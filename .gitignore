@@ -1,0 +1,89 @@
+# =========================
+# 🔐 ENV / SECRETS
+# =========================
+.env
+.envrc
+
+# =========================
+# 🐍 PYTHON
+# =========================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# =========================
+# 📦 NODE / FRONTEND
+# =========================
+node_modules/
+
+# =========================
+# 📊 LOGS / TEMP FILES
+# =========================
+*.log
+*.out
+
+# =========================
+# 📁 OS / SYSTEM FILES
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# 📦 ARCHIVES / BUILD FILES
+# =========================
+*.zip
+*.tar
+*.gz
+
+# =========================
+# 🗄️ DATABASE / LOCAL FILES
+# =========================
+db.sqlite3
+db.sqlite3-journal
+
+# =========================
+# ⚙️ FLASK
+# =========================
+instance/
+.webassets-cache/
+
+# =========================
+# 🧪 TEST / COVERAGE
+# =========================
+.coverage
+coverage.xml
+.pytest_cache/
+
+# =========================
+# 🧠 EDITORS / IDE
+# =========================
+.vscode/
+.idea/
+
+# =========================
+# 🧱 BUILD / DIST
+# =========================
+build/
+dist/
+*.egg-info/
+
+# =========================
+# 🧠 MISC
+# =========================
+*.swp
+
+# Backup / old files
+*backup*
+*old*
+
+*before_patch*
+
+cookies.txt
+viewer-cookies.txt

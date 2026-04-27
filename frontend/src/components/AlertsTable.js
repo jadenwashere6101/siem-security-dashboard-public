@@ -1,0 +1,1136 @@
+import React, { useState } from "react";
+
+const SIEM_BASE_PATH =
+  typeof window !== "undefined" &&
+  (window.location.pathname === "/siem" || window.location.pathname.startsWith("/siem/"))
+    ? "/siem"
+    : "";
+
+const buildSiemPath = (path) => `${SIEM_BASE_PATH}${path}`;
+
+function AlertsTable({
+  alerts,
+  canTakeAlertActions,
+  setAlerts,
+  searchTerm,
+  setSearchTerm,
+  sortOption,
+  setSortOption,
+  severityFilter,
+  setSeverityFilter,
+  statusFilter,
+  setStatusFilter,
+  selectedAlertId,
+  setSelectedAlertId,
+  getSeverityBadgeStyle,
+  cardStyle,
+  cardHeaderStyle,
+  cardTitleStyle,
+  cardSubtitleStyle,
+  filterWrapperStyle,
+  filterLabelStyle,
+  selectStyle,
+  emptyStateStyle,
+  emptyStateTextStyle,
+  tableWrapperStyle,
+  tableStyle,
+  headerCellStyle,
+  bodyCellStyle,
+  onUpdateStatus,
+  monoCellStyle,
+  tableRowStyle,
+  expandedCellStyle,
+  expandedContentStyle,
+  expandedLabelStyle,
+  expandedTextStyle,
+}) {
+  const [responseLogs, setResponseLogs] = useState({});
+  const [executingActionId, setExecutingActionId] = useState(null);
+  const [toastMessage, setToastMessage] = useState("");
+  const [toastType, setToastType] = useState("info");
+  const [selectedAlert, setSelectedAlert] = useState(null);
+  const exportMenuStyle = {
+    position: "relative",
+    display: "inline-block",
+    marginTop: "10px",
+  };
+  const exportMenuTriggerStyle = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "6px",
+    listStyle: "none",
+    padding: "6px 10px",
+    borderRadius: "999px",
+    border: "1px solid #30363d",
+    backgroundColor: "#0d1117",
+    color: "#c9d1d9",
+    fontSize: "12px",
+    fontWeight: "600",
+    cursor: "pointer",
+    userSelect: "none",
+  };
+  const exportMenuPanelStyle = {
+    position: "absolute",
+    top: "calc(100% + 8px)",
+    left: 0,
+    minWidth: "240px",
+    padding: "8px",
+    borderRadius: "10px",
+    border: "1px solid #30363d",
+    backgroundColor: "#111827",
+    boxShadow: "0 12px 30px rgba(0,0,0,0.35)",
+    zIndex: 5,
+    display: "flex",
+    flexDirection: "column",
+    gap: "4px",
+  };
+  const exportMenuOptionStyle = {
+    display: "flex",
+    alignItems: "center",
+    padding: "8px 10px",
+    borderRadius: "8px",
+    color: "#dbeafe",
+    textDecoration: "none",
+    fontSize: "12px",
+    fontWeight: "600",
+    whiteSpace: "nowrap",
+    backgroundColor: "transparent",
+  };
+  const exportRowStyle = {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    marginTop: "10px",
+    flexWrap: "wrap",
+  };
+  const exportLabelStyle = {
+    color: "#9ca3af",
+    fontSize: "12px",
+    fontWeight: "700",
+    letterSpacing: "0.04em",
+    textTransform: "uppercase",
+  };
+  const inlineExportLinkStyle = {
+    display: "inline-flex",
+    alignItems: "center",
+    color: "#93c5fd",
+    textDecoration: "none",
+    fontSize: "12px",
+    fontWeight: "700",
+    letterSpacing: "0.02em",
+  };
+  const exportDividerStyle = {
+    color: "#4b5563",
+    fontSize: "12px",
+  };
+  const mitreSectionStyle = {
+    margin: "12px 0 10px",
+    padding: "10px 12px",
+    borderRadius: "10px",
+    border: "1px solid #30363d",
+    backgroundColor: "#111827",
+  };
+  const mitreHeaderRowStyle = {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    flexWrap: "wrap",
+    marginBottom: "6px",
+  };
+  const mitreTechniqueBadgeStyle = {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "4px 8px",
+    borderRadius: "999px",
+    backgroundColor: "rgba(59, 130, 246, 0.14)",
+    border: "1px solid rgba(59, 130, 246, 0.3)",
+    color: "#93c5fd",
+    fontSize: "11px",
+    fontWeight: "700",
+    letterSpacing: "0.03em",
+  };
+  const mitreTechniqueNameStyle = {
+    color: "#e6edf3",
+    fontSize: "13px",
+    fontWeight: "600",
+  };
+  const mitreTacticStyle = {
+    margin: 0,
+    color: "#9ca3af",
+    fontSize: "12px",
+  };
+
+  const showToast = (message, type = "info") => {
+    setToastMessage(message);
+    setToastType(type);
+    setTimeout(() => {
+      setToastMessage("");
+      setToastType("info");
+    }, type === "error" ? 5500 : 2500);
+  };
+
+  const getAccessDeniedMessage = () =>
+    "🔒 Access denied — elevated privileges required\nThis attempt was logged in the audit trail.";
+
+  const isAdminRequiredError = (message) =>
+    /admin role required|super admin role required|analyst or super admin role required|forbidden/i.test(message || "");
+
+  const getActionButtonStyle = (baseStyle, restrictedAccent) => {
+    if (canTakeAlertActions) {
+      return baseStyle;
+    }
+
+    return {
+      ...baseStyle,
+      backgroundColor: "#161b22",
+      color: "#c9d1d9",
+      border: "1px solid #30363d",
+      boxShadow: "none",
+      opacity: 0.9,
+    };
+  };
+
+  const fetchResponseLog = async (alertId) => {
+    try {
+      const res = await fetch(buildSiemPath(`/alerts/${alertId}/response-log`), {
+        credentials: "include",
+      });
+
+      const data = await res.json();
+
+      setResponseLogs(prev => ({
+        ...prev,
+        [alertId]: data
+      }));
+
+    } catch (err) {
+      console.error("Error fetching response log:", err);
+    }
+  };
+
+  const downloadPdfReport = async (url, filename) => {
+    try {
+      const response = await fetch(url, {
+        credentials: "include",
+      });
+
+      if (!response.ok) {
+        throw new Error("Unable to download PDF report");
+      }
+
+      const pdfBlob = await response.blob();
+      const objectUrl = window.URL.createObjectURL(pdfBlob);
+      const downloadLink = document.createElement("a");
+
+      downloadLink.href = objectUrl;
+      downloadLink.download = filename;
+      downloadLink.style.display = "none";
+      downloadLink.rel = "noopener";
+      document.body.appendChild(downloadLink);
+      downloadLink.click();
+      document.body.removeChild(downloadLink);
+      window.setTimeout(() => {
+        window.URL.revokeObjectURL(objectUrl);
+      }, 1000);
+    } catch (err) {
+      console.error("Error downloading PDF report:", err);
+      showToast("Unable to download PDF report", "error");
+    }
+  };
+
+  const executeAction = async (alertId, action) => {
+    try {
+      setExecutingActionId(alertId);
+
+      const executeRes = await fetch(buildSiemPath(`/alerts/${alertId}/execute`), {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ action })
+      });
+
+      if (!executeRes.ok) {
+        const errorData = await executeRes.json().catch(() => ({}));
+        throw new Error(errorData.message || errorData.error || "Action failed");
+      }
+
+      // refresh response log for that alert
+      await fetchResponseLog(alertId);
+
+      // refresh alerts without reloading page
+      const res = await fetch(buildSiemPath("/alerts"), {
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        throw new Error("Failed to refresh alerts");
+      }
+
+      const data = await res.json();
+
+      if (!Array.isArray(data)) {
+        throw new Error("Invalid alerts response");
+      }
+
+      setAlerts(data);
+
+      showToast(`Action "${action}" executed successfully`);
+    } catch (err) {
+      console.error("Error executing action:", err);
+      showToast(
+        isAdminRequiredError(err.message)
+          ? getAccessDeniedMessage()
+          : err.message || "Action failed",
+        isAdminRequiredError(err.message) ? "error" : "info"
+      );
+    } finally {
+      setExecutingActionId(null);
+    }
+  };
+
+
+  const filteredAlerts = alerts;
+
+  const resolvedAlerts = alerts.filter(
+    (alert) => alert.status === "resolved"
+  );
+
+  const reportQuery = new URLSearchParams();
+  if (searchTerm) {
+    reportQuery.set("search", searchTerm);
+  }
+  if (severityFilter && severityFilter !== "all") {
+    reportQuery.set("severity", severityFilter);
+  }
+  if (statusFilter && statusFilter !== "all") {
+    reportQuery.set("status", statusFilter);
+  }
+  const multiAlertReportHref = buildSiemPath(
+    `/alerts/report${reportQuery.toString() ? `?${reportQuery.toString()}` : ""}`
+  );
+  const multiAlertPdfReportHref = buildSiemPath(
+    `/alerts/report/pdf${reportQuery.toString() ? `?${reportQuery.toString()}` : ""}`
+  );
+  const getResponseIndicatorColor = (action) => {
+    if (action === "block_ip") return "#ef4444";
+    if (action === "flag_high_priority") return "#f59e0b";
+    if (action === "monitor") return "#22c55e";
+    return "#6b7280";
+  };
+
+  const handleResolve = async (e, alertId) => {
+    e.stopPropagation();
+    const result = await onUpdateStatus(alertId, "resolved");
+
+    if (!result?.ok) {
+      showToast(
+        isAdminRequiredError(result?.message)
+          ? getAccessDeniedMessage()
+          : result?.message || "Access denied",
+        isAdminRequiredError(result?.message) ? "error" : "info"
+      );
+    }
+  };
+
+  return (
+    <>
+      {toastMessage && (
+        <div
+          style={{
+            position: "fixed",
+            top: "20px",
+            right: "20px",
+            backgroundColor: toastType === "error" ? "#2d1117" : "#111827",
+            color: toastType === "error" ? "#ffb4b4" : "#fff",
+            padding: "10px 14px",
+            borderRadius: "8px",
+            border: toastType === "error" ? "1px solid #f85149" : "1px solid #374151",
+            boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+            zIndex: 9999,
+            fontSize: "14px",
+            fontWeight: "600",
+            whiteSpace: "pre-line",
+            maxWidth: "340px",
+            lineHeight: "1.45",
+          }}
+        >
+          {toastMessage}
+        </div>
+      )}
+
+      <section style={cardStyle}>
+        <div style={cardHeaderStyle}>
+          <div>
+            <h2 style={cardTitleStyle}>Recent Alerts</h2>
+
+            <p style={cardSubtitleStyle}>
+              Showing {filteredAlerts.length} alerts ({resolvedAlerts.length}{" "}
+              resolved total)
+            </p>
+
+            <details style={exportMenuStyle}>
+              <summary style={exportMenuTriggerStyle}>Export</summary>
+              <div style={exportMenuPanelStyle}>
+                <a href={multiAlertReportHref} style={exportMenuOptionStyle}>
+                  Download Filtered Incident Report (TXT)
+                </a>
+                <button
+                  type="button"
+                  onClick={() =>
+                    downloadPdfReport(multiAlertPdfReportHref, "siem-alert-report.pdf")
+                  }
+                  style={{
+                    ...exportMenuOptionStyle,
+                    border: "none",
+                    width: "100%",
+                    backgroundColor: "transparent",
+                    cursor: "pointer",
+                    textAlign: "left",
+                  }}
+                >
+                  Download Filtered PDF Report
+                </button>
+              </div>
+            </details>
+          </div>
+
+          <div style={filterWrapperStyle}>
+            <label htmlFor="searchAlerts" style={filterLabelStyle}>
+              Search
+            </label>
+            <input
+              id="searchAlerts"
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Search IP or message"
+              style={{
+                ...selectStyle,
+                appearance: "none",
+                WebkitAppearance: "none",
+                MozAppearance: "none",
+                paddingRight: "12px",
+              }}
+            />
+          </div>
+
+          <div style={filterWrapperStyle}>
+            <label htmlFor="sortAlerts" style={filterLabelStyle}>
+              Sort
+            </label>
+            <select
+              id="sortAlerts"
+              value={sortOption}
+              onChange={(e) => setSortOption(e.target.value)}
+              style={selectStyle}
+            >
+              <option value="newest">Newest</option>
+              <option value="oldest">Oldest</option>
+              <option value="severity">Severity</option>
+            </select>
+          </div>
+
+          <div style={filterWrapperStyle}>
+            <label htmlFor="severityFilter" style={filterLabelStyle}>
+              Severity
+            </label>
+            <select
+              id="severityFilter"
+              value={severityFilter}
+              onChange={(e) => setSeverityFilter(e.target.value)}
+              style={selectStyle}
+            >
+              <option value="all">ALL</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+          </div>
+
+          <div style={filterWrapperStyle}>
+            <label htmlFor="statusFilter" style={filterLabelStyle}>
+              Status
+            </label>
+            <select
+              id="statusFilter"
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              style={selectStyle}
+            >
+              <option value="all">All</option>
+              <option value="open">Open</option>
+              <option value="resolved">Resolved</option>
+            </select>
+          </div>
+        </div>
+
+        {filteredAlerts.length === 0 ? (
+          <div style={emptyStateStyle}>
+            <p style={emptyStateTextStyle}>
+              No alerts found for the selected filters.
+            </p>
+          </div>
+        ) : (
+          <div style={tableWrapperStyle}>
+            <div
+              style={{
+                maxHeight: "500px",
+                overflowY: "auto",
+                overflowX: "auto",
+                width: "100%",
+              }}
+            >
+            <table style={tableStyle}>
+              <thead>
+                <tr>
+                  <th style={headerCellStyle}>ID</th>
+                  <th style={headerCellStyle}>Type</th>
+                  <th style={headerCellStyle}>Source IP</th>
+                  <th style={headerCellStyle}>Severity</th>
+                  <th style={headerCellStyle}>Message</th>
+                  <th style={headerCellStyle}>Created At</th>
+                  <th style={headerCellStyle}>Action</th>
+                </tr>
+              </thead>
+
+            <tbody>
+              {filteredAlerts.map((alert) => (
+                <React.Fragment key={alert.id}>
+                  <tr
+                    style={{
+                      ...tableRowStyle,
+                      cursor: "pointer",
+                      backgroundColor:
+                        selectedAlertId === alert.id
+                          ? "#111827"
+                          : "#161b22",
+                    }}
+                    onClick={() => {
+                      if (selectedAlertId === alert.id) {
+                        setSelectedAlertId(null);
+                        setSelectedAlert(null);
+                      } else {
+                        setSelectedAlertId(alert.id);
+                        setSelectedAlert(alert);
+                        fetchResponseLog(alert.id);
+                      }
+                    }}
+                  >
+                    <td style={bodyCellStyle}>{alert.id}</td>
+
+                    <td style={{ ...bodyCellStyle, ...monoCellStyle }}>
+                      {alert.alert_type}
+                    </td>
+
+                    <td style={{ ...bodyCellStyle, ...monoCellStyle }}>
+                      <div>{alert.source_ip}</div>
+                      <div style={{ fontSize: "12px", color: "#666", marginTop: "4px" }}>
+                        {alert.city && alert.country
+                          ? `${alert.city}, ${alert.country}`
+                          : "Location unavailable"}
+                      </div>
+                    </td>
+
+                    <td style={bodyCellStyle}>
+                      <div>
+                        <span style={getSeverityBadgeStyle(alert.severity)}>
+                          {alert.severity}
+                        </span>
+                      </div>
+                    </td>
+
+                    <td style={bodyCellStyle}>{alert.message}</td>
+
+                    <td style={{ ...bodyCellStyle, ...monoCellStyle }}>
+                      {alert.created_at}
+                    </td>
+
+                    <td style={bodyCellStyle}>
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "10px",
+                          flexWrap: "wrap",
+                        }}
+                      >
+                        <span
+                          title={alert.response_action || "No response action"}
+                          style={{
+                            width: "10px",
+                            height: "10px",
+                            borderRadius: "999px",
+                            backgroundColor: getResponseIndicatorColor(alert.response_action),
+                            boxShadow: `0 0 0 2px rgba(255, 255, 255, 0.04), 0 0 0 1px ${getResponseIndicatorColor(alert.response_action)}`,
+                            flexShrink: 0,
+                          }}
+                        />
+                        {alert.status === "open" && (
+                          <button
+                            onClick={(e) => handleResolve(e, alert.id)}
+                            title={canTakeAlertActions ? "Resolve alert" : "Requires elevated privileges"}
+                            style={getActionButtonStyle(
+                              {
+                                padding: "6px 10px",
+                                backgroundColor: "#238636",
+                                color: "white",
+                                border: "none",
+                                borderRadius: "6px",
+                                cursor: "pointer",
+                                fontWeight: "700",
+                                transition: "opacity 120ms ease, border-color 120ms ease, background-color 120ms ease",
+                              },
+                              "#f59e0b"
+                            )}
+                          >
+                            {canTakeAlertActions ? "Resolve" : "🔒 Resolve"}
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+
+                  {selectedAlertId === alert.id && (
+                    <tr onClick={(e) => e.stopPropagation()}>
+                      <td colSpan="7" style={expandedCellStyle}>
+                        <div style={expandedContentStyle}>
+                          <p style={expandedLabelStyle}>Alert Details</p>
+
+                          <p style={expandedTextStyle}>
+                            <strong>ID:</strong> {alert.id}
+                          </p>
+
+                          <p style={expandedTextStyle}>
+                            <strong>Type:</strong> {alert.alert_type}
+                          </p>
+
+                          <div>
+                            <p style={expandedTextStyle}>
+                              <strong>Source IP:</strong>{" "}
+                              <span style={monoCellStyle}>
+                                {alert.source_ip}
+                              </span>
+                            </p>
+
+                            <p style={expandedTextStyle}>
+                              <strong>Location:</strong>{" "}
+                              {alert.city && alert.country
+                                ? `${alert.city}, ${alert.country}`
+                                : "Location unavailable"}
+                            </p>
+                          </div>
+
+                          <p style={expandedTextStyle}>
+                            <strong>Severity:</strong> {alert.severity}
+                          </p>
+
+                          <p style={expandedTextStyle}>
+                            <strong>Message:</strong> {alert.message}
+                          </p>
+
+                          {(alert.mitre_technique_id || alert.mitre_technique_name || alert.mitre_tactic) && (
+                            <div style={mitreSectionStyle}>
+                              <p style={expandedLabelStyle}>MITRE ATT&CK</p>
+                              <div style={mitreHeaderRowStyle}>
+                                {alert.mitre_technique_id && (
+                                  <span style={mitreTechniqueBadgeStyle}>
+                                    {alert.mitre_technique_id}
+                                  </span>
+                                )}
+                                {alert.mitre_technique_name && (
+                                  <span style={mitreTechniqueNameStyle}>
+                                    {alert.mitre_technique_name}
+                                  </span>
+                                )}
+                              </div>
+                              {alert.mitre_tactic && (
+                                <p style={mitreTacticStyle}>
+                                  <strong>Tactic:</strong> {alert.mitre_tactic}
+                                </p>
+                              )}
+                            </div>
+                          )}
+
+                          <p style={expandedTextStyle}>
+                            <strong>Reputation:</strong>{" "}
+                            <span
+                              style={{
+                                display: "inline-block",
+                                padding: "4px 8px",
+                                borderRadius: "999px",
+                                fontSize: "11px",
+                                fontWeight: "600",
+                                backgroundColor:
+                                  alert.reputation_label === "high-risk"
+                                    ? "rgba(239, 68, 68, 0.15)"
+                                    : alert.reputation_label === "medium-risk"
+                                    ? "rgba(245, 158, 11, 0.15)"
+                                    : alert.reputation_label === "low-risk"
+                                    ? "rgba(16, 185, 129, 0.15)"
+                                    : "rgba(156, 163, 175, 0.15)",
+                                color:
+                                  alert.reputation_label === "high-risk"
+                                    ? "#ef4444"
+                                    : alert.reputation_label === "medium-risk"
+                                    ? "#f59e0b"
+                                    : alert.reputation_label === "low-risk"
+                                    ? "#10b981"
+                                    : "#9ca3af",
+                                border:
+                                  alert.reputation_label === "high-risk"
+                                    ? "1px solid rgba(239, 68, 68, 0.35)"
+                                    : alert.reputation_label === "medium-risk"
+                                    ? "1px solid rgba(245, 158, 11, 0.35)"
+                                    : alert.reputation_label === "low-risk"
+                                    ? "1px solid rgba(16, 185, 129, 0.35)"
+                                    : "1px solid rgba(156, 163, 175, 0.35)"
+                              }}
+                            >
+                              {alert.reputation_label
+                                ? `${alert.reputation_label} (${alert.reputation_score})`
+                                : "No reputation data"}
+                            </span>
+                          </p>
+                          <p style={{ marginTop: "8px" }}>
+                            {alert.reputation_summary || "No reputation details available"}
+                          </p>
+
+                          <p style={expandedTextStyle}>
+                            <strong>Response Action:</strong>{" "}
+                            {alert.response_action || "Not set"}
+                          </p>
+                          <p style={expandedTextStyle}>
+                            <strong>Response Status:</strong>{" "}
+                            {alert.response_status || "Not set"}
+                          </p>
+
+                          <div style={exportRowStyle}>
+                            <span style={exportLabelStyle}>Export:</span>
+                            <a
+                              href={buildSiemPath(`/alerts/${alert.id}/report`)}
+                              style={inlineExportLinkStyle}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              Download Incident Report (TXT)
+                            </a>
+                            <span style={exportDividerStyle}>|</span>
+                            <button
+                              type="button"
+                              style={{
+                                ...inlineExportLinkStyle,
+                                border: "none",
+                                backgroundColor: "transparent",
+                                padding: 0,
+                                cursor: "pointer",
+                              }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                downloadPdfReport(
+                                  buildSiemPath(`/alerts/${alert.id}/report/pdf`),
+                                  `siem-alert-${alert.id}-report.pdf`
+                                );
+                              }}
+                            >
+                              Download PDF Report
+                            </button>
+                          </div>
+
+                          <div style={{ marginTop: "10px" }}>
+                            <strong>Response Log:</strong>
+
+                            {responseLogs[alert.id] && responseLogs[alert.id].length > 0 ? (
+                              responseLogs[alert.id].map((log) => {
+                                let color = "#999";
+
+                                if (log.action === "block_ip") color = "#ff4d4f";
+                                else if (log.action === "flag_high_priority") color = "#faad14";
+                                else if (log.action === "monitor") color = "#52c41a";
+
+                                return (
+                                  <div
+                                    key={log.id}
+                                    style={{
+                                      marginTop: "5px",
+                                      padding: "6px",
+                                      borderRadius: "6px",
+                                      backgroundColor: "#1e1e1e",
+                                      color: "#fff",
+                                      fontSize: "12px",
+                                      display: "flex",
+                                      justifyContent: "space-between"
+                                    }}
+                                  >
+                                    <span>
+                                      <strong style={{ color }}>{log.action.toUpperCase()}</strong>
+                                      {" \u2192 "}
+                                      {log.status}
+                                    </span>
+
+                                    <span style={{ opacity: 0.7 }}>
+                                      {new Date(log.executed_at).toLocaleTimeString()}
+                                    </span>
+                                  </div>
+                                );
+                              })
+                            ) : (
+                              <div style={{ fontSize: "12px", opacity: 0.6 }}>
+                                No response actions logged
+                              </div>
+                            )}
+                          </div>
+
+                          <div style={{ marginTop: "10px" }}>
+                            <strong>Manual Actions:</strong>
+                            {!canTakeAlertActions && (
+                              <div style={{ fontSize: "12px", color: "#8b949e", marginTop: "4px" }}>
+                                Requires elevated privileges
+                              </div>
+                            )}
+
+                            <div style={{ display: "flex", gap: "8px", marginTop: "6px", flexWrap: "wrap" }}>
+                              <button
+                                onClick={() => executeAction(alert.id, "block_ip")}
+                                onMouseOver={(e) => e.target.style.opacity = "0.85"}
+                                onMouseOut={(e) => e.target.style.opacity = "1"}
+                                disabled={executingActionId === alert.id}
+                                title={canTakeAlertActions ? "Block IP" : "Requires elevated privileges"}
+                                style={{
+                                  ...getActionButtonStyle(
+                                    {
+                                      backgroundColor: "#ff4d4f",
+                                      color: "white",
+                                      border: "none",
+                                      padding: "6px 10px",
+                                      borderRadius: "6px",
+                                      cursor: executingActionId === alert.id ? "not-allowed" : "pointer",
+                                      fontWeight: "bold",
+                                      opacity: executingActionId === alert.id ? 0.6 : 1,
+                                      transition: "opacity 120ms ease, border-color 120ms ease, background-color 120ms ease",
+                                    },
+                                    "#ff4d4f"
+                                  ),
+                                  opacity: executingActionId === alert.id ? 0.6 : 1,
+                                }}
+                              >
+                                {executingActionId === alert.id ? "Executing..." : canTakeAlertActions ? "Block IP" : "🔒 Block IP"}
+                              </button>
+
+                              <button
+                                onClick={() => executeAction(alert.id, "flag_high_priority")}
+                                onMouseOver={(e) => e.target.style.opacity = "0.85"}
+                                onMouseOut={(e) => e.target.style.opacity = "1"}
+                                disabled={executingActionId === alert.id}
+                                title={canTakeAlertActions ? "Escalate" : "Requires elevated privileges"}
+                                style={{
+                                  ...getActionButtonStyle(
+                                    {
+                                      backgroundColor: "#faad14",
+                                      color: "black",
+                                      border: "none",
+                                      padding: "6px 10px",
+                                      borderRadius: "6px",
+                                      cursor: executingActionId === alert.id ? "not-allowed" : "pointer",
+                                      fontWeight: "bold",
+                                      opacity: executingActionId === alert.id ? 0.6 : 1,
+                                      transition: "opacity 120ms ease, border-color 120ms ease, background-color 120ms ease",
+                                    },
+                                    "#f59e0b"
+                                  ),
+                                  opacity: executingActionId === alert.id ? 0.6 : 1,
+                                }}
+                              >
+                                {executingActionId === alert.id ? "Executing..." : canTakeAlertActions ? "Escalate" : "🔒 Escalate"}
+                              </button>
+
+                              <button
+                                onClick={() => executeAction(alert.id, "monitor")}
+                                onMouseOver={(e) => e.target.style.opacity = "0.85"}
+                                onMouseOut={(e) => e.target.style.opacity = "1"}
+                                disabled={executingActionId === alert.id}
+                                title={canTakeAlertActions ? "Monitor" : "Requires elevated privileges"}
+                                style={{
+                                  ...getActionButtonStyle(
+                                    {
+                                      backgroundColor: "#52c41a",
+                                      color: "white",
+                                      border: "none",
+                                      padding: "6px 10px",
+                                      borderRadius: "6px",
+                                      cursor: executingActionId === alert.id ? "not-allowed" : "pointer",
+                                      fontWeight: "bold",
+                                      opacity: executingActionId === alert.id ? 0.6 : 1,
+                                      transition: "opacity 120ms ease, border-color 120ms ease, background-color 120ms ease",
+                                    },
+                                    "#22c55e"
+                                  ),
+                                  opacity: executingActionId === alert.id ? 0.6 : 1,
+                                }}
+                              >
+                                {executingActionId === alert.id ? "Executing..." : canTakeAlertActions ? "Monitor" : "🔒 Monitor"}
+                              </button>
+                            </div>
+                          </div>
+
+                          <p style={expandedTextStyle}>
+                            <strong>Created At:</strong>{" "}
+                            <span style={monoCellStyle}>
+                              {alert.created_at}
+                            </span>
+                          </p>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        </div>
+      )}
+      </section>
+
+      {statusFilter === "all" && resolvedAlerts.length > 0 && (
+        <section
+          style={{
+            ...cardStyle,
+            marginTop: "24px",
+          }}
+        >
+          <div style={cardHeaderStyle}>
+            <h2 style={cardTitleStyle}>Resolved Alerts</h2>
+          </div>
+
+          <div style={tableWrapperStyle}>
+            <table style={tableStyle}>
+              <thead>
+                <tr>
+                  <th style={headerCellStyle}>Type</th>
+                  <th style={headerCellStyle}>Severity</th>
+                  <th style={headerCellStyle}>Source IP</th>
+                  <th style={headerCellStyle}>Message</th>
+                  <th style={headerCellStyle}>Time</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {resolvedAlerts.map((alert) => (
+                  <tr key={alert.id}>
+                    <td style={bodyCellStyle}>{alert.alert_type}</td>
+                    <td style={bodyCellStyle}>{alert.severity}</td>
+                    <td style={bodyCellStyle}>
+                      <div>{alert.source_ip}</div>
+                      <div style={{ fontSize: "12px", color: "#666", marginTop: "4px" }}>
+                        {alert.city && alert.country
+                          ? `${alert.city}, ${alert.country}`
+                          : "Location unavailable"}
+                      </div>
+                    </td>
+                    <td style={bodyCellStyle}>{alert.message}</td>
+                    <td style={bodyCellStyle}>{alert.created_at}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {selectedAlert && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            right: 0,
+            width: "420px",
+            height: "100vh",
+            backgroundColor: "#0f172a",
+            color: "#fff",
+            boxShadow: "-4px 0 20px rgba(0,0,0,0.35)",
+            zIndex: 9998,
+            borderLeft: "1px solid #1f2937",
+            display: "flex",
+            flexDirection: "column"
+          }}
+        >
+          <div
+            onWheel={(e) => {
+              e.stopPropagation();
+            }}
+            style={{
+              height: "100%",
+              overflowY: "auto",
+              overflowX: "hidden",
+              WebkitOverflowScrolling: "touch",
+              padding: "20px"
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "16px"
+              }}
+            >
+              <h2 style={{ margin: 0, fontSize: "20px" }}>Alert Details</h2>
+
+              <button
+                onClick={() => {
+                  setSelectedAlert(null);
+                  setSelectedAlertId(null);
+                }}
+                style={{
+                  background: "transparent",
+                  color: "#fff",
+                  border: "none",
+                  fontSize: "22px",
+                  cursor: "pointer"
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            <div style={{ fontSize: "14px", lineHeight: "1.7" }}>
+              <p><strong>ID:</strong> {selectedAlert.id}</p>
+              <p><strong>Type:</strong> {selectedAlert.alert_type}</p>
+              <p><strong>Source IP:</strong> {selectedAlert.source_ip}</p>
+              <p><strong>Severity:</strong> {selectedAlert.severity}</p>
+              <p><strong>Status:</strong> {selectedAlert.status}</p>
+              <p><strong>Message:</strong> {selectedAlert.message}</p>
+              <p>
+                <strong>Location:</strong>{" "}
+                {selectedAlert.city && selectedAlert.country
+                  ? `${selectedAlert.city}, ${selectedAlert.country}`
+                  : "Unknown"}
+              </p>
+              <p><strong>Reputation:</strong> {selectedAlert.reputation_label || "N/A"} ({selectedAlert.reputation_score ?? "N/A"})</p>
+              <p><strong>Reputation Summary:</strong> {selectedAlert.reputation_summary || "N/A"}</p>
+              <p><strong>Response Action:</strong> {selectedAlert.response_action || "N/A"}</p>
+              <p><strong>Response Status:</strong> {selectedAlert.response_status || "N/A"}</p>
+            </div>
+
+            <div style={{ marginTop: "20px" }}>
+              <strong>Response Log:</strong>
+
+              {responseLogs[selectedAlert.id] && responseLogs[selectedAlert.id].length > 0 ? (
+                responseLogs[selectedAlert.id].map((log) => {
+                  let color = "#999";
+
+                  if (log.action === "block_ip") color = "#ff4d4f";
+                  else if (log.action === "flag_high_priority") color = "#faad14";
+                  else if (log.action === "monitor") color = "#52c41a";
+
+                  return (
+                    <div
+                      key={log.id}
+                      style={{
+                        marginTop: "8px",
+                        padding: "8px",
+                        borderRadius: "8px",
+                        backgroundColor: "#1e293b",
+                        fontSize: "12px",
+                        display: "flex",
+                        justifyContent: "space-between"
+                      }}
+                    >
+                      <span>
+                        <strong style={{ color }}>{log.action.toUpperCase()}</strong>
+                        {" \u2192 "}
+                        {log.status}
+                      </span>
+                      <span style={{ opacity: 0.7 }}>
+                        {new Date(log.executed_at).toLocaleTimeString()}
+                      </span>
+                    </div>
+                  );
+                })
+              ) : (
+                <div style={{ marginTop: "8px", fontSize: "12px", opacity: 0.7 }}>
+                  No response actions logged
+                </div>
+              )}
+            </div>
+
+            <div style={{ marginTop: "20px" }}>
+              <strong>Manual Actions:</strong>
+              {!canTakeAlertActions && (
+                <div style={{ marginTop: "6px", fontSize: "12px", color: "#94a3b8" }}>
+                  Requires elevated privileges
+                </div>
+              )}
+
+              <div style={{ display: "flex", gap: "8px", marginTop: "8px", flexWrap: "wrap" }}>
+                <button
+                  onClick={() => executeAction(selectedAlert.id, "block_ip")}
+                  title={canTakeAlertActions ? "Block IP" : "Requires elevated privileges"}
+                  style={getActionButtonStyle(
+                    {
+                      backgroundColor: "#ff4d4f",
+                      color: "white",
+                      border: "none",
+                      padding: "6px 10px",
+                      borderRadius: "6px",
+                      cursor: "pointer",
+                      fontWeight: "bold",
+                      transition: "opacity 120ms ease, border-color 120ms ease, background-color 120ms ease",
+                    },
+                    "#ff4d4f"
+                  )}
+                >
+                  {canTakeAlertActions ? "Block IP" : "🔒 Block IP"}
+                </button>
+
+                <button
+                  onClick={() => executeAction(selectedAlert.id, "flag_high_priority")}
+                  title={canTakeAlertActions ? "Escalate" : "Requires elevated privileges"}
+                  style={getActionButtonStyle(
+                    {
+                      backgroundColor: "#faad14",
+                      color: "black",
+                      border: "none",
+                      padding: "6px 10px",
+                      borderRadius: "6px",
+                      cursor: "pointer",
+                      fontWeight: "bold",
+                      transition: "opacity 120ms ease, border-color 120ms ease, background-color 120ms ease",
+                    },
+                    "#f59e0b"
+                  )}
+                >
+                  {canTakeAlertActions ? "Escalate" : "🔒 Escalate"}
+                </button>
+
+                <button
+                  onClick={() => executeAction(selectedAlert.id, "monitor")}
+                  title={canTakeAlertActions ? "Monitor" : "Requires elevated privileges"}
+                  style={getActionButtonStyle(
+                    {
+                      backgroundColor: "#52c41a",
+                      color: "white",
+                      border: "none",
+                      padding: "6px 10px",
+                      borderRadius: "6px",
+                      cursor: "pointer",
+                      fontWeight: "bold",
+                      transition: "opacity 120ms ease, border-color 120ms ease, background-color 120ms ease",
+                    },
+                    "#22c55e"
+                  )}
+                >
+                  {canTakeAlertActions ? "Monitor" : "🔒 Monitor"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+export default AlertsTable;
