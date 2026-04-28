@@ -56,6 +56,7 @@ function AlertsTable({
   const [toastMessage, setToastMessage] = useState("");
   const [toastType, setToastType] = useState("info");
   const [selectedAlert, setSelectedAlert] = useState(null);
+  const [hoveredAlertId, setHoveredAlertId] = useState(null);
   const exportMenuStyle = {
     position: "relative",
     display: "inline-block",
@@ -186,6 +187,16 @@ const sourceTypeTextStyle = {
   color: "#8b949e",
   fontSize: "11px",
 };
+const detailLabelTextStyle = {
+  color: "#cbd5e1",
+  fontSize: "12px",
+  fontWeight: "700",
+  letterSpacing: "0.02em",
+};
+const detailValueTextStyle = {
+  color: "#e6edf3",
+  fontSize: "14px",
+};
 const expandedSecondaryTextStyle = {
   color: "#8b949e",
   fontSize: "12px",
@@ -274,6 +285,9 @@ const timelineTypeStyle = {
 const timelineSubtextStyle = {
   color: "#8b949e",
   fontSize: "11px",
+};
+const detailSectionStyle = {
+  marginTop: "10px",
 };
 
   const showToast = (message, type = "info") => {
@@ -939,11 +953,16 @@ const timelineSubtextStyle = {
                             : "#111827"
                           : targetedAlertMeta
                             ? targetedAlertMeta.rowStyle.backgroundColor
+                            : hoveredAlertId === alert.id
+                              ? "#1b2230"
                             : "#161b22",
                       borderLeft: targetedAlertMeta
                         ? targetedAlertMeta.rowStyle.borderLeft
                         : tableRowStyle.borderLeft,
+                      transition: "background-color 120ms ease",
                     }}
+                    onMouseEnter={() => setHoveredAlertId(alert.id)}
+                    onMouseLeave={() => setHoveredAlertId(null)}
                     onClick={() => {
                       if (selectedAlertId === alert.id) {
                         setSelectedAlertId(null);
@@ -964,7 +983,7 @@ const timelineSubtextStyle = {
                       <div style={sourceBadgeStackStyle}>
                         <span>{alert.alert_type}</span>
                         {targetedAlertMeta?.badge && (
-                          <span style={targetedAlertMeta.badgeStyle}>
+                          <span style={targetedAlertMeta.badgeStyle} title={targetedAlertMeta.description || targetedAlertMeta.badge}>
                             {targetedAlertMeta.badge}
                           </span>
                         )}
@@ -973,7 +992,7 @@ const timelineSubtextStyle = {
 
                     <td style={bodyCellStyle}>
                       <div style={sourceBadgeStackStyle}>
-                        <span style={{ ...sourceBadgeStyle, ...sourceBadge.style }}>
+                        <span style={{ ...sourceBadgeStyle, ...sourceBadge.style }} title={`Source: ${sourceBadge.label}`}>
                           {sourceBadge.label}
                         </span>
                         <span style={sourceTypeTextStyle}>{sourceBadge.subLabel}</span>
@@ -991,7 +1010,10 @@ const timelineSubtextStyle = {
 
                     <td style={bodyCellStyle}>
                       <div style={sourceBadgeStackStyle}>
-                        <span style={{ ...sourceBadgeStyle, ...getReputationBadgeStyle(alert.reputation_label) }}>
+                        <span
+                          style={{ ...sourceBadgeStyle, ...getReputationBadgeStyle(alert.reputation_label) }}
+                          title={`Behavioral reputation: ${alert.reputation_label || "Normal"} (${alert.reputation_score ?? 0})`}
+                        >
                           {alert.reputation_label || "Normal"}
                         </span>
                         <span style={sourceTypeTextStyle}>Score {alert.reputation_score ?? 0}</span>
@@ -1061,14 +1083,16 @@ const timelineSubtextStyle = {
                     <tr onClick={(e) => e.stopPropagation()}>
                       <td colSpan="9" style={expandedCellStyle}>
                         <div style={expandedContentStyle}>
-                          <p style={expandedLabelStyle}>Alert Details</p>
+                          <p style={{ ...expandedLabelStyle, marginBottom: "10px" }}>Alert Details</p>
 
-                          <p style={expandedTextStyle}>
-                            <strong>ID:</strong> {alert.id}
+                          <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
+                            <strong style={detailLabelTextStyle}>ID:</strong>{" "}
+                            <span style={detailValueTextStyle}>{alert.id}</span>
                           </p>
 
-                          <p style={expandedTextStyle}>
-                            <strong>Type:</strong> {alert.alert_type}
+                          <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
+                            <strong style={detailLabelTextStyle}>Type:</strong>{" "}
+                            <span style={detailValueTextStyle}>{alert.alert_type}</span>
                           </p>
 
                           {targetedAlertMeta && (
@@ -1105,36 +1129,38 @@ const timelineSubtextStyle = {
                             </div>
                           )}
 
-                          <p style={expandedTextStyle}>
-                            <strong>Source:</strong>{" "}
-                            {sourceBadge.label}{" "}
+                          <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
+                            <strong style={detailLabelTextStyle}>Source:</strong>{" "}
+                            <span style={detailValueTextStyle}>{sourceBadge.label}</span>{" "}
                             <span style={expandedSecondaryTextStyle}>
                               ({sourceBadge.subLabel})
                             </span>
                           </p>
 
-                          <div>
-                            <p style={expandedTextStyle}>
-                              <strong>Source IP:</strong>{" "}
-                              <span style={monoCellStyle}>
+                          <div style={detailSectionStyle}>
+                            <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
+                              <strong style={detailLabelTextStyle}>Source IP:</strong>{" "}
+                              <span style={{ ...monoCellStyle, ...detailValueTextStyle }}>
                                 {alert.source_ip}
                               </span>
                             </p>
 
-                            <p style={expandedTextStyle}>
-                              <strong>Location:</strong>{" "}
-                              {alert.city && alert.country
+                            <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
+                              <strong style={detailLabelTextStyle}>Location:</strong>{" "}
+                              <span style={detailValueTextStyle}>{alert.city && alert.country
                                 ? `${alert.city}, ${alert.country}`
-                                : "Location unavailable"}
+                                : "Location unavailable"}</span>
                             </p>
                           </div>
 
-                          <p style={expandedTextStyle}>
-                            <strong>Severity:</strong> {alert.severity}
+                          <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
+                            <strong style={detailLabelTextStyle}>Severity:</strong>{" "}
+                            <span style={detailValueTextStyle}>{alert.severity}</span>
                           </p>
 
-                          <p style={expandedTextStyle}>
-                            <strong>Message:</strong> {alert.message}
+                          <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
+                            <strong style={detailLabelTextStyle}>Message:</strong>{" "}
+                            <span style={detailValueTextStyle}>{alert.message}</span>
                           </p>
 
                           {(alert.mitre_technique_id || alert.mitre_technique_name || alert.mitre_tactic) && (
@@ -1160,9 +1186,12 @@ const timelineSubtextStyle = {
                             </div>
                           )}
 
-                          <p style={expandedTextStyle}>
-                            <strong>Behavioral Reputation:</strong>{" "}
-                            <span style={{ ...sourceBadgeStyle, ...getReputationBadgeStyle(alert.reputation_label) }}>
+                          <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
+                            <strong style={detailLabelTextStyle}>Behavioral Reputation:</strong>{" "}
+                            <span
+                              style={{ ...sourceBadgeStyle, ...getReputationBadgeStyle(alert.reputation_label) }}
+                              title={`Behavioral reputation: ${alert.reputation_label || "Normal"} (${alert.reputation_score ?? 0})`}
+                            >
                               {alert.reputation_label || "Normal"} ({alert.reputation_score ?? 0})
                             </span>
                           </p>
@@ -1172,7 +1201,7 @@ const timelineSubtextStyle = {
                           <p style={{ marginTop: "8px" }}>
                             {alert.reputation_summary || "No reputation details available"}
                           </p>
-                          <div style={{ marginTop: "10px" }}>
+                          <div style={detailSectionStyle}>
                             <strong>Contributing Signals:</strong>
                             {Array.isArray(alert.contributing_signals) && alert.contributing_signals.length > 0 ? (
                               alert.contributing_signals.map((signal) => (
@@ -1190,13 +1219,13 @@ const timelineSubtextStyle = {
                             )}
                           </div>
 
-                          <p style={expandedTextStyle}>
-                            <strong>Response Action:</strong>{" "}
-                            {alert.response_action || "Not set"}
+                          <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
+                            <strong style={detailLabelTextStyle}>Response Action:</strong>{" "}
+                            <span style={detailValueTextStyle}>{alert.response_action || "Not set"}</span>
                           </p>
-                          <p style={expandedTextStyle}>
-                            <strong>Response Status:</strong>{" "}
-                            {alert.response_status || "Not set"}
+                          <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
+                            <strong style={detailLabelTextStyle}>Response Status:</strong>{" "}
+                            <span style={detailValueTextStyle}>{alert.response_status || "Not set"}</span>
                           </p>
 
                           <div style={exportRowStyle}>
@@ -1366,9 +1395,9 @@ const timelineSubtextStyle = {
                             </div>
                           </div>
 
-                          <p style={expandedTextStyle}>
-                            <strong>Created At:</strong>{" "}
-                            <span style={monoCellStyle}>
+                          <p style={{ ...expandedTextStyle, marginBottom: "0" }}>
+                            <strong style={detailLabelTextStyle}>Created At:</strong>{" "}
+                            <span style={{ ...monoCellStyle, ...detailValueTextStyle }}>
                               {alert.created_at}
                             </span>
                           </p>
