@@ -1165,6 +1165,13 @@ def lookup_ip_location(ip_address):
 
 VALID_SEVERITIES = {"low", "medium", "high", "critical"}
 VALID_EVENT_TYPES = {"failed_login", "login_failure", "successful_login", "port_scan", "normal_activity"}
+VALID_EVENT_SEARCH_TYPES = VALID_EVENT_TYPES | {
+    "unauthorized_access",
+    "http_error",
+    "application_exception",
+    "availability_failure",
+}
+VALID_EVENT_SOURCES = {"bank_app", "nginx", "azure_insights", "opentelemetry"}
 VALID_RESPONSE_ACTIONS = {"block_ip", "monitor", "flag_high_priority"}
 MAX_ALERT_NOTE_LENGTH = 2000
 
@@ -2462,25 +2469,34 @@ def get_alerts():
 
         cur.execute("""
             SELECT
-                id,
-                alert_type,
-                severity,
-                message,
-                source_ip,
-                created_at,
-                status,
-                country,
-                city,
-                latitude,
-                longitude,
-                reputation_score,
-                reputation_label,
-                reputation_source,
-                reputation_summary,
-                response_action,
-                response_status
-            FROM alerts
-            ORDER BY created_at DESC
+                a.id,
+                a.alert_type,
+                a.severity,
+                a.message,
+                a.source_ip,
+                a.created_at,
+                a.status,
+                a.country,
+                a.city,
+                a.latitude,
+                a.longitude,
+                a.reputation_score,
+                a.reputation_label,
+                a.reputation_source,
+                a.reputation_summary,
+                a.response_action,
+                a.response_status,
+                event_meta.source,
+                event_meta.source_type
+            FROM alerts a
+            LEFT JOIN LATERAL (
+                SELECT e.source, e.source_type
+                FROM events e
+                WHERE e.source_ip = a.source_ip
+                ORDER BY e.created_at DESC
+                LIMIT 1
+            ) AS event_meta ON TRUE
+            ORDER BY a.created_at DESC
         """)
 
         rows = cur.fetchall()
@@ -2504,6 +2520,8 @@ def get_alerts():
                 "reputation_summary": row[14],
                 "response_action": row[15],
                 "response_status": row[16],
+                "source": row[17],
+                "source_type": row[18],
             })
             for row in rows
         ]
@@ -2528,6 +2546,7 @@ def search_events():
 
     try:
         source_ip = (request.args.get("source_ip") or "").strip()
+        source = (request.args.get("source") or "").strip()
         event_type = (request.args.get("event_type") or "").strip()
         start_time = (request.args.get("start_time") or "").strip()
         end_time = (request.args.get("end_time") or "").strip()
@@ -2543,8 +2562,14 @@ def search_events():
             clauses.append("source_ip = %s")
             params.append(source_ip)
 
+        if source:
+            if source not in VALID_EVENT_SOURCES:
+                return jsonify({"error": "Invalid source"}), 400
+            clauses.append("source = %s")
+            params.append(source)
+
         if event_type:
-            if event_type not in VALID_EVENT_TYPES:
+            if event_type not in VALID_EVENT_SEARCH_TYPES:
                 return jsonify({"error": "Invalid event_type"}), 400
             clauses.append("event_type = %s")
             params.append(event_type)
@@ -2574,6 +2599,8 @@ def search_events():
                 message,
                 app_name,
                 environment,
+                source,
+                source_type,
                 raw_payload,
                 created_at
             FROM events
@@ -2598,8 +2625,10 @@ def search_events():
                 "message": row[4],
                 "app_name": row[5],
                 "environment": row[6],
-                "raw_payload": row[7],
-                "created_at": str(row[8]),
+                "source": row[7],
+                "source_type": row[8],
+                "raw_payload": row[9],
+                "created_at": str(row[10]),
             }
             for row in rows
         ]

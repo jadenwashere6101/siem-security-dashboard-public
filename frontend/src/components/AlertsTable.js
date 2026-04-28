@@ -7,6 +7,7 @@ const SIEM_BASE_PATH =
     : "";
 
 const buildSiemPath = (path) => `${SIEM_BASE_PATH}${path}`;
+const MAX_ALERT_NOTE_LENGTH = 2000;
 
 function AlertsTable({
   alerts,
@@ -18,6 +19,8 @@ function AlertsTable({
   setSortOption,
   severityFilter,
   setSeverityFilter,
+  sourceFilter,
+  setSourceFilter,
   statusFilter,
   setStatusFilter,
   selectedAlertId,
@@ -45,6 +48,10 @@ function AlertsTable({
   expandedTextStyle,
 }) {
   const [responseLogs, setResponseLogs] = useState({});
+  const [alertNotes, setAlertNotes] = useState({});
+  const [noteDrafts, setNoteDrafts] = useState({});
+  const [loadingNotesForAlertId, setLoadingNotesForAlertId] = useState(null);
+  const [addingNoteForAlertId, setAddingNoteForAlertId] = useState(null);
   const [executingActionId, setExecutingActionId] = useState(null);
   const [toastMessage, setToastMessage] = useState("");
   const [toastType, setToastType] = useState("info");
@@ -155,11 +162,34 @@ function AlertsTable({
     fontSize: "13px",
     fontWeight: "600",
   };
-  const mitreTacticStyle = {
-    margin: 0,
-    color: "#9ca3af",
-    fontSize: "12px",
-  };
+const mitreTacticStyle = {
+  margin: 0,
+  color: "#9ca3af",
+  fontSize: "12px",
+};
+const sourceBadgeStackStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "4px",
+};
+const sourceBadgeStyle = {
+  display: "inline-block",
+  width: "fit-content",
+  padding: "4px 8px",
+  borderRadius: "999px",
+  fontSize: "10px",
+  fontWeight: "700",
+  letterSpacing: "0.04em",
+  textTransform: "uppercase",
+};
+const sourceTypeTextStyle = {
+  color: "#8b949e",
+  fontSize: "11px",
+};
+const expandedSecondaryTextStyle = {
+  color: "#8b949e",
+  fontSize: "12px",
+};
 
   const showToast = (message, type = "info") => {
     setToastMessage(message);
@@ -206,6 +236,89 @@ function AlertsTable({
 
     } catch (err) {
       console.error("Error fetching response log:", err);
+    }
+  };
+
+  const fetchAlertNotes = async (alertId) => {
+    try {
+      setLoadingNotesForAlertId(alertId);
+      const res = await fetch(buildSiemPath(`/alerts/${alertId}/notes`), {
+        credentials: "include",
+      });
+
+      const data = await res.json().catch(() => []);
+
+      if (!res.ok) {
+        const errorMessage = data.error || "Unable to load notes";
+        throw new Error(errorMessage);
+      }
+
+      setAlertNotes((prev) => ({
+        ...prev,
+        [alertId]: Array.isArray(data) ? data : [],
+      }));
+    } catch (err) {
+      console.error("Error fetching alert notes:", err);
+      showToast(err.message || "Unable to load notes", "error");
+    } finally {
+      setLoadingNotesForAlertId(null);
+    }
+  };
+
+  const formatNoteTimestamp = (value) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return value;
+    }
+
+    return new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      timeZone: "UTC",
+      timeZoneName: "short",
+    }).format(date);
+  };
+
+  const addAlertNote = async (alertId) => {
+    const noteText = (noteDrafts[alertId] || "").trim();
+    if (!noteText) {
+      showToast("Note text is required", "error");
+      return;
+    }
+
+    try {
+      setAddingNoteForAlertId(alertId);
+      const res = await fetch(buildSiemPath(`/alerts/${alertId}/notes`), {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ note_text: noteText }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        const errorMessage = data.error || "Unable to add note";
+        throw new Error(errorMessage);
+      }
+
+      setNoteDrafts((prev) => ({
+        ...prev,
+        [alertId]: "",
+      }));
+      await fetchAlertNotes(alertId);
+      showToast("Note added successfully");
+    } catch (err) {
+      console.error("Error adding alert note:", err);
+      showToast(err.message || "Unable to add note", "error");
+    } finally {
+      setAddingNoteForAlertId(null);
     }
   };
 
@@ -311,6 +424,9 @@ function AlertsTable({
   const multiAlertReportHref = buildSiemPath(
     `/alerts/report${reportQuery.toString() ? `?${reportQuery.toString()}` : ""}`
   );
+  const multiAlertCsvExportHref = buildSiemPath(
+    `/alerts/export/csv${reportQuery.toString() ? `?${reportQuery.toString()}` : ""}`
+  );
   const multiAlertPdfReportHref = buildSiemPath(
     `/alerts/report/pdf${reportQuery.toString() ? `?${reportQuery.toString()}` : ""}`
   );
@@ -319,6 +435,68 @@ function AlertsTable({
     if (action === "flag_high_priority") return "#f59e0b";
     if (action === "monitor") return "#22c55e";
     return "#6b7280";
+  };
+
+  const getSourceBadgeMeta = (source, sourceType) => {
+    const normalizedSource = (source || "").toLowerCase();
+
+    if (normalizedSource === "bank_app") {
+      return {
+        label: "App / Bank",
+        subLabel: sourceType || "custom",
+        style: {
+          color: "#93c5fd",
+          backgroundColor: "rgba(59, 130, 246, 0.10)",
+          border: "1px solid rgba(59, 130, 246, 0.28)",
+        },
+      };
+    }
+
+    if (normalizedSource === "nginx") {
+      return {
+        label: "Web Log",
+        subLabel: sourceType || "web_log",
+        style: {
+          color: "#fbbf24",
+          backgroundColor: "rgba(251, 191, 36, 0.10)",
+          border: "1px solid rgba(251, 191, 36, 0.28)",
+        },
+      };
+    }
+
+    if (normalizedSource === "azure_insights") {
+      return {
+        label: "Azure",
+        subLabel: sourceType || "cloud_api",
+        style: {
+          color: "#67e8f9",
+          backgroundColor: "rgba(103, 232, 249, 0.10)",
+          border: "1px solid rgba(103, 232, 249, 0.26)",
+        },
+      };
+    }
+
+    if (normalizedSource === "opentelemetry") {
+      return {
+        label: "OTEL",
+        subLabel: sourceType || "telemetry",
+        style: {
+          color: "#c4b5fd",
+          backgroundColor: "rgba(196, 181, 253, 0.10)",
+          border: "1px solid rgba(196, 181, 253, 0.26)",
+        },
+      };
+    }
+
+    return {
+      label: "Unknown",
+      subLabel: sourceType || "Legacy",
+      style: {
+        color: "#c9d1d9",
+        backgroundColor: "rgba(148, 163, 184, 0.10)",
+        border: "1px solid rgba(148, 163, 184, 0.22)",
+      },
+    };
   };
 
   const handleResolve = async (e, alertId) => {
@@ -374,6 +552,9 @@ function AlertsTable({
             <details style={exportMenuStyle}>
               <summary style={exportMenuTriggerStyle}>Export</summary>
               <div style={exportMenuPanelStyle}>
+                <a href={multiAlertCsvExportHref} style={exportMenuOptionStyle}>
+                  Download Filtered Alerts (CSV)
+                </a>
                 <a href={multiAlertReportHref} style={exportMenuOptionStyle}>
                   Download Filtered Incident Report (TXT)
                 </a>
@@ -451,6 +632,24 @@ function AlertsTable({
           </div>
 
           <div style={filterWrapperStyle}>
+            <label htmlFor="sourceFilter" style={filterLabelStyle}>
+              Source
+            </label>
+            <select
+              id="sourceFilter"
+              value={sourceFilter}
+              onChange={(e) => setSourceFilter(e.target.value)}
+              style={selectStyle}
+            >
+              <option value="all">All Sources</option>
+              <option value="bank_app">bank_app</option>
+              <option value="nginx">nginx</option>
+              <option value="azure_insights">azure_insights</option>
+              <option value="opentelemetry">opentelemetry</option>
+            </select>
+          </div>
+
+          <div style={filterWrapperStyle}>
             <label htmlFor="statusFilter" style={filterLabelStyle}>
               Status
             </label>
@@ -488,6 +687,7 @@ function AlertsTable({
                 <tr>
                   <th style={headerCellStyle}>ID</th>
                   <th style={headerCellStyle}>Type</th>
+                  <th style={headerCellStyle}>Source</th>
                   <th style={headerCellStyle}>Source IP</th>
                   <th style={headerCellStyle}>Severity</th>
                   <th style={headerCellStyle}>Message</th>
@@ -497,7 +697,10 @@ function AlertsTable({
               </thead>
 
             <tbody>
-              {filteredAlerts.map((alert) => (
+              {filteredAlerts.map((alert) => {
+                const sourceBadge = getSourceBadgeMeta(alert.source, alert.source_type);
+
+                return (
                 <React.Fragment key={alert.id}>
                   <tr
                     style={{
@@ -516,6 +719,9 @@ function AlertsTable({
                         setSelectedAlertId(alert.id);
                         setSelectedAlert(alert);
                         fetchResponseLog(alert.id);
+                        if (canTakeAlertActions) {
+                          fetchAlertNotes(alert.id);
+                        }
                       }
                     }}
                   >
@@ -523,6 +729,15 @@ function AlertsTable({
 
                     <td style={{ ...bodyCellStyle, ...monoCellStyle }}>
                       {alert.alert_type}
+                    </td>
+
+                    <td style={bodyCellStyle}>
+                      <div style={sourceBadgeStackStyle}>
+                        <span style={{ ...sourceBadgeStyle, ...sourceBadge.style }}>
+                          {sourceBadge.label}
+                        </span>
+                        <span style={sourceTypeTextStyle}>{sourceBadge.subLabel}</span>
+                      </div>
                     </td>
 
                     <td style={{ ...bodyCellStyle, ...monoCellStyle }}>
@@ -595,7 +810,7 @@ function AlertsTable({
 
                   {selectedAlertId === alert.id && (
                     <tr onClick={(e) => e.stopPropagation()}>
-                      <td colSpan="7" style={expandedCellStyle}>
+                      <td colSpan="8" style={expandedCellStyle}>
                         <div style={expandedContentStyle}>
                           <p style={expandedLabelStyle}>Alert Details</p>
 
@@ -605,6 +820,14 @@ function AlertsTable({
 
                           <p style={expandedTextStyle}>
                             <strong>Type:</strong> {alert.alert_type}
+                          </p>
+
+                          <p style={expandedTextStyle}>
+                            <strong>Source:</strong>{" "}
+                            {sourceBadge.label}{" "}
+                            <span style={expandedSecondaryTextStyle}>
+                              ({sourceBadge.subLabel})
+                            </span>
                           </p>
 
                           <div>
@@ -885,7 +1108,8 @@ function AlertsTable({
                     </tr>
                   )}
                 </React.Fragment>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -1126,6 +1350,106 @@ function AlertsTable({
                 </button>
               </div>
             </div>
+
+            {canTakeAlertActions && (
+              <div style={{ marginTop: "24px" }}>
+                <strong>Analyst Notes:</strong>
+                <div style={{ marginTop: "10px" }}>
+                  <textarea
+                    value={noteDrafts[selectedAlert.id] || ""}
+                    onChange={(e) =>
+                      setNoteDrafts((prev) => ({
+                        ...prev,
+                        [selectedAlert.id]: e.target.value,
+                      }))
+                    }
+                    maxLength={MAX_ALERT_NOTE_LENGTH}
+                    placeholder="Add investigation notes..."
+                    style={{
+                      width: "100%",
+                      minHeight: "96px",
+                      padding: "10px 12px",
+                      borderRadius: "10px",
+                      border: "1px solid #334155",
+                      backgroundColor: "#111827",
+                      color: "#e5e7eb",
+                      resize: "vertical",
+                      boxSizing: "border-box",
+                      fontSize: "13px",
+                    }}
+                  />
+                  <div
+                    style={{
+                      marginTop: "8px",
+                      fontSize: "12px",
+                      color: "#94a3b8",
+                      textAlign: "right",
+                    }}
+                  >
+                    {(noteDrafts[selectedAlert.id] || "").length} / {MAX_ALERT_NOTE_LENGTH}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => addAlertNote(selectedAlert.id)}
+                    disabled={addingNoteForAlertId === selectedAlert.id}
+                    style={{
+                      marginTop: "10px",
+                      padding: "8px 12px",
+                      borderRadius: "8px",
+                      border: "1px solid rgba(59, 130, 246, 0.35)",
+                      backgroundColor: "rgba(37, 99, 235, 0.18)",
+                      color: "#bfdbfe",
+                      fontWeight: "700",
+                      cursor: addingNoteForAlertId === selectedAlert.id ? "not-allowed" : "pointer",
+                      opacity: addingNoteForAlertId === selectedAlert.id ? 0.7 : 1,
+                    }}
+                  >
+                    {addingNoteForAlertId === selectedAlert.id ? "Adding..." : "Add Note"}
+                  </button>
+                </div>
+
+                <div style={{ marginTop: "14px" }}>
+                  {loadingNotesForAlertId === selectedAlert.id ? (
+                    <div style={{ fontSize: "12px", opacity: 0.7 }}>Loading notes...</div>
+                  ) : alertNotes[selectedAlert.id] && alertNotes[selectedAlert.id].length > 0 ? (
+                    alertNotes[selectedAlert.id].map((note) => (
+                      <div
+                        key={note.id}
+                        style={{
+                          marginTop: "8px",
+                          padding: "10px 12px",
+                          borderRadius: "10px",
+                          backgroundColor: "#111827",
+                          border: "1px solid #1f2937",
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            gap: "12px",
+                            marginBottom: "6px",
+                            fontSize: "12px",
+                            color: "#94a3b8",
+                          }}
+                        >
+                          <span>{note.author}</span>
+                          <span>{formatNoteTimestamp(note.created_at)}</span>
+                        </div>
+                        <div style={{ fontSize: "13px", lineHeight: "1.55", color: "#e5e7eb" }}>
+                          {note.note_text}
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div style={{ fontSize: "12px", opacity: 0.7 }}>
+                      No notes yet. Add the first note.
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

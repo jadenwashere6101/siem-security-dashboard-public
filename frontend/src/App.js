@@ -7,6 +7,8 @@ import AlertsTable from "./components/AlertsTable";
 import MapView from "./components/MapView";
 import AdminUsersPanel from "./components/AdminUsersPanel";
 import AuditLogPanel from "./components/AuditLogPanel";
+import DetectionRulesPanel from "./components/DetectionRulesPanel";
+import ThreatHuntPanel from "./components/ThreatHuntPanel";
 
 const SIEM_BASE_PATH =
   typeof window !== "undefined" &&
@@ -45,6 +47,7 @@ const writeStoredSessionIdentity = (identity) => {
 function App() {
   const [alerts, setAlerts] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
+  const [sourceFilter, setSourceFilter] = useState("all");
   const [severityFilter, setSeverityFilter] = useState("");
   const [selectedAlertId, setSelectedAlertId] = useState(null);
   const [statusFilter, setStatusFilter] = useState("");
@@ -64,6 +67,8 @@ function App() {
     role: null,
   });
   const hasCheckedAuthRef = useRef(false);
+  const alertsTableRef = useRef(null);
+  const pendingAlertsFocusRef = useRef(false);
 
   const checkAuth = async () => {
     try {
@@ -221,6 +226,18 @@ function App() {
     return () => clearTimeout(timeout);
   }, [sessionNotice]);
 
+  useEffect(() => {
+    if (!pendingAlertsFocusRef.current || activeSection !== "dashboard") {
+      return;
+    }
+
+    alertsTableRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+    pendingAlertsFocusRef.current = false;
+  }, [activeSection, searchTerm]);
+
   const filteredAlerts = useMemo(() => {
     return alerts.filter((alert) => {
       const matchesSearch =
@@ -234,9 +251,12 @@ function App() {
       const matchesStatus =
         !statusFilter || statusFilter === "all" || alert.status === statusFilter;
 
-      return matchesSearch && matchesSeverity && matchesStatus;
+      const matchesSource =
+        !sourceFilter || sourceFilter === "all" || (alert.source || "legacy") === sourceFilter;
+
+      return matchesSearch && matchesSeverity && matchesStatus && matchesSource;
     });
-  }, [alerts, searchTerm, severityFilter, statusFilter]);
+  }, [alerts, searchTerm, severityFilter, statusFilter, sourceFilter]);
 
   const sortedAlerts = useMemo(() => {
     return [...filteredAlerts].sort((a, b) => {
@@ -300,27 +320,34 @@ function App() {
     }
   };
 
+  const handleViewRelatedAlerts = (sourceIp) => {
+    pendingAlertsFocusRef.current = true;
+    setSearchTerm(sourceIp || "");
+    setActiveSection("dashboard");
+    setSelectedAlertId(null);
+  };
+
 
   const metrics = useMemo(() => {
-    const highCount = alerts.filter((alert) => alert.severity === "high").length;
-    const mediumCount = alerts.filter((alert) => alert.severity === "medium").length;
-    const lowCount = alerts.filter((alert) => alert.severity === "low").length;
-    const uniqueIPs = new Set(alerts.map((alert) => alert.source_ip)).size;
+    const highCount = filteredAlerts.filter((alert) => alert.severity === "high").length;
+    const mediumCount = filteredAlerts.filter((alert) => alert.severity === "medium").length;
+    const lowCount = filteredAlerts.filter((alert) => alert.severity === "low").length;
+    const uniqueIPs = new Set(filteredAlerts.map((alert) => alert.source_ip)).size;
 
     return {
-      totalAlerts: alerts.length,
+      totalAlerts: filteredAlerts.length,
       highCount,
       mediumCount,
       lowCount,
       uniqueIPs,
     };
-  }, [alerts]);
+  }, [filteredAlerts]);
 
 
   const topIPChartData = useMemo(() => {
     const counts = {};
 
-    alerts.forEach((alert) => {
+    filteredAlerts.forEach((alert) => {
       counts[alert.source_ip] = (counts[alert.source_ip] || 0) + 1;
     });
 
@@ -331,13 +358,13 @@ function App() {
       }))
       .sort((a, b) => b.value - a.value)
       .slice(0, 5);
-  }, [alerts]);
+  }, [filteredAlerts]);
 
   const alertTimelineData = useMemo(() => {
     const bucketCounts = new Map();
     const dayKeys = new Set();
 
-    alerts.forEach((alert) => {
+    filteredAlerts.forEach((alert) => {
       if (!alert?.created_at) return;
 
       const createdAt = new Date(alert.created_at);
@@ -373,7 +400,7 @@ function App() {
           bucketStart,
         };
       });
-  }, [alerts]);
+  }, [filteredAlerts]);
 
   const getSeverityBadgeStyle = (severity) => {
     if (severity === "high") {
@@ -580,6 +607,18 @@ function App() {
           >
             Dashboard
           </button>
+          {canTakeAlertActions && (
+            <button
+              type="button"
+              onClick={() => setActiveSection("threat-hunt")}
+              style={{
+                ...sectionTabStyle,
+                ...(activeSection === "threat-hunt" ? activeSectionTabStyle : inactiveSectionTabStyle),
+              }}
+            >
+              Threat Hunt
+            </button>
+          )}
           {isSuperAdmin && (
             <button
               type="button"
@@ -662,47 +701,69 @@ function App() {
                 <MapView alerts={sortedAlerts} />
               </div>
             </div>
-            <AlertsTable
-              alerts={sortedAlerts}
-              canTakeAlertActions={canTakeAlertActions}
-              setAlerts={setAlerts}
-              searchTerm={searchTerm}
-              setSearchTerm={setSearchTerm}
-              sortOption={sortOption}
-              setSortOption={setSortOption}
-              severityFilter={severityFilter}
-              setSeverityFilter={setSeverityFilter}
-              selectedAlertId={selectedAlertId}
-              setSelectedAlertId={setSelectedAlertId}
-              getSeverityBadgeStyle={getSeverityBadgeStyle}
-              cardStyle={cardStyle}
-              cardHeaderStyle={cardHeaderStyle}
-              cardTitleStyle={cardTitleStyle}
-              cardSubtitleStyle={cardSubtitleStyle}
-              filterWrapperStyle={filterWrapperStyle}
-              filterLabelStyle={filterLabelStyle}
-              selectStyle={selectStyle}
-              emptyStateStyle={emptyStateStyle}
-              emptyStateTextStyle={emptyStateTextStyle}
-              tableWrapperStyle={tableWrapperStyle}
-              tableStyle={tableStyle}
-              headerCellStyle={headerCellStyle}
-              bodyCellStyle={bodyCellStyle}
-              monoCellStyle={monoCellStyle}
-              tableRowStyle={tableRowStyle}
-              expandedCellStyle={expandedCellStyle}
-              expandedContentStyle={expandedContentStyle}
-              expandedLabelStyle={expandedLabelStyle}
-              expandedTextStyle={expandedTextStyle}
-              onUpdateStatus={handleUpdateStatus}
-              statusFilter={statusFilter}
-              setStatusFilter={setStatusFilter}
-            />
+            <div ref={alertsTableRef}>
+              <AlertsTable
+                alerts={sortedAlerts}
+                canTakeAlertActions={canTakeAlertActions}
+                setAlerts={setAlerts}
+                searchTerm={searchTerm}
+                setSearchTerm={setSearchTerm}
+                sortOption={sortOption}
+                setSortOption={setSortOption}
+                severityFilter={severityFilter}
+                setSeverityFilter={setSeverityFilter}
+                sourceFilter={sourceFilter}
+                setSourceFilter={setSourceFilter}
+                selectedAlertId={selectedAlertId}
+                setSelectedAlertId={setSelectedAlertId}
+                getSeverityBadgeStyle={getSeverityBadgeStyle}
+                cardStyle={cardStyle}
+                cardHeaderStyle={cardHeaderStyle}
+                cardTitleStyle={cardTitleStyle}
+                cardSubtitleStyle={cardSubtitleStyle}
+                filterWrapperStyle={filterWrapperStyle}
+                filterLabelStyle={filterLabelStyle}
+                selectStyle={selectStyle}
+                emptyStateStyle={emptyStateStyle}
+                emptyStateTextStyle={emptyStateTextStyle}
+                tableWrapperStyle={tableWrapperStyle}
+                tableStyle={tableStyle}
+                headerCellStyle={headerCellStyle}
+                bodyCellStyle={bodyCellStyle}
+                monoCellStyle={monoCellStyle}
+                tableRowStyle={tableRowStyle}
+                expandedCellStyle={expandedCellStyle}
+                expandedContentStyle={expandedContentStyle}
+                expandedLabelStyle={expandedLabelStyle}
+                expandedTextStyle={expandedTextStyle}
+                onUpdateStatus={handleUpdateStatus}
+                statusFilter={statusFilter}
+                setStatusFilter={setStatusFilter}
+              />
+            </div>
           </>
+        )}
+
+        {canTakeAlertActions && activeSection === "threat-hunt" && (
+          <ThreatHuntPanel
+            cardStyle={cardStyle}
+            cardHeaderStyle={cardHeaderStyle}
+            cardTitleStyle={cardTitleStyle}
+            cardSubtitleStyle={cardSubtitleStyle}
+            filterLabelStyle={filterLabelStyle}
+            selectStyle={selectStyle}
+            onViewRelatedAlerts={handleViewRelatedAlerts}
+          />
         )}
 
         {isSuperAdmin && activeSection === "administration" && (
           <>
+            <DetectionRulesPanel
+              cardStyle={cardStyle}
+              cardHeaderStyle={cardHeaderStyle}
+              cardTitleStyle={cardTitleStyle}
+              cardSubtitleStyle={cardSubtitleStyle}
+            />
             <AdminUsersPanel
               cardStyle={cardStyle}
               cardHeaderStyle={cardHeaderStyle}
