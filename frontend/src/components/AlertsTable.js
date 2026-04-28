@@ -57,6 +57,7 @@ function AlertsTable({
   const [toastType, setToastType] = useState("info");
   const [selectedAlert, setSelectedAlert] = useState(null);
   const [hoveredAlertId, setHoveredAlertId] = useState(null);
+  const [collapsedGroups, setCollapsedGroups] = useState({});
   const exportMenuStyle = {
     position: "relative",
     display: "inline-block",
@@ -286,8 +287,61 @@ const timelineSubtextStyle = {
   color: "#8b949e",
   fontSize: "11px",
 };
+const groupHeaderRowStyle = {
+  backgroundColor: "#101722",
+  borderTop: "1px solid #30363d",
+  borderBottom: "1px solid #253041",
+  cursor: "pointer",
+};
+const groupHeaderCellStyle = {
+  ...bodyCellStyle,
+  padding: "10px 14px",
+  backgroundColor: "#101722",
+};
+const groupHeaderContentStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: "12px",
+  flexWrap: "wrap",
+};
+const groupHeaderMetaStyle = {
+  display: "flex",
+  alignItems: "center",
+  gap: "10px",
+  flexWrap: "wrap",
+};
+const groupHeaderTitleStyle = {
+  color: "#e6edf3",
+  fontSize: "13px",
+  fontWeight: "700",
+};
+const groupHeaderSubtextStyle = {
+  color: "#94a3b8",
+  fontSize: "11px",
+};
+const groupCountBadgeStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: "4px 8px",
+  borderRadius: "999px",
+  fontSize: "10px",
+  fontWeight: "700",
+  letterSpacing: "0.04em",
+  textTransform: "uppercase",
+  color: "#cbd5e1",
+  backgroundColor: "rgba(148, 163, 184, 0.12)",
+  border: "1px solid rgba(148, 163, 184, 0.22)",
+};
 const detailSectionStyle = {
   marginTop: "10px",
+};
+const severityRank = {
+  critical: 1,
+  high: 2,
+  medium: 3,
+  low: 4,
 };
 
   const showToast = (message, type = "info") => {
@@ -733,6 +787,54 @@ const detailSectionStyle = {
         .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
     : [];
 
+  const groupedFilteredAlerts = [];
+  const groupedFilteredAlertsMap = new Map();
+
+  filteredAlerts.forEach((alert) => {
+    const groupKey = alert.source_ip || "Unknown IP";
+    const existingGroup = groupedFilteredAlertsMap.get(groupKey);
+
+    if (existingGroup) {
+      existingGroup.alerts.push(alert);
+      return;
+    }
+
+    const nextGroup = {
+      sourceIp: groupKey,
+      alerts: [alert],
+    };
+
+    groupedFilteredAlertsMap.set(groupKey, nextGroup);
+    groupedFilteredAlerts.push(nextGroup);
+  });
+
+  groupedFilteredAlerts.forEach((group) => {
+    const highestSeverityAlert = group.alerts.reduce((currentHighest, candidate) => {
+      if (!currentHighest) {
+        return candidate;
+      }
+
+      const currentRank = severityRank[currentHighest.severity] || 99;
+      const candidateRank = severityRank[candidate.severity] || 99;
+
+      return candidateRank < currentRank ? candidate : currentHighest;
+    }, null);
+
+    group.primaryAlert = group.alerts[0];
+    group.highestSeverity = highestSeverityAlert?.severity || "unknown";
+    group.locationLabel =
+      group.primaryAlert?.city && group.primaryAlert?.country
+        ? `${group.primaryAlert.city}, ${group.primaryAlert.country}`
+        : "Location unavailable";
+  });
+
+  const toggleGroup = (groupKey) => {
+    setCollapsedGroups((current) => ({
+      ...current,
+      [groupKey]: !current[groupKey],
+    }));
+  };
+
   const handleResolve = async (e, alertId) => {
     e.stopPropagation();
     const result = await onUpdateStatus(alertId, "resolved");
@@ -932,157 +1034,186 @@ const detailSectionStyle = {
               </thead>
 
             <tbody>
-              {filteredAlerts.map((alert) => {
-                const sourceBadge = getSourceBadgeMeta(alert.source, alert.source_type);
-                const correlationAlert = isCorrelationAlert(alert);
-                const targetedAlertMeta = getTargetedAlertMeta(alert.alert_type);
-                const correlatedAlertTypes = getCorrelationAlertTypes(alert);
-
-                return (
-                <React.Fragment key={alert.id}>
+              {groupedFilteredAlerts.map((group) => (
+                <React.Fragment key={group.sourceIp}>
                   <tr
-                    style={{
-                      ...tableRowStyle,
-                      cursor: "pointer",
-                      backgroundColor:
-                        selectedAlertId === alert.id
-                          ? targetedAlertMeta
-                            ? targetedAlertMeta.rowStyle.backgroundColor === "#19150d"
-                              ? "#1f1a11"
-                              : targetedAlertMeta.rowStyle.backgroundColor
-                            : "#111827"
-                          : targetedAlertMeta
-                            ? targetedAlertMeta.rowStyle.backgroundColor
-                            : hoveredAlertId === alert.id
-                              ? "#1b2230"
-                            : "#161b22",
-                      borderLeft: targetedAlertMeta
-                        ? targetedAlertMeta.rowStyle.borderLeft
-                        : tableRowStyle.borderLeft,
-                      transition: "background-color 120ms ease",
-                    }}
-                    onMouseEnter={() => setHoveredAlertId(alert.id)}
-                    onMouseLeave={() => setHoveredAlertId(null)}
-                    onClick={() => {
-                      if (selectedAlertId === alert.id) {
-                        setSelectedAlertId(null);
-                        setSelectedAlert(null);
-                      } else {
-                        setSelectedAlertId(alert.id);
-                        setSelectedAlert(alert);
-                        fetchResponseLog(alert.id);
-                        if (canTakeAlertActions) {
-                          fetchAlertNotes(alert.id);
-                        }
-                      }
-                    }}
+                    style={groupHeaderRowStyle}
+                    onClick={() => toggleGroup(group.sourceIp)}
+                    title={collapsedGroups[group.sourceIp] ? "Expand group" : "Collapse group"}
                   >
-                    <td style={bodyCellStyle}>{alert.id}</td>
-
-                    <td style={{ ...bodyCellStyle, ...monoCellStyle }}>
-                      <div style={sourceBadgeStackStyle}>
-                        <span>{alert.alert_type}</span>
-                        {targetedAlertMeta?.badge && (
-                          <span style={targetedAlertMeta.badgeStyle} title={targetedAlertMeta.description || targetedAlertMeta.badge}>
-                            {targetedAlertMeta.badge}
+                    <td colSpan="9" style={groupHeaderCellStyle}>
+                      <div style={groupHeaderContentStyle}>
+                        <div style={groupHeaderMetaStyle}>
+                          <span style={groupHeaderTitleStyle}>
+                            {collapsedGroups[group.sourceIp] ? "▸" : "▾"} {group.sourceIp}
                           </span>
-                        )}
-                      </div>
-                    </td>
-
-                    <td style={bodyCellStyle}>
-                      <div style={sourceBadgeStackStyle}>
-                        <span style={{ ...sourceBadgeStyle, ...sourceBadge.style }} title={`Source: ${sourceBadge.label}`}>
-                          {sourceBadge.label}
-                        </span>
-                        <span style={sourceTypeTextStyle}>{sourceBadge.subLabel}</span>
-                      </div>
-                    </td>
-
-                    <td style={{ ...bodyCellStyle, ...monoCellStyle }}>
-                      <div>{alert.source_ip}</div>
-                      <div style={{ fontSize: "12px", color: "#666", marginTop: "4px" }}>
-                        {alert.city && alert.country
-                          ? `${alert.city}, ${alert.country}`
-                          : "Location unavailable"}
-                      </div>
-                    </td>
-
-                    <td style={bodyCellStyle}>
-                      <div style={sourceBadgeStackStyle}>
-                        <span
-                          style={{ ...sourceBadgeStyle, ...getReputationBadgeStyle(alert.reputation_label) }}
-                          title={`Behavioral reputation: ${alert.reputation_label || "Normal"} (${alert.reputation_score ?? 0})`}
-                        >
-                          {alert.reputation_label || "Normal"}
-                        </span>
-                        <span style={sourceTypeTextStyle}>Score {alert.reputation_score ?? 0}</span>
-                      </div>
-                    </td>
-
-                    <td style={bodyCellStyle}>
-                      <div>
-                        <span style={getSeverityBadgeStyle(alert.severity)}>
-                          {alert.severity}
-                        </span>
-                      </div>
-                    </td>
-
-                    <td style={bodyCellStyle}>{alert.message}</td>
-
-                    <td style={{ ...bodyCellStyle, ...monoCellStyle }}>
-                      {alert.created_at}
-                    </td>
-
-                    <td style={bodyCellStyle}>
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "10px",
-                          flexWrap: "wrap",
-                        }}
-                      >
-                        <span
-                          title={alert.response_action || "No response action"}
-                          style={{
-                            width: "10px",
-                            height: "10px",
-                            borderRadius: "999px",
-                            backgroundColor: getResponseIndicatorColor(alert.response_action),
-                            boxShadow: `0 0 0 2px rgba(255, 255, 255, 0.04), 0 0 0 1px ${getResponseIndicatorColor(alert.response_action)}`,
-                            flexShrink: 0,
-                          }}
-                        />
-                        {alert.status === "open" && (
-                          <button
-                            onClick={(e) => handleResolve(e, alert.id)}
-                            title={canTakeAlertActions ? "Resolve alert" : "Requires elevated privileges"}
-                            style={getActionButtonStyle(
-                              {
-                                padding: "6px 10px",
-                                backgroundColor: "#238636",
-                                color: "white",
-                                border: "none",
-                                borderRadius: "6px",
-                                cursor: "pointer",
-                                fontWeight: "700",
-                                transition: "opacity 120ms ease, border-color 120ms ease, background-color 120ms ease",
-                              },
-                              "#f59e0b"
-                            )}
-                          >
-                            {canTakeAlertActions ? "Resolve" : "🔒 Resolve"}
-                          </button>
-                        )}
+                          <span style={groupHeaderSubtextStyle}>{group.locationLabel}</span>
+                          <span style={groupCountBadgeStyle}>
+                            {group.alerts.length} {group.alerts.length === 1 ? "alert" : "alerts"}
+                          </span>
+                        </div>
+                        <div style={groupHeaderMetaStyle}>
+                          <span style={groupHeaderSubtextStyle}>Highest severity</span>
+                          <span style={getSeverityBadgeStyle(group.highestSeverity)}>
+                            {group.highestSeverity}
+                          </span>
+                        </div>
                       </div>
                     </td>
                   </tr>
 
-                  {selectedAlertId === alert.id && (
-                    <tr onClick={(e) => e.stopPropagation()}>
-                      <td colSpan="9" style={expandedCellStyle}>
-                        <div style={expandedContentStyle}>
+                  {!collapsedGroups[group.sourceIp] &&
+                    group.alerts.map((alert) => {
+                      const sourceBadge = getSourceBadgeMeta(alert.source, alert.source_type);
+                      const correlationAlert = isCorrelationAlert(alert);
+                      const targetedAlertMeta = getTargetedAlertMeta(alert.alert_type);
+                      const correlatedAlertTypes = getCorrelationAlertTypes(alert);
+
+                      return (
+                      <React.Fragment key={alert.id}>
+                        <tr
+                          style={{
+                            ...tableRowStyle,
+                            cursor: "pointer",
+                            backgroundColor:
+                              selectedAlertId === alert.id
+                                ? targetedAlertMeta
+                                  ? targetedAlertMeta.rowStyle.backgroundColor === "#19150d"
+                                    ? "#1f1a11"
+                                    : targetedAlertMeta.rowStyle.backgroundColor
+                                  : "#111827"
+                                : targetedAlertMeta
+                                  ? targetedAlertMeta.rowStyle.backgroundColor
+                                  : hoveredAlertId === alert.id
+                                    ? "#1b2230"
+                                    : "#161b22",
+                            borderLeft: targetedAlertMeta
+                              ? targetedAlertMeta.rowStyle.borderLeft
+                              : tableRowStyle.borderLeft,
+                            transition: "background-color 120ms ease",
+                          }}
+                          onMouseEnter={() => setHoveredAlertId(alert.id)}
+                          onMouseLeave={() => setHoveredAlertId(null)}
+                          onClick={() => {
+                            if (selectedAlertId === alert.id) {
+                              setSelectedAlertId(null);
+                              setSelectedAlert(null);
+                            } else {
+                              setSelectedAlertId(alert.id);
+                              setSelectedAlert(alert);
+                              fetchResponseLog(alert.id);
+                              if (canTakeAlertActions) {
+                                fetchAlertNotes(alert.id);
+                              }
+                            }
+                          }}
+                        >
+                          <td style={bodyCellStyle}>{alert.id}</td>
+
+                          <td style={{ ...bodyCellStyle, ...monoCellStyle }}>
+                            <div style={sourceBadgeStackStyle}>
+                              <span>{alert.alert_type}</span>
+                              {targetedAlertMeta?.badge && (
+                                <span style={targetedAlertMeta.badgeStyle} title={targetedAlertMeta.description || targetedAlertMeta.badge}>
+                                  {targetedAlertMeta.badge}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+
+                          <td style={bodyCellStyle}>
+                            <div style={sourceBadgeStackStyle}>
+                              <span style={{ ...sourceBadgeStyle, ...sourceBadge.style }} title={`Source: ${sourceBadge.label}`}>
+                                {sourceBadge.label}
+                              </span>
+                              <span style={sourceTypeTextStyle}>{sourceBadge.subLabel}</span>
+                            </div>
+                          </td>
+
+                          <td style={{ ...bodyCellStyle, ...monoCellStyle }}>
+                            <div>{alert.source_ip}</div>
+                            <div style={{ fontSize: "12px", color: "#666", marginTop: "4px" }}>
+                              {alert.city && alert.country
+                                ? `${alert.city}, ${alert.country}`
+                                : "Location unavailable"}
+                            </div>
+                          </td>
+
+                          <td style={bodyCellStyle}>
+                            <div style={sourceBadgeStackStyle}>
+                              <span
+                                style={{ ...sourceBadgeStyle, ...getReputationBadgeStyle(alert.reputation_label) }}
+                                title={`Behavioral reputation: ${alert.reputation_label || "Normal"} (${alert.reputation_score ?? 0})`}
+                              >
+                                {alert.reputation_label || "Normal"}
+                              </span>
+                              <span style={sourceTypeTextStyle}>Score {alert.reputation_score ?? 0}</span>
+                            </div>
+                          </td>
+
+                          <td style={bodyCellStyle}>
+                            <div>
+                              <span style={getSeverityBadgeStyle(alert.severity)}>
+                                {alert.severity}
+                              </span>
+                            </div>
+                          </td>
+
+                          <td style={bodyCellStyle}>{alert.message}</td>
+
+                          <td style={{ ...bodyCellStyle, ...monoCellStyle }}>
+                            {alert.created_at}
+                          </td>
+
+                          <td style={bodyCellStyle}>
+                            <div
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "10px",
+                                flexWrap: "wrap",
+                              }}
+                            >
+                              <span
+                                title={alert.response_action || "No response action"}
+                                style={{
+                                  width: "10px",
+                                  height: "10px",
+                                  borderRadius: "999px",
+                                  backgroundColor: getResponseIndicatorColor(alert.response_action),
+                                  boxShadow: `0 0 0 2px rgba(255, 255, 255, 0.04), 0 0 0 1px ${getResponseIndicatorColor(alert.response_action)}`,
+                                  flexShrink: 0,
+                                }}
+                              />
+                              {alert.status === "open" && (
+                                <button
+                                  onClick={(e) => handleResolve(e, alert.id)}
+                                  title={canTakeAlertActions ? "Resolve alert" : "Requires elevated privileges"}
+                                  style={getActionButtonStyle(
+                                    {
+                                      padding: "6px 10px",
+                                      backgroundColor: "#238636",
+                                      color: "white",
+                                      border: "none",
+                                      borderRadius: "6px",
+                                      cursor: "pointer",
+                                      fontWeight: "700",
+                                      transition: "opacity 120ms ease, border-color 120ms ease, background-color 120ms ease",
+                                    },
+                                    "#f59e0b"
+                                  )}
+                                >
+                                  {canTakeAlertActions ? "Resolve" : "🔒 Resolve"}
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+
+                        {selectedAlertId === alert.id && (
+                          <tr onClick={(e) => e.stopPropagation()}>
+                            <td colSpan="9" style={expandedCellStyle}>
+                              <div style={expandedContentStyle}>
                           <p style={{ ...expandedLabelStyle, marginBottom: "10px" }}>Alert Details</p>
 
                           <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
@@ -1401,13 +1532,15 @@ const detailSectionStyle = {
                               {alert.created_at}
                             </span>
                           </p>
-                        </div>
-                      </td>
-                    </tr>
-                  )}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                      );
+                    })}
                 </React.Fragment>
-                );
-              })}
+              ))}
             </tbody>
           </table>
         </div>
