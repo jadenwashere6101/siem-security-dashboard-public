@@ -203,6 +203,34 @@ const signalRowStyle = {
   fontSize: "12px",
   color: "#e6edf3",
 };
+const correlationBadgeStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "6px",
+  width: "fit-content",
+  padding: "4px 8px",
+  borderRadius: "999px",
+  fontSize: "10px",
+  fontWeight: "800",
+  letterSpacing: "0.04em",
+  textTransform: "uppercase",
+  color: "#fde68a",
+  backgroundColor: "rgba(245, 158, 11, 0.12)",
+  border: "1px solid rgba(245, 158, 11, 0.34)",
+};
+const correlationPanelStyle = {
+  margin: "12px 0 10px",
+  padding: "10px 12px",
+  borderRadius: "10px",
+  border: "1px solid rgba(245, 158, 11, 0.32)",
+  backgroundColor: "rgba(120, 53, 15, 0.18)",
+};
+const correlationListStyle = {
+  margin: "8px 0 0",
+  paddingLeft: "18px",
+  color: "#fef3c7",
+  fontSize: "12px",
+};
 
   const showToast = (message, type = "info") => {
     setToastMessage(message);
@@ -554,6 +582,12 @@ const signalRowStyle = {
     };
   };
 
+  const isCorrelationAlert = (alert) =>
+    alert?.is_correlation_alert || alert?.alert_type === "correlated_activity";
+
+  const getCorrelationAlertTypes = (alert) =>
+    Array.isArray(alert?.correlated_alert_types) ? alert.correlated_alert_types : [];
+
   const handleResolve = async (e, alertId) => {
     e.stopPropagation();
     const result = await onUpdateStatus(alertId, "resolved");
@@ -755,6 +789,8 @@ const signalRowStyle = {
             <tbody>
               {filteredAlerts.map((alert) => {
                 const sourceBadge = getSourceBadgeMeta(alert.source, alert.source_type);
+                const correlationAlert = isCorrelationAlert(alert);
+                const correlatedAlertTypes = getCorrelationAlertTypes(alert);
 
                 return (
                 <React.Fragment key={alert.id}>
@@ -764,8 +800,15 @@ const signalRowStyle = {
                       cursor: "pointer",
                       backgroundColor:
                         selectedAlertId === alert.id
-                          ? "#111827"
-                          : "#161b22",
+                          ? correlationAlert
+                            ? "#1f1a11"
+                            : "#111827"
+                          : correlationAlert
+                            ? "#19150d"
+                            : "#161b22",
+                      borderLeft: correlationAlert
+                        ? "3px solid rgba(245, 158, 11, 0.9)"
+                        : tableRowStyle.borderLeft,
                     }}
                     onClick={() => {
                       if (selectedAlertId === alert.id) {
@@ -784,7 +827,12 @@ const signalRowStyle = {
                     <td style={bodyCellStyle}>{alert.id}</td>
 
                     <td style={{ ...bodyCellStyle, ...monoCellStyle }}>
-                      {alert.alert_type}
+                      <div style={sourceBadgeStackStyle}>
+                        <span>{alert.alert_type}</span>
+                        {correlationAlert && (
+                          <span style={correlationBadgeStyle}>Correlation</span>
+                        )}
+                      </div>
                     </td>
 
                     <td style={bodyCellStyle}>
@@ -886,6 +934,35 @@ const signalRowStyle = {
                           <p style={expandedTextStyle}>
                             <strong>Type:</strong> {alert.alert_type}
                           </p>
+
+                          {correlationAlert && (
+                            <div style={correlationPanelStyle}>
+                              <p style={expandedLabelStyle}>Correlation Alert</p>
+                              <p style={expandedTextStyle}>
+                                Multi-source / multi-signal activity grouped into a higher-confidence alert.
+                              </p>
+                              {correlatedAlertTypes.length > 0 ? (
+                                <div>
+                                  <p style={expandedTextStyle}>
+                                    <strong>Involved Alert Types:</strong>
+                                  </p>
+                                  <ul style={correlationListStyle}>
+                                    {correlatedAlertTypes.map((alertType) => (
+                                      <li key={alertType}>
+                                        <span style={{ ...monoCellStyle, fontSize: "12px" }}>
+                                          {alertType}
+                                        </span>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              ) : (
+                                <p style={expandedTextStyle}>
+                                  <strong>Correlation Message:</strong> {alert.message}
+                                </p>
+                              )}
+                            </div>
+                          )}
 
                           <p style={expandedTextStyle}>
                             <strong>Source:</strong>{" "}
@@ -1271,6 +1348,33 @@ const signalRowStyle = {
             </div>
 
             <div style={{ fontSize: "14px", lineHeight: "1.7" }}>
+              {isCorrelationAlert(selectedAlert) && (
+                <div style={correlationPanelStyle}>
+                  <p style={{ ...expandedLabelStyle, marginTop: 0 }}>Correlation Alert</p>
+                  <div style={{ marginBottom: "8px" }}>
+                    <span style={correlationBadgeStyle}>Multi-Source</span>
+                  </div>
+                  <p style={expandedTextStyle}>
+                    Multi-source / multi-signal activity grouped into a higher-confidence alert.
+                  </p>
+                  {getCorrelationAlertTypes(selectedAlert).length > 0 ? (
+                    <div>
+                      <strong>Involved Alert Types:</strong>
+                      <ul style={correlationListStyle}>
+                        {getCorrelationAlertTypes(selectedAlert).map((alertType) => (
+                          <li key={alertType}>
+                            <span style={{ ...monoCellStyle, fontSize: "12px" }}>
+                              {alertType}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : (
+                    <p><strong>Correlation Message:</strong> {selectedAlert.message}</p>
+                  )}
+                </div>
+              )}
               <p><strong>ID:</strong> {selectedAlert.id}</p>
               <p><strong>Type:</strong> {selectedAlert.alert_type}</p>
               <p><strong>Source IP:</strong> {selectedAlert.source_ip}</p>

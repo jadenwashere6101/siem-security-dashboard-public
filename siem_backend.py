@@ -3135,7 +3135,8 @@ def get_alerts():
             reputation = reputation_by_ip[source_ip]
 
             alerts.append(
-                enrich_alert_with_mitre({
+                enrich_alert_with_correlation_context(
+                    enrich_alert_with_mitre({
                     "id": row[0],
                     "alert_type": row[1],
                     "severity": row[2],
@@ -3156,7 +3157,8 @@ def get_alerts():
                     "response_status": row[16],
                     "source": row[17] or "unknown",
                     "source_type": row[18] or "legacy",
-                })
+                    })
+                )
             )
 
 
@@ -3444,6 +3446,29 @@ def enrich_alert_with_mitre(alert_dict):
     alert_dict["mitre_technique_id"] = mitre_data.get("mitre_technique_id")
     alert_dict["mitre_technique_name"] = mitre_data.get("mitre_technique_name")
     alert_dict["mitre_tactic"] = mitre_data.get("mitre_tactic")
+
+    return alert_dict
+
+
+def enrich_alert_with_correlation_context(alert_dict):
+    if alert_dict.get("alert_type") != "correlated_activity":
+        return alert_dict
+
+    message = str(alert_dict.get("message") or "")
+    marker = "involving:"
+    marker_index = message.lower().find(marker)
+
+    correlated_alert_types = []
+    if marker_index != -1:
+        correlated_alert_types = [
+            item.strip()
+            for item in message[marker_index + len(marker):].split(",")
+            if item.strip()
+        ]
+
+    alert_dict["is_correlation_alert"] = True
+    alert_dict["correlated_alert_types"] = correlated_alert_types
+    alert_dict["correlated_alert_count"] = len(correlated_alert_types)
 
     return alert_dict
 
