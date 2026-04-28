@@ -231,6 +231,13 @@ const correlationListStyle = {
   color: "#fef3c7",
   fontSize: "12px",
 };
+const targetedAlertPanelStyle = {
+  margin: "12px 0 10px",
+  padding: "10px 12px",
+  borderRadius: "10px",
+  border: "1px solid rgba(239, 68, 68, 0.28)",
+  backgroundColor: "rgba(69, 10, 10, 0.16)",
+};
 
   const showToast = (message, type = "info") => {
     setToastMessage(message);
@@ -582,6 +589,70 @@ const correlationListStyle = {
     };
   };
 
+  const getTargetedAlertMeta = (alertType) => {
+    if (alertType === "spray_then_success_pattern") {
+      return {
+        badge: "Attack Chain",
+        description: "Password spray followed by successful login",
+        rowStyle: {
+          backgroundColor: "#251212",
+          borderLeft: "3px solid rgba(239, 68, 68, 0.95)",
+        },
+        badgeStyle: {
+          color: "#fecaca",
+          backgroundColor: "rgba(239, 68, 68, 0.16)",
+          border: "1px solid rgba(239, 68, 68, 0.34)",
+        },
+      };
+    }
+
+    if (alertType === "web_to_app_attack_pattern") {
+      return {
+        badge: "Web → App Attack",
+        description: "Web layer errors followed by application authentication activity",
+        rowStyle: {
+          backgroundColor: "#221711",
+          borderLeft: "3px solid rgba(249, 115, 22, 0.92)",
+        },
+        badgeStyle: {
+          color: "#fdba74",
+          backgroundColor: "rgba(249, 115, 22, 0.14)",
+          border: "1px solid rgba(249, 115, 22, 0.32)",
+        },
+      };
+    }
+
+    if (alertType === "cloud_app_error_pattern") {
+      return {
+        badge: "Cloud + Web",
+        description: "Cloud and web application errors correlated across services",
+        rowStyle: {
+          backgroundColor: "#1d1811",
+          borderLeft: "3px solid rgba(245, 158, 11, 0.86)",
+        },
+        badgeStyle: {
+          color: "#fde68a",
+          backgroundColor: "rgba(245, 158, 11, 0.12)",
+          border: "1px solid rgba(245, 158, 11, 0.28)",
+        },
+      };
+    }
+
+    if (alertType === "correlated_activity") {
+      return {
+        badge: "Correlation",
+        description: "Multi-source / multi-signal activity grouped into a higher-confidence alert.",
+        rowStyle: {
+          backgroundColor: "#19150d",
+          borderLeft: "3px solid rgba(245, 158, 11, 0.9)",
+        },
+        badgeStyle: correlationBadgeStyle,
+      };
+    }
+
+    return null;
+  };
+
   const isCorrelationAlert = (alert) =>
     alert?.is_correlation_alert || alert?.alert_type === "correlated_activity";
 
@@ -790,6 +861,7 @@ const correlationListStyle = {
               {filteredAlerts.map((alert) => {
                 const sourceBadge = getSourceBadgeMeta(alert.source, alert.source_type);
                 const correlationAlert = isCorrelationAlert(alert);
+                const targetedAlertMeta = getTargetedAlertMeta(alert.alert_type);
                 const correlatedAlertTypes = getCorrelationAlertTypes(alert);
 
                 return (
@@ -800,14 +872,16 @@ const correlationListStyle = {
                       cursor: "pointer",
                       backgroundColor:
                         selectedAlertId === alert.id
-                          ? correlationAlert
-                            ? "#1f1a11"
+                          ? targetedAlertMeta
+                            ? targetedAlertMeta.rowStyle.backgroundColor === "#19150d"
+                              ? "#1f1a11"
+                              : targetedAlertMeta.rowStyle.backgroundColor
                             : "#111827"
-                          : correlationAlert
-                            ? "#19150d"
+                          : targetedAlertMeta
+                            ? targetedAlertMeta.rowStyle.backgroundColor
                             : "#161b22",
-                      borderLeft: correlationAlert
-                        ? "3px solid rgba(245, 158, 11, 0.9)"
+                      borderLeft: targetedAlertMeta
+                        ? targetedAlertMeta.rowStyle.borderLeft
                         : tableRowStyle.borderLeft,
                     }}
                     onClick={() => {
@@ -829,8 +903,10 @@ const correlationListStyle = {
                     <td style={{ ...bodyCellStyle, ...monoCellStyle }}>
                       <div style={sourceBadgeStackStyle}>
                         <span>{alert.alert_type}</span>
-                        {correlationAlert && (
-                          <span style={correlationBadgeStyle}>Correlation</span>
+                        {targetedAlertMeta?.badge && (
+                          <span style={targetedAlertMeta.badgeStyle}>
+                            {targetedAlertMeta.badge}
+                          </span>
                         )}
                       </div>
                     </td>
@@ -935,13 +1011,18 @@ const correlationListStyle = {
                             <strong>Type:</strong> {alert.alert_type}
                           </p>
 
-                          {correlationAlert && (
-                            <div style={correlationPanelStyle}>
-                              <p style={expandedLabelStyle}>Correlation Alert</p>
-                              <p style={expandedTextStyle}>
-                                Multi-source / multi-signal activity grouped into a higher-confidence alert.
+                          {targetedAlertMeta && (
+                            <div style={correlationAlert ? correlationPanelStyle : targetedAlertPanelStyle}>
+                              <p style={expandedLabelStyle}>
+                                {correlationAlert ? "Correlation Alert" : "Targeted Correlation Alert"}
                               </p>
-                              {correlatedAlertTypes.length > 0 ? (
+                              <div style={{ marginBottom: "8px" }}>
+                                <span style={targetedAlertMeta.badgeStyle}>{targetedAlertMeta.badge}</span>
+                              </div>
+                              <p style={expandedTextStyle}>
+                                {targetedAlertMeta.description}
+                              </p>
+                              {correlationAlert && correlatedAlertTypes.length > 0 ? (
                                 <div>
                                   <p style={expandedTextStyle}>
                                     <strong>Involved Alert Types:</strong>
@@ -958,7 +1039,7 @@ const correlationListStyle = {
                                 </div>
                               ) : (
                                 <p style={expandedTextStyle}>
-                                  <strong>Correlation Message:</strong> {alert.message}
+                                  <strong>{correlationAlert ? "Correlation Message" : "Alert Message"}:</strong> {alert.message}
                                 </p>
                               )}
                             </div>
@@ -1348,16 +1429,26 @@ const correlationListStyle = {
             </div>
 
             <div style={{ fontSize: "14px", lineHeight: "1.7" }}>
-              {isCorrelationAlert(selectedAlert) && (
-                <div style={correlationPanelStyle}>
-                  <p style={{ ...expandedLabelStyle, marginTop: 0 }}>Correlation Alert</p>
+              {getTargetedAlertMeta(selectedAlert.alert_type) && (
+                <div
+                  style={
+                    isCorrelationAlert(selectedAlert)
+                      ? correlationPanelStyle
+                      : targetedAlertPanelStyle
+                  }
+                >
+                  <p style={{ ...expandedLabelStyle, marginTop: 0 }}>
+                    {isCorrelationAlert(selectedAlert) ? "Correlation Alert" : "Targeted Correlation Alert"}
+                  </p>
                   <div style={{ marginBottom: "8px" }}>
-                    <span style={correlationBadgeStyle}>Multi-Source</span>
+                    <span style={getTargetedAlertMeta(selectedAlert.alert_type).badgeStyle}>
+                      {getTargetedAlertMeta(selectedAlert.alert_type).badge}
+                    </span>
                   </div>
                   <p style={expandedTextStyle}>
-                    Multi-source / multi-signal activity grouped into a higher-confidence alert.
+                    {getTargetedAlertMeta(selectedAlert.alert_type).description}
                   </p>
-                  {getCorrelationAlertTypes(selectedAlert).length > 0 ? (
+                  {isCorrelationAlert(selectedAlert) && getCorrelationAlertTypes(selectedAlert).length > 0 ? (
                     <div>
                       <strong>Involved Alert Types:</strong>
                       <ul style={correlationListStyle}>
