@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS alerts (
     alert_type TEXT NOT NULL,
     severity TEXT NOT NULL,
     source_ip INET NOT NULL,
+    source TEXT,
+    source_type TEXT,
     message TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'open',
     country TEXT,

@@ -1230,17 +1230,21 @@ def ingest_normalized_event(event_dict, conn, cur):
     alerts_created = []
 
     if event_type == "failed_login":
-        alerts_created = _generate_failed_login_alerts_core(cur, conn)
-        alerts_created.extend(_generate_password_spraying_alerts_core(cur, conn))
-        alerts_created.extend(_generate_successful_login_after_spray_alerts_core(cur, conn))
+        alerts_created = _generate_failed_login_alerts_core(cur, conn, source=source, source_type=source_type)
+        alerts_created.extend(_generate_password_spraying_alerts_core(cur, conn, source=source, source_type=source_type))
+        alerts_created.extend(
+            _generate_successful_login_after_spray_alerts_core(cur, conn, source=source, source_type=source_type)
+        )
     elif event_type == "unauthorized_access":
-        alerts_created = _generate_failed_login_alerts_core(cur, conn)
+        alerts_created = _generate_failed_login_alerts_core(cur, conn, source=source, source_type=source_type)
     elif event_type == "http_error":
-        alerts_created = _generate_http_error_alerts_core(cur, conn)
+        alerts_created = _generate_http_error_alerts_core(cur, conn, source=source, source_type=source_type)
     elif event_type == "successful_login":
-        alerts_created.extend(_generate_successful_login_after_spray_alerts_core(cur, conn))
+        alerts_created.extend(
+            _generate_successful_login_after_spray_alerts_core(cur, conn, source=source, source_type=source_type)
+        )
     elif event_type == "port_scan":
-        alerts_created = _generate_port_scan_alerts_core(cur, conn)
+        alerts_created = _generate_port_scan_alerts_core(cur, conn, source=source, source_type=source_type)
 
     return alerts_created
 
@@ -1697,7 +1701,7 @@ def execute_response_action(cur, alert_id, source_ip, response_action):
     return status
 
 
-def _generate_failed_login_alerts_core(cur, conn):
+def _generate_failed_login_alerts_core(cur, conn, source=None, source_type=None):
     rule_config = get_effective_detection_rule("failed_login_threshold", cur=cur)
     threshold = rule_config["parameters"]["threshold"]
     window_minutes = rule_config["parameters"]["window_minutes"]
@@ -1783,6 +1787,8 @@ def _generate_failed_login_alerts_core(cur, conn):
                 source_ip,
                 alert_type,
                 severity,
+                source,
+                source_type,
                 message,
                 status,
                 response_action,
@@ -1796,12 +1802,14 @@ def _generate_failed_login_alerts_core(cur, conn):
                 reputation_source,
                 reputation_summary
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 source_ip,
                 "failed_login_threshold",
                 "high",
+                source,
+                source_type,
                 message,
                 "open",
                 response_action,
@@ -1848,7 +1856,7 @@ def _generate_failed_login_alerts_core(cur, conn):
     return alerts_created
 
 
-def _generate_password_spraying_alerts_core(cur, conn):
+def _generate_password_spraying_alerts_core(cur, conn, source=None, source_type=None):
     rule_config = get_effective_detection_rule("password_spraying_threshold", cur=cur)
     threshold = rule_config["parameters"]["threshold"]
     window_minutes = rule_config["parameters"]["window_minutes"]
@@ -1942,6 +1950,8 @@ def _generate_password_spraying_alerts_core(cur, conn):
                 source_ip,
                 alert_type,
                 severity,
+                source,
+                source_type,
                 message,
                 status,
                 response_action,
@@ -1955,12 +1965,14 @@ def _generate_password_spraying_alerts_core(cur, conn):
                 reputation_source,
                 reputation_summary
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 source_ip,
                 "password_spraying_threshold",
                 "high",
+                source,
+                source_type,
                 message,
                 "open",
                 response_action,
@@ -2005,7 +2017,7 @@ def _generate_password_spraying_alerts_core(cur, conn):
     return alerts_created
 
 
-def _generate_successful_login_after_spray_alerts_core(cur, conn):
+def _generate_successful_login_after_spray_alerts_core(cur, conn, source=None, source_type=None):
     rule_config = get_effective_detection_rule("successful_login_after_spray", cur=cur)
     threshold = rule_config["parameters"]["threshold"]
     success_window_minutes = rule_config["parameters"]["success_window_minutes"]
@@ -2115,6 +2127,8 @@ def _generate_successful_login_after_spray_alerts_core(cur, conn):
                 source_ip,
                 alert_type,
                 severity,
+                source,
+                source_type,
                 message,
                 status,
                 response_action,
@@ -2128,12 +2142,14 @@ def _generate_successful_login_after_spray_alerts_core(cur, conn):
                 reputation_source,
                 reputation_summary
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 source_ip,
                 "successful_login_after_spray",
                 "critical",
+                source,
+                source_type,
                 message,
                 "open",
                 response_action,
@@ -2178,7 +2194,7 @@ def _generate_successful_login_after_spray_alerts_core(cur, conn):
     return alerts_created
 
 
-def _generate_port_scan_alerts_core(cur, conn):
+def _generate_port_scan_alerts_core(cur, conn, source=None, source_type=None):
     rule_config = get_effective_detection_rule("port_scan_threshold", cur=cur)
     threshold = rule_config["parameters"]["threshold"]
     window_minutes = rule_config["parameters"]["window_minutes"]
@@ -2261,6 +2277,8 @@ def _generate_port_scan_alerts_core(cur, conn):
                 source_ip,
                 alert_type,
                 severity,
+                source,
+                source_type,
                 message,
                 status,
                 response_action,
@@ -2274,12 +2292,14 @@ def _generate_port_scan_alerts_core(cur, conn):
                 reputation_source,
                 reputation_summary
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 source_ip,
                 "port_scan_threshold",
                 "medium",
+                source,
+                source_type,
                 message,
                 "open",
                 response_action,
@@ -2324,7 +2344,7 @@ def _generate_port_scan_alerts_core(cur, conn):
     return alerts_created
 
 
-def _generate_http_error_alerts_core(cur, conn):
+def _generate_http_error_alerts_core(cur, conn, source=None, source_type=None):
     threshold = HTTP_ERROR_THRESHOLD
     window_minutes = HTTP_ERROR_WINDOW_MINUTES
 
@@ -2397,6 +2417,8 @@ def _generate_http_error_alerts_core(cur, conn):
                 source_ip,
                 alert_type,
                 severity,
+                source,
+                source_type,
                 message,
                 status,
                 response_action,
@@ -2410,12 +2432,14 @@ def _generate_http_error_alerts_core(cur, conn):
                 reputation_source,
                 reputation_summary
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 source_ip,
                 "http_error_threshold",
                 "medium",
+                source,
+                source_type,
                 message,
                 "open",
                 response_action,
@@ -2469,34 +2493,27 @@ def get_alerts():
 
         cur.execute("""
             SELECT
-                a.id,
-                a.alert_type,
-                a.severity,
-                a.message,
-                a.source_ip,
-                a.created_at,
-                a.status,
-                a.country,
-                a.city,
-                a.latitude,
-                a.longitude,
-                a.reputation_score,
-                a.reputation_label,
-                a.reputation_source,
-                a.reputation_summary,
-                a.response_action,
-                a.response_status,
-                event_meta.source,
-                event_meta.source_type
-            FROM alerts a
-            LEFT JOIN LATERAL (
-                SELECT e.source, e.source_type
-                FROM events e
-                WHERE e.source_ip = a.source_ip
-                ORDER BY e.created_at DESC
-                LIMIT 1
-            ) AS event_meta ON TRUE
-            ORDER BY a.created_at DESC
+                id,
+                alert_type,
+                severity,
+                message,
+                source_ip,
+                created_at,
+                status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary,
+                response_action,
+                response_status,
+                source,
+                source_type
+            FROM alerts
+            ORDER BY created_at DESC
         """)
 
         rows = cur.fetchall()
@@ -2520,8 +2537,8 @@ def get_alerts():
                 "reputation_summary": row[14],
                 "response_action": row[15],
                 "response_status": row[16],
-                "source": row[17],
-                "source_type": row[18],
+                "source": row[17] or "unknown",
+                "source_type": row[18] or "legacy",
             })
             for row in rows
         ]
