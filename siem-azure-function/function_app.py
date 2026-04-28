@@ -12,7 +12,7 @@ from azure.monitor.query import LogsQueryClient
 app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
 
 SIEM_AZURE_INGEST_URL = os.environ["SIEM_AZURE_INGEST_URL"]
-SIEM_AZURE_INGEST_API_KEY = os.environ["SIEM_AZURE_INGEST_API_KEY"]
+AZURE_INGEST_API_KEY = os.environ["AZURE_INGEST_API_KEY"]
 LOG_ANALYTICS_WORKSPACE_ID = os.environ["LOG_ANALYTICS_WORKSPACE_ID"]
 QUERY_WINDOW_MINUTES = 5
 MAX_RECORDS = 25
@@ -64,7 +64,7 @@ def forward_telemetry_to_siem(telemetry: dict):
         method="POST",
         headers={
             "Content-Type": "application/json",
-            "X-API-Key": SIEM_AZURE_INGEST_API_KEY,
+            "X-API-Key": AZURE_INGEST_API_KEY,
         },
     )
 
