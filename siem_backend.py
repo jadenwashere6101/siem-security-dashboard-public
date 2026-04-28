@@ -91,6 +91,9 @@ PORT_SCAN_WINDOW_MINUTES = 15
 PASSWORD_SPRAY_THRESHOLD = 5
 PASSWORD_SPRAY_WINDOW_MINUTES = 15
 
+HTTP_ERROR_THRESHOLD = 5
+HTTP_ERROR_WINDOW_MINUTES = 15
+
 SUCCESS_AFTER_SPRAY_SUCCESS_WINDOW_MINUTES = 15
 SUCCESS_AFTER_SPRAY_FAILED_LOOKBACK_MINUTES = 30
 SUCCESS_AFTER_SPRAY_CORRELATION_WINDOW_MINUTES = 15
@@ -1197,6 +1200,10 @@ def ingest_normalized_event(event_dict, conn, cur):
         alerts_created = _generate_failed_login_alerts_core(cur, conn)
         alerts_created.extend(_generate_password_spraying_alerts_core(cur, conn))
         alerts_created.extend(_generate_successful_login_after_spray_alerts_core(cur, conn))
+    elif event_type == "unauthorized_access":
+        alerts_created = _generate_failed_login_alerts_core(cur, conn)
+    elif event_type == "http_error":
+        alerts_created = _generate_http_error_alerts_core(cur, conn)
     elif event_type == "successful_login":
         alerts_created.extend(_generate_successful_login_after_spray_alerts_core(cur, conn))
     elif event_type == "port_scan":
@@ -1520,7 +1527,7 @@ def _generate_failed_login_alerts_core(cur, conn):
         f"""
         SELECT source_ip, COUNT(*) as attempts
         FROM events
-        WHERE event_type IN ('failed_login', 'login_failure')
+        WHERE event_type IN ('failed_login', 'login_failure', 'unauthorized_access')
         AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
         GROUP BY source_ip
         HAVING COUNT(*) >= %s
@@ -1552,7 +1559,7 @@ def _generate_failed_login_alerts_core(cur, conn):
                 NULLIF(raw_payload->'location'->>'lon', '')::double precision
             FROM events
             WHERE source_ip = %s
-              AND event_type IN ('failed_login', 'login_failure')
+              AND event_type IN ('failed_login', 'login_failure', 'unauthorized_access')
             ORDER BY created_at DESC
             LIMIT 1
             """,
@@ -2093,6 +2100,142 @@ def _generate_port_scan_alerts_core(cur, conn):
             (
                 source_ip,
                 "port_scan_threshold",
+                "medium",
+                message,
+                "open",
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary,
+            ),
+        )
+
+        cur.execute("SELECT currval(pg_get_serial_sequence('alerts', 'id'))")
+        alert_id = cur.fetchone()[0]
+
+        execution_status = execute_response_action(
+            cur,
+            alert_id,
+            str(source_ip),
+            response_action
+        )
+
+        cur.execute(
+            """
+            UPDATE alerts
+            SET response_status = %s
+            WHERE id = %s
+            """,
+            (execution_status, alert_id)
+        )
+
+        alerts_created.append(
+            {
+                "source_ip": source_ip,
+                "attempts": attempts,
+            }
+        )
+
+    return alerts_created
+
+
+def _generate_http_error_alerts_core(cur, conn):
+    threshold = HTTP_ERROR_THRESHOLD
+    window_minutes = HTTP_ERROR_WINDOW_MINUTES
+
+    cur.execute(
+        f"""
+        SELECT source_ip, COUNT(*) as attempts
+        FROM events
+        WHERE event_type = 'http_error'
+          AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
+        GROUP BY source_ip
+        HAVING COUNT(*) >= %s
+        """,
+        (threshold,)
+    )
+
+    rows = cur.fetchall()
+    alerts_created = []
+
+    for row in rows:
+        source_ip = row[0]
+        attempts = row[1]
+        reputation = lookup_ip_reputation(str(source_ip))
+        reputation_score = reputation["reputation_score"]
+        response_action = determine_response_action(reputation_score)
+        response_status = "pending"
+        reputation_label = reputation["reputation_label"]
+        reputation_source = reputation["reputation_source"]
+        reputation_summary = reputation["reputation_summary"]
+
+        cur.execute(
+            """
+            SELECT
+                raw_payload->'location'->>'country',
+                raw_payload->'location'->>'city',
+                NULLIF(raw_payload->'location'->>'lat', '')::double precision,
+                NULLIF(raw_payload->'location'->>'lon', '')::double precision
+            FROM events
+            WHERE source_ip = %s
+              AND event_type = 'http_error'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (source_ip,)
+        )
+
+        location_row = cur.fetchone()
+        country = location_row[0] if location_row else None
+        city = location_row[1] if location_row else None
+        latitude = location_row[2] if location_row else None
+        longitude = location_row[3] if location_row else None
+
+        message = f"Repeated HTTP server errors detected from {source_ip}"
+
+        cur.execute(
+            """
+            SELECT 1 FROM alerts
+            WHERE source_ip = %s
+              AND alert_type = %s
+              AND status = 'open'
+            """,
+            (source_ip, "http_error_threshold"),
+        )
+
+        if cur.fetchone():
+            continue
+
+        cur.execute(
+            """
+            INSERT INTO alerts (
+                source_ip,
+                alert_type,
+                severity,
+                message,
+                status,
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                source_ip,
+                "http_error_threshold",
                 "medium",
                 message,
                 "open",
