@@ -6,10 +6,14 @@ from dotenv import load_dotenv
 from functools import wraps
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 import logging
 import os
-from io import BytesIO
+import ipaddress
+import csv
+import json
+from io import BytesIO, StringIO
 from datetime import datetime, timezone
 import requests
 import psycopg2
@@ -75,6 +79,240 @@ geo_cache = {}
 SIEM_ALLOWED_ORIGINS = env_csv("SIEM_ALLOWED_ORIGINS", default=DEFAULT_ALLOWED_ORIGINS)
 SIEM_BIND_HOST = env_first("SIEM_BIND_HOST", default="0.0.0.0")
 SIEM_PORT = int(env_first("SIEM_PORT", default="5051"))
+SIEM_DEBUG = env_first("SIEM_DEBUG", default="false").strip().lower() == "true"
+
+FAILED_LOGIN_THRESHOLD = 3
+FAILED_LOGIN_WINDOW_MINUTES = 15
+
+PORT_SCAN_THRESHOLD = 2
+PORT_SCAN_WINDOW_MINUTES = 15
+
+PASSWORD_SPRAY_THRESHOLD = 5
+PASSWORD_SPRAY_WINDOW_MINUTES = 15
+
+SUCCESS_AFTER_SPRAY_SUCCESS_WINDOW_MINUTES = 15
+SUCCESS_AFTER_SPRAY_FAILED_LOOKBACK_MINUTES = 30
+SUCCESS_AFTER_SPRAY_CORRELATION_WINDOW_MINUTES = 15
+SUCCESS_AFTER_SPRAY_THRESHOLD = 5
+
+DETECTION_THRESHOLD_MIN = 1
+DETECTION_THRESHOLD_MAX = 100
+DETECTION_WINDOW_MINUTES_MIN = 1
+DETECTION_WINDOW_MINUTES_MAX = 1440
+
+
+def get_detection_rule_defaults():
+    return {
+        "failed_login_threshold": {
+            "rule_id": "failed_login_threshold",
+            "display_name": "Failed Login Threshold",
+            "parameters": {
+                "threshold": FAILED_LOGIN_THRESHOLD,
+                "window_minutes": FAILED_LOGIN_WINDOW_MINUTES,
+            },
+            "active": True,
+            "description": "Triggers when multiple failed login attempts occur within a time window.",
+        },
+        "port_scan_threshold": {
+            "rule_id": "port_scan_threshold",
+            "display_name": "Port Scan Threshold",
+            "parameters": {
+                "threshold": PORT_SCAN_THRESHOLD,
+                "window_minutes": PORT_SCAN_WINDOW_MINUTES,
+            },
+            "active": True,
+            "description": "Triggers when repeated port scan events occur from the same source within a time window.",
+        },
+        "password_spraying_threshold": {
+            "rule_id": "password_spraying_threshold",
+            "display_name": "Password Spraying Threshold",
+            "parameters": {
+                "threshold": PASSWORD_SPRAY_THRESHOLD,
+                "window_minutes": PASSWORD_SPRAY_WINDOW_MINUTES,
+            },
+            "active": True,
+            "description": "Triggers when failed logins target multiple distinct usernames from the same source within a time window.",
+        },
+        "successful_login_after_spray": {
+            "rule_id": "successful_login_after_spray",
+            "display_name": "Successful Login After Spray",
+            "parameters": {
+                "threshold": SUCCESS_AFTER_SPRAY_THRESHOLD,
+                "success_window_minutes": SUCCESS_AFTER_SPRAY_SUCCESS_WINDOW_MINUTES,
+                "failed_lookback_minutes": SUCCESS_AFTER_SPRAY_FAILED_LOOKBACK_MINUTES,
+                "correlation_window_minutes": SUCCESS_AFTER_SPRAY_CORRELATION_WINDOW_MINUTES,
+            },
+            "active": True,
+            "description": "Triggers when password spraying activity is followed by a successful login from the same source.",
+        },
+    }
+
+
+def parse_detection_rule_parameters(raw_parameters):
+    if raw_parameters is None:
+        return {}
+
+    if isinstance(raw_parameters, str):
+        try:
+            raw_parameters = json.loads(raw_parameters)
+        except json.JSONDecodeError as error:
+            raise ValueError("Parameters must be valid JSON") from error
+
+    if not isinstance(raw_parameters, dict):
+        raise ValueError("Parameters must be an object")
+
+    return raw_parameters
+
+
+def validate_detection_rule_config(rule_id, parameters, active):
+    defaults = get_detection_rule_defaults()
+    rule_defaults = defaults.get(rule_id)
+
+    if not rule_defaults:
+        raise ValueError("Unknown rule_id")
+
+    parameters = parse_detection_rule_parameters(parameters)
+
+    if not isinstance(active, bool):
+        raise ValueError("Active must be a boolean")
+
+    allowed_parameters = set(rule_defaults["parameters"].keys())
+    normalized_parameters = {}
+
+    for key, value in parameters.items():
+        if key not in allowed_parameters:
+            raise ValueError(f"Unknown parameter key: {key}")
+
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"Parameter {key} must be an integer")
+
+        if key == "threshold":
+            if not DETECTION_THRESHOLD_MIN <= value <= DETECTION_THRESHOLD_MAX:
+                raise ValueError(f"Parameter {key} must be between {DETECTION_THRESHOLD_MIN} and {DETECTION_THRESHOLD_MAX}")
+        else:
+            if not DETECTION_WINDOW_MINUTES_MIN <= value <= DETECTION_WINDOW_MINUTES_MAX:
+                raise ValueError(
+                    f"Parameter {key} must be between {DETECTION_WINDOW_MINUTES_MIN} and {DETECTION_WINDOW_MINUTES_MAX}"
+                )
+
+        normalized_parameters[key] = value
+
+    return {
+        "parameters": normalized_parameters,
+        "active": active,
+    }
+
+
+def get_effective_detection_rule(rule_id, cur=None):
+    defaults = get_detection_rule_defaults()
+    rule_defaults = defaults.get(rule_id)
+
+    if not rule_defaults:
+        raise ValueError("Unknown rule_id")
+
+    effective_rule = {
+        "rule_id": rule_defaults["rule_id"],
+        "display_name": rule_defaults["display_name"],
+        "parameters": dict(rule_defaults["parameters"]),
+        "active": rule_defaults["active"],
+        "description": rule_defaults["description"],
+        "updated_by": None,
+        "updated_at": None,
+        "has_override": False,
+        "override_status": "default",
+    }
+
+    owns_connection = cur is None
+    conn = None
+    uses_savepoint = cur is not None
+
+    try:
+        if owns_connection:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            uses_savepoint = False
+
+        if uses_savepoint:
+            cur.execute("SAVEPOINT detection_config_lookup")
+
+        cur.execute(
+            """
+            SELECT parameters, active, updated_by, updated_at
+            FROM detection_config
+            WHERE rule_id = %s
+            """,
+            (rule_id,),
+        )
+        row = cur.fetchone()
+
+        if not row:
+            return effective_rule
+
+        effective_rule["has_override"] = True
+        parameters = parse_detection_rule_parameters(row[0] if row[0] is not None else {})
+        active = row[1]
+        effective_rule["updated_by"] = row[2]
+        effective_rule["updated_at"] = str(row[3]) if row[3] is not None else None
+
+        validated = validate_detection_rule_config(rule_id, parameters, active)
+        merged_parameters = dict(effective_rule["parameters"])
+        merged_parameters.update(validated["parameters"])
+
+        effective_rule["parameters"] = merged_parameters
+        effective_rule["active"] = validated["active"]
+        effective_rule["override_status"] = "applied"
+        return effective_rule
+    except ValueError as error:
+        app.logger.warning("Invalid detection_config override for rule_id=%s: %s", rule_id, error)
+        effective_rule["override_status"] = "invalid"
+        return effective_rule
+    except Exception as error:
+        if uses_savepoint:
+            try:
+                cur.execute("ROLLBACK TO SAVEPOINT detection_config_lookup")
+            except Exception:
+                pass
+        app.logger.warning("Falling back to detection defaults for rule_id=%s: %s", rule_id, error)
+        effective_rule["override_status"] = "unavailable"
+        return effective_rule
+    finally:
+        if uses_savepoint:
+            try:
+                cur.execute("RELEASE SAVEPOINT detection_config_lookup")
+            except Exception:
+                pass
+        if owns_connection:
+            if cur:
+                cur.close()
+            if conn:
+                conn.close()
+
+
+def get_all_effective_detection_rules():
+    defaults = get_detection_rule_defaults()
+    conn = None
+    cur = None
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        return [get_effective_detection_rule(rule_id, cur=cur) for rule_id in defaults.keys()]
+    except Exception as error:
+        app.logger.warning("Falling back to detection defaults for admin detection rules list: %s", error)
+        return [
+            {
+                **rule_defaults,
+                "parameters": dict(rule_defaults["parameters"]),
+                "has_override": False,
+                "override_status": "unavailable",
+            }
+            for rule_defaults in defaults.values()
+        ]
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 
 def get_db_connection():
@@ -173,6 +411,7 @@ def log_audit_event(
 load_dotenv()
 
 app = Flask(__name__, static_folder="frontend/build/static")
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 limiter = Limiter(
     key_func=get_remote_address,
     app=app,
@@ -180,6 +419,9 @@ limiter = Limiter(
 )
 FRONTEND_BUILD_DIR = os.path.join(app.root_path, "frontend", "build")
 app.config["SECRET_KEY"] = env_first("SIEM_SECRET_KEY", "SECRET_KEY")
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = not SIEM_DEBUG
 
 admin_username = env_first("SIEM_ADMIN_USERNAME", "ADMIN_USERNAME")
 admin_password = env_first("SIEM_ADMIN_PASSWORD", "ADMIN_PASSWORD")
@@ -357,6 +599,14 @@ def login():
 @app.route("/logout", methods=["POST"])
 @login_required
 def logout():
+    log_audit_event(
+        "LOGOUT",
+        actor_username=current_user.id,
+        actor_role=current_user.role,
+        http_method=request.method,
+        request_path=request.path,
+        source_ip=request.remote_addr,
+    )
     logout_user()
     return jsonify({"message": "Logout successful"}), 200
 
@@ -461,6 +711,14 @@ def list_users():
             for row in rows
         ]
 
+        log_audit_event(
+            "VIEW_ADMIN_USERS",
+            actor_username=current_user.id,
+            actor_role=current_user.role,
+            http_method=request.method,
+            request_path=request.path,
+            source_ip=request.remote_addr,
+        )
         return jsonify(users), 200
     except Exception:
         return jsonify({"error": "Unable to list users"}), 500
@@ -512,6 +770,16 @@ def update_user_status(username):
             http_method=request.method,
             request_path=request.path,
             source_ip=request.remote_addr,
+        )
+        log_audit_event(
+            "USER_STATUS_CHANGE",
+            actor_username=current_user.id,
+            actor_role=current_user.role,
+            target_username=username,
+            http_method=request.method,
+            request_path=request.path,
+            source_ip=request.remote_addr,
+            details={"is_active": is_active},
         )
         return jsonify({"message": "User status updated successfully"}), 200
     except Exception:
@@ -567,6 +835,15 @@ def update_user_password(username):
             request_path=request.path,
             source_ip=request.remote_addr,
         )
+        log_audit_event(
+            "PASSWORD_RESET",
+            actor_username=current_user.id,
+            actor_role=current_user.role,
+            target_username=username,
+            http_method=request.method,
+            request_path=request.path,
+            source_ip=request.remote_addr,
+        )
         return jsonify({"message": "Password updated successfully"}), 200
     except Exception:
         if conn:
@@ -611,6 +888,16 @@ def update_user_role(username):
         conn.commit()
         log_audit_event(
             "user_role_update",
+            actor_username=current_user.id,
+            actor_role=current_user.role,
+            target_username=username,
+            http_method=request.method,
+            request_path=request.path,
+            source_ip=request.remote_addr,
+            details={"new_role": role},
+        )
+        log_audit_event(
+            "USER_ROLE_CHANGE",
             actor_username=current_user.id,
             actor_role=current_user.role,
             target_username=username,
@@ -683,6 +970,114 @@ def list_audit_log():
             conn.close()
 
 
+@app.route("/admin/detection-rules", methods=["GET"])
+@login_required
+@super_admin_required
+def list_detection_rules():
+    return jsonify(get_all_effective_detection_rules()), 200
+
+
+@app.route("/admin/detection-rules/<rule_id>", methods=["PATCH"])
+@login_required
+@super_admin_required
+def update_detection_rule(rule_id):
+    defaults = get_detection_rule_defaults()
+    if rule_id not in defaults:
+        return jsonify({"error": "Detection rule not found"}), 404
+
+    payload = request.get_json()
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    if "active" in payload:
+        return jsonify({"error": "Active status cannot be updated in this phase"}), 400
+
+    if "parameters" not in payload:
+        return jsonify({"error": "Missing required field: parameters"}), 400
+
+    conn = None
+    cur = None
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        old_effective_rule = get_effective_detection_rule(rule_id, cur=cur)
+        current_active = old_effective_rule["active"]
+
+        try:
+            validated = validate_detection_rule_config(
+                rule_id,
+                payload.get("parameters"),
+                current_active,
+            )
+        except ValueError as error:
+            conn.rollback()
+            return jsonify({"error": str(error)}), 400
+
+        normalized_parameters = validated["parameters"]
+        changes = []
+        all_parameter_keys = set(old_effective_rule["parameters"].keys()) | set(normalized_parameters.keys())
+
+        for key in sorted(all_parameter_keys):
+            old_value = old_effective_rule["parameters"].get(key)
+            new_value = normalized_parameters.get(key, old_value)
+            if old_value != new_value:
+                changes.append({
+                    "field": key,
+                    "old": old_value,
+                    "new": new_value,
+                })
+
+        cur.execute(
+            """
+            INSERT INTO detection_config (rule_id, parameters, updated_by, updated_at)
+            VALUES (%s, %s, %s, NOW())
+            ON CONFLICT (rule_id) DO UPDATE
+            SET
+                parameters = EXCLUDED.parameters,
+                updated_by = EXCLUDED.updated_by,
+                updated_at = NOW()
+            """,
+            (
+                rule_id,
+                Json(normalized_parameters),
+                current_user.id,
+            ),
+        )
+
+        updated_effective_rule = get_effective_detection_rule(rule_id, cur=cur)
+        conn.commit()
+
+        log_audit_event(
+            "detection_rule_updated",
+            actor_username=current_user.id,
+            actor_role=current_user.role,
+            http_method=request.method,
+            request_path=request.path,
+            source_ip=request.remote_addr,
+            details={
+                "rule_id": rule_id,
+                "old_parameters": old_effective_rule["parameters"],
+                "new_parameters": updated_effective_rule["parameters"],
+                "changes": changes,
+                "actor": current_user.id,
+            },
+        )
+
+        return jsonify(updated_effective_rule), 200
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        app.logger.error("Unable to update detection rule rule_id=%s: %s", rule_id, error)
+        return jsonify({"error": "Unable to update detection rule"}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+
 logging.basicConfig(level=logging.INFO)
 
 
@@ -693,7 +1088,7 @@ REPUTATION_CACHE = {}
 
 def require_api_key():
     if not INGEST_API_KEY:
-        return jsonify({"error": "Service unavailable"}), 503
+        return jsonify({"error": "Unauthorized"}), 401
 
     api_key = request.headers.get(API_KEY_HEADER, "")
     if api_key != INGEST_API_KEY:
@@ -740,6 +1135,8 @@ def lookup_ip_location(ip_address):
 
 VALID_SEVERITIES = {"low", "medium", "high", "critical"}
 VALID_EVENT_TYPES = {"failed_login", "login_failure", "successful_login", "port_scan", "normal_activity"}
+VALID_RESPONSE_ACTIONS = {"block_ip", "monitor", "flag_high_priority"}
+MAX_ALERT_NOTE_LENGTH = 2000
 
 
 def has_valid_location(location):
@@ -751,6 +1148,37 @@ def has_valid_location(location):
     return lat not in (None, "") and lon not in (None, "")
 
 
+def ingest_normalized_event(event_dict, conn, cur):
+    event_type = event_dict["event_type"]
+    severity = event_dict["severity"]
+    source_ip = event_dict["source_ip"]
+    message = event_dict["message"]
+    app_name = event_dict["app_name"]
+    environment = event_dict["environment"]
+    raw_payload = event_dict["raw_payload"]
+
+    cur.execute(
+        """
+        INSERT INTO events (event_type, severity, source_ip, message, app_name, environment, raw_payload)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """,
+        (event_type, severity, source_ip, message, app_name, environment, Json(raw_payload)),
+    )
+
+    alerts_created = []
+
+    if event_type == "failed_login":
+        alerts_created = _generate_failed_login_alerts_core(cur, conn)
+        alerts_created.extend(_generate_password_spraying_alerts_core(cur, conn))
+        alerts_created.extend(_generate_successful_login_after_spray_alerts_core(cur, conn))
+    elif event_type == "successful_login":
+        alerts_created.extend(_generate_successful_login_after_spray_alerts_core(cur, conn))
+    elif event_type == "port_scan":
+        alerts_created = _generate_port_scan_alerts_core(cur, conn)
+
+    return alerts_created
+
+
 @app.route("/health", methods=["GET"])
 def health_check():
     return jsonify({"status": "ok", "service": "siem_dashboard"}), 200
@@ -759,9 +1187,9 @@ def health_check():
 @app.route("/ingest", methods=["POST"])
 @limiter.limit("200 per minute")
 def add_event():
-    api_key = request.headers.get("X-API-Key")
-    if api_key != INGEST_API_KEY:
-        return jsonify({"error": "Unauthorized"}), 401
+    api_key_error = require_api_key()
+    if api_key_error:
+        return api_key_error
 
     conn = None
     cur = None
@@ -781,6 +1209,11 @@ def add_event():
 
         if not event_type or not severity or not source_ip:
             return jsonify({"error": "Missing required fields"}), 400
+
+        try:
+            ipaddress.ip_address(str(source_ip))
+        except ValueError:
+            return jsonify({"error": "Invalid source_ip"}), 400
 
         if not message:
             return jsonify({"error": "Missing required field: message"}), 400
@@ -805,24 +1238,19 @@ def add_event():
         conn = get_db_connection()
         cur = conn.cursor()
 
-        cur.execute(
-            """
-            INSERT INTO events (event_type, severity, source_ip, message, app_name, environment, raw_payload)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """,
-            (event_type, severity, source_ip, message, app_name, environment, Json(raw_payload)),
+        alerts_created = ingest_normalized_event(
+            {
+                "event_type": event_type,
+                "severity": severity,
+                "source_ip": source_ip,
+                "message": message,
+                "app_name": app_name,
+                "environment": environment,
+                "raw_payload": raw_payload,
+            },
+            conn,
+            cur,
         )
-
-        alerts_created = []
-
-        if event_type == "failed_login":
-            alerts_created = _generate_failed_login_alerts_core(cur, conn)
-            alerts_created.extend(_generate_password_spraying_alerts_core(cur, conn))
-            alerts_created.extend(_generate_successful_login_after_spray_alerts_core(cur, conn))
-        elif event_type == "successful_login":
-            alerts_created.extend(_generate_successful_login_after_spray_alerts_core(cur, conn))
-        elif event_type == "port_scan":
-            alerts_created = _generate_port_scan_alerts_core(cur, conn)
 
         conn.commit()
 
@@ -969,15 +1397,20 @@ def execute_response_action(cur, alert_id, source_ip, response_action):
 
 
 def _generate_failed_login_alerts_core(cur, conn):
+    rule_config = get_effective_detection_rule("failed_login_threshold", cur=cur)
+    threshold = rule_config["parameters"]["threshold"]
+    window_minutes = rule_config["parameters"]["window_minutes"]
+
     cur.execute(
-        """
+        f"""
         SELECT source_ip, COUNT(*) as attempts
         FROM events
         WHERE event_type IN ('failed_login', 'login_failure')
-        AND created_at >= NOW() - INTERVAL '15 minutes'
+        AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
         GROUP BY source_ip
-        HAVING COUNT(*) >= 3
-        """
+        HAVING COUNT(*) >= %s
+        """,
+        (threshold,)
     )
 
     rows = cur.fetchall()
@@ -1115,8 +1548,12 @@ def _generate_failed_login_alerts_core(cur, conn):
 
 
 def _generate_password_spraying_alerts_core(cur, conn):
+    rule_config = get_effective_detection_rule("password_spraying_threshold", cur=cur)
+    threshold = rule_config["parameters"]["threshold"]
+    window_minutes = rule_config["parameters"]["window_minutes"]
+
     cur.execute(
-        """
+        f"""
         WITH extracted_failed_logins AS (
             SELECT
                 source_ip,
@@ -1133,14 +1570,15 @@ def _generate_password_spraying_alerts_core(cur, conn):
                 ) AS extracted_username
             FROM events
             WHERE event_type = 'failed_login'
-              AND created_at >= NOW() - INTERVAL '15 minutes'
+              AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
         )
         SELECT source_ip, COUNT(DISTINCT extracted_username) AS distinct_username_count
         FROM extracted_failed_logins
         WHERE extracted_username IS NOT NULL
         GROUP BY source_ip
-        HAVING COUNT(DISTINCT extracted_username) >= 5
-        """
+        HAVING COUNT(DISTINCT extracted_username) >= %s
+        """,
+        (threshold,)
     )
 
     rows = cur.fetchall()
@@ -1267,13 +1705,19 @@ def _generate_password_spraying_alerts_core(cur, conn):
 
 
 def _generate_successful_login_after_spray_alerts_core(cur, conn):
+    rule_config = get_effective_detection_rule("successful_login_after_spray", cur=cur)
+    threshold = rule_config["parameters"]["threshold"]
+    success_window_minutes = rule_config["parameters"]["success_window_minutes"]
+    failed_lookback_minutes = rule_config["parameters"]["failed_lookback_minutes"]
+    correlation_window_minutes = rule_config["parameters"]["correlation_window_minutes"]
+
     cur.execute(
-        """
+        f"""
         WITH recent_successes AS (
             SELECT source_ip, created_at AS success_at
             FROM events
             WHERE event_type = 'successful_login'
-              AND created_at >= NOW() - INTERVAL '15 minutes'
+              AND created_at >= NOW() - INTERVAL '{success_window_minutes} minutes'
         ),
         extracted_failed_logins AS (
             SELECT
@@ -1292,7 +1736,7 @@ def _generate_successful_login_after_spray_alerts_core(cur, conn):
                 ) AS extracted_username
             FROM events
             WHERE event_type = 'failed_login'
-              AND created_at >= NOW() - INTERVAL '30 minutes'
+              AND created_at >= NOW() - INTERVAL '{failed_lookback_minutes} minutes'
         ),
         qualifying_successes AS (
             SELECT
@@ -1302,14 +1746,15 @@ def _generate_successful_login_after_spray_alerts_core(cur, conn):
             JOIN extracted_failed_logins
               ON extracted_failed_logins.source_ip = recent_successes.source_ip
              AND extracted_failed_logins.extracted_username IS NOT NULL
-             AND extracted_failed_logins.created_at >= recent_successes.success_at - INTERVAL '15 minutes'
+             AND extracted_failed_logins.created_at >= recent_successes.success_at - INTERVAL '{correlation_window_minutes} minutes'
              AND extracted_failed_logins.created_at <= recent_successes.success_at
             GROUP BY recent_successes.source_ip, recent_successes.success_at
-            HAVING COUNT(DISTINCT extracted_failed_logins.extracted_username) >= 5
+            HAVING COUNT(DISTINCT extracted_failed_logins.extracted_username) >= %s
         )
         SELECT source_ip, success_at
         FROM qualifying_successes
-        """
+        """,
+        (threshold,)
     )
 
     rows = cur.fetchall()
@@ -1433,15 +1878,20 @@ def _generate_successful_login_after_spray_alerts_core(cur, conn):
 
 
 def _generate_port_scan_alerts_core(cur, conn):
+    rule_config = get_effective_detection_rule("port_scan_threshold", cur=cur)
+    threshold = rule_config["parameters"]["threshold"]
+    window_minutes = rule_config["parameters"]["window_minutes"]
+
     cur.execute(
-        """
+        f"""
         SELECT source_ip, COUNT(*) as attempts
         FROM events
         WHERE event_type = 'port_scan'
-          AND created_at >= NOW() - INTERVAL '15 minutes'
+          AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
         GROUP BY source_ip
-        HAVING COUNT(*) >= 2
-        """
+        HAVING COUNT(*) >= %s
+        """,
+        (threshold,)
     )
 
     rows = cur.fetchall()
@@ -1639,6 +2089,102 @@ def get_alerts():
         return jsonify({"error": "Internal server error"}), 500
 
 
+@app.route("/events/search", methods=["GET"])
+@login_required
+@analyst_or_super_admin_required
+def search_events():
+    conn = None
+    cur = None
+
+    try:
+        source_ip = (request.args.get("source_ip") or "").strip()
+        event_type = (request.args.get("event_type") or "").strip()
+        start_time = (request.args.get("start_time") or "").strip()
+        end_time = (request.args.get("end_time") or "").strip()
+
+        clauses = []
+        params = []
+
+        if source_ip:
+            try:
+                ipaddress.ip_address(source_ip)
+            except ValueError:
+                return jsonify({"error": "Invalid source_ip"}), 400
+            clauses.append("source_ip = %s")
+            params.append(source_ip)
+
+        if event_type:
+            if event_type not in VALID_EVENT_TYPES:
+                return jsonify({"error": "Invalid event_type"}), 400
+            clauses.append("event_type = %s")
+            params.append(event_type)
+
+        if start_time:
+            try:
+                parsed_start = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+            except ValueError:
+                return jsonify({"error": "Invalid start_time"}), 400
+            clauses.append("created_at >= %s")
+            params.append(parsed_start)
+
+        if end_time:
+            try:
+                parsed_end = datetime.fromisoformat(end_time.replace("Z", "+00:00"))
+            except ValueError:
+                return jsonify({"error": "Invalid end_time"}), 400
+            clauses.append("created_at <= %s")
+            params.append(parsed_end)
+
+        query = """
+            SELECT
+                id,
+                event_type,
+                severity,
+                source_ip,
+                message,
+                app_name,
+                environment,
+                raw_payload,
+                created_at
+            FROM events
+        """
+
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+
+        query += " ORDER BY created_at DESC LIMIT 100"
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(query, tuple(params))
+
+        rows = cur.fetchall()
+        events = [
+            {
+                "id": row[0],
+                "event_type": row[1],
+                "severity": row[2],
+                "source_ip": str(row[3]) if row[3] is not None else None,
+                "message": row[4],
+                "app_name": row[5],
+                "environment": row[6],
+                "raw_payload": row[7],
+                "created_at": str(row[8]),
+            }
+            for row in rows
+        ]
+
+        return jsonify(events), 200
+    except Exception as e:
+        app.logger.error("Error in search_events: %s", e)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+
 @app.route("/alerts/backfill-reputation", methods=["POST"])
 @login_required
 @admin_required
@@ -1739,6 +2285,26 @@ def format_pdf_timestamp(value):
         dt = dt.astimezone(timezone.utc)
 
     return dt.strftime("%B %d, %Y · %H:%M UTC")
+
+
+def format_csv_timestamp(value):
+    if value is None:
+        return ""
+
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        try:
+            dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return str(value)
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+
+    return dt.strftime("%Y-%m-%d %H:%M UTC")
 
 
 def format_display_value(value):
@@ -1999,6 +2565,55 @@ def fetch_response_logs_by_alert_id(cur, alert_ids):
     for row in cur.fetchall():
         log_map.setdefault(row[0], []).append(row[1:])
     return log_map
+
+
+def fetch_alert_csv_rows(cur, filters=None):
+    filters = filters or {}
+    clauses = []
+    params = []
+
+    severity = (filters.get("severity") or "").strip().lower()
+    if severity and severity != "all":
+        clauses.append("a.severity = %s")
+        params.append(severity)
+
+    status = (filters.get("status") or "").strip().lower()
+    if status and status != "all":
+        clauses.append("a.status = %s")
+        params.append(status)
+
+    search = (filters.get("search") or "").strip()
+    if search:
+        clauses.append("(a.source_ip::text ILIKE %s OR a.message ILIKE %s OR a.alert_type ILIKE %s)")
+        like_value = f"%{search}%"
+        params.extend([like_value, like_value, like_value])
+
+    query = """
+        SELECT
+            a.id,
+            a.alert_type,
+            a.severity,
+            a.source_ip,
+            a.status,
+            a.created_at,
+            a.message,
+            latest_event.environment
+        FROM alerts a
+        LEFT JOIN LATERAL (
+            SELECT e.environment
+            FROM events e
+            WHERE e.source_ip = a.source_ip
+            ORDER BY e.created_at DESC
+            LIMIT 1
+        ) AS latest_event ON TRUE
+    """
+
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+
+    query += " ORDER BY a.created_at DESC"
+    cur.execute(query, tuple(params))
+    return cur.fetchall()
 
 
 def build_report_header(generated_at, scope):
@@ -2391,6 +3006,17 @@ def export_alert_report(alert_id):
         report_body = "\n".join(lines) + "\n"
         filename = f"incident-report-alert-{alert_id}.txt"
 
+        log_audit_event(
+            "DOWNLOAD_REPORT",
+            actor_username=current_user.id,
+            actor_role=current_user.role,
+            target_alert_id=alert_id,
+            http_method=request.method,
+            request_path=request.path,
+            source_ip=request.remote_addr,
+            details={"report_type": "txt", "scope": "single_alert"},
+        )
+
         return Response(
             report_body,
             mimetype="text/plain; charset=utf-8",
@@ -2427,6 +3053,17 @@ def export_alert_report_pdf(alert_id):
         alert_data = normalize_alert_report_data(alert_row)
         generated_at = datetime.now(timezone.utc).isoformat()
         scope = f"Single Alert (Alert ID {alert_id})"
+
+        log_audit_event(
+            "DOWNLOAD_REPORT",
+            actor_username=current_user.id,
+            actor_role=current_user.role,
+            target_alert_id=alert_id,
+            http_method=request.method,
+            request_path=request.path,
+            source_ip=request.remote_addr,
+            details={"report_type": "pdf", "scope": "single_alert"},
+        )
 
         return build_pdf_report_response(
             f"incident-report-alert-{alert_id}.pdf",
@@ -2515,6 +3152,16 @@ def export_multi_alert_report():
         report_body = "\n".join(lines) + "\n"
         filename = "incident-report-alerts.txt"
 
+        log_audit_event(
+            "DOWNLOAD_REPORT",
+            actor_username=current_user.id,
+            actor_role=current_user.role,
+            http_method=request.method,
+            request_path=request.path,
+            source_ip=request.remote_addr,
+            details={"report_type": "txt", "scope": "filtered_alerts"},
+        )
+
         return Response(
             report_body,
             mimetype="text/plain; charset=utf-8",
@@ -2525,6 +3172,58 @@ def export_multi_alert_report():
         app.logger.error("Error in export_multi_alert_report: %s", e)
         return jsonify({"error": "Internal server error"}), 500
 
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+
+@app.route("/alerts/export/csv", methods=["GET"])
+@login_required
+@analyst_or_super_admin_required
+def export_alerts_csv():
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        filters = {
+            "search": request.args.get("search", ""),
+            "severity": request.args.get("severity", ""),
+            "status": request.args.get("status", ""),
+        }
+        alert_rows = fetch_alert_csv_rows(cur, filters)
+
+        string_io = StringIO()
+        writer = csv.writer(string_io)
+        writer.writerow(["id", "alert_type", "severity", "source_ip", "status", "created_at", "environment", "message"])
+
+        for row in alert_rows:
+            writer.writerow([
+                row[0],
+                row[1],
+                row[2],
+                str(row[3]) if row[3] is not None else "",
+                row[4],
+                format_csv_timestamp(row[5]),
+                row[7] or "",
+                row[6],
+            ])
+
+        csv_body = string_io.getvalue()
+        string_io.close()
+        filename = f"alerts-{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.csv"
+
+        return Response(
+            csv_body,
+            mimetype="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except Exception as e:
+        app.logger.error("Error in export_alerts_csv: %s", e)
+        return jsonify({"error": "Internal server error"}), 500
     finally:
         if cur:
             cur.close()
@@ -2581,6 +3280,16 @@ def export_multi_alert_report_pdf():
                     "response_logs": response_logs_map.get(row[0], []),
                 }
             )
+
+        log_audit_event(
+            "DOWNLOAD_REPORT",
+            actor_username=current_user.id,
+            actor_role=current_user.role,
+            http_method=request.method,
+            request_path=request.path,
+            source_ip=request.remote_addr,
+            details={"report_type": "pdf", "scope": "filtered_alerts"},
+        )
 
         return build_pdf_report_response(
             "incident-report-alerts.pdf",
@@ -2649,6 +3358,112 @@ def get_response_log(alert_id):
             conn.close()
 
 
+@app.route("/alerts/<int:alert_id>/notes", methods=["GET"])
+@login_required
+@analyst_or_super_admin_required
+def get_alert_notes(alert_id):
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT id, alert_id, author, note_text, created_at
+            FROM alert_notes
+            WHERE alert_id = %s
+            ORDER BY created_at DESC
+            """,
+            (alert_id,)
+        )
+
+        rows = cur.fetchall()
+        notes = [
+            {
+                "id": row[0],
+                "alert_id": row[1],
+                "author": row[2],
+                "note_text": row[3],
+                "created_at": str(row[4]),
+            }
+            for row in rows
+        ]
+
+        return jsonify(notes), 200
+    except Exception as e:
+        app.logger.error("Error in get_alert_notes: %s", e)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+
+@app.route("/alerts/<int:alert_id>/notes", methods=["POST"])
+@limiter.limit("30 per minute")
+@login_required
+@analyst_or_super_admin_required
+def add_alert_note(alert_id):
+    conn = None
+    cur = None
+    try:
+        data = request.get_json() or {}
+        note_text = (data.get("note_text") or "").strip()
+
+        if not note_text:
+            return jsonify({"error": "note_text is required"}), 400
+
+        if len(note_text) > MAX_ALERT_NOTE_LENGTH:
+            return jsonify({"error": f"note_text must be {MAX_ALERT_NOTE_LENGTH} characters or fewer"}), 400
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT 1
+            FROM alerts
+            WHERE id = %s
+            """,
+            (alert_id,)
+        )
+
+        if not cur.fetchone():
+            return jsonify({"error": "Alert not found"}), 404
+
+        cur.execute(
+            """
+            INSERT INTO alert_notes (alert_id, author, note_text)
+            VALUES (%s, %s, %s)
+            RETURNING id, alert_id, author, note_text, created_at
+            """,
+            (alert_id, current_user.id, note_text)
+        )
+
+        row = cur.fetchone()
+        conn.commit()
+
+        return jsonify({
+            "id": row[0],
+            "alert_id": row[1],
+            "author": row[2],
+            "note_text": row[3],
+            "created_at": str(row[4]),
+        }), 201
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        app.logger.error("Error in add_alert_note: %s", e)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+
 @app.route("/alerts/<int:alert_id>/execute", methods=["POST"])
 @login_required
 @analyst_or_super_admin_required
@@ -2662,6 +3477,9 @@ def manual_execute_alert(alert_id):
 
         if not action:
             return jsonify({"error": "Missing action"}), 400
+
+        if action not in VALID_RESPONSE_ACTIONS:
+            return jsonify({"error": "Invalid response action"}), 400
 
         conn = get_db_connection()
         cur = conn.cursor()
@@ -2694,6 +3512,17 @@ def manual_execute_alert(alert_id):
         )
 
         conn.commit()
+
+        log_audit_event(
+            "EXECUTE_RESPONSE_ACTION",
+            actor_username=current_user.id,
+            actor_role=current_user.role,
+            target_alert_id=alert_id,
+            http_method=request.method,
+            request_path=request.path,
+            source_ip=request.remote_addr,
+            details={"action": action, "status": execution_status},
+        )
 
         return jsonify({
             "message": "Action executed successfully",
@@ -2738,7 +3567,21 @@ def update_alert_status(alert_id):
             (new_status, alert_id),
         )
 
+        if cur.rowcount == 0:
+            conn.rollback()
+            return jsonify({"error": "Alert not found"}), 404
+
         conn.commit()
+        log_audit_event(
+            "UPDATE_ALERT_STATUS",
+            actor_username=current_user.id,
+            actor_role=current_user.role,
+            target_alert_id=alert_id,
+            http_method=request.method,
+            request_path=request.path,
+            source_ip=request.remote_addr,
+            details={"status": new_status},
+        )
         cur.close()
         conn.close()
 
@@ -2761,4 +3604,4 @@ def serve_frontend(path):
 
 
 if __name__ == "__main__":
-    app.run(host=SIEM_BIND_HOST, port=SIEM_PORT, debug=True)
+    app.run(host=SIEM_BIND_HOST, port=SIEM_PORT, debug=SIEM_DEBUG)
