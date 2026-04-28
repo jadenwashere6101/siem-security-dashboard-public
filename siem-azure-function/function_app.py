@@ -14,12 +14,14 @@ app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
 SIEM_AZURE_INGEST_URL = os.environ["SIEM_AZURE_INGEST_URL"]
 SIEM_AZURE_INGEST_API_KEY = os.environ["SIEM_AZURE_INGEST_API_KEY"]
 LOG_ANALYTICS_WORKSPACE_ID = os.environ["LOG_ANALYTICS_WORKSPACE_ID"]
+QUERY_WINDOW_MINUTES = 5
+MAX_RECORDS = 25
 
-APP_INSIGHTS_QUERY = """
+APP_INSIGHTS_QUERY = f"""
 union isfuzzy=true
 (
     exceptions
-    | where timestamp >= ago(5m)
+    | where timestamp >= ago({QUERY_WINDOW_MINUTES}m)
     | project
         itemType = "exception",
         timestamp,
@@ -30,7 +32,7 @@ union isfuzzy=true
 ),
 (
     requests
-    | where timestamp >= ago(5m)
+    | where timestamp >= ago({QUERY_WINDOW_MINUTES}m)
     | where toint(resultCode) in (401, 403) or toint(resultCode) >= 500
     | project
         itemType = "request",
@@ -42,7 +44,7 @@ union isfuzzy=true
 )
 | where isnotempty(client_IP)
 | order by timestamp asc
-| take 25
+| take {MAX_RECORDS}
 """.strip()
 
 
@@ -69,7 +71,7 @@ def _query_recent_telemetry():
     result = client.query_workspace(
         workspace_id=LOG_ANALYTICS_WORKSPACE_ID,
         query=APP_INSIGHTS_QUERY,
-        timespan=timedelta(minutes=5),
+        timespan=timedelta(minutes=QUERY_WINDOW_MINUTES),
     )
 
     tables = getattr(result, "tables", None) or []
@@ -177,9 +179,11 @@ def poll_application_insights(timer: func.TimerRequest) -> None:
             logging.exception("Failed to forward Application Insights telemetry row")
 
     logging.info(
-        "Application Insights polling complete: returned=%d forwarded=%d skipped_invalid_ip=%d failures=%d",
+        "Application Insights polling complete: returned=%d forwarded=%d skipped_invalid_ip=%d failures=%d query_window_minutes=%d max_records=%d",
         len(rows),
         forwarded,
         skipped_invalid_ip,
         failures,
+        QUERY_WINDOW_MINUTES,
+        MAX_RECORDS,
     )
