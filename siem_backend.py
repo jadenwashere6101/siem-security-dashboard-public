@@ -1530,6 +1530,7 @@ def ingest_normalized_event(event_dict, conn, cur):
         if alert.get("source_ip") is not None
     }:
         generate_correlated_activity_alerts(cur, conn, correlated_source_ip)
+        generate_targeted_correlation_alerts(cur, conn, correlated_source_ip)
 
     return alerts_created
 
@@ -3110,6 +3111,209 @@ def generate_correlated_activity_alerts(cur, conn, source_ip):
     )
 
     return True
+
+
+def generate_targeted_correlation_alerts(cur, conn, source_ip):
+    rules = (
+        {
+            "alert_type": "web_to_app_attack_pattern",
+            "window_minutes": 10,
+            "severity": "critical",
+            "message": f"Web-to-app attack pattern detected from {source_ip}",
+            "matches": lambda row: (
+                (row[2], row[3]) == ("nginx", "web_log")
+                and row[1] in {"http_error_threshold", "high_request_rate_threshold"}
+            ) or (
+                (row[2], row[3]) == ("bank_app", "custom")
+                and row[1] in {"failed_login_threshold", "password_spraying_threshold"}
+            ),
+            "required_groups": ("nginx_web", "bank_app_custom"),
+            "group_for_row": lambda row: (
+                "nginx_web"
+                if (row[2], row[3]) == ("nginx", "web_log")
+                and row[1] in {"http_error_threshold", "high_request_rate_threshold"}
+                else "bank_app_custom"
+                if (row[2], row[3]) == ("bank_app", "custom")
+                and row[1] in {"failed_login_threshold", "password_spraying_threshold"}
+                else None
+            ),
+        },
+        {
+            "alert_type": "spray_then_success_pattern",
+            "window_minutes": 15,
+            "severity": "critical",
+            "message": f"Password spray followed by successful login from {source_ip}",
+            "matches": lambda row: row[1] in {"password_spraying_threshold", "successful_login_after_spray"},
+            "required_groups": ("password_spraying_threshold", "successful_login_after_spray"),
+            "group_for_row": lambda row: row[1] if row[1] in {"password_spraying_threshold", "successful_login_after_spray"} else None,
+        },
+        {
+            "alert_type": "cloud_app_error_pattern",
+            "window_minutes": 10,
+            "severity": "high",
+            "message": f"Cloud and web application errors correlated from {source_ip}",
+            "matches": lambda row: (
+                (row[2], row[3]) == ("azure_insights", "cloud_api")
+                and row[1] in {"http_error_threshold", "application_exception"}
+            ) or (
+                (row[2], row[3]) == ("nginx", "web_log")
+                and row[1] in {"http_error_threshold", "high_request_rate_threshold"}
+            ),
+            "required_groups": ("azure_cloud", "nginx_web"),
+            "group_for_row": lambda row: (
+                "azure_cloud"
+                if (row[2], row[3]) == ("azure_insights", "cloud_api")
+                and row[1] in {"http_error_threshold", "application_exception"}
+                else "nginx_web"
+                if (row[2], row[3]) == ("nginx", "web_log")
+                and row[1] in {"http_error_threshold", "high_request_rate_threshold"}
+                else None
+            ),
+        },
+    )
+
+    for rule in rules:
+        rule_alert_type = rule["alert_type"]
+        app.logger.info("[TARGETED_CORRELATION] Evaluating rule=%s | IP: %s", rule_alert_type, source_ip)
+
+        cur.execute(
+            """
+            SELECT 1
+            FROM alerts
+            WHERE source_ip = %s
+              AND alert_type = %s
+              AND status = 'open'
+            """,
+            (source_ip, rule_alert_type),
+        )
+
+        if cur.fetchone():
+            app.logger.info("[TARGETED_CORRELATION] Skipped rule=%s | reason=duplicate_open_alert | IP: %s", rule_alert_type, source_ip)
+            continue
+
+        cur.execute(
+            f"""
+            SELECT
+                id,
+                alert_type,
+                source,
+                source_type,
+                country,
+                city,
+                latitude,
+                longitude,
+                created_at
+            FROM alerts
+            WHERE source_ip = %s
+              AND status = 'open'
+              AND created_at >= NOW() - INTERVAL '{rule["window_minutes"]} minutes'
+            ORDER BY created_at DESC
+            """,
+            (source_ip,),
+        )
+
+        rows = cur.fetchall()
+        qualifying_rows = [row for row in rows if rule["matches"](row)]
+        matched_groups = []
+        for row in qualifying_rows:
+            group = rule["group_for_row"](row)
+            if group and group not in matched_groups:
+                matched_groups.append(group)
+
+        if not all(group in matched_groups for group in rule["required_groups"]):
+            app.logger.info(
+                "[TARGETED_CORRELATION] Skipped rule=%s | reason=missing_required_pattern | IP: %s",
+                rule_alert_type,
+                source_ip,
+            )
+            continue
+
+        newest_alert = qualifying_rows[0]
+        source = newest_alert[2] or "unknown"
+        source_type = newest_alert[3] or "legacy"
+        country = newest_alert[4]
+        city = newest_alert[5]
+        latitude = newest_alert[6]
+        longitude = newest_alert[7]
+
+        reputation = lookup_ip_reputation(str(source_ip))
+        reputation_score = reputation["reputation_score"]
+        response_action = determine_response_action(reputation_score)
+        response_status = "pending"
+        reputation_label = reputation["reputation_label"]
+        reputation_source = reputation["reputation_source"]
+        reputation_summary = reputation["reputation_summary"]
+
+        cur.execute(
+            """
+            INSERT INTO alerts (
+                source_ip,
+                alert_type,
+                severity,
+                source,
+                source_type,
+                message,
+                status,
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                source_ip,
+                rule_alert_type,
+                rule["severity"],
+                source,
+                source_type,
+                rule["message"],
+                "open",
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary,
+            ),
+        )
+
+        cur.execute("SELECT currval(pg_get_serial_sequence('alerts', 'id'))")
+        alert_id = cur.fetchone()[0]
+
+        execution_status = execute_response_action(
+            cur,
+            alert_id,
+            str(source_ip),
+            response_action
+        )
+
+        cur.execute(
+            """
+            UPDATE alerts
+            SET response_status = %s
+            WHERE id = %s
+            """,
+            (execution_status, alert_id)
+        )
+
+        app.logger.info(
+            "[TARGETED_CORRELATION] Created rule=%s | IP: %s | matched_alerts=%d | sources=%s",
+            rule_alert_type,
+            source_ip,
+            len(qualifying_rows),
+            ", ".join(sorted({str(row[2]) for row in qualifying_rows if row[2]})),
+        )
 
 
 @app.route("/alerts", methods=["GET"])
