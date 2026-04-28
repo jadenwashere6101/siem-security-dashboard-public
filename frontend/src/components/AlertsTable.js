@@ -190,6 +190,19 @@ const expandedSecondaryTextStyle = {
   color: "#8b949e",
   fontSize: "12px",
 };
+const signalRowStyle = {
+  marginTop: "6px",
+  padding: "8px 10px",
+  borderRadius: "8px",
+  backgroundColor: "#111827",
+  border: "1px solid #30363d",
+  display: "flex",
+  justifyContent: "space-between",
+  gap: "12px",
+  flexWrap: "wrap",
+  fontSize: "12px",
+  color: "#e6edf3",
+};
 
   const showToast = (message, type = "info") => {
     setToastMessage(message);
@@ -499,6 +512,48 @@ const expandedSecondaryTextStyle = {
     };
   };
 
+  const getReputationBadgeStyle = (label) => {
+    const normalized = (label || "").toLowerCase();
+
+    if (normalized === "critical") {
+      return {
+        color: "#fecaca",
+        backgroundColor: "rgba(239, 68, 68, 0.16)",
+        border: "1px solid rgba(239, 68, 68, 0.34)",
+      };
+    }
+
+    if (normalized === "high risk") {
+      return {
+        color: "#fca5a5",
+        backgroundColor: "rgba(248, 113, 113, 0.12)",
+        border: "1px solid rgba(248, 113, 113, 0.28)",
+      };
+    }
+
+    if (normalized === "suspicious") {
+      return {
+        color: "#fcd34d",
+        backgroundColor: "rgba(251, 191, 36, 0.12)",
+        border: "1px solid rgba(251, 191, 36, 0.28)",
+      };
+    }
+
+    if (normalized === "low suspicion") {
+      return {
+        color: "#bfdbfe",
+        backgroundColor: "rgba(59, 130, 246, 0.10)",
+        border: "1px solid rgba(59, 130, 246, 0.24)",
+      };
+    }
+
+    return {
+      color: "#86efac",
+      backgroundColor: "rgba(74, 222, 128, 0.10)",
+      border: "1px solid rgba(74, 222, 128, 0.24)",
+    };
+  };
+
   const handleResolve = async (e, alertId) => {
     e.stopPropagation();
     const result = await onUpdateStatus(alertId, "resolved");
@@ -689,6 +744,7 @@ const expandedSecondaryTextStyle = {
                   <th style={headerCellStyle}>Type</th>
                   <th style={headerCellStyle}>Source</th>
                   <th style={headerCellStyle}>Source IP</th>
+                  <th style={headerCellStyle}>Behavior</th>
                   <th style={headerCellStyle}>Severity</th>
                   <th style={headerCellStyle}>Message</th>
                   <th style={headerCellStyle}>Created At</th>
@@ -746,6 +802,15 @@ const expandedSecondaryTextStyle = {
                         {alert.city && alert.country
                           ? `${alert.city}, ${alert.country}`
                           : "Location unavailable"}
+                      </div>
+                    </td>
+
+                    <td style={bodyCellStyle}>
+                      <div style={sourceBadgeStackStyle}>
+                        <span style={{ ...sourceBadgeStyle, ...getReputationBadgeStyle(alert.reputation_label) }}>
+                          {alert.reputation_label || "Normal"}
+                        </span>
+                        <span style={sourceTypeTextStyle}>Score {alert.reputation_score ?? 0}</span>
                       </div>
                     </td>
 
@@ -810,7 +875,7 @@ const expandedSecondaryTextStyle = {
 
                   {selectedAlertId === alert.id && (
                     <tr onClick={(e) => e.stopPropagation()}>
-                      <td colSpan="8" style={expandedCellStyle}>
+                      <td colSpan="9" style={expandedCellStyle}>
                         <div style={expandedContentStyle}>
                           <p style={expandedLabelStyle}>Alert Details</p>
 
@@ -878,48 +943,34 @@ const expandedSecondaryTextStyle = {
                           )}
 
                           <p style={expandedTextStyle}>
-                            <strong>Reputation:</strong>{" "}
-                            <span
-                              style={{
-                                display: "inline-block",
-                                padding: "4px 8px",
-                                borderRadius: "999px",
-                                fontSize: "11px",
-                                fontWeight: "600",
-                                backgroundColor:
-                                  alert.reputation_label === "high-risk"
-                                    ? "rgba(239, 68, 68, 0.15)"
-                                    : alert.reputation_label === "medium-risk"
-                                    ? "rgba(245, 158, 11, 0.15)"
-                                    : alert.reputation_label === "low-risk"
-                                    ? "rgba(16, 185, 129, 0.15)"
-                                    : "rgba(156, 163, 175, 0.15)",
-                                color:
-                                  alert.reputation_label === "high-risk"
-                                    ? "#ef4444"
-                                    : alert.reputation_label === "medium-risk"
-                                    ? "#f59e0b"
-                                    : alert.reputation_label === "low-risk"
-                                    ? "#10b981"
-                                    : "#9ca3af",
-                                border:
-                                  alert.reputation_label === "high-risk"
-                                    ? "1px solid rgba(239, 68, 68, 0.35)"
-                                    : alert.reputation_label === "medium-risk"
-                                    ? "1px solid rgba(245, 158, 11, 0.35)"
-                                    : alert.reputation_label === "low-risk"
-                                    ? "1px solid rgba(16, 185, 129, 0.35)"
-                                    : "1px solid rgba(156, 163, 175, 0.35)"
-                              }}
-                            >
-                              {alert.reputation_label
-                                ? `${alert.reputation_label} (${alert.reputation_score})`
-                                : "No reputation data"}
+                            <strong>Behavioral Reputation:</strong>{" "}
+                            <span style={{ ...sourceBadgeStyle, ...getReputationBadgeStyle(alert.reputation_label) }}>
+                              {alert.reputation_label || "Normal"} ({alert.reputation_score ?? 0})
                             </span>
+                          </p>
+                          <p style={expandedSecondaryTextStyle}>
+                            Internal SIEM-generated behavioral score
                           </p>
                           <p style={{ marginTop: "8px" }}>
                             {alert.reputation_summary || "No reputation details available"}
                           </p>
+                          <div style={{ marginTop: "10px" }}>
+                            <strong>Contributing Signals:</strong>
+                            {Array.isArray(alert.contributing_signals) && alert.contributing_signals.length > 0 ? (
+                              alert.contributing_signals.map((signal) => (
+                                <div key={signal.signal} style={signalRowStyle}>
+                                  <span>{signal.label}</span>
+                                  <span style={sourceTypeTextStyle}>
+                                    count {signal.count} · weight {signal.weight} · total {signal.total}
+                                  </span>
+                                </div>
+                              ))
+                            ) : (
+                              <div style={{ fontSize: "12px", color: "#8b949e", marginTop: "4px" }}>
+                                No contributing signals
+                              </div>
+                            )}
+                          </div>
 
                           <p style={expandedTextStyle}>
                             <strong>Response Action:</strong>{" "}
@@ -1232,8 +1283,26 @@ const expandedSecondaryTextStyle = {
                   ? `${selectedAlert.city}, ${selectedAlert.country}`
                   : "Unknown"}
               </p>
-              <p><strong>Reputation:</strong> {selectedAlert.reputation_label || "N/A"} ({selectedAlert.reputation_score ?? "N/A"})</p>
+              <p><strong>Behavioral Reputation:</strong> {selectedAlert.reputation_label || "Normal"} ({selectedAlert.reputation_score ?? 0})</p>
+              <p><strong>Score Type:</strong> Internal SIEM-generated behavioral score</p>
               <p><strong>Reputation Summary:</strong> {selectedAlert.reputation_summary || "N/A"}</p>
+              <div>
+                <strong>Contributing Signals:</strong>
+                {Array.isArray(selectedAlert.contributing_signals) && selectedAlert.contributing_signals.length > 0 ? (
+                  selectedAlert.contributing_signals.map((signal) => (
+                    <div key={signal.signal} style={signalRowStyle}>
+                      <span>{signal.label}</span>
+                      <span style={sourceTypeTextStyle}>
+                        count {signal.count} · weight {signal.weight} · total {signal.total}
+                      </span>
+                    </div>
+                  ))
+                ) : (
+                  <div style={{ fontSize: "12px", color: "#8b949e", marginTop: "4px" }}>
+                    No contributing signals
+                  </div>
+                )}
+              </div>
               <p><strong>Response Action:</strong> {selectedAlert.response_action || "N/A"}</p>
               <p><strong>Response Status:</strong> {selectedAlert.response_status || "N/A"}</p>
             </div>

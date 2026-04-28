@@ -205,6 +205,48 @@ function ThreatHuntPanel({
     };
   };
 
+  const getReputationBadgeStyle = (label) => {
+    const normalized = (label || "").toLowerCase();
+
+    if (normalized === "critical") {
+      return {
+        color: "#fecaca",
+        backgroundColor: "rgba(239, 68, 68, 0.16)",
+        border: "1px solid rgba(239, 68, 68, 0.34)",
+      };
+    }
+
+    if (normalized === "high risk") {
+      return {
+        color: "#fca5a5",
+        backgroundColor: "rgba(248, 113, 113, 0.12)",
+        border: "1px solid rgba(248, 113, 113, 0.28)",
+      };
+    }
+
+    if (normalized === "suspicious") {
+      return {
+        color: "#fcd34d",
+        backgroundColor: "rgba(251, 191, 36, 0.12)",
+        border: "1px solid rgba(251, 191, 36, 0.28)",
+      };
+    }
+
+    if (normalized === "low suspicion") {
+      return {
+        color: "#bfdbfe",
+        backgroundColor: "rgba(59, 130, 246, 0.10)",
+        border: "1px solid rgba(59, 130, 246, 0.24)",
+      };
+    }
+
+    return {
+      color: "#86efac",
+      backgroundColor: "rgba(74, 222, 128, 0.10)",
+      border: "1px solid rgba(74, 222, 128, 0.24)",
+    };
+  };
+
   const runSearch = async ({
     sourceIpValue = sourceIp,
     sourceValue = source,
@@ -443,16 +485,17 @@ function ThreatHuntPanel({
                         <th style={{ ...headerCellStyle, width: "10%" }}>Severity</th>
                         <th style={{ ...headerCellStyle, width: "12%" }}>Source</th>
                         <th style={{ ...headerCellStyle, width: "12%" }}>Source IP</th>
+                    <th style={{ ...headerCellStyle, width: "12%" }}>Behavior</th>
                     <th style={{ ...headerCellStyle, width: "8%" }}>App</th>
                     <th style={{ ...headerCellStyle, width: "8%" }}>Environment</th>
-                    <th style={{ ...headerCellStyle, width: "22%" }}>Message</th>
+                    <th style={{ ...headerCellStyle, width: "18%" }}>Message</th>
                   </tr>
                 </thead>
                 <tbody>
                   {groupedEvents.map((group) => (
                     <React.Fragment key={group.label}>
                       <tr>
-                        <td colSpan={8} style={groupHeaderCellStyle}>
+                        <td colSpan={9} style={groupHeaderCellStyle}>
                           <div style={groupHeaderStyle}>{group.label}</div>
                         </td>
                       </tr>
@@ -493,6 +536,14 @@ function ThreatHuntPanel({
                                 </div>
                               </td>
                               <td style={{ ...bodyCellStyle, ...monoCellStyle }}>{event.source_ip}</td>
+                              <td style={bodyCellStyle}>
+                                <div style={sourceBadgeStackStyle}>
+                                  <span style={{ ...sourceBadgeStyle, ...getReputationBadgeStyle(event.reputation_label) }}>
+                                    {event.reputation_label || "Normal"}
+                                  </span>
+                                  <span style={sourceTypeTextStyle}>Score {event.reputation_score ?? 0}</span>
+                                </div>
+                              </td>
                               <td style={bodyCellStyle}>{event.app_name}</td>
                               <td style={bodyCellStyle}>{event.environment}</td>
                               <td style={{ ...bodyCellStyle, ...messageCellStyle }} title={event.message}>
@@ -501,7 +552,7 @@ function ThreatHuntPanel({
                             </tr>
                             {isExpanded && (
                               <tr>
-                                <td colSpan={8} style={expandedCellStyle}>
+                                <td colSpan={9} style={expandedCellStyle}>
                                   <div style={expandedContentStyle}>
                                     <div style={expandedActionsRowStyle}>
                                       <button
@@ -553,6 +604,33 @@ function ThreatHuntPanel({
                                       <strong>Source:</strong> {sourceBadge.label}{" "}
                                       <span style={sourceTypeTextStyle}>({sourceBadge.subLabel})</span>
                                     </p>
+                                    <p style={expandedDetailTextStyle}>
+                                      <strong>Behavioral Reputation:</strong>{" "}
+                                      <span style={{ ...sourceBadgeStyle, ...getReputationBadgeStyle(event.reputation_label) }}>
+                                        {event.reputation_label || "Normal"} ({event.reputation_score ?? 0})
+                                      </span>
+                                    </p>
+                                    <p style={expandedSupportTextStyle}>
+                                      Internal SIEM-generated behavioral score
+                                    </p>
+                                    <p style={expandedDetailTextStyle}>
+                                      <strong>Reputation Summary:</strong> {event.reputation_summary || "No reputation details available."}
+                                    </p>
+                                    <div style={{ marginBottom: "12px" }}>
+                                      <strong style={expandedSignalsLabelStyle}>Contributing Signals</strong>
+                                      {Array.isArray(event.contributing_signals) && event.contributing_signals.length > 0 ? (
+                                        event.contributing_signals.map((signal) => (
+                                          <div key={signal.signal} style={signalRowStyle}>
+                                            <span>{signal.label}</span>
+                                            <span style={sourceTypeTextStyle}>
+                                              count {signal.count} · weight {signal.weight} · total {signal.total}
+                                            </span>
+                                          </div>
+                                        ))
+                                      ) : (
+                                        <div style={noSignalTextStyle}>No contributing signals</div>
+                                      )}
+                                    </div>
                                     <p style={expandedDetailTextStyle}>
                                       <strong>App:</strong> {event.app_name || "Unknown"}{" "}
                                       <span style={sourceTypeTextStyle}>({event.environment || "Unknown"})</span>
@@ -863,6 +941,35 @@ const expandedDetailTextStyle = {
   margin: "0 0 10px 0",
   color: "#e6edf3",
   fontSize: "13px",
+};
+const expandedSupportTextStyle = {
+  margin: "0 0 10px 0",
+  color: "#8b949e",
+  fontSize: "12px",
+};
+const expandedSignalsLabelStyle = {
+  display: "block",
+  marginBottom: "8px",
+  color: "#c9d1d9",
+  fontSize: "12px",
+  fontWeight: "700",
+};
+const signalRowStyle = {
+  marginTop: "6px",
+  padding: "8px 10px",
+  borderRadius: "8px",
+  backgroundColor: "#111827",
+  border: "1px solid #30363d",
+  display: "flex",
+  justifyContent: "space-between",
+  gap: "12px",
+  flexWrap: "wrap",
+  fontSize: "12px",
+  color: "#e6edf3",
+};
+const noSignalTextStyle = {
+  color: "#8b949e",
+  fontSize: "12px",
 };
 
 const copyActionButtonStyle = {

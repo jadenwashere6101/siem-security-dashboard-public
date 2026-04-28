@@ -438,6 +438,164 @@ def create_blocked_ip_record(cur, ip_address, created_by=None, reason=None, sour
     return cur.fetchone()[0]
 
 
+def _get_reputation_label(score):
+    if score <= 0:
+        return "Normal"
+    if score <= 4:
+        return "Low Suspicion"
+    if score <= 9:
+        return "Suspicious"
+    if score <= 14:
+        return "High Risk"
+    return "Critical"
+
+
+def _build_reputation_summary(signals):
+    if not signals:
+        return "No elevated behavioral signals observed in SIEM history."
+
+    phrases = [signal["summary_phrase"] for signal in signals[:2] if signal.get("summary_phrase")]
+    if not phrases:
+        return "Behavioral signals observed in SIEM history."
+    if len(phrases) == 1:
+        return phrases[0]
+    return f"{phrases[0]} and {phrases[1]}"
+
+
+def get_ip_reputation(source_ip, cur=None):
+    if source_ip is None:
+        return {
+            "reputation_score": 0,
+            "reputation_label": "Normal",
+            "reputation_summary": "No elevated behavioral signals observed in SIEM history.",
+            "contributing_signals": [],
+        }
+
+    owns_connection = cur is None
+    conn = None
+
+    try:
+        if owns_connection:
+            conn = get_db_connection()
+            cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT alert_type, COUNT(*)
+            FROM alerts
+            WHERE source_ip = %s
+              AND alert_type IN (
+                  'failed_login_threshold',
+                  'password_spraying_threshold',
+                  'successful_login_after_spray',
+                  'port_scan_threshold',
+                  'http_error_threshold',
+                  'high_request_rate_threshold'
+              )
+            GROUP BY alert_type
+            """,
+            (source_ip,),
+        )
+        alert_counts = {row[0]: row[1] for row in cur.fetchall()}
+
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM blocked_ips
+            WHERE ip_address = %s
+              AND status = 'active'
+            """,
+            (source_ip,),
+        )
+        active_block_count = cur.fetchone()[0]
+
+        signal_config = {
+            "failed_login_threshold": {
+                "weight": 3,
+                "label": "Failed Login Threshold",
+                "summary_phrase": "Multiple failed login attempts",
+            },
+            "password_spraying_threshold": {
+                "weight": 5,
+                "label": "Password Spraying",
+                "summary_phrase": "Password spraying activity",
+            },
+            "successful_login_after_spray": {
+                "weight": 6,
+                "label": "Successful Login After Spray",
+                "summary_phrase": "Successful login after spraying",
+            },
+            "port_scan_threshold": {
+                "weight": 4,
+                "label": "Port Scan Threshold",
+                "summary_phrase": "Port scan activity",
+            },
+            "http_error_threshold": {
+                "weight": 2,
+                "label": "HTTP Error Threshold",
+                "summary_phrase": "Repeated HTTP errors",
+            },
+            "high_request_rate_threshold": {
+                "weight": 3,
+                "label": "High Request Rate Threshold",
+                "summary_phrase": "High request rate",
+            },
+        }
+
+        contributing_signals = []
+        reputation_score = 0
+
+        for signal_key, config in signal_config.items():
+            count = int(alert_counts.get(signal_key, 0) or 0)
+            if count <= 0:
+                continue
+
+            total_weight = count * config["weight"]
+            reputation_score += total_weight
+            contributing_signals.append(
+                {
+                    "signal": signal_key,
+                    "label": config["label"],
+                    "count": count,
+                    "weight": config["weight"],
+                    "total": total_weight,
+                    "summary_phrase": config["summary_phrase"],
+                }
+            )
+
+        if active_block_count > 0:
+            total_weight = active_block_count * 6
+            reputation_score += total_weight
+            contributing_signals.append(
+                {
+                    "signal": "blocked_ips",
+                    "label": "Active Blocklist Entry",
+                    "count": active_block_count,
+                    "weight": 6,
+                    "total": total_weight,
+                    "summary_phrase": "Prior blocklist entry",
+                }
+            )
+
+        contributing_signals.sort(key=lambda item: (-item["total"], item["label"]))
+
+        return {
+            "reputation_score": reputation_score,
+            "reputation_label": _get_reputation_label(reputation_score),
+            "reputation_summary": _build_reputation_summary(contributing_signals),
+            "contributing_signals": [
+                {key: value for key, value in signal.items() if key != "summary_phrase"}
+                for signal in contributing_signals
+            ],
+        }
+    finally:
+        if owns_connection:
+            if cur:
+                cur.close()
+            if conn:
+                conn.close()
+
+
 def get_user_by_username(username):
     conn = None
     cur = None
@@ -2799,31 +2957,39 @@ def get_alerts():
         """)
 
         rows = cur.fetchall()
+        reputation_by_ip = {}
 
-        alerts = [
-            enrich_alert_with_mitre({
-                "id": row[0],
-                "alert_type": row[1],
-                "severity": row[2],
-                "message": row[3],
-                "source_ip": row[4],
-                "created_at": str(row[5]),
-                "status": row[6],
-                "country": row[7],
-                "city": row[8],
-                "latitude": row[9],
-                "longitude": row[10],
-                "reputation_score": row[11],
-                "reputation_label": row[12],
-                "reputation_source": row[13],
-                "reputation_summary": row[14],
-                "response_action": row[15],
-                "response_status": row[16],
-                "source": row[17] or "unknown",
-                "source_type": row[18] or "legacy",
-            })
-            for row in rows
-        ]
+        alerts = []
+        for row in rows:
+            source_ip = str(row[4]) if row[4] is not None else None
+            if source_ip not in reputation_by_ip:
+                reputation_by_ip[source_ip] = get_ip_reputation(source_ip, cur=cur)
+            reputation = reputation_by_ip[source_ip]
+
+            alerts.append(
+                enrich_alert_with_mitre({
+                    "id": row[0],
+                    "alert_type": row[1],
+                    "severity": row[2],
+                    "message": row[3],
+                    "source_ip": row[4],
+                    "created_at": str(row[5]),
+                    "status": row[6],
+                    "country": row[7],
+                    "city": row[8],
+                    "latitude": row[9],
+                    "longitude": row[10],
+                    "reputation_score": reputation["reputation_score"],
+                    "reputation_label": reputation["reputation_label"],
+                    "reputation_source": "siem_internal",
+                    "reputation_summary": reputation["reputation_summary"],
+                    "contributing_signals": reputation["contributing_signals"],
+                    "response_action": row[15],
+                    "response_status": row[16],
+                    "source": row[17] or "unknown",
+                    "source_type": row[18] or "legacy",
+                })
+            )
 
 
         cur.close()
@@ -2915,22 +3081,33 @@ def search_events():
         cur.execute(query, tuple(params))
 
         rows = cur.fetchall()
-        events = [
-            {
-                "id": row[0],
-                "event_type": row[1],
-                "severity": row[2],
-                "source_ip": str(row[3]) if row[3] is not None else None,
-                "message": row[4],
-                "app_name": row[5],
-                "environment": row[6],
-                "source": row[7],
-                "source_type": row[8],
-                "raw_payload": row[9],
-                "created_at": str(row[10]),
-            }
-            for row in rows
-        ]
+        reputation_by_ip = {}
+        events = []
+        for row in rows:
+            source_ip = str(row[3]) if row[3] is not None else None
+            if source_ip not in reputation_by_ip:
+                reputation_by_ip[source_ip] = get_ip_reputation(source_ip, cur=cur)
+            reputation = reputation_by_ip[source_ip]
+
+            events.append(
+                {
+                    "id": row[0],
+                    "event_type": row[1],
+                    "severity": row[2],
+                    "source_ip": source_ip,
+                    "message": row[4],
+                    "app_name": row[5],
+                    "environment": row[6],
+                    "source": row[7],
+                    "source_type": row[8],
+                    "raw_payload": row[9],
+                    "created_at": str(row[10]),
+                    "reputation_score": reputation["reputation_score"],
+                    "reputation_label": reputation["reputation_label"],
+                    "reputation_summary": reputation["reputation_summary"],
+                    "contributing_signals": reputation["contributing_signals"],
+                }
+            )
 
         return jsonify(events), 200
     except Exception as e:
