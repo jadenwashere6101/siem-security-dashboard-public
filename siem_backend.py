@@ -24,6 +24,7 @@ from reportlab.lib.utils import simpleSplit
 from reportlab.pdfgen import canvas
 from adapters.azure_insights_adapter import normalize_azure_insights_telemetry
 from adapters.nginx_adapter import parse_nginx_access_log_line
+from adapters.otel_adapter import normalize_otel_telemetry
 
 
 def env_first(*names, default=None):
@@ -1089,6 +1090,7 @@ logging.basicConfig(level=logging.INFO)
 API_KEY_HEADER = "X-API-Key"
 INGEST_API_KEY = env_first("SIEM_INGEST_API_KEY", "INGEST_API_KEY", default="")
 AZURE_INGEST_API_KEY = env_first("AZURE_INGEST_API_KEY", default="")
+OTEL_INGEST_API_KEY = env_first("OTEL_INGEST_API_KEY", default="")
 ABUSEIPDB_API_KEY = env_first("SIEM_ABUSEIPDB_API_KEY", "ABUSEIPDB_API_KEY")
 REPUTATION_CACHE = {}
 
@@ -1109,6 +1111,17 @@ def require_azure_api_key():
 
     api_key = request.headers.get(API_KEY_HEADER, "")
     if api_key != AZURE_INGEST_API_KEY:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    return None
+
+
+def require_otel_api_key():
+    if not OTEL_INGEST_API_KEY:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    api_key = request.headers.get(API_KEY_HEADER, "")
+    if api_key != OTEL_INGEST_API_KEY:
         return jsonify({"error": "Unauthorized"}), 401
 
     return None
@@ -1472,6 +1485,79 @@ def add_azure_event():
         if conn:
             conn.rollback()
         app.logger.error("Error in add_azure_event: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+
+@app.route("/ingest/otlp", methods=["POST"])
+def add_otel_event():
+    api_key_error = require_otel_api_key()
+    if api_key_error:
+        return api_key_error
+
+    conn = None
+    cur = None
+
+    try:
+        data = request.get_json()
+        if data is None:
+            return jsonify({"error": "Invalid JSON"}), 400
+
+        if isinstance(data, list):
+            if not data:
+                return jsonify({"error": "Telemetry batch must not be empty"}), 400
+            if len(data) > 25:
+                return jsonify({"error": "Telemetry batch exceeds maximum size of 25"}), 400
+            telemetry_items = data
+        elif isinstance(data, dict):
+            telemetry_items = [data]
+        else:
+            return jsonify({"error": "Invalid telemetry payload"}), 400
+
+        normalized_events = []
+        for item in telemetry_items:
+            try:
+                normalized = normalize_otel_telemetry(item)
+            except ValueError as error:
+                return jsonify({"error": str(error)}), 400
+
+            normalized_events.append(
+                {
+                    "event_type": normalized["event_type"],
+                    "severity": normalized["severity"],
+                    "source_ip": normalized["source_ip"],
+                    "source": "opentelemetry",
+                    "source_type": "telemetry",
+                    "event_timestamp": normalized.get("event_timestamp"),
+                    "message": normalized["message"],
+                    "app_name": "opentelemetry",
+                    "environment": (item.get("environment") or "prod") if isinstance(item, dict) else "prod",
+                    "raw_payload": item,
+                }
+            )
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        alerts_created = []
+        for event_dict in normalized_events:
+            alerts_created.extend(ingest_normalized_event(event_dict, conn, cur))
+
+        conn.commit()
+
+        success_message = "Events added successfully" if len(normalized_events) > 1 else "Event added successfully"
+        return jsonify({
+            "message": success_message,
+            "alerts_created": alerts_created,
+        }), 201
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        app.logger.error("Error in add_otel_event: %s", error)
         return jsonify({"error": "Internal server error"}), 500
     finally:
         if cur:
