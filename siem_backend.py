@@ -1395,6 +1395,20 @@ def require_otel_api_key():
 
     return None
 
+
+def _safe_non_empty_string(value):
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped if stripped else None
+    return None
+
+
+def _get_azure_app_name(telemetry_item):
+    if not isinstance(telemetry_item, dict):
+        return "azure_application_insights"
+
+    return _safe_non_empty_string(telemetry_item.get("cloud_RoleName")) or "azure_application_insights"
+
 def lookup_ip_location(ip_address):
     try:
         if ip_address in geo_cache:
@@ -1747,10 +1761,16 @@ def add_azure_event():
             return jsonify({"error": "Invalid telemetry payload"}), 400
 
         normalized_events = []
-        for item in telemetry_items:
+        for item_index, item in enumerate(telemetry_items):
             try:
                 normalized = normalize_azure_insights_telemetry(item)
             except ValueError as error:
+                app.logger.warning(
+                    "Azure telemetry batch item %s failed validation: %s: %s",
+                    item_index,
+                    type(error).__name__,
+                    error,
+                )
                 return jsonify({"error": str(error)}), 400
 
             normalized_events.append(
@@ -1762,7 +1782,7 @@ def add_azure_event():
                     "source_type": "cloud_api",
                     "event_timestamp": normalized.get("event_timestamp"),
                     "message": normalized["message"],
-                    "app_name": "azure_application_insights",
+                    "app_name": _get_azure_app_name(item),
                     "environment": (item.get("environment") or "prod") if isinstance(item, dict) else "prod",
                     "raw_payload": item,
                 }

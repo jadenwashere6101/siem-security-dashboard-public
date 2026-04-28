@@ -74,6 +74,45 @@ def _normalize_status_code(value):
     return None
 
 
+def _build_exception_message(base_data, telemetry, operation_name):
+    return _first_non_empty_value(
+        base_data.get("message"),
+        telemetry.get("message"),
+        _safe_get(base_data, "exceptions", 0, "message"),
+        _safe_get(base_data, "exceptions", 0, "typeName"),
+        operation_name,
+        "Azure application exception detected",
+    )
+
+
+def _build_availability_message(base_data, telemetry, operation_name):
+    return _first_non_empty_value(
+        base_data.get("message"),
+        telemetry.get("message"),
+        operation_name,
+        "Azure availability failure detected",
+    )
+
+
+def _build_http_error_message(base_data, telemetry, operation_name, result_code):
+    return _first_non_empty_value(
+        base_data.get("message"),
+        telemetry.get("message"),
+        operation_name,
+        f"Azure HTTP error telemetry detected: status {result_code}",
+        "Azure HTTP error telemetry detected",
+    )
+
+
+def _build_request_message(base_data, telemetry, operation_name):
+    return _first_non_empty_value(
+        base_data.get("message"),
+        telemetry.get("message"),
+        operation_name,
+        "Azure request telemetry observed",
+    )
+
+
 def normalize_azure_insights_telemetry(telemetry):
     if not isinstance(telemetry, dict) or not telemetry:
         raise ValueError("Telemetry item must be an object")
@@ -117,14 +156,8 @@ def normalize_azure_insights_telemetry(telemetry):
         "Azure telemetry event",
     )
 
-    exception_message = _first_non_empty_value(
-        base_data.get("message"),
-        telemetry.get("message"),
-        _safe_get(base_data, "exceptions", 0, "message"),
-    )
-
     if "exception" in base_type_lower or "exception" in telemetry_name_lower:
-        message = exception_message or f"Application exception detected: {operation_name}"
+        message = _build_exception_message(base_data, telemetry, operation_name)
         return {
             "event_type": "application_exception",
             "severity": "high",
@@ -136,7 +169,7 @@ def normalize_azure_insights_telemetry(telemetry):
     if "availability" in base_type_lower or "availability" in telemetry_name_lower:
         availability_success = base_data.get("success")
         if availability_success is False or str(availability_success).strip().lower() == "false":
-            message = f"Availability failure detected: {operation_name}"
+            message = _build_availability_message(base_data, telemetry, operation_name)
             return {
                 "event_type": "availability_failure",
                 "severity": "high",
@@ -147,7 +180,7 @@ def normalize_azure_insights_telemetry(telemetry):
 
     if "request" in base_type_lower or "request" in telemetry_name_lower or "dependency" in base_type_lower or "dependency" in telemetry_name_lower:
         if result_code is not None and 500 <= result_code <= 599:
-            message = f"HTTP error telemetry detected: status {result_code} for {operation_name}"
+            message = _build_http_error_message(base_data, telemetry, operation_name, result_code)
             return {
                 "event_type": "http_error",
                 "severity": "medium",
@@ -158,7 +191,7 @@ def normalize_azure_insights_telemetry(telemetry):
 
         success_str = str(success_value).strip().lower() if success_value is not None else ""
         if result_code is not None or success_str in {"true", "false"}:
-            message = f"Successful request telemetry observed: {operation_name}"
+            message = _build_request_message(base_data, telemetry, operation_name)
             return {
                 "event_type": "normal_activity",
                 "severity": "low",
