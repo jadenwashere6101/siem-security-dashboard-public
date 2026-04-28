@@ -33,11 +33,17 @@ def _extract_source_ip(telemetry):
         telemetry.get("source_ip"),
         telemetry.get("sourceIp"),
         telemetry.get("client_ip"),
+        telemetry.get("client_IP"),
         telemetry.get("clientIp"),
+        telemetry.get("clientIP"),
         _safe_get(telemetry, "context", "client", "ip"),
         _safe_get(telemetry, "context", "client", "ipAddress"),
+        _safe_get(telemetry, "context", "location", "clientIp"),
+        _safe_get(telemetry, "context", "location", "clientip"),
         _safe_get(telemetry, "client", "ip"),
         _safe_get(telemetry, "client", "ipAddress"),
+        _safe_get(telemetry, "properties", "clientIp"),
+        _safe_get(telemetry, "customDimensions", "clientIp"),
         _safe_get(telemetry, "tags", "ai.location.ip"),
     )
 
