@@ -3,6 +3,9 @@ CREATE TABLE IF NOT EXISTS events (
     event_type TEXT NOT NULL,
     severity TEXT NOT NULL,
     source_ip INET NOT NULL,
+    source TEXT NOT NULL DEFAULT 'bank_app',
+    source_type TEXT NOT NULL DEFAULT 'custom',
+    event_timestamp TIMESTAMPTZ,
     message TEXT NOT NULL,
     app_name TEXT NOT NULL DEFAULT 'unknown_app',
     environment TEXT NOT NULL DEFAULT 'dev',
@@ -62,6 +65,22 @@ CREATE TABLE IF NOT EXISTS audit_log (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS alert_notes (
+    id SERIAL PRIMARY KEY,
+    alert_id INTEGER NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+    author TEXT NOT NULL,
+    note_text TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS detection_config (
+    rule_id TEXT PRIMARY KEY,
+    parameters JSONB NOT NULL DEFAULT '{}'::jsonb,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    updated_by TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS idx_events_source_ip ON events (source_ip);
 CREATE INDEX IF NOT EXISTS idx_events_created_at ON events (created_at);
 CREATE INDEX IF NOT EXISTS idx_events_event_type ON events (event_type);
@@ -75,7 +94,7 @@ CREATE INDEX IF NOT EXISTS idx_response_actions_log_alert_id
 ON response_actions_log (alert_id);
 
 CREATE INDEX IF NOT EXISTS idx_response_actions_log_executed_at
-ON response_actions_log (executed_at););
+ON response_actions_log (executed_at);
 
 CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);
 
@@ -84,4 +103,6 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_actor_username ON audit_log (actor_user
 CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log (created_at);
 CREATE INDEX IF NOT EXISTS idx_audit_log_target_username ON audit_log (target_username);
 CREATE INDEX IF NOT EXISTS idx_audit_log_target_alert_id ON audit_log (target_alert_id);
+CREATE INDEX IF NOT EXISTS idx_alert_notes_alert_id ON alert_notes (alert_id);
+CREATE INDEX IF NOT EXISTS idx_alert_notes_created_at ON alert_notes (created_at);
 ;

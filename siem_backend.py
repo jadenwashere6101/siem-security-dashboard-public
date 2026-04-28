@@ -1152,6 +1152,9 @@ def ingest_normalized_event(event_dict, conn, cur):
     event_type = event_dict["event_type"]
     severity = event_dict["severity"]
     source_ip = event_dict["source_ip"]
+    source = event_dict.get("source", "bank_app")
+    source_type = event_dict.get("source_type", "custom")
+    event_timestamp = event_dict.get("event_timestamp")
     message = event_dict["message"]
     app_name = event_dict["app_name"]
     environment = event_dict["environment"]
@@ -1159,10 +1162,32 @@ def ingest_normalized_event(event_dict, conn, cur):
 
     cur.execute(
         """
-        INSERT INTO events (event_type, severity, source_ip, message, app_name, environment, raw_payload)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO events (
+            event_type,
+            severity,
+            source_ip,
+            source,
+            source_type,
+            event_timestamp,
+            message,
+            app_name,
+            environment,
+            raw_payload
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
-        (event_type, severity, source_ip, message, app_name, environment, Json(raw_payload)),
+        (
+            event_type,
+            severity,
+            source_ip,
+            source,
+            source_type,
+            event_timestamp,
+            message,
+            app_name,
+            environment,
+            Json(raw_payload),
+        ),
     )
 
     alerts_created = []
