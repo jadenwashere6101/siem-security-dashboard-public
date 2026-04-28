@@ -22,6 +22,7 @@ from reportlab.lib import colors
 from reportlab.lib.colors import HexColor
 from reportlab.lib.utils import simpleSplit
 from reportlab.pdfgen import canvas
+from adapters.nginx_adapter import parse_nginx_access_log_line
 
 
 def env_first(*names, default=None):
@@ -1290,6 +1291,95 @@ def add_event():
         print("Error in add_event:", e)
         return jsonify({"error": "Internal server error"}), 500
 
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+
+@app.route("/ingest/web-log", methods=["POST"])
+def add_web_log_event():
+    api_key_error = require_api_key()
+    if api_key_error:
+        return api_key_error
+
+    conn = None
+    cur = None
+
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Invalid JSON"}), 400
+
+        line = data.get("line")
+        if not isinstance(line, str) or not line.strip():
+            return jsonify({"error": "Missing required field: line"}), 400
+
+        try:
+            parsed_line = parse_nginx_access_log_line(line)
+        except ValueError as error:
+            return jsonify({"error": str(error)}), 400
+
+        status_code = parsed_line["status"]
+        if status_code in {401, 403}:
+            event_type = "unauthorized_access"
+            severity = "medium"
+        elif 500 <= status_code <= 599:
+            event_type = "http_error"
+            severity = "medium"
+        else:
+            event_type = "normal_activity"
+            severity = "low"
+
+        method = parsed_line.get("method") or "UNKNOWN"
+        path = parsed_line.get("path") or "/"
+        source_ip = parsed_line["source_ip"]
+        environment = data.get("environment") or "prod"
+        raw_payload = {
+            "line": line,
+            "log_format": "nginx_access",
+            **parsed_line,
+        }
+
+        if event_type == "unauthorized_access":
+            message = f"Unauthorized web access detected: HTTP {status_code} for {method} {path}"
+        elif event_type == "http_error":
+            message = f"Web server error detected: HTTP {status_code} for {method} {path}"
+        else:
+            message = f"Web request observed: HTTP {status_code} for {method} {path}"
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        alerts_created = ingest_normalized_event(
+            {
+                "event_type": event_type,
+                "severity": severity,
+                "source_ip": source_ip,
+                "source": "nginx",
+                "source_type": "web_log",
+                "event_timestamp": parsed_line.get("event_timestamp"),
+                "message": message,
+                "app_name": "nginx",
+                "environment": environment,
+                "raw_payload": raw_payload,
+            },
+            conn,
+            cur,
+        )
+
+        conn.commit()
+
+        return jsonify({
+            "message": "Event added successfully",
+            "alerts_created": alerts_created
+        }), 201
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        app.logger.error("Error in add_web_log_event: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
     finally:
         if cur:
             cur.close()
