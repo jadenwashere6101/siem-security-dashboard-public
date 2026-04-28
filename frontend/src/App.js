@@ -9,6 +9,7 @@ import AdminUsersPanel from "./components/AdminUsersPanel";
 import AuditLogPanel from "./components/AuditLogPanel";
 import DetectionRulesPanel from "./components/DetectionRulesPanel";
 import ThreatHuntPanel from "./components/ThreatHuntPanel";
+import BlocklistManagerPanel from "./components/BlocklistManagerPanel";
 
 const SIEM_BASE_PATH =
   typeof window !== "undefined" &&
@@ -610,6 +611,18 @@ function App() {
           {canTakeAlertActions && (
             <button
               type="button"
+              onClick={() => setActiveSection("blocklist")}
+              style={{
+                ...sectionTabStyle,
+                ...(activeSection === "blocklist" ? activeSectionTabStyle : inactiveSectionTabStyle),
+              }}
+            >
+              Blocklist
+            </button>
+          )}
+          {canTakeAlertActions && (
+            <button
+              type="button"
               onClick={() => setActiveSection("threat-hunt")}
               style={{
                 ...sectionTabStyle,
@@ -753,6 +766,17 @@ function App() {
             filterLabelStyle={filterLabelStyle}
             selectStyle={selectStyle}
             onViewRelatedAlerts={handleViewRelatedAlerts}
+          />
+        )}
+
+        {canTakeAlertActions && activeSection === "blocklist" && (
+          <BlocklistManagerPanel
+            cardStyle={cardStyle}
+            cardHeaderStyle={cardHeaderStyle}
+            cardTitleStyle={cardTitleStyle}
+            cardSubtitleStyle={cardSubtitleStyle}
+            filterLabelStyle={filterLabelStyle}
+            selectStyle={selectStyle}
           />
         )}
 

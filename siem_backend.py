@@ -365,6 +365,79 @@ def backfill_alert_sources(conn, cur):
     return updated_count
 
 
+def validate_blocked_ip(ip_address):
+    if ip_address is None or not str(ip_address).strip():
+        raise ValueError("IP address is required")
+
+    try:
+        parsed_ip = ipaddress.ip_address(str(ip_address).strip())
+    except ValueError as error:
+        raise ValueError("Invalid IP address") from error
+
+    if (
+        parsed_ip.is_loopback
+        or parsed_ip.is_private
+        or parsed_ip.is_link_local
+        or parsed_ip.is_multicast
+        or parsed_ip.is_reserved
+        or parsed_ip.is_unspecified
+    ):
+        raise ValueError("Private, loopback, and internal IPs cannot be blocked")
+
+    return str(parsed_ip)
+
+
+def create_blocked_ip_record(cur, ip_address, created_by=None, reason=None, source_alert_id=None, expires_at=None):
+    normalized_ip = validate_blocked_ip(ip_address)
+
+    if source_alert_id is not None:
+        cur.execute(
+            """
+            SELECT 1
+            FROM alerts
+            WHERE id = %s
+            """,
+            (source_alert_id,),
+        )
+        if not cur.fetchone():
+            raise ValueError("Source alert not found")
+
+    cur.execute(
+        """
+        SELECT 1
+        FROM blocked_ips
+        WHERE ip_address = %s
+          AND status = 'active'
+        """,
+        (normalized_ip,),
+    )
+    if cur.fetchone():
+        raise ValueError("An active block already exists for this IP")
+
+    cur.execute(
+        """
+        INSERT INTO blocked_ips (
+            ip_address,
+            reason,
+            status,
+            created_by,
+            expires_at,
+            source_alert_id
+        )
+        VALUES (%s, %s, 'active', %s, %s, %s)
+        RETURNING id
+        """,
+        (
+            normalized_ip,
+            reason,
+            created_by,
+            expires_at,
+            source_alert_id,
+        ),
+    )
+    return cur.fetchone()[0]
+
+
 def get_user_by_username(username):
     conn = None
     cur = None
@@ -1720,13 +1793,34 @@ def determine_response_action(reputation_score):
         return "monitor"
 
 
-def execute_response_action(cur, alert_id, source_ip, response_action):
+def execute_response_action(
+    cur,
+    alert_id,
+    source_ip,
+    response_action,
+    *,
+    create_blocklist_record=False,
+    created_by=None,
+    reason=None,
+    source_alert_id=None,
+):
     status = "executed"
     details = None
 
     if response_action == "block_ip":
-        app.logger.info("[SIMULATED BLOCK] alert_id=%s ip=%s", alert_id, source_ip)
-        details = "Simulated IP block"
+        if create_blocklist_record:
+            create_blocked_ip_record(
+                cur,
+                source_ip,
+                created_by=created_by,
+                reason=reason,
+                source_alert_id=source_alert_id,
+            )
+            app.logger.info("[BLOCKLIST TRACKING] alert_id=%s ip=%s", alert_id, source_ip)
+            details = "Recorded in SIEM blocklist (tracking only)"
+        else:
+            app.logger.info("[SIMULATED BLOCK] alert_id=%s ip=%s", alert_id, source_ip)
+            details = "Simulated IP block"
 
     elif response_action == "flag_high_priority":
         app.logger.info("[SIMULATED ESCALATION] alert_id=%s ip=%s", alert_id, source_ip)
@@ -4128,6 +4222,183 @@ def add_alert_note(alert_id):
             conn.close()
 
 
+@app.route("/blocked-ips", methods=["GET"])
+@login_required
+@analyst_or_super_admin_required
+def list_blocked_ips():
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, ip_address, reason, status, created_by, created_at, expires_at, source_alert_id
+            FROM blocked_ips
+            ORDER BY created_at DESC
+            """
+        )
+
+        rows = cur.fetchall()
+        blocked_ips = [
+            {
+                "id": row[0],
+                "ip_address": str(row[1]) if row[1] is not None else None,
+                "reason": row[2],
+                "status": row[3],
+                "created_by": row[4],
+                "created_at": str(row[5]),
+                "expires_at": str(row[6]) if row[6] is not None else None,
+                "source_alert_id": row[7],
+            }
+            for row in rows
+        ]
+
+        return jsonify(blocked_ips), 200
+    except Exception as error:
+        app.logger.error("Error in list_blocked_ips: %s", error)
+        return jsonify({"error": "Unable to list blocked IPs"}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+
+@app.route("/blocked-ips", methods=["POST"])
+@login_required
+@analyst_or_super_admin_required
+def add_blocked_ip():
+    conn = None
+    cur = None
+
+    try:
+        data = request.get_json() or {}
+        ip_address = data.get("ip_address")
+        reason = (data.get("reason") or "").strip() or None
+        source_alert_id = data.get("source_alert_id")
+        expires_at = (data.get("expires_at") or "").strip()
+        parsed_expires_at = None
+
+        if expires_at:
+            try:
+                parsed_expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            except ValueError:
+                return jsonify({"error": "Invalid expires_at"}), 400
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        block_id = create_blocked_ip_record(
+            cur,
+            ip_address,
+            created_by=current_user.id,
+            reason=reason,
+            source_alert_id=source_alert_id,
+            expires_at=parsed_expires_at,
+        )
+        normalized_ip = validate_blocked_ip(ip_address)
+        conn.commit()
+
+        log_audit_event(
+            "block_ip_added",
+            actor_username=current_user.id,
+            actor_role=current_user.role,
+            http_method=request.method,
+            request_path=request.path,
+            source_ip=request.remote_addr,
+            details={
+                "ip_address": normalized_ip,
+                "reason": reason,
+                "actor": current_user.id,
+                "source_alert_id": source_alert_id,
+                "block_id": block_id,
+            },
+        )
+
+        return jsonify({"message": "Blocked IP added successfully", "id": block_id}), 201
+    except ValueError as error:
+        if conn:
+            conn.rollback()
+        return jsonify({"error": str(error)}), 400
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        app.logger.error("Error in add_blocked_ip: %s", error)
+        return jsonify({"error": "Unable to add blocked IP"}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+
+@app.route("/blocked-ips/<int:block_id>/unblock", methods=["PATCH"])
+@login_required
+@analyst_or_super_admin_required
+def unblock_blocked_ip(block_id):
+    conn = None
+    cur = None
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT ip_address, reason, source_alert_id, status
+            FROM blocked_ips
+            WHERE id = %s
+            """,
+            (block_id,),
+        )
+        row = cur.fetchone()
+
+        if not row:
+            return jsonify({"error": "Blocked IP entry not found"}), 404
+
+        if row[3] != "active":
+            return jsonify({"error": "Blocked IP entry is not active"}), 400
+
+        cur.execute(
+            """
+            UPDATE blocked_ips
+            SET status = 'inactive'
+            WHERE id = %s
+            """,
+            (block_id,),
+        )
+        conn.commit()
+
+        ip_address = str(row[0]) if row[0] is not None else None
+        log_audit_event(
+            "block_ip_removed",
+            actor_username=current_user.id,
+            actor_role=current_user.role,
+            http_method=request.method,
+            request_path=request.path,
+            source_ip=request.remote_addr,
+            details={
+                "ip_address": ip_address,
+                "reason": row[1],
+                "actor": current_user.id,
+                "source_alert_id": row[2],
+                "block_id": block_id,
+            },
+        )
+
+        return jsonify({"message": "Blocked IP removed successfully"}), 200
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        app.logger.error("Error in unblock_blocked_ip: %s", error)
+        return jsonify({"error": "Unable to unblock blocked IP"}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+
 @app.route("/alerts/<int:alert_id>/execute", methods=["POST"])
 @login_required
 @analyst_or_super_admin_required
@@ -4163,7 +4434,17 @@ def manual_execute_alert(alert_id):
 
         source_ip = row[0]
 
-        execution_status = execute_response_action(cur, alert_id, str(source_ip), action)
+        block_reason = f"Manual block recorded from alert {alert_id}" if action == "block_ip" else None
+        execution_status = execute_response_action(
+            cur,
+            alert_id,
+            str(source_ip),
+            action,
+            create_blocklist_record=action == "block_ip",
+            created_by=current_user.id,
+            reason=block_reason,
+            source_alert_id=alert_id if action == "block_ip" else None,
+        )
 
         cur.execute(
             """
@@ -4195,6 +4476,10 @@ def manual_execute_alert(alert_id):
             "response_status": execution_status
         }), 200
 
+    except ValueError as e:
+        if conn:
+            conn.rollback()
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         if conn:
             conn.rollback()

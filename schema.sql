@@ -83,6 +83,17 @@ CREATE TABLE IF NOT EXISTS detection_config (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS blocked_ips (
+    id SERIAL PRIMARY KEY,
+    ip_address INET NOT NULL,
+    reason TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ,
+    source_alert_id INTEGER REFERENCES alerts(id) ON DELETE SET NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_events_source_ip ON events (source_ip);
 CREATE INDEX IF NOT EXISTS idx_events_created_at ON events (created_at);
 CREATE INDEX IF NOT EXISTS idx_events_event_type ON events (event_type);
@@ -107,4 +118,6 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_target_username ON audit_log (target_us
 CREATE INDEX IF NOT EXISTS idx_audit_log_target_alert_id ON audit_log (target_alert_id);
 CREATE INDEX IF NOT EXISTS idx_alert_notes_alert_id ON alert_notes (alert_id);
 CREATE INDEX IF NOT EXISTS idx_alert_notes_created_at ON alert_notes (created_at);
+CREATE INDEX IF NOT EXISTS idx_blocked_ips_ip_address ON blocked_ips (ip_address);
+CREATE INDEX IF NOT EXISTS idx_blocked_ips_status ON blocked_ips (status);
 ;
