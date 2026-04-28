@@ -2942,6 +2942,8 @@ def generate_correlated_activity_alerts(cur, conn, source_ip):
         "high_request_rate_threshold",
     )
 
+    app.logger.info("[CORRELATION] Evaluating IP: %s", source_ip)
+
     cur.execute(
         """
         SELECT 1
@@ -2954,6 +2956,7 @@ def generate_correlated_activity_alerts(cur, conn, source_ip):
     )
 
     if cur.fetchone():
+        app.logger.warning("[CORRELATION] Skipped: duplicate open correlated_activity alert exists | IP: %s", source_ip)
         return False
 
     cur.execute(
@@ -2979,7 +2982,21 @@ def generate_correlated_activity_alerts(cur, conn, source_ip):
     )
 
     rows = cur.fetchall()
+    app.logger.debug("[CORRELATION] Detailed counts | IP: %s | qualifying_open_alerts=%d | window_minutes=%d", source_ip, len(rows), CORRELATION_WINDOW_MINUTES)
     if len(rows) < 2:
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM alerts
+            WHERE source_ip = %s
+              AND status = 'open'
+              AND alert_type IN %s
+            """,
+            (source_ip, qualifying_alert_types),
+        )
+        total_qualifying_alerts = cur.fetchone()[0]
+        skip_reason = "alerts exist but not within correlation window" if total_qualifying_alerts >= 2 else "not enough qualifying alerts"
+        app.logger.warning("[CORRELATION] Skipped: %s | IP: %s", skip_reason, source_ip)
         return False
 
     alert_types = []
@@ -2995,9 +3012,11 @@ def generate_correlated_activity_alerts(cur, conn, source_ip):
                 known_sources.append(normalized_source)
 
     if len(alert_types) < 2:
+        app.logger.warning("[CORRELATION] Skipped: not enough distinct alert types | IP: %s", source_ip)
         return False
 
     if len(known_sources) < 2:
+        app.logger.warning("[CORRELATION] Skipped: not enough distinct known sources | IP: %s", source_ip)
         return False
 
     newest_alert = rows[0]
@@ -3083,10 +3102,11 @@ def generate_correlated_activity_alerts(cur, conn, source_ip):
     )
 
     app.logger.info(
-        "Correlated activity detected source_ip=%s linked_alert_count=%d alert_types=%s",
+        "[CORRELATION] Success | IP: %s | alerts=%d | types=%s | sources=%s",
         source_ip,
         len(rows),
         alert_types_text,
+        ", ".join(known_sources),
     )
 
     return True
