@@ -98,6 +98,7 @@ HTTP_ERROR_WINDOW_MINUTES = 15
 
 HIGH_REQUEST_RATE_THRESHOLD = 20
 HIGH_REQUEST_RATE_WINDOW_MINUTES = 5
+CORRELATION_WINDOW_MINUTES = 10
 
 SUCCESS_AFTER_SPRAY_SUCCESS_WINDOW_MINUTES = 15
 SUCCESS_AFTER_SPRAY_FAILED_LOOKBACK_MINUTES = 30
@@ -1523,6 +1524,13 @@ def ingest_normalized_event(event_dict, conn, cur):
     elif event_type == "port_scan":
         alerts_created = _generate_port_scan_alerts_core(cur, conn, source=source, source_type=source_type)
 
+    for correlated_source_ip in {
+        str(alert.get("source_ip"))
+        for alert in alerts_created
+        if alert.get("source_ip") is not None
+    }:
+        generate_correlated_activity_alerts(cur, conn, correlated_source_ip)
+
     return alerts_created
 
 
@@ -2922,6 +2930,166 @@ def _generate_high_request_rate_alerts_core(cur, conn, source=None, source_type=
         )
 
     return alerts_created
+
+
+def generate_correlated_activity_alerts(cur, conn, source_ip):
+    qualifying_alert_types = (
+        "failed_login_threshold",
+        "password_spraying_threshold",
+        "successful_login_after_spray",
+        "port_scan_threshold",
+        "http_error_threshold",
+        "high_request_rate_threshold",
+    )
+
+    cur.execute(
+        """
+        SELECT 1
+        FROM alerts
+        WHERE source_ip = %s
+          AND alert_type = %s
+          AND status = 'open'
+        """,
+        (source_ip, "correlated_activity"),
+    )
+
+    if cur.fetchone():
+        return False
+
+    cur.execute(
+        f"""
+        SELECT
+            id,
+            alert_type,
+            source,
+            source_type,
+            country,
+            city,
+            latitude,
+            longitude,
+            created_at
+        FROM alerts
+        WHERE source_ip = %s
+          AND status = 'open'
+          AND alert_type IN %s
+          AND created_at >= NOW() - INTERVAL '{CORRELATION_WINDOW_MINUTES} minutes'
+        ORDER BY created_at DESC
+        """,
+        (source_ip, qualifying_alert_types),
+    )
+
+    rows = cur.fetchall()
+    if len(rows) < 2:
+        return False
+
+    alert_types = []
+    known_sources = []
+    for row in rows:
+        alert_type = row[1]
+        if alert_type not in alert_types:
+            alert_types.append(alert_type)
+        source = row[2]
+        if source is not None:
+            normalized_source = str(source).strip().lower()
+            if normalized_source and normalized_source != "unknown" and normalized_source not in known_sources:
+                known_sources.append(normalized_source)
+
+    if len(alert_types) < 2:
+        return False
+
+    if len(known_sources) < 2:
+        return False
+
+    newest_alert = rows[0]
+    source = newest_alert[2] or "unknown"
+    source_type = newest_alert[3] or "legacy"
+    country = newest_alert[4]
+    city = newest_alert[5]
+    latitude = newest_alert[6]
+    longitude = newest_alert[7]
+
+    reputation = lookup_ip_reputation(str(source_ip))
+    reputation_score = reputation["reputation_score"]
+    response_action = determine_response_action(reputation_score)
+    response_status = "pending"
+    reputation_label = reputation["reputation_label"]
+    reputation_source = reputation["reputation_source"]
+    reputation_summary = reputation["reputation_summary"]
+
+    alert_types_text = ", ".join(alert_types)
+    message = f"Multi-source suspicious activity detected from {source_ip} involving: {alert_types_text}"
+
+    cur.execute(
+        """
+        INSERT INTO alerts (
+            source_ip,
+            alert_type,
+            severity,
+            source,
+            source_type,
+            message,
+            status,
+            response_action,
+            response_status,
+            country,
+            city,
+            latitude,
+            longitude,
+            reputation_score,
+            reputation_label,
+            reputation_source,
+            reputation_summary
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            source_ip,
+            "correlated_activity",
+            "high",
+            source,
+            source_type,
+            message,
+            "open",
+            response_action,
+            response_status,
+            country,
+            city,
+            latitude,
+            longitude,
+            reputation_score,
+            reputation_label,
+            reputation_source,
+            reputation_summary,
+        ),
+    )
+
+    cur.execute("SELECT currval(pg_get_serial_sequence('alerts', 'id'))")
+    alert_id = cur.fetchone()[0]
+
+    execution_status = execute_response_action(
+        cur,
+        alert_id,
+        str(source_ip),
+        response_action
+    )
+
+    cur.execute(
+        """
+        UPDATE alerts
+        SET response_status = %s
+        WHERE id = %s
+        """,
+        (execution_status, alert_id)
+    )
+
+    app.logger.info(
+        "Correlated activity detected source_ip=%s linked_alert_count=%d alert_types=%s",
+        source_ip,
+        len(rows),
+        alert_types_text,
+    )
+
+    return True
 
 
 @app.route("/alerts", methods=["GET"])
