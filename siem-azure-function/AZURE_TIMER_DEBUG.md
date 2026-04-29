@@ -1,203 +1,106 @@
 # Azure Timer Debug Guide
 
-This guide is the Azure Function-side reference for setup verification and troubleshooting.
-
-For the full plug-and-play setup flow, use:
+For the full demo flow, use:
 - `docs/azure-integration-setup.md`
+
+## Current Working Architecture
+
+```text
+Azure Function test_endpoint
+  -> Application Insights traces
+  -> poll_application_insights timer
+  -> SIEM /ingest/azure
+  -> events table
+  -> dashboard
+```
 
 ## Required Azure Function Settings
 
-| Variable | Required | Format | Description |
-|---|---|---|---|
-| `LOG_ANALYTICS_WORKSPACE_ID` | Yes | UUID string | Azure Log Analytics workspace ID to query |
-| `SIEM_AZURE_INGEST_URL` | Yes | HTTPS URL ending in `/ingest/azure` | Full URL of the SIEM backend Azure ingest endpoint |
-| `AZURE_INGEST_API_KEY` | Yes | Arbitrary secret string | API key sent to the SIEM backend as `X-API-Key` header |
-| `FUNCTIONS_WORKER_RUNTIME` | Yes | `python` | Azure runtime setting |
-| `AzureWebJobsStorage` | Yes | Azure storage connection string | Required by Azure Functions runtime |
+| Variable | Required | Notes |
+|---|---|---|
+| `LOG_ANALYTICS_WORKSPACE_ID` | Yes | Log Analytics workspace queried by the timer |
+| `SIEM_AZURE_INGEST_URL` | Yes | Full backend URL ending in `/ingest/azure` |
+| `AZURE_INGEST_API_KEY` | Yes | Must match the SIEM backend value |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | Yes | Sends Function logs and traces to Application Insights |
+| `AzureWebJobsStorage` | Yes | Required by Azure Functions runtime |
+| `FUNCTIONS_WORKER_RUNTIME` | Yes | Set to `python` |
 
-## Naming Rules
-
-- Use `AZURE_INGEST_API_KEY` exactly
-- Do not use `SIEM_AZURE_INGEST_API_KEY`
-- `SIEM_AZURE_INGEST_URL` must include the full path and end with `/ingest/azure`
-- Do not add a trailing slash to `SIEM_AZURE_INGEST_URL`
-
-## What This Timer Does
-
-- Runs every 5 minutes
-- Queries Log Analytics for the last 5 minutes
-- Caps results at 25 records
-- Forwards only:
-  - exceptions
-  - requests with `401` / `403`
-  - requests with `>= 500`
-
-## Important IP Behavior
-
-Rows with these `client_IP` values are skipped intentionally:
-
-- missing
-- blank
-- `0.0.0.0`
-
-This is expected behavior. The SIEM backend keeps strict IP validation and does not accept fake or placeholder IPs.
-
-## End-to-End Data Flow
+## Required Backend Setting
 
 ```text
-Azure Application Insights
-  -> Azure Log Analytics Workspace
-  -> poll_application_insights timer function
-  -> POST SIEM_AZURE_INGEST_URL with X-API-Key: AZURE_INGEST_API_KEY
-  -> SIEM /ingest/azure
-  -> events table
-  -> alerts table
-  -> SIEM UI
+AZURE_INGEST_API_KEY=<SHARED_AZURE_INGEST_KEY>
 ```
 
-## Verification
+This value must match the Azure Function setting exactly.
 
-### Check Azure Function Invocations
+## Demo Steps
 
-Use Azure Portal:
+### 1. Trigger a trace
 
-1. Open the Function App
-2. Open `Functions`
-3. Open `poll_application_insights`
-4. Review `Monitor` and recent runs
+```bash
+curl "https://<FUNCTION_APP_HOST>/api/test_endpoint?code=<FUNCTION_KEY>"
+```
 
-Look for a log line like:
+### 2. Wait for the timer
+
+- `poll_application_insights` runs every 5 minutes
+
+### 3. Check timer logs
+
+Look for:
 
 ```text
 Application Insights polling complete: returned=N forwarded=N skipped_invalid_ip=N failures=0 ...
 ```
 
-Interpretation:
+Success means:
 
-- `forwarded > 0` means events were sent to the SIEM
-- `failures > 0` means the SIEM rejected requests or was unreachable
-- `skipped_invalid_ip > 0` means matching rows had no usable client IP
-- `returned = 0` means no matching telemetry was found in the last 5 minutes
+- `returned > 0`
+- `forwarded > 0`
 
-### Manual KQL Queries
+### 4. Verify in Azure Portal
 
-#### Requests
+- Function App -> Functions -> `poll_application_insights` -> Monitor
+- Function App -> Settings -> Environment variables
+- Confirm the required settings are present before debugging code
 
-```kusto
-requests
-| where timestamp >= ago(5m)
-| where toint(resultCode) in (401, 403) or toint(resultCode) >= 500
-| project timestamp, operation_Name, name, resultCode, client_IP
-| order by timestamp asc
-| take 25
-```
+## Verification Query
 
-#### Exceptions
-
-```kusto
-exceptions
-| where timestamp >= ago(5m)
-| project timestamp, operation_Name, message, client_IP
-| order by timestamp asc
-| take 25
-```
-
-#### Combined View Matching Timer Scope
-
-```kusto
-union isfuzzy=true
-(
-    exceptions
-    | where timestamp >= ago(5m)
-    | project itemType = "exception", timestamp, operation_Name, message, client_IP, resultCode = ""
-),
-(
-    requests
-    | where timestamp >= ago(5m)
-    | where toint(resultCode) in (401, 403) or toint(resultCode) >= 500
-    | project itemType = "request", timestamp, operation_Name, message = name, client_IP, resultCode
-)
-| where isnotempty(client_IP)
-| order by timestamp asc
-| take 25
-```
-
-### Verify Forwarded Events in SIEM
+Run against the SIEM VM database:
 
 ```sql
-SELECT created_at, source_ip, event_type, source, source_type
+SELECT created_at, source_ip, event_type, source, source_type, message
 FROM events
 WHERE source = 'azure_insights'
 ORDER BY created_at DESC
-LIMIT 25;
+LIMIT 5;
 ```
 
-Expected values:
+## Troubleshooting
 
-- `source = 'azure_insights'`
-- `source_type = 'cloud_api'`
+### `returned=0`
 
-### Optional Endpoint Reachability Check
+- No matching telemetry was found in the time window
 
-If you need to confirm the backend endpoint exists before the Azure Function can reach it:
+### `skipped_invalid_ip > 0`
 
-```bash
-curl -s -o /dev/null -w "%{http_code}" -X POST https://<your-siem-host>/ingest/azure \
-  -H "X-API-Key: wrongkey" \
-  -H "Content-Type: application/json" \
-  -d '{}'
-```
+- No usable IP was extracted from the trace or telemetry row
 
-Expected: `401`
+### `failures > 0`
 
-## Common Failure Modes
+- The SIEM rejected the payload or the backend was unreachable
 
-### Missing environment variable in Azure Function
+### `401` from `test_endpoint`
 
-- Symptom: function does not run correctly or no events appear in the SIEM DB
-- Cause: one of `LOG_ANALYTICS_WORKSPACE_ID`, `SIEM_AZURE_INGEST_URL`, or `AZURE_INGEST_API_KEY` is missing
-- Verify: Azure Portal -> Function App -> Environment variables
+- The function key was missing or invalid
 
-### Wrong API key
+### `400` from `/ingest/azure`
 
-- Symptom: invocations run but `failures > 0`
-- Cause: `AZURE_INGEST_API_KEY` does not match the backend `.env`
-- Verify: confirm both values are identical
+- The backend Azure adapter rejected the forwarded payload
 
-### Wrong endpoint URL
+## Demo Talking Points
 
-- Symptom: invocation failures or connection errors
-- Cause: `SIEM_AZURE_INGEST_URL` is wrong
-- Verify: confirm it ends with `/ingest/azure` exactly
-
-### Forwarded = 0, no failures
-
-- Symptom: invocations succeed but nothing reaches the SIEM
-- Cause: all matching rows were skipped for invalid or missing `client_IP`
-- Verify: run the KQL query manually and inspect `client_IP`
-
-### Returned = 0
-
-- Symptom: invocations succeed but no rows are processed
-- Cause: no matching telemetry exists in the last 5 minutes
-- Verify: confirm Application Insights is connected to the correct Log Analytics workspace and the monitored app is emitting exceptions or error requests
-
-### Backend returns 400
-
-- Symptom: invocation failures with no new DB rows
-- Cause: unsupported telemetry payload shape or missing required fields
-- Verify: check SIEM backend logs for `/ingest/azure` errors
-
-### Backend returns 500
-
-- Symptom: invocation failures with no new DB rows
-- Cause: backend internal error, usually database-related
-- Verify: check SIEM backend service logs and DB connectivity
-
-## v1 Duplicate Behavior
-
-- 5-minute query window
-- max 25 records
-- no persisted watermark yet
-
-Duplicate forwarding is still possible across overlapping runs or retries. That is an accepted v1 limitation.
+- This demonstrates a real Azure-to-SIEM ingestion path.
+- The Azure Function extracts the real client IP from trace logs.
+- Forwarded rows enter the same SIEM normalization pipeline as other sources.
+- No new database schema was required.
