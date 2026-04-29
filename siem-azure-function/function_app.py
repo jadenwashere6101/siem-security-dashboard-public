@@ -253,6 +253,19 @@ def forward_one(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="test_endpoint", methods=["GET"])
 def test_endpoint(req: func.HttpRequest) -> func.HttpResponse:
+    forwarded_for = req.headers.get("X-Forwarded-For", "")
+    real_ip = forwarded_for.split(",")[0].strip() if forwarded_for else ""
+    if not real_ip:
+        real_ip = req.headers.get("X-Client-IP", "").strip()
+    if not real_ip:
+        real_ip = "unknown"
+
+    logging.info(
+        "HTTP request received: real_ip=%s, user_agent=%s, path=%s",
+        real_ip,
+        req.headers.get("User-Agent"),
+        req.url,
+    )
     return func.HttpResponse(
         json.dumps({"status": "ok"}),
         status_code=200,
