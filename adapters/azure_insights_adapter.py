@@ -113,6 +113,15 @@ def _build_request_message(base_data, telemetry, operation_name):
     )
 
 
+def _build_trace_message(base_data, telemetry, operation_name):
+    return _first_non_empty_value(
+        base_data.get("message"),
+        telemetry.get("message"),
+        operation_name,
+        "Azure trace telemetry observed",
+    )
+
+
 def _extract_identity_source_ip(telemetry):
     source_ip = _first_non_empty_value(
         telemetry.get("sourceIp"),
@@ -286,5 +295,15 @@ def normalize_azure_insights_telemetry(telemetry):
                 "message": message,
                 "event_timestamp": event_timestamp,
             }
+
+    if "trace" in base_type_lower or "trace" in telemetry_name_lower or "log" in base_type_lower or "log" in telemetry_name_lower:
+        message = _build_trace_message(base_data, telemetry, operation_name)
+        return {
+            "event_type": "normal_activity",
+            "severity": "low",
+            "source_ip": source_ip,
+            "message": message,
+            "event_timestamp": event_timestamp,
+        }
 
     raise ValueError("Unsupported Azure telemetry type")
