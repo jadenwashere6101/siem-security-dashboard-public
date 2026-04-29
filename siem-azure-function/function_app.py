@@ -147,8 +147,17 @@ def _extract_real_client_ip(row: dict) -> str:
         candidate = custom_dimensions.get("x-forwarded-for")
     if candidate in (None, ""):
         candidate = row.get("client_IP")
+    if candidate in (None, ""):
+        message = str(row.get("message") or "")
+        marker = "real_ip="
+        if marker in message:
+            candidate = message.split(marker, 1)[1].split(",", 1)[0].strip()
 
     candidate_text = str(candidate).split(",")[0].strip() if candidate not in (None, "") else ""
+    if candidate_text.count(":") == 1:
+        host, port = candidate_text.rsplit(":", 1)
+        if port.isdigit():
+            candidate_text = host.strip()
     return candidate_text
 
 
