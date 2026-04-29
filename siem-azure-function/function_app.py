@@ -82,7 +82,7 @@ def _query_recent_telemetry():
         return []
 
     table = tables[0]
-    column_names = [column.name for column in table.columns]
+    column_names = table.columns
 
     return [dict(zip(column_names, row)) for row in table.rows]
 
