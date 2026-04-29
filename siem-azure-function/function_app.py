@@ -19,22 +19,19 @@ MAX_RECORDS = 25
 UNKNOWN_AZURE_SERVICE = "unknown_azure_service"
 
 APP_INSIGHTS_QUERY = f"""
-union isfuzzy=true
-(
-    exceptions
-    | where timestamp >= ago({QUERY_WINDOW_MINUTES}m)
-    | project
-        itemType = "exception",
-        timestamp,
-        operation_Name,
-        name = "",
-        message,
-        client_IP,
-        resultCode = "",
-        cloud_RoleName,
-        severityLevel
-),
-(
+exceptions
+| where timestamp >= ago({QUERY_WINDOW_MINUTES}m)
+| project
+    itemType = "exception",
+    timestamp,
+    operation_Name,
+    name = "",
+    message,
+    client_IP,
+    resultCode = "",
+    cloud_RoleName,
+    severityLevel
+| union isfuzzy=true (
     requests
     | where timestamp >= ago({QUERY_WINDOW_MINUTES}m)
     | where toint(resultCode) in (401, 403) or toint(resultCode) >= 500
