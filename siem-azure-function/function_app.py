@@ -46,7 +46,21 @@ let requestRows = AppRequests
     cloud_RoleName = AppRoleName,
     severityLevel = int(null),
     customDimensions = Properties;
-union isfuzzy=true exceptionRows, requestRows
+let traceRows = AppTraces
+| where TimeGenerated >= ago({QUERY_WINDOW_MINUTES}m)
+| where Message contains "HTTP request received"
+| project
+    itemType = "trace",
+    timestamp = TimeGenerated,
+    operation_Name = "",
+    name = "trace_log",
+    message = Message,
+    client_IP = "",
+    resultCode = "",
+    cloud_RoleName = "",
+    severityLevel = int(null),
+    customDimensions = Properties;
+union isfuzzy=true exceptionRows, requestRows, traceRows
 | order by timestamp asc
 | take {MAX_RECORDS}
 """.strip()
