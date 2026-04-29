@@ -197,6 +197,12 @@ def _classify_telemetry_row(row: dict) -> dict:
             "reason": "unsupported_request_result_code",
         }
 
+    if item_type == "trace":
+        return {
+            "status": "mapped",
+            "event_type": "normal_activity",
+        }
+
     return {
         "status": "unmapped",
         "reason": "unsupported_item_type",
