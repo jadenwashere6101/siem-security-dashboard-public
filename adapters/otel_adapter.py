@@ -115,6 +115,12 @@ def _extract_source_ip(telemetry):
         raise ValueError("Missing valid source/client IP") from error
 
 
+def _extract_app_name(telemetry):
+    return _first_non_empty_value(
+        _extract_attribute_value(telemetry, "service.name"),
+    )
+
+
 def _normalize_status_code(value):
     if value in (None, "") or isinstance(value, bool):
         return None
@@ -188,24 +194,31 @@ def normalize_otel_telemetry(telemetry):
         telemetry.get("message"),
         _extract_attribute_value(telemetry, "exception.message"),
     )
+    app_name = _extract_app_name(telemetry)
 
     if status_code in {401, 403}:
-        return {
+        result = {
             "event_type": "unauthorized_access",
             "severity": "medium",
             "source_ip": source_ip,
             "message": message or f"Unauthorized HTTP telemetry detected: status {status_code} for {operation_name}",
             "event_timestamp": event_timestamp,
         }
+        if app_name:
+            result["app_name"] = app_name
+        return result
 
     if status_code is not None and status_code >= 500:
-        return {
+        result = {
             "event_type": "http_error",
             "severity": "medium",
             "source_ip": source_ip,
             "message": message or f"HTTP error telemetry detected: status {status_code} for {operation_name}",
             "event_timestamp": event_timestamp,
         }
+        if app_name:
+            result["app_name"] = app_name
+        return result
 
     status_value = _first_non_empty_value(
         _safe_get(telemetry, "status", "code"),
@@ -216,21 +229,36 @@ def normalize_otel_telemetry(telemetry):
     exception_type = _extract_attribute_value(telemetry, "exception.type")
 
     if exception_type or status_text in {"error", "2"}:
-        return {
+        result = {
             "event_type": "application_exception",
             "severity": "high",
             "source_ip": source_ip,
             "message": message or f"Application exception telemetry detected: {operation_name}",
             "event_timestamp": event_timestamp,
         }
+        if app_name:
+            result["app_name"] = app_name
+        return result
 
     if status_code is not None:
-        return {
+        result = {
             "event_type": "normal_activity",
             "severity": "low",
             "source_ip": source_ip,
             "message": message or f"Successful HTTP telemetry observed: {operation_name}",
             "event_timestamp": event_timestamp,
         }
+        if app_name:
+            result["app_name"] = app_name
+        return result
 
-    raise ValueError("Unsupported OpenTelemetry telemetry type")
+    result = {
+        "event_type": "normal_activity",
+        "severity": "low",
+        "source_ip": source_ip,
+        "message": message or f"OpenTelemetry event observed: {operation_name}",
+        "event_timestamp": event_timestamp,
+    }
+    if app_name:
+        result["app_name"] = app_name
+    return result

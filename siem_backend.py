@@ -1409,6 +1409,22 @@ def _get_azure_app_name(telemetry_item):
 
     return _safe_non_empty_string(telemetry_item.get("cloud_RoleName")) or "azure_application_insights"
 
+
+def _get_otel_app_name(normalized_telemetry, telemetry_item):
+    normalized_name = _safe_non_empty_string(
+        normalized_telemetry.get("app_name") if isinstance(normalized_telemetry, dict) else None
+    )
+    if normalized_name:
+        return normalized_name
+
+    payload_name = _safe_non_empty_string(
+        telemetry_item.get("serviceName") if isinstance(telemetry_item, dict) else None
+    )
+    if payload_name:
+        return payload_name
+
+    return "opentelemetry"
+
 def lookup_ip_location(ip_address):
     try:
         if ip_address in geo_cache:
@@ -1855,7 +1871,7 @@ def add_otel_event():
                     "source_type": "telemetry",
                     "event_timestamp": normalized.get("event_timestamp"),
                     "message": normalized["message"],
-                    "app_name": "opentelemetry",
+                    "app_name": _get_otel_app_name(normalized, item),
                     "environment": (item.get("environment") or "prod") if isinstance(item, dict) else "prod",
                     "raw_payload": item,
                 }
