@@ -19,7 +19,7 @@ MAX_RECORDS = 25
 UNKNOWN_AZURE_SERVICE = "unknown_azure_service"
 
 APP_INSIGHTS_QUERY = f"""
-exceptions
+let exceptionRows = exceptions
 | where timestamp >= ago({QUERY_WINDOW_MINUTES}m)
 | project
     itemType = "exception",
@@ -30,22 +30,21 @@ exceptions
     client_IP,
     resultCode = "",
     cloud_RoleName,
-    severityLevel
-| union isfuzzy=true (
-    requests
-    | where timestamp >= ago({QUERY_WINDOW_MINUTES}m)
-    | where toint(resultCode) in (401, 403) or toint(resultCode) >= 500
-    | project
-        itemType = "request",
-        timestamp,
-        operation_Name,
-        name,
-        message = name,
-        client_IP,
-        resultCode,
-        cloud_RoleName,
-        severityLevel = int(null)
-)
+    severityLevel;
+let requestRows = requests
+| where timestamp >= ago({QUERY_WINDOW_MINUTES}m)
+| where toint(resultCode) in (401, 403) or toint(resultCode) >= 500
+| project
+    itemType = "request",
+    timestamp,
+    operation_Name,
+    name,
+    message = name,
+    client_IP,
+    resultCode,
+    cloud_RoleName,
+    severityLevel = int(null);
+union isfuzzy=true exceptionRows, requestRows
 | where isnotempty(client_IP)
 | order by timestamp asc
 | take {MAX_RECORDS}
