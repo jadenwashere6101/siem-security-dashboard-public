@@ -33,7 +33,7 @@ let exceptionRows = AppExceptions
     severityLevel = SeverityLevel;
 let requestRows = AppRequests
 | where TimeGenerated >= ago({QUERY_WINDOW_MINUTES}m)
-| where toint(ResultCode) in (401, 403) or toint(ResultCode) >= 500
+| where isnotempty(ClientIP)
 | project
     itemType = "request",
     timestamp = TimeGenerated,
@@ -249,6 +249,15 @@ def forward_one(req: func.HttpRequest) -> func.HttpResponse:
             status_code=500,
             mimetype="application/json"
         )
+
+
+@app.route(route="test_endpoint", methods=["GET"])
+def test_endpoint(req: func.HttpRequest) -> func.HttpResponse:
+    return func.HttpResponse(
+        json.dumps({"status": "ok"}),
+        status_code=200,
+        mimetype="application/json",
+    )
 
 
 @app.timer_trigger(schedule="0 */5 * * * *", arg_name="timer", run_on_startup=False)
