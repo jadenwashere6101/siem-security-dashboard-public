@@ -337,6 +337,7 @@ def poll_application_insights(timer: func.TimerRequest) -> None:
         "application_exception": 0,
         "unauthorized_access": 0,
         "http_error": 0,
+        "normal_activity": 0,
     }
     forwarded = 0
     skipped_invalid_ip = 0
