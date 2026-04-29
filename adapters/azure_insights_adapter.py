@@ -113,6 +113,93 @@ def _build_request_message(base_data, telemetry, operation_name):
     )
 
 
+def _extract_identity_source_ip(telemetry):
+    source_ip = _first_non_empty_value(
+        telemetry.get("sourceIp"),
+        telemetry.get("source_ip"),
+        telemetry.get("client_IP"),
+        telemetry.get("clientIp"),
+    )
+
+    if source_ip is None:
+        raise ValueError("Missing valid source/client IP")
+
+    try:
+        return str(ipaddress.ip_address(str(source_ip).strip()))
+    except ValueError as error:
+        raise ValueError("Missing valid source/client IP") from error
+
+
+def _extract_identity_username(telemetry):
+    username = _first_non_empty_value(
+        telemetry.get("userPrincipalName"),
+        telemetry.get("username"),
+        telemetry.get("upn"),
+    )
+    if username is None:
+        raise ValueError("Missing username")
+    return str(username).strip()
+
+
+def _normalize_identity_result(telemetry):
+    result_value = _first_non_empty_value(
+        telemetry.get("result"),
+        telemetry.get("resultType"),
+    )
+
+    if result_value is None:
+        raise ValueError("Missing or unrecognized login result")
+
+    result_text = str(result_value).strip().lower()
+    if not result_text:
+        raise ValueError("Missing or unrecognized login result")
+
+    if result_text in {"success", "0"}:
+        return "successful_login", "low"
+
+    if result_text == "failure":
+        return "failed_login", "medium"
+
+    if result_text.isdigit() and result_text != "0":
+        return "failed_login", "medium"
+
+    raise ValueError("Missing or unrecognized login result")
+
+
+def normalize_azure_identity_telemetry(telemetry):
+    if not isinstance(telemetry, dict) or not telemetry:
+        raise ValueError("Telemetry item must be an object")
+
+    source_ip = _extract_identity_source_ip(telemetry)
+    username = _extract_identity_username(telemetry)
+    event_type, severity = _normalize_identity_result(telemetry)
+
+    message = _first_non_empty_value(
+        telemetry.get("message"),
+        telemetry.get("resultDescription"),
+    )
+    if message is None:
+        if event_type == "failed_login":
+            message = f"Azure login failure for {username} from {source_ip}"
+        else:
+            message = f"Azure login success for {username} from {source_ip}"
+
+    event_timestamp = _first_non_empty_value(
+        telemetry.get("timestamp"),
+        telemetry.get("time"),
+        telemetry.get("createdDateTime"),
+    )
+
+    return {
+        "event_type": event_type,
+        "severity": severity,
+        "source_ip": source_ip,
+        "username": username,
+        "message": message,
+        "event_timestamp": event_timestamp,
+    }
+
+
 def normalize_azure_insights_telemetry(telemetry):
     if not isinstance(telemetry, dict) or not telemetry:
         raise ValueError("Telemetry item must be an object")

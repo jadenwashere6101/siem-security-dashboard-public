@@ -22,7 +22,10 @@ from reportlab.lib import colors
 from reportlab.lib.colors import HexColor
 from reportlab.lib.utils import simpleSplit
 from reportlab.pdfgen import canvas
-from adapters.azure_insights_adapter import normalize_azure_insights_telemetry
+from adapters.azure_insights_adapter import (
+    normalize_azure_identity_telemetry,
+    normalize_azure_insights_telemetry,
+)
 from adapters.nginx_adapter import parse_nginx_access_log_line
 from adapters.otel_adapter import normalize_otel_telemetry
 
@@ -1410,6 +1413,24 @@ def _get_azure_app_name(telemetry_item):
     return _safe_non_empty_string(telemetry_item.get("cloud_RoleName")) or "azure_application_insights"
 
 
+def _is_azure_identity_payload(telemetry_item):
+    if not isinstance(telemetry_item, dict):
+        return False
+
+    return str(telemetry_item.get("baseType") or "").strip() in {"SignInData", "SignInLog"}
+
+
+def _get_azure_identity_app_name(telemetry_item):
+    if not isinstance(telemetry_item, dict):
+        return "azure_identity"
+
+    return (
+        _safe_non_empty_string(telemetry_item.get("appDisplayName"))
+        or _safe_non_empty_string(telemetry_item.get("app_name"))
+        or "azure_identity"
+    )
+
+
 def _get_otel_app_name(normalized_telemetry, telemetry_item):
     normalized_name = _safe_non_empty_string(
         normalized_telemetry.get("app_name") if isinstance(normalized_telemetry, dict) else None
@@ -1779,7 +1800,11 @@ def add_azure_event():
         normalized_events = []
         for item_index, item in enumerate(telemetry_items):
             try:
-                normalized = normalize_azure_insights_telemetry(item)
+                is_identity_payload = _is_azure_identity_payload(item)
+                if is_identity_payload:
+                    normalized = normalize_azure_identity_telemetry(item)
+                else:
+                    normalized = normalize_azure_insights_telemetry(item)
             except ValueError as error:
                 app.logger.warning(
                     "Azure telemetry batch item %s failed validation: %s: %s",
@@ -1788,6 +1813,10 @@ def add_azure_event():
                     error,
                 )
                 return jsonify({"error": str(error)}), 400
+
+            raw_payload = dict(item) if isinstance(item, dict) else item
+            if is_identity_payload and isinstance(raw_payload, dict):
+                raw_payload["username"] = normalized["username"]
 
             normalized_events.append(
                 {
@@ -1798,9 +1827,9 @@ def add_azure_event():
                     "source_type": "cloud_api",
                     "event_timestamp": normalized.get("event_timestamp"),
                     "message": normalized["message"],
-                    "app_name": _get_azure_app_name(item),
+                    "app_name": _get_azure_identity_app_name(item) if is_identity_payload else _get_azure_app_name(item),
                     "environment": (item.get("environment") or "prod") if isinstance(item, dict) else "prod",
-                    "raw_payload": item,
+                    "raw_payload": raw_payload,
                 }
             )
 
