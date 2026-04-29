@@ -30,6 +30,11 @@ from adapters.nginx_adapter import parse_nginx_access_log_line
 from adapters.otel_adapter import normalize_otel_telemetry
 
 
+# ============================================================================
+# Imports / Environment Helpers
+# ============================================================================
+
+
 def env_first(*names, default=None):
     for name in names:
         value = os.getenv(name)
@@ -43,6 +48,11 @@ def env_csv(*names, default=None):
     if raw_value is None:
         return list(default or [])
     return [item.strip() for item in raw_value.split(",") if item.strip()]
+
+
+# ============================================================================
+# Constants / Validation Sets
+# ============================================================================
 
 
 DEFAULT_ALLOWED_ORIGINS = [
@@ -114,6 +124,11 @@ DETECTION_THRESHOLD_MIN = 1
 DETECTION_THRESHOLD_MAX = 100
 DETECTION_WINDOW_MINUTES_MIN = 1
 DETECTION_WINDOW_MINUTES_MAX = 1440
+
+
+# ============================================================================
+# Detection Rule Config
+# ============================================================================
 
 
 def get_detection_rule_defaults():
@@ -330,6 +345,11 @@ def get_all_effective_detection_rules():
             conn.close()
 
 
+# ============================================================================
+# Database Helpers
+# ============================================================================
+
+
 def get_db_connection():
     return psycopg2.connect(
         dbname=env_first("SIEM_DB_NAME", "DB_NAME"),
@@ -442,6 +462,11 @@ def create_blocked_ip_record(cur, ip_address, created_by=None, reason=None, sour
         ),
     )
     return cur.fetchone()[0]
+
+
+# ============================================================================
+# Audit / Reputation Helpers
+# ============================================================================
 
 
 def _get_reputation_label(score):
@@ -686,6 +711,12 @@ def log_audit_event(
         if conn:
             conn.close()
 
+
+# ============================================================================
+# Flask App Setup
+# ============================================================================
+
+
 load_dotenv()
 
 app = Flask(__name__, static_folder="frontend/build/static")
@@ -812,6 +843,11 @@ def load_user(user_id):
         return User(db_user["username"], role=db_user["role"])
 
     return None
+
+
+# ============================================================================
+# Auth / RBAC / Admin Routes
+# ============================================================================
 
 
 @app.route("/login", methods=["POST"])
@@ -1359,6 +1395,11 @@ def update_detection_rule(rule_id):
 logging.basicConfig(level=logging.INFO)
 
 
+# ============================================================================
+# API Key Helpers
+# ============================================================================
+
+
 API_KEY_HEADER = "X-API-Key"
 INGEST_API_KEY = env_first("SIEM_INGEST_API_KEY", "INGEST_API_KEY", default="")
 AZURE_INGEST_API_KEY = env_first("AZURE_INGEST_API_KEY", default="")
@@ -1494,6 +1535,11 @@ VALID_EVENT_SEARCH_TYPES = VALID_EVENT_TYPES | {
 VALID_EVENT_SOURCES = {"bank_app", "nginx", "azure_insights", "opentelemetry"}
 VALID_RESPONSE_ACTIONS = {"block_ip", "monitor", "flag_high_priority"}
 MAX_ALERT_NOTE_LENGTH = 2000
+
+
+# ============================================================================
+# Ingestion Routes
+# ============================================================================
 
 
 def has_valid_location(location):
@@ -2075,6 +2121,11 @@ def execute_response_action(
     )
 
     return status
+
+
+# ============================================================================
+# Detection Engine
+# ============================================================================
 
 
 def _generate_failed_login_alerts_core(cur, conn, source=None, source_type=None):
@@ -3142,6 +3193,11 @@ def _generate_high_request_rate_alerts_core(cur, conn, source=None, source_type=
     return alerts_created
 
 
+# ============================================================================
+# Correlation Engine
+# ============================================================================
+
+
 def generate_correlated_activity_alerts(cur, conn, source_ip):
     qualifying_alert_types = (
         "failed_login_threshold",
@@ -3525,6 +3581,11 @@ def generate_targeted_correlation_alerts(cur, conn, source_ip):
         )
 
 
+# ============================================================================
+# Alerts / Events APIs
+# ============================================================================
+
+
 @app.route("/alerts", methods=["GET"])
 @login_required
 def get_alerts():
@@ -3797,6 +3858,11 @@ def backfill_alert_reputation():
             cur.close()
         if conn:
             conn.close()
+
+
+# ============================================================================
+# Reporting / Export Helpers
+# ============================================================================
 
 
 def format_report_timestamp(value):
@@ -4872,6 +4938,11 @@ def export_multi_alert_report_pdf():
             conn.close()
 
 
+# ============================================================================
+# Response Actions / Notes / Blocklist
+# ============================================================================
+
+
 @app.route("/alerts/<int:alert_id>/response-log", methods=["GET"])
 @login_required
 def get_response_log(alert_id):
@@ -5342,6 +5413,11 @@ def update_alert_status(alert_id):
     except Exception as e:
         app.logger.error("Error in update_alert_status: %s", e)
         return jsonify({"error": "Internal server error"}), 500
+
+
+# ============================================================================
+# Frontend Serving / Entrypoint
+# ============================================================================
 
 
 @app.route("/", defaults={"path": ""})
