@@ -30,7 +30,8 @@ let exceptionRows = AppExceptions
     client_IP = ClientIP,
     resultCode = "",
     cloud_RoleName = AppRoleName,
-    severityLevel = SeverityLevel;
+    severityLevel = SeverityLevel,
+    customDimensions = Properties;
 let requestRows = AppRequests
 | where TimeGenerated >= ago({QUERY_WINDOW_MINUTES}m)
 | where isnotempty(ClientIP)
@@ -43,9 +44,9 @@ let requestRows = AppRequests
     client_IP = ClientIP,
     resultCode = ResultCode,
     cloud_RoleName = AppRoleName,
-    severityLevel = int(null);
+    severityLevel = int(null),
+    customDimensions = Properties;
 union isfuzzy=true exceptionRows, requestRows
-| where isnotempty(client_IP)
 | order by timestamp asc
 | take {MAX_RECORDS}
 """.strip()
@@ -111,6 +112,32 @@ def _sample_row_for_logging(row: dict) -> dict:
     return {key: _serialize_log_value(value) for key, value in row.items()}
 
 
+def _normalize_custom_dimensions(value):
+    if isinstance(value, dict):
+        return value
+
+    if isinstance(value, str):
+        try:
+            loaded = json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
+
+    return {}
+
+
+def _extract_real_client_ip(row: dict) -> str:
+    custom_dimensions = _normalize_custom_dimensions(row.get("customDimensions"))
+    candidate = custom_dimensions.get("client_IP")
+    if candidate in (None, ""):
+        candidate = custom_dimensions.get("x-forwarded-for")
+    if candidate in (None, ""):
+        candidate = row.get("client_IP")
+
+    candidate_text = str(candidate).split(",")[0].strip() if candidate not in (None, "") else ""
+    return candidate_text
+
+
 def _classify_telemetry_row(row: dict) -> dict:
     item_type = str(row.get("itemType") or "").strip().lower()
 
@@ -154,7 +181,7 @@ def _classify_telemetry_row(row: dict) -> dict:
 
 
 def _row_to_siem_telemetry(row: dict, mapping: dict) -> dict:
-    client_ip = row.get("client_IP")
+    client_ip = _extract_real_client_ip(row)
     timestamp = row.get("timestamp")
     timestamp_text = timestamp.isoformat() if hasattr(timestamp, "isoformat") else str(timestamp)
     operation_name = str(row.get("operation_Name") or "").strip()
@@ -217,11 +244,7 @@ def _row_to_siem_telemetry(row: dict, mapping: dict) -> dict:
 
 
 def _has_valid_client_ip(row: dict) -> bool:
-    client_ip = row.get("client_IP")
-    if client_ip is None:
-        return False
-
-    normalized = str(client_ip).strip()
+    normalized = _extract_real_client_ip(row)
     return bool(normalized) and normalized != "0.0.0.0"
 
 
