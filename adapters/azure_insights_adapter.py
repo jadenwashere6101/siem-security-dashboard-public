@@ -251,6 +251,10 @@ def normalize_azure_insights_telemetry(telemetry):
         telemetry.get("name"),
         "Azure telemetry event",
     )
+    message_text = _first_non_empty_value(
+        base_data.get("message"),
+        telemetry.get("message"),
+    )
 
     if "exception" in base_type_lower or "exception" in telemetry_name_lower:
         message = _build_exception_message(base_data, telemetry, operation_name)
@@ -296,7 +300,7 @@ def normalize_azure_insights_telemetry(telemetry):
                 "event_timestamp": event_timestamp,
             }
 
-    if "trace" in base_type_lower or "trace" in telemetry_name_lower or "log" in base_type_lower or "log" in telemetry_name_lower:
+    if isinstance(message_text, str) and "HTTP request received" in message_text:
         message = _build_trace_message(base_data, telemetry, operation_name)
         return {
             "event_type": "normal_activity",
