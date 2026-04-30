@@ -92,11 +92,13 @@ MITRE_ATTACK_MAPPINGS = {
 
 geo_cache = {}
 
+# Runtime / deployment settings.
 SIEM_ALLOWED_ORIGINS = env_csv("SIEM_ALLOWED_ORIGINS", default=DEFAULT_ALLOWED_ORIGINS)
 SIEM_BIND_HOST = env_first("SIEM_BIND_HOST", default="0.0.0.0")
 SIEM_PORT = int(env_first("SIEM_PORT", default="5051"))
 SIEM_DEBUG = env_first("SIEM_DEBUG", default="false").strip().lower() == "true"
 
+# Detector defaults.
 FAILED_LOGIN_THRESHOLD = 3
 FAILED_LOGIN_WINDOW_MINUTES = 15
 
@@ -120,6 +122,7 @@ SUCCESS_AFTER_SPRAY_FAILED_LOOKBACK_MINUTES = 30
 SUCCESS_AFTER_SPRAY_CORRELATION_WINDOW_MINUTES = 15
 SUCCESS_AFTER_SPRAY_THRESHOLD = 5
 
+# Shared validation bounds for admin-configurable detector settings.
 DETECTION_THRESHOLD_MIN = 1
 DETECTION_THRESHOLD_MAX = 100
 DETECTION_WINDOW_MINUTES_MIN = 1
@@ -1407,6 +1410,7 @@ OTEL_INGEST_API_KEY = env_first("OTEL_INGEST_API_KEY", default="")
 ABUSEIPDB_API_KEY = env_first("SIEM_ABUSEIPDB_API_KEY", "ABUSEIPDB_API_KEY")
 REPUTATION_CACHE = {}
 
+
 def require_api_key():
     if not INGEST_API_KEY:
         return jsonify({"error": "Unauthorized"}), 401
@@ -1541,6 +1545,7 @@ MAX_ALERT_NOTE_LENGTH = 2000
 # Ingestion Routes
 # ============================================================================
 
+# Event validation sets used by ingest endpoints and search APIs.
 
 def has_valid_location(location):
     if not isinstance(location, dict):
@@ -1552,6 +1557,8 @@ def has_valid_location(location):
 
 
 def ingest_normalized_event(event_dict, conn, cur):
+    # Central normalized ingestion path. Adapters and raw ingest routes feed
+    # this function, and detector/correlation fan-out happens here.
     event_type = event_dict["event_type"]
     severity = event_dict["severity"]
     source_ip = event_dict["source_ip"]
@@ -2127,6 +2134,7 @@ def execute_response_action(
 # Detection Engine
 # ============================================================================
 
+# Each detector owns its own duplicate suppression and alert creation path.
 
 def _generate_failed_login_alerts_core(cur, conn, source=None, source_type=None):
     rule_config = get_effective_detection_rule("failed_login_threshold", cur=cur)
@@ -2205,9 +2213,6 @@ def _generate_failed_login_alerts_core(cur, conn, source=None, source_type=None)
 
         if cur.fetchone():
             continue
-
-     
-     
         cur.execute(
             """
             INSERT INTO alerts (
@@ -2270,8 +2275,6 @@ def _generate_failed_login_alerts_core(cur, conn, source=None, source_type=None)
             """,
             (execution_status, alert_id)
         )
-     
-     
 
         alerts_created.append(
             {
@@ -3197,6 +3200,7 @@ def _generate_high_request_rate_alerts_core(cur, conn, source=None, source_type=
 # Correlation Engine
 # ============================================================================
 
+# Generic correlation runs first; targeted rules layer on top of existing alerts.
 
 def generate_correlated_activity_alerts(cur, conn, source_ip):
     qualifying_alert_types = (
@@ -3864,6 +3868,7 @@ def backfill_alert_reputation():
 # Reporting / Export Helpers
 # ============================================================================
 
+# Reporting helpers below are formatting/rendering utilities for text, CSV, and PDF exports.
 
 def format_report_timestamp(value):
     if value is None:
