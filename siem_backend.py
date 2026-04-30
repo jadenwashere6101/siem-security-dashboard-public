@@ -1410,7 +1410,7 @@ OTEL_INGEST_API_KEY = env_first("OTEL_INGEST_API_KEY", default="")
 ABUSEIPDB_API_KEY = env_first("SIEM_ABUSEIPDB_API_KEY", "ABUSEIPDB_API_KEY")
 REPUTATION_CACHE = {}
 
-
+# Ingestion auth guards.
 def require_api_key():
     if not INGEST_API_KEY:
         return jsonify({"error": "Unauthorized"}), 401
@@ -1444,6 +1444,7 @@ def require_otel_api_key():
     return None
 
 
+# Source-specific app-name helpers used by normalized ingest paths.
 def _safe_non_empty_string(value):
     if isinstance(value, str):
         stripped = value.strip()
@@ -1491,6 +1492,8 @@ def _get_otel_app_name(normalized_telemetry, telemetry_item):
 
     return "opentelemetry"
 
+
+# Shared enrichment helper for IP geolocation.
 def lookup_ip_location(ip_address):
     try:
         if ip_address in geo_cache:
@@ -1556,6 +1559,7 @@ def has_valid_location(location):
     return lat not in (None, "") and lon not in (None, "")
 
 
+# Central normalized event write path.
 def ingest_normalized_event(event_dict, conn, cur):
     # Central normalized ingestion path. Adapters and raw ingest routes feed
     # this function, and detector/correlation fan-out happens here.
@@ -2073,6 +2077,7 @@ def lookup_ip_reputation(ip_address):
         return result
 
 
+# Response-action selection and execution helpers.
 def determine_response_action(reputation_score):
     if reputation_score >= 80:
         return "block_ip"
@@ -3870,6 +3875,7 @@ def backfill_alert_reputation():
 
 # Reporting helpers below are formatting/rendering utilities for text, CSV, and PDF exports.
 
+# Timestamp and display formatting helpers.
 def format_report_timestamp(value):
     if value is None:
         return "Unknown"
@@ -3943,6 +3949,7 @@ def format_display_value(value):
     return text.replace("_", " ").title()
 
 
+# Alert enrichment and narrative-building helpers.
 def enrich_alert_with_mitre(alert_dict):
     alert_type = alert_dict.get("alert_type")
     mitre_data = MITRE_ATTACK_MAPPINGS.get(alert_type, {})
@@ -4038,6 +4045,7 @@ def build_next_steps(alert_type):
     )
 
 
+# Report data assembly helpers.
 def normalize_alert_report_data(alert_row):
     location = "Location unavailable"
     if alert_row[8] and alert_row[7]:
@@ -4248,6 +4256,7 @@ def fetch_alert_csv_rows(cur, filters=None):
     return cur.fetchall()
 
 
+# PDF rendering helpers.
 def build_report_header(generated_at, scope):
     return [
         "SIEM INCIDENT REPORT",
