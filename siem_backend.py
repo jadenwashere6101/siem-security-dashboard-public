@@ -4140,6 +4140,7 @@ def build_alert_report_sections(alert_data, response_logs, include_identifier=Tr
     return lines
 
 
+# Shared alert/report query helpers used by text, CSV, and PDF exports.
 def fetch_alert_rows(cur, filters=None):
     filters = filters or {}
     clauses = []
@@ -4622,6 +4623,7 @@ def build_pdf_report_response(filename, generated_at, scope, alert_sections, sev
     )
 
 
+# Export routes for single-alert and filtered multi-alert report downloads.
 @app.route("/alerts/<int:alert_id>/report", methods=["GET"])
 @login_required
 def export_alert_report(alert_id):
