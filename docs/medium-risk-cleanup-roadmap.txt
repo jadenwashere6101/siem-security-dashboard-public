@@ -1,0 +1,241 @@
+Medium-Risk Cleanup Roadmap
+===========================
+
+This roadmap is the next step after the completed low-risk cleanup pass.
+
+Already completed
+-----------------
+
+- backend section headers and comments
+- AlertsTable.js readability comments
+- README repo map
+- Azure docs clarification
+- adapter and script scope comments
+
+Goal
+----
+
+Improve maintainability with gradual medium-risk organization work, without destabilizing the working SIEM.
+
+Guiding rules
+-------------
+
+- Prefer small, isolated cleanup steps.
+- Avoid behavior changes.
+- If a change feels like a refactor instead of cleanup, stop.
+- Do not split backend routes yet.
+- Do not refactor DB connection handling yet.
+- Do not rewrite auth, detection, or correlation logic.
+- Stop if a cleanup starts creating noisy diffs without real maintainability gain.
+
+1. What should be avoided for now
+---------------------------------
+
+- Splitting `siem_backend.py` into multiple backend modules
+- Extracting shared adapter utility modules
+- Refactoring DB connection handling
+- Changing route ownership or endpoint layout
+- Rewriting auth/RBAC patterns
+- Reworking detector SQL or correlation SQL
+- Splitting `AlertsTable.js` into new components immediately
+- Broad OpenSpec history cleanup across old folders
+
+These are not bad ideas. They are just too risky for the next pass.
+
+2. Best order of execution
+--------------------------
+
+Step 1
+- `AlertsTable.js` in-file grouping cleanup only
+
+Step 2
+- Review diff and confirm no UI regression before continuing
+
+Step 3
+- Pause and evaluate frontend results before backend changes
+
+Step 4
+- Optional repo workflow/index doc review only if `README.md` is still not enough
+
+Step 5
+- Optional future-only OpenSpec hygiene clarification
+
+Step 6
+- Optional future-only decomposition planning for `AlertsTable.js`
+
+Step 7
+- Backend in-file cleanup planning revisit, only after the frontend path proves low-noise
+
+3. Step-by-step execution strategy
+----------------------------------
+
+Step 1
+- Step goal:
+  - Improve maintainability inside `AlertsTable.js` with only small, local grouping changes.
+- Exact files touched:
+  - `frontend/src/components/AlertsTable.js`
+- What is allowed:
+  - Reorder only nearby helper functions within the same local area if the change is small and clearly improves grouping.
+  - Reorder only nearby style objects within the same style cluster if the change is small and clearly improves grouping.
+  - Add tiny subsection comments where needed.
+  - Improve spacing.
+- What is NOT allowed:
+  - Do NOT split files.
+  - Do NOT create new components.
+  - Do NOT change rendering behavior.
+  - Do NOT change props, API calls, filtering, sorting, grouping, timeline, notes, exports, or response actions.
+  - Do NOT rename functions or variables.
+  - Do NOT change style values.
+  - Do NOT move JSX blocks across major render areas.
+  - Do NOT do large-scale reordering.
+  - Do NOT move any function that is referenced before its definition if it risks breaking execution order.
+- Required checks/tests:
+  - `cd /Users/jadengomez/Desktop/siem-security-dashboard-public/frontend && npm run build`
+  - confirm no new build failures
+  - confirm no accidental JSX structure changes
+- Stop condition / when not to proceed:
+  - stop if the diff becomes noisy
+  - stop if helper movement starts crossing distinct UI behavior areas
+  - stop if more than ~30–40 lines are moved in a single diff
+  - stop if any build error appears
+
+Step 2
+- Step goal:
+  - Review the Step 1 diff and confirm there is no UI regression before continuing.
+- Exact files touched:
+  - none required
+- What is allowed:
+  - review diff size
+  - review build output
+  - sanity-check the rendered alerts UI manually if needed
+- What is NOT allowed:
+  - no code changes
+  - no backend cleanup
+- Required checks/tests:
+  - confirm Step 1 diff is understandable and bounded
+  - confirm frontend build remains stable
+  - confirm no obvious UI regression in alerts table behavior
+- Stop condition / when not to proceed:
+  - stop if Step 1 already created more churn than value
+  - stop if the file is only marginally clearer
+  - stop if UI behavior looks different in any meaningful way
+
+Step 3
+- Step goal:
+  - Pause and evaluate frontend results before backend changes.
+- Exact files touched:
+  - none required
+- What is allowed:
+  - decide whether backend cleanup should be delayed longer
+  - decide whether optional non-code documentation steps should happen first
+- What is NOT allowed:
+  - no backend edits
+  - no assumption that backend cleanup must happen next
+- Required checks/tests:
+  - confirm Step 1 and Step 2 results were both low-noise
+- Stop condition / when not to proceed:
+  - stop if there is any doubt that frontend cleanup stayed behavior-safe
+
+Step 4
+- Step goal:
+  - Optional repo workflow/index doc review only if `README.md` still does not provide enough contributor navigation.
+- Exact files touched:
+  - optional small doc under `docs/`
+  - or no file if skipped
+- What is allowed:
+  - one short navigation-oriented doc
+  - links to existing backend, frontend, Azure, and spec locations
+- What is NOT allowed:
+  - do not duplicate README content heavily
+  - do not create a second conflicting source of truth
+- Required checks/tests:
+  - verify links and file paths
+  - verify the doc adds something the README does not already cover
+- Stop condition / when not to proceed:
+  - skip entirely if README is already enough
+
+Step 5
+- Step goal:
+  - Optional future-only OpenSpec hygiene clarification.
+- Exact files touched:
+  - optional short process note only
+- What is allowed:
+  - define a forward rule for future specs
+- What is NOT allowed:
+  - do not normalize old spec folders
+  - do not rewrite old proposal/spec/tasks history
+- Required checks/tests:
+  - ensure the rule is short and practical
+- Stop condition / when not to proceed:
+  - skip if it starts turning into historical cleanup
+
+Step 6
+- Step goal:
+  - Optional future-only decomposition planning for `AlertsTable.js`.
+- Exact files touched:
+  - optional planning doc only
+- What is allowed:
+  - identify likely future split boundaries
+  - describe responsibilities
+- What is NOT allowed:
+  - no component extraction yet
+  - no code changes
+- Required checks/tests:
+  - boundaries should be realistic and non-overlapping
+- Stop condition / when not to proceed:
+  - stop if planning becomes implementation
+
+Step 7
+- Step goal:
+  - Revisit backend in-file cleanup only after the frontend medium-risk path stays controlled.
+- Exact files touched:
+  - `siem_backend.py` only if explicitly approved later
+- What is allowed:
+  - future in-file organization planning
+- What is NOT allowed:
+  - no route splitting
+  - no DB/auth/detection/correlation rewrites
+  - no module extraction
+- Required checks/tests:
+  - `python3 -m py_compile /Users/jadengomez/Desktop/siem-security-dashboard-public/siem_backend.py`
+- Stop condition / when not to proceed:
+  - do not begin until frontend medium-risk cleanup has clearly paid off
+
+4. Risk level for each step
+---------------------------
+
+Step 1
+- Risk: Medium-low
+
+Step 2
+- Risk: Low
+
+Step 3
+- Risk: Medium-low
+
+Step 4
+- Risk: Medium-low
+
+Step 5
+- Risk: Medium
+
+Step 6
+- Risk: Medium-low
+
+Step 7
+- Risk: Medium
+
+5. First recommended medium-risk cleanup step
+---------------------------------------------
+
+First step:
+- `frontend/src/components/AlertsTable.js` in-file grouping cleanup only
+
+6. Why this step is safe enough to do next
+------------------------------------------
+
+- It has a smaller blast radius than backend cleanup.
+- The frontend build gives fast feedback.
+- The file is already a clear organization hotspot.
+- It improves future AI-assisted edits quickly because the component carries a lot of UI responsibilities.
+- The new Step 2 and Step 3 pauses prevent momentum from turning into backend churn too early.
