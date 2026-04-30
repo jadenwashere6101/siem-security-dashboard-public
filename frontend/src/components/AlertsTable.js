@@ -605,12 +605,14 @@ const detailSectionStyle = {
   // Badge / Display Helpers
   // ==========================================================================
 
+  // Filtered/resolved alert collections used by the table and summary UI.
   const filteredAlerts = alerts;
 
   const resolvedAlerts = alerts.filter(
     (alert) => alert.status === "resolved"
   );
 
+  // Derived export links stay local to the table header controls.
   const reportQuery = new URLSearchParams();
   if (searchTerm) {
     reportQuery.set("search", searchTerm);
@@ -630,6 +632,7 @@ const detailSectionStyle = {
   const multiAlertPdfReportHref = buildSiemPath(
     `/alerts/report/pdf${reportQuery.toString() ? `?${reportQuery.toString()}` : ""}`
   );
+
   const getResponseIndicatorColor = (action) => {
     if (action === "block_ip") return "#ef4444";
     if (action === "flag_high_priority") return "#f59e0b";
@@ -815,6 +818,8 @@ const detailSectionStyle = {
   // Timeline / Alert Details
   // ==========================================================================
 
+  // Timeline is built from the currently selected alert and the already-loaded
+  // alert collection. No extra API request is made for this view.
   const selectedAlertTimeline = selectedAlert?.source_ip
     ? alerts
         .filter((candidate) => candidate.source_ip === selectedAlert.source_ip)
