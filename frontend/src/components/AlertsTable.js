@@ -849,6 +849,8 @@ const detailSectionStyle = {
     groupedFilteredAlerts.push(nextGroup);
   });
 
+  // Each group keeps a primary row plus a highest-severity summary for the
+  // collapsed table view.
   groupedFilteredAlerts.forEach((group) => {
     const highestSeverityAlert = group.alerts.reduce((currentHighest, candidate) => {
       if (!currentHighest) {
@@ -869,6 +871,7 @@ const detailSectionStyle = {
         : "Location unavailable";
   });
 
+  // Row-level actions stay local so clicks do not leak into parent row selection.
   const toggleGroup = (groupKey) => {
     setCollapsedGroups((current) => ({
       ...current,
