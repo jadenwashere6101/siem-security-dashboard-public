@@ -1,6 +1,9 @@
 import ipaddress
 from datetime import datetime, timezone
 
+# OpenTelemetry JSON normalization helpers.
+# Scope is intentionally narrow and maps only the approved subset of HTTP/error/
+# exception-style telemetry used by the current SIEM ingestion path.
 
 def _first_non_empty_value(*values):
     for value in values:
@@ -157,6 +160,8 @@ def _normalize_event_timestamp(value):
 
 
 def normalize_otel_telemetry(telemetry):
+    # Expects JSON-style OTEL payloads already accepted by the /ingest/otlp
+    # route. This adapter is not intended to implement full OTLP coverage.
     if not isinstance(telemetry, dict) or not telemetry:
         raise ValueError("Telemetry item must be an object")
 

@@ -1,5 +1,8 @@
 import ipaddress
 
+# Azure Application Insights normalization helpers.
+# Scope is intentionally narrow: request/error/exception-style telemetry plus
+# the approved identity and trace/log shapes already supported by the backend.
 
 def _first_non_empty_value(*values):
     for value in values:
@@ -176,6 +179,8 @@ def _normalize_identity_result(telemetry):
 
 
 def normalize_azure_identity_telemetry(telemetry):
+    # Supported identity payloads are expected to be already pre-filtered by the
+    # route handler before this normalizer is called.
     if not isinstance(telemetry, dict) or not telemetry:
         raise ValueError("Telemetry item must be an object")
 
@@ -210,6 +215,8 @@ def normalize_azure_identity_telemetry(telemetry):
 
 
 def normalize_azure_insights_telemetry(telemetry):
+    # This normalizer handles the Azure Application Insights payloads currently
+    # used by the SIEM. It is not a broad Azure telemetry compatibility layer.
     if not isinstance(telemetry, dict) or not telemetry:
         raise ValueError("Telemetry item must be an object")
 

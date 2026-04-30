@@ -1,6 +1,9 @@
 import re
 from datetime import datetime
 
+# nginx combined access-log parsing only.
+# This adapter intentionally handles one access-log shape for the current
+# /ingest/web-log workflow and does not aim to support arbitrary nginx formats.
 
 NGINX_ACCESS_LOG_PATTERN = re.compile(
     r'^(?P<source_ip>\S+) '
@@ -15,6 +18,8 @@ NGINX_ACCESS_LOG_PATTERN = re.compile(
 
 
 def parse_nginx_access_log_line(line):
+    # Expects one raw nginx access-log line and returns a normalized field map
+    # for the backend web-log ingestion route.
     if not isinstance(line, str) or not line.strip():
         raise ValueError("Log line is required")
 

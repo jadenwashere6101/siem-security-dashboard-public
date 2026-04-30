@@ -7,6 +7,9 @@ from pathlib import Path
 
 import requests
 
+# Local .log file ingestion helper.
+# Reads newline-based log files, forwards each new line to /ingest/web-log, and
+# tracks byte offsets to avoid duplicate ingestion across repeated runs.
 
 STATE_FILENAME = ".ingest_state.json"
 WEB_LOG_PATH = "/ingest/web-log"
