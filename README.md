@@ -20,6 +20,27 @@
 
   ---
 
+  ## Repo Map
+
+  Quick navigation for contributors and AI agents:
+
+  - Backend entrypoint: `siem_backend.py` (main Flask app)
+  - Frontend: `frontend/src/App.js`
+  - Frontend alerts UI: `frontend/src/components/AlertsTable.js`
+  - Azure adapter: `adapters/azure_insights_adapter.py`
+  - Nginx adapter: `adapters/nginx_adapter.py`
+  - OpenTelemetry adapter: `adapters/otel_adapter.py`
+  - Azure Function: `siem-azure-function/function_app.py`
+  - Log file ingestion script: `scripts/ingest_log_files.py`
+  - Attack simulation script: `simulate_attacks.py`
+  - Demo alert script: `demo_alerts.sh`
+  - Deployment script: `deploy.sh`
+  - Azure setup/demo guide: `docs/azure-integration-setup.md`
+  - Azure timer debug guide: `siem-azure-function/AZURE_TIMER_DEBUG.md`
+  - Feature specs: `openspec/changes/`
+
+  ---
+
   ## Real-World Integration
 
   This SIEM is designed to integrate with external applications that stream real-time
