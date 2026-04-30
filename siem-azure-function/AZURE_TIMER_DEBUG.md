@@ -1,7 +1,8 @@
 # Azure Timer Debug Guide
 
-For the full demo flow, use:
-- `docs/azure-integration-setup.md`
+## Runtime Debug Guide
+
+For initial setup and demo flow, see `docs/azure-integration-setup.md`.
 
 ## Current Working Architecture
 
@@ -104,3 +105,7 @@ LIMIT 5;
 - The Azure Function extracts the real client IP from trace logs.
 - Forwarded rows enter the same SIEM normalization pipeline as other sources.
 - No new database schema was required.
+
+## See Also
+
+- Setup and demo flow: `docs/azure-integration-setup.md`

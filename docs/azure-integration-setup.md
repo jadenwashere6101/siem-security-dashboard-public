@@ -1,6 +1,10 @@
 # Azure Integration Setup
 
+## Setup & Demo Guide
+
 ## Overview
+
+For runtime debugging, see `siem-azure-function/AZURE_TIMER_DEBUG.md`.
 
 This is the current working Azure -> SIEM demo path.
 
@@ -162,3 +166,7 @@ LIMIT 5;
 - Real IP is extracted from Azure trace logs.
 - Azure events normalize into the same SIEM ingestion pipeline as other sources.
 - No new database schema was required for the demo.
+
+## See Also
+
+- Runtime debugging: `siem-azure-function/AZURE_TIMER_DEBUG.md`
