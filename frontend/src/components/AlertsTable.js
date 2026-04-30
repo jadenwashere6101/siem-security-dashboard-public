@@ -1,5 +1,9 @@
 import React, { useState } from "react";
 
+// ============================================================================
+// Imports / Utilities
+// ============================================================================
+
 const SIEM_BASE_PATH =
   typeof window !== "undefined" &&
   (window.location.pathname === "/siem" || window.location.pathname.startsWith("/siem/"))
@@ -47,6 +51,10 @@ function AlertsTable({
   expandedLabelStyle,
   expandedTextStyle,
 }) {
+  // ==========================================================================
+  // Component State / Derived Values
+  // ==========================================================================
+
   const [responseLogs, setResponseLogs] = useState({});
   const [alertNotes, setAlertNotes] = useState({});
   const [noteDrafts, setNoteDrafts] = useState({});
@@ -58,6 +66,13 @@ function AlertsTable({
   const [selectedAlert, setSelectedAlert] = useState(null);
   const [hoveredAlertId, setHoveredAlertId] = useState(null);
   const [collapsedGroups, setCollapsedGroups] = useState({});
+
+  // ==========================================================================
+  // Inline Styles
+  // ==========================================================================
+  // Large style clusters stay in-file for now to avoid changing props or JSX
+  // structure during this readability-only pass.
+
   const exportMenuStyle = {
     position: "relative",
     display: "inline-block",
@@ -337,12 +352,16 @@ const groupCountBadgeStyle = {
 const detailSectionStyle = {
   marginTop: "10px",
 };
-const severityRank = {
-  critical: 1,
-  high: 2,
-  medium: 3,
-  low: 4,
-};
+  const severityRank = {
+    critical: 1,
+    high: 2,
+    medium: 3,
+    low: 4,
+  };
+
+  // ==========================================================================
+  // Event Handlers
+  // ==========================================================================
 
   const showToast = (message, type = "info") => {
     setToastMessage(message);
@@ -359,6 +378,7 @@ const severityRank = {
   const isAdminRequiredError = (message) =>
     /admin role required|super admin role required|analyst or super admin role required|forbidden/i.test(message || "");
 
+  // Shared action button styling for permission-aware controls.
   const getActionButtonStyle = (baseStyle, restrictedAccent) => {
     if (canTakeAlertActions) {
       return baseStyle;
@@ -373,6 +393,10 @@ const severityRank = {
       opacity: 0.9,
     };
   };
+
+  // ==========================================================================
+  // Response Actions / Notes
+  // ==========================================================================
 
   const fetchResponseLog = async (alertId) => {
     try {
@@ -491,6 +515,10 @@ const severityRank = {
     }
   };
 
+  // ==========================================================================
+  // Export / Report Actions
+  // ==========================================================================
+
   const downloadPdfReport = async (url, filename) => {
     try {
       const response = await fetch(url, {
@@ -573,6 +601,9 @@ const severityRank = {
     }
   };
 
+  // ==========================================================================
+  // Badge / Display Helpers
+  // ==========================================================================
 
   const filteredAlerts = alerts;
 
@@ -780,6 +811,10 @@ const severityRank = {
   const getCorrelationAlertTypes = (alert) =>
     Array.isArray(alert?.correlated_alert_types) ? alert.correlated_alert_types : [];
 
+  // ==========================================================================
+  // Timeline / Alert Details
+  // ==========================================================================
+
   const selectedAlertTimeline = selectedAlert?.source_ip
     ? alerts
         .filter((candidate) => candidate.source_ip === selectedAlert.source_ip)
@@ -790,6 +825,7 @@ const severityRank = {
   const groupedFilteredAlerts = [];
   const groupedFilteredAlertsMap = new Map();
 
+  // Grouping happens after upstream filtering/sorting so table behavior stays intact.
   filteredAlerts.forEach((alert) => {
     const groupKey = alert.source_ip || "Unknown IP";
     const existingGroup = groupedFilteredAlertsMap.get(groupKey);
@@ -848,6 +884,10 @@ const severityRank = {
       );
     }
   };
+
+  // ==========================================================================
+  // Rendered Table / JSX
+  // ==========================================================================
 
   return (
     <>
