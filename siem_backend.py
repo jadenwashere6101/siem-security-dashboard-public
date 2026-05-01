@@ -17,6 +17,7 @@ from io import StringIO
 from datetime import datetime, timezone
 import requests
 import psycopg2
+from backend_db import create_blocked_ip_record, get_db_connection, validate_blocked_ip
 from backend_enrichment_helpers import enrich_alert_with_mitre
 from backend_pdf_helpers import build_pdf_report_response
 from backend_ingest_normalizers import (
@@ -338,20 +339,6 @@ def get_all_effective_detection_rules():
             conn.close()
 
 
-# ============================================================================
-# Database Helpers
-# ============================================================================
-
-
-def get_db_connection():
-    return psycopg2.connect(
-        dbname=env_first("SIEM_DB_NAME", "DB_NAME"),
-        user=env_first("SIEM_DB_USER", "DB_USER"),
-        host=env_first("SIEM_DB_HOST", "DB_HOST"),
-        password=env_first("SIEM_DB_PASSWORD", "DB_PASSWORD")
-    )
-
-
 def backfill_alert_sources(conn, cur):
     cur.execute(
         """
@@ -382,79 +369,6 @@ def backfill_alert_sources(conn, cur):
     updated_count = cur.rowcount
     print(f"Updated {updated_count} alerts with source attribution")
     return updated_count
-
-
-def validate_blocked_ip(ip_address):
-    if ip_address is None or not str(ip_address).strip():
-        raise ValueError("IP address is required")
-
-    try:
-        parsed_ip = ipaddress.ip_address(str(ip_address).strip())
-    except ValueError as error:
-        raise ValueError("Invalid IP address") from error
-
-    if (
-        parsed_ip.is_loopback
-        or parsed_ip.is_private
-        or parsed_ip.is_link_local
-        or parsed_ip.is_multicast
-        or parsed_ip.is_reserved
-        or parsed_ip.is_unspecified
-    ):
-        raise ValueError("Private, loopback, and internal IPs cannot be blocked")
-
-    return str(parsed_ip)
-
-
-def create_blocked_ip_record(cur, ip_address, created_by=None, reason=None, source_alert_id=None, expires_at=None):
-    normalized_ip = validate_blocked_ip(ip_address)
-
-    if source_alert_id is not None:
-        cur.execute(
-            """
-            SELECT 1
-            FROM alerts
-            WHERE id = %s
-            """,
-            (source_alert_id,),
-        )
-        if not cur.fetchone():
-            raise ValueError("Source alert not found")
-
-    cur.execute(
-        """
-        SELECT 1
-        FROM blocked_ips
-        WHERE ip_address = %s
-          AND status = 'active'
-        """,
-        (normalized_ip,),
-    )
-    if cur.fetchone():
-        raise ValueError("An active block already exists for this IP")
-
-    cur.execute(
-        """
-        INSERT INTO blocked_ips (
-            ip_address,
-            reason,
-            status,
-            created_by,
-            expires_at,
-            source_alert_id
-        )
-        VALUES (%s, %s, 'active', %s, %s, %s)
-        RETURNING id
-        """,
-        (
-            normalized_ip,
-            reason,
-            created_by,
-            expires_at,
-            source_alert_id,
-        ),
-    )
-    return cur.fetchone()[0]
 
 
 # ============================================================================
