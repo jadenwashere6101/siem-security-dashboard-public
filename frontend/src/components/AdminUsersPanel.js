@@ -1,13 +1,12 @@
 import React, { useEffect, useState } from "react";
 import AdminStatusBadge from "./AdminStatusBadge";
-import { getApiErrorMessage, parseJsonResponse } from "../utils/apiResponse";
 import {
+  createAdminUser,
   loadAdminUsers,
   resetAdminUserPassword,
   updateAdminUserRole,
   updateAdminUserStatus,
 } from "../services/adminUsersService";
-import { buildSiemPath } from "../utils/siemPath";
 
 function AdminUsersPanel({
   cardStyle,
@@ -86,25 +85,7 @@ function AdminUsersPanel({
 
     try {
       setSubmitting(true);
-      const res = await fetch(buildSiemPath("/admin/users"), {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          username,
-          password,
-          role,
-        }),
-      });
-      const data = await parseJsonResponse(res, {});
-
-      if (!res.ok) {
-        throw new Error(
-          getApiErrorMessage(data, "Unable to create user", ["error", "message"])
-        );
-      }
+      const data = await createAdminUser({ username, password, role });
 
       setUsername("");
       setPassword("");
