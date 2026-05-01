@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import AdminStatusBadge from "./AdminStatusBadge";
 
 const SIEM_BASE_PATH =
   typeof window !== "undefined" &&
@@ -407,14 +408,7 @@ function AdminUsersPanel({
                         </div>
                       </td>
                       <td style={bodyCellStyle}>
-                        <span
-                          style={{
-                            ...statusBadgeStyle,
-                            ...(user.is_active ? activeStatusStyle : inactiveStatusStyle),
-                          }}
-                        >
-                          {user.is_active ? "Active" : "Inactive"}
-                        </span>
+                        <AdminStatusBadge isActive={user.is_active} />
                       </td>
                       <td style={{ ...bodyCellStyle, ...createdCellStyle }} title={user.created_at}>
                         {formatCreatedAt(user.created_at)}
@@ -674,28 +668,6 @@ const bodyCellStyle = {
 
 const rowStyle = {
   backgroundColor: "#161b22",
-};
-
-const statusBadgeStyle = {
-  display: "inline-block",
-  padding: "3px 7px",
-  borderRadius: "999px",
-  fontSize: "10px",
-  fontWeight: "700",
-  textTransform: "uppercase",
-  letterSpacing: "0.04em",
-};
-
-const activeStatusStyle = {
-  color: "#86efac",
-  backgroundColor: "rgba(34, 197, 94, 0.12)",
-  border: "1px solid rgba(34, 197, 94, 0.28)",
-};
-
-const inactiveStatusStyle = {
-  color: "#fca5a5",
-  backgroundColor: "rgba(239, 68, 68, 0.12)",
-  border: "1px solid rgba(239, 68, 68, 0.28)",
 };
 
 const toggleButtonStyle = {
