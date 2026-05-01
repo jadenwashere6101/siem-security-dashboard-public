@@ -10,14 +10,8 @@ import AuditLogPanel from "./components/AuditLogPanel";
 import DetectionRulesPanel from "./components/DetectionRulesPanel";
 import ThreatHuntPanel from "./components/ThreatHuntPanel";
 import BlocklistManagerPanel from "./components/BlocklistManagerPanel";
+import { buildSiemPath } from "./utils/siemPath";
 
-const SIEM_BASE_PATH =
-  typeof window !== "undefined" &&
-  (window.location.pathname === "/siem" || window.location.pathname.startsWith("/siem/"))
-    ? "/siem"
-    : "";
-
-const buildSiemPath = (path) => `${SIEM_BASE_PATH}${path}`;
 const SESSION_IDENTITY_KEY = "siem_last_identity";
 
 const readStoredSessionIdentity = () => {

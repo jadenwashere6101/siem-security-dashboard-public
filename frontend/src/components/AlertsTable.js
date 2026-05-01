@@ -2,18 +2,12 @@ import React, { useState } from "react";
 import AlertDetailsPanel from "./AlertDetailsPanel";
 import AlertResponseIndicator from "./AlertResponseIndicator";
 import AlertsToolbar from "./AlertsToolbar";
+import { buildSiemPath } from "../utils/siemPath";
 
 // ============================================================================
 // Imports / Utilities
 // ============================================================================
 
-const SIEM_BASE_PATH =
-  typeof window !== "undefined" &&
-  (window.location.pathname === "/siem" || window.location.pathname.startsWith("/siem/"))
-    ? "/siem"
-    : "";
-
-const buildSiemPath = (path) => `${SIEM_BASE_PATH}${path}`;
 const MAX_ALERT_NOTE_LENGTH = 2000;
 
 function AlertsTable({

@@ -1,13 +1,6 @@
 import React, { useEffect, useState } from "react";
 import AdminStatusBadge from "./AdminStatusBadge";
-
-const SIEM_BASE_PATH =
-  typeof window !== "undefined" &&
-  (window.location.pathname === "/siem" || window.location.pathname.startsWith("/siem/"))
-    ? "/siem"
-    : "";
-
-const buildSiemPath = (path) => `${SIEM_BASE_PATH}${path}`;
+import { buildSiemPath } from "../utils/siemPath";
 
 function AdminUsersPanel({
   cardStyle,
