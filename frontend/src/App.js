@@ -11,33 +11,10 @@ import DetectionRulesPanel from "./components/DetectionRulesPanel";
 import ThreatHuntPanel from "./components/ThreatHuntPanel";
 import BlocklistManagerPanel from "./components/BlocklistManagerPanel";
 import { buildSiemPath } from "./utils/siemPath";
-
-const SESSION_IDENTITY_KEY = "siem_last_identity";
-
-const readStoredSessionIdentity = () => {
-  if (typeof window === "undefined") return null;
-
-  try {
-    const rawValue = window.sessionStorage.getItem(SESSION_IDENTITY_KEY);
-    return rawValue ? JSON.parse(rawValue) : null;
-  } catch (_error) {
-    return null;
-  }
-};
-
-const writeStoredSessionIdentity = (identity) => {
-  if (typeof window === "undefined") return;
-
-  try {
-    if (!identity?.authenticated) {
-      window.sessionStorage.removeItem(SESSION_IDENTITY_KEY);
-      return;
-    }
-
-    window.sessionStorage.setItem(SESSION_IDENTITY_KEY, JSON.stringify(identity));
-  } catch (_error) {
-  }
-};
+import {
+  readStoredSessionIdentity,
+  writeStoredSessionIdentity,
+} from "./utils/sessionIdentity";
 
 function App() {
   const [alerts, setAlerts] = useState([]);
