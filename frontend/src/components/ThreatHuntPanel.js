@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import ThreatHuntEventDetails from "./ThreatHuntEventDetails";
 
 const SIEM_BASE_PATH =
   typeof window !== "undefined" &&
@@ -600,45 +601,21 @@ function ThreatHuntPanel({
                                       </button>
                                       {copyFeedback && <span style={copyFeedbackStyle}>{copyFeedback}</span>}
                                     </div>
-                                    <p style={expandedDetailTextStyle}>
-                                      <strong>Source:</strong> {sourceBadge.label}{" "}
-                                      <span style={sourceTypeTextStyle}>({sourceBadge.subLabel})</span>
-                                    </p>
-                                    <p style={expandedDetailTextStyle}>
-                                      <strong>Behavioral Reputation:</strong>{" "}
-                                      <span style={{ ...sourceBadgeStyle, ...getReputationBadgeStyle(event.reputation_label) }}>
-                                        {event.reputation_label || "Normal"} ({event.reputation_score ?? 0})
-                                      </span>
-                                    </p>
-                                    <p style={expandedSupportTextStyle}>
-                                      Internal SIEM-generated behavioral score
-                                    </p>
-                                    <p style={expandedDetailTextStyle}>
-                                      <strong>Reputation Summary:</strong> {event.reputation_summary || "No reputation details available."}
-                                    </p>
-                                    <div style={{ marginBottom: "12px" }}>
-                                      <strong style={expandedSignalsLabelStyle}>Contributing Signals</strong>
-                                      {Array.isArray(event.contributing_signals) && event.contributing_signals.length > 0 ? (
-                                        event.contributing_signals.map((signal) => (
-                                          <div key={signal.signal} style={signalRowStyle}>
-                                            <span>{signal.label}</span>
-                                            <span style={sourceTypeTextStyle}>
-                                              count {signal.count} · weight {signal.weight} · total {signal.total}
-                                            </span>
-                                          </div>
-                                        ))
-                                      ) : (
-                                        <div style={noSignalTextStyle}>No contributing signals</div>
-                                      )}
-                                    </div>
-                                    <p style={expandedDetailTextStyle}>
-                                      <strong>App:</strong> {event.app_name || "Unknown"}{" "}
-                                      <span style={sourceTypeTextStyle}>({event.environment || "Unknown"})</span>
-                                    </p>
-                                    <p style={expandedLabelStyle}>Raw Payload</p>
-                                    <pre style={rawPayloadStyle}>
-                                      {formatRawPayload(event.raw_payload)}
-                                    </pre>
+                                    <ThreatHuntEventDetails
+                                      event={event}
+                                      sourceBadge={sourceBadge}
+                                      getReputationBadgeStyle={getReputationBadgeStyle}
+                                      formatRawPayload={formatRawPayload}
+                                      expandedDetailTextStyle={expandedDetailTextStyle}
+                                      expandedSupportTextStyle={expandedSupportTextStyle}
+                                      expandedSignalsLabelStyle={expandedSignalsLabelStyle}
+                                      expandedLabelStyle={expandedLabelStyle}
+                                      sourceBadgeStyle={sourceBadgeStyle}
+                                      sourceTypeTextStyle={sourceTypeTextStyle}
+                                      signalRowStyle={signalRowStyle}
+                                      noSignalTextStyle={noSignalTextStyle}
+                                      rawPayloadStyle={rawPayloadStyle}
+                                    />
                                   </div>
                                 </td>
                               </tr>
