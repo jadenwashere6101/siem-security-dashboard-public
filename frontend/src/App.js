@@ -6,7 +6,6 @@ import AuditLogPanel from "./components/AuditLogPanel";
 import DetectionRulesPanel from "./components/DetectionRulesPanel";
 import ThreatHuntPanel from "./components/ThreatHuntPanel";
 import BlocklistManagerPanel from "./components/BlocklistManagerPanel";
-import { buildSiemPath } from "./utils/siemPath";
 import {
   readStoredSessionIdentity,
   writeStoredSessionIdentity,
@@ -20,7 +19,11 @@ import {
 } from "./utils/alertDashboardData";
 import { updateAlertStatusRequest } from "./services/alertStatusService";
 import { loadAlerts } from "./services/alertsService";
-import { loginToDashboard, logoutFromDashboard } from "./services/authService";
+import {
+  loadCurrentSession,
+  loginToDashboard,
+  logoutFromDashboard,
+} from "./services/authService";
 
 function App() {
   const [alerts, setAlerts] = useState([]);
@@ -50,11 +53,7 @@ function App() {
 
   const checkAuth = async () => {
     try {
-      const res = await fetch(buildSiemPath("/auth/me"), {
-        credentials: "include",
-      });
-
-      const data = await res.json();
+      const data = await loadCurrentSession();
       const authenticated = !!data.authenticated;
       const nextUsername = authenticated ? data.user || null : null;
       const nextRole = authenticated ? data.role || null : null;

@@ -1,5 +1,13 @@
 import { buildSiemPath } from "../utils/siemPath";
 
+export const loadCurrentSession = async () => {
+  const res = await fetch(buildSiemPath("/auth/me"), {
+    credentials: "include",
+  });
+
+  return res.json();
+};
+
 export const loginToDashboard = async (username, password) => {
   const res = await fetch(buildSiemPath("/login"), {
     method: "POST",
