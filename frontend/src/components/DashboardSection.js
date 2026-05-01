@@ -1,0 +1,124 @@
+import React from "react";
+import AlertsTable from "./AlertsTable";
+import DashboardMetrics from "./DashboardMetrics";
+import DashboardVisuals from "./DashboardVisuals";
+
+function DashboardSection({
+  metrics,
+  topIPChartData,
+  alertTimelineData,
+  sortedAlerts,
+  alertsTableRef,
+  canTakeAlertActions,
+  setAlerts,
+  searchTerm,
+  setSearchTerm,
+  sortOption,
+  setSortOption,
+  severityFilter,
+  setSeverityFilter,
+  sourceFilter,
+  setSourceFilter,
+  selectedAlertId,
+  setSelectedAlertId,
+  getSeverityBadgeStyle,
+  onUpdateStatus,
+  statusFilter,
+  setStatusFilter,
+  metricsGridStyle,
+  metricCardStyle,
+  metricLabelStyle,
+  metricValueStyle,
+  chartsGridStyle,
+  tooltipStyle,
+  tooltipLabelStyle,
+  tooltipItemStyle,
+  cardStyle,
+  cardHeaderStyle,
+  cardTitleStyle,
+  cardSubtitleStyle,
+  filterWrapperStyle,
+  filterLabelStyle,
+  selectStyle,
+  emptyStateStyle,
+  emptyStateTextStyle,
+  tableWrapperStyle,
+  tableStyle,
+  headerCellStyle,
+  bodyCellStyle,
+  monoCellStyle,
+  tableRowStyle,
+  expandedCellStyle,
+  expandedContentStyle,
+  expandedLabelStyle,
+  expandedTextStyle,
+}) {
+  return (
+    <>
+      <DashboardMetrics
+        metrics={metrics}
+        metricsGridStyle={metricsGridStyle}
+        metricCardStyle={metricCardStyle}
+        metricLabelStyle={metricLabelStyle}
+        metricValueStyle={metricValueStyle}
+      />
+
+      <DashboardVisuals
+        metrics={metrics}
+        topIPChartData={topIPChartData}
+        alertTimelineData={alertTimelineData}
+        sortedAlerts={sortedAlerts}
+        chartsGridStyle={chartsGridStyle}
+        tooltipStyle={tooltipStyle}
+        tooltipLabelStyle={tooltipLabelStyle}
+        tooltipItemStyle={tooltipItemStyle}
+        cardStyle={cardStyle}
+        cardHeaderStyle={cardHeaderStyle}
+        cardTitleStyle={cardTitleStyle}
+        cardSubtitleStyle={cardSubtitleStyle}
+      />
+      <div ref={alertsTableRef}>
+        <AlertsTable
+          alerts={sortedAlerts}
+          canTakeAlertActions={canTakeAlertActions}
+          setAlerts={setAlerts}
+          searchTerm={searchTerm}
+          setSearchTerm={setSearchTerm}
+          sortOption={sortOption}
+          setSortOption={setSortOption}
+          severityFilter={severityFilter}
+          setSeverityFilter={setSeverityFilter}
+          sourceFilter={sourceFilter}
+          setSourceFilter={setSourceFilter}
+          selectedAlertId={selectedAlertId}
+          setSelectedAlertId={setSelectedAlertId}
+          getSeverityBadgeStyle={getSeverityBadgeStyle}
+          cardStyle={cardStyle}
+          cardHeaderStyle={cardHeaderStyle}
+          cardTitleStyle={cardTitleStyle}
+          cardSubtitleStyle={cardSubtitleStyle}
+          filterWrapperStyle={filterWrapperStyle}
+          filterLabelStyle={filterLabelStyle}
+          selectStyle={selectStyle}
+          emptyStateStyle={emptyStateStyle}
+          emptyStateTextStyle={emptyStateTextStyle}
+          tableWrapperStyle={tableWrapperStyle}
+          tableStyle={tableStyle}
+          headerCellStyle={headerCellStyle}
+          bodyCellStyle={bodyCellStyle}
+          monoCellStyle={monoCellStyle}
+          tableRowStyle={tableRowStyle}
+          expandedCellStyle={expandedCellStyle}
+          expandedContentStyle={expandedContentStyle}
+          expandedLabelStyle={expandedLabelStyle}
+          expandedTextStyle={expandedTextStyle}
+          onUpdateStatus={onUpdateStatus}
+          statusFilter={statusFilter}
+          setStatusFilter={setStatusFilter}
+        />
+      </div>
+    </>
+  );
+}
+
+export default DashboardSection;

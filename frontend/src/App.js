@@ -1,8 +1,6 @@
 import React, { useEffect, useState, useMemo, useRef } from "react";
 
-import AlertsTable from "./components/AlertsTable";
-import DashboardMetrics from "./components/DashboardMetrics";
-import DashboardVisuals from "./components/DashboardVisuals";
+import DashboardSection from "./components/DashboardSection";
 import AdminUsersPanel from "./components/AdminUsersPanel";
 import AuditLogPanel from "./components/AuditLogPanel";
 import DetectionRulesPanel from "./components/DetectionRulesPanel";
@@ -616,70 +614,56 @@ function App() {
         </div>
 
         {activeSection === "dashboard" && (
-          <>
-            <DashboardMetrics
-              metrics={metrics}
-              metricsGridStyle={metricsGridStyle}
-              metricCardStyle={metricCardStyle}
-              metricLabelStyle={metricLabelStyle}
-              metricValueStyle={metricValueStyle}
-            />
-
-            <DashboardVisuals
-              metrics={metrics}
-              topIPChartData={topIPChartData}
-              alertTimelineData={alertTimelineData}
-              sortedAlerts={sortedAlerts}
-              chartsGridStyle={chartsGridStyle}
-              tooltipStyle={tooltipStyle}
-              tooltipLabelStyle={tooltipLabelStyle}
-              tooltipItemStyle={tooltipItemStyle}
-              cardStyle={cardStyle}
-              cardHeaderStyle={cardHeaderStyle}
-              cardTitleStyle={cardTitleStyle}
-              cardSubtitleStyle={cardSubtitleStyle}
-            />
-            <div ref={alertsTableRef}>
-              <AlertsTable
-                alerts={sortedAlerts}
-                canTakeAlertActions={canTakeAlertActions}
-                setAlerts={setAlerts}
-                searchTerm={searchTerm}
-                setSearchTerm={setSearchTerm}
-                sortOption={sortOption}
-                setSortOption={setSortOption}
-                severityFilter={severityFilter}
-                setSeverityFilter={setSeverityFilter}
-                sourceFilter={sourceFilter}
-                setSourceFilter={setSourceFilter}
-                selectedAlertId={selectedAlertId}
-                setSelectedAlertId={setSelectedAlertId}
-                getSeverityBadgeStyle={getSeverityBadgeStyle}
-                cardStyle={cardStyle}
-                cardHeaderStyle={cardHeaderStyle}
-                cardTitleStyle={cardTitleStyle}
-                cardSubtitleStyle={cardSubtitleStyle}
-                filterWrapperStyle={filterWrapperStyle}
-                filterLabelStyle={filterLabelStyle}
-                selectStyle={selectStyle}
-                emptyStateStyle={emptyStateStyle}
-                emptyStateTextStyle={emptyStateTextStyle}
-                tableWrapperStyle={tableWrapperStyle}
-                tableStyle={tableStyle}
-                headerCellStyle={headerCellStyle}
-                bodyCellStyle={bodyCellStyle}
-                monoCellStyle={monoCellStyle}
-                tableRowStyle={tableRowStyle}
-                expandedCellStyle={expandedCellStyle}
-                expandedContentStyle={expandedContentStyle}
-                expandedLabelStyle={expandedLabelStyle}
-                expandedTextStyle={expandedTextStyle}
-                onUpdateStatus={handleUpdateStatus}
-                statusFilter={statusFilter}
-                setStatusFilter={setStatusFilter}
-              />
-            </div>
-          </>
+          <DashboardSection
+            metrics={metrics}
+            topIPChartData={topIPChartData}
+            alertTimelineData={alertTimelineData}
+            sortedAlerts={sortedAlerts}
+            alertsTableRef={alertsTableRef}
+            canTakeAlertActions={canTakeAlertActions}
+            setAlerts={setAlerts}
+            searchTerm={searchTerm}
+            setSearchTerm={setSearchTerm}
+            sortOption={sortOption}
+            setSortOption={setSortOption}
+            severityFilter={severityFilter}
+            setSeverityFilter={setSeverityFilter}
+            sourceFilter={sourceFilter}
+            setSourceFilter={setSourceFilter}
+            selectedAlertId={selectedAlertId}
+            setSelectedAlertId={setSelectedAlertId}
+            getSeverityBadgeStyle={getSeverityBadgeStyle}
+            onUpdateStatus={handleUpdateStatus}
+            statusFilter={statusFilter}
+            setStatusFilter={setStatusFilter}
+            metricsGridStyle={metricsGridStyle}
+            metricCardStyle={metricCardStyle}
+            metricLabelStyle={metricLabelStyle}
+            metricValueStyle={metricValueStyle}
+            chartsGridStyle={chartsGridStyle}
+            tooltipStyle={tooltipStyle}
+            tooltipLabelStyle={tooltipLabelStyle}
+            tooltipItemStyle={tooltipItemStyle}
+            cardStyle={cardStyle}
+            cardHeaderStyle={cardHeaderStyle}
+            cardTitleStyle={cardTitleStyle}
+            cardSubtitleStyle={cardSubtitleStyle}
+            filterWrapperStyle={filterWrapperStyle}
+            filterLabelStyle={filterLabelStyle}
+            selectStyle={selectStyle}
+            emptyStateStyle={emptyStateStyle}
+            emptyStateTextStyle={emptyStateTextStyle}
+            tableWrapperStyle={tableWrapperStyle}
+            tableStyle={tableStyle}
+            headerCellStyle={headerCellStyle}
+            bodyCellStyle={bodyCellStyle}
+            monoCellStyle={monoCellStyle}
+            tableRowStyle={tableRowStyle}
+            expandedCellStyle={expandedCellStyle}
+            expandedContentStyle={expandedContentStyle}
+            expandedLabelStyle={expandedLabelStyle}
+            expandedTextStyle={expandedTextStyle}
+          />
         )}
 
         {canTakeAlertActions && activeSection === "threat-hunt" && (
