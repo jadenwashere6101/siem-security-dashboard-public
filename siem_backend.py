@@ -22,6 +22,7 @@ from reportlab.lib import colors
 from reportlab.lib.colors import HexColor
 from reportlab.lib.utils import simpleSplit
 from reportlab.pdfgen import canvas
+from backend_enrichment_helpers import enrich_alert_with_mitre
 from backend_reporting_helpers import (
     build_alert_report_sections,
     build_alert_summary,
@@ -73,34 +74,6 @@ DEFAULT_ALLOWED_ORIGINS = [
     "http://localhost:3001",
     "http://127.0.0.1:3001",
 ]
-
-MITRE_ATTACK_MAPPINGS = {
-    "failed_login_threshold": {
-        "mitre_technique_id": "T1110",
-        "mitre_technique_name": "Brute Force",
-        "mitre_tactic": "Credential Access",
-    },
-    "port_scan_threshold": {
-        "mitre_technique_id": "T1046",
-        "mitre_technique_name": "Network Service Discovery",
-        "mitre_tactic": "Discovery",
-    },
-    "suspicious_ip_reputation": {
-        "mitre_technique_id": "T1595",
-        "mitre_technique_name": "Active Scanning",
-        "mitre_tactic": "Reconnaissance",
-    },
-    "password_spraying_threshold": {
-        "mitre_technique_id": "T1110.003",
-        "mitre_technique_name": "Password Spraying",
-        "mitre_tactic": "Credential Access",
-    },
-    "successful_login_after_spray": {
-        "mitre_technique_id": "T1110.003",
-        "mitre_technique_name": "Password Spraying",
-        "mitre_tactic": "Credential Access",
-    },
-}
 
 geo_cache = {}
 
@@ -3886,18 +3859,6 @@ def backfill_alert_reputation():
 # ============================================================================
 
 # Reporting helpers below are formatting/rendering utilities for text, CSV, and PDF exports.
-
-# Alert enrichment and narrative-building helpers.
-def enrich_alert_with_mitre(alert_dict):
-    alert_type = alert_dict.get("alert_type")
-    mitre_data = MITRE_ATTACK_MAPPINGS.get(alert_type, {})
-
-    alert_dict["mitre_technique_id"] = mitre_data.get("mitre_technique_id")
-    alert_dict["mitre_technique_name"] = mitre_data.get("mitre_technique_name")
-    alert_dict["mitre_tactic"] = mitre_data.get("mitre_tactic")
-
-    return alert_dict
-
 
 def enrich_alert_with_correlation_context(alert_dict):
     if alert_dict.get("alert_type") != "correlated_activity":
