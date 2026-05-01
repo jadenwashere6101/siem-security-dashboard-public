@@ -1,6 +1,6 @@
 # Modularization Handoff
 
-Last updated: 2026-05-01
+Last updated: 2026-05-01 (ingest normalizers extraction)
 
 This document is the starting point for future sessions working on modularization. It summarizes the current project shape, what has already been extracted safely, what boundaries are still risky, and how to continue without drifting into broad refactors.
 
@@ -14,6 +14,9 @@ Backend:
 - Supporting backend modules:
   - `backend_reporting_helpers.py`
   - `backend_enrichment_helpers.py`
+  - `backend_pdf_helpers.py`
+  - `backend_query_helpers.py`
+  - `backend_ingest_normalizers.py`
   - `adapters/azure_insights_adapter.py`
   - `adapters/nginx_adapter.py`
   - `adapters/otel_adapter.py`
@@ -158,22 +161,46 @@ Important frontend state ownership that has not moved:
 - `MITRE_ATTACK_MAPPINGS`
 - `enrich_alert_with_mitre`
 
+`backend_pdf_helpers.py` currently owns PDF rendering (13 functions):
+
+- `get_pdf_severity_palette`, `start_pdf_page`, `ensure_pdf_space`, `draw_pdf_wrapped_text`
+- `draw_pdf_section_heading`, `draw_pdf_key_value_rows`, `draw_pdf_severity_badge`
+- `draw_pdf_response_logs`, `draw_pdf_mitre_section`, `draw_pdf_next_steps`
+- `draw_pdf_summary_grid`, `draw_pdf_alert_card`, `build_pdf_report_response`
+- Only `build_pdf_report_response` is imported by `siem_backend.py`.
+
+`backend_query_helpers.py` currently owns filtered SQL helpers:
+
+- `fetch_alert_rows` — filtered SELECT from alerts table
+- `fetch_response_logs_by_alert_id` — SELECT from response_actions_log, returns dict keyed by alert_id
+- `fetch_alert_csv_rows` — filtered SELECT with LEFT JOIN LATERAL for CSV export
+- No imports — functions receive psycopg2 cursor as parameter.
+
+`backend_ingest_normalizers.py` currently owns pure ingest app-name normalizers:
+
+- `_safe_non_empty_string` — strips and validates a string value
+- `_get_azure_app_name` — extracts cloud_RoleName from Azure telemetry dict
+- `_is_azure_identity_payload` — detects SignInData/SignInLog baseType payloads
+- `_get_azure_identity_app_name` — extracts app name from Azure identity payload
+- `_get_otel_app_name` — resolves app name from normalized OTel telemetry or payload
+- No imports — pure Python, zero dependencies.
+
 `siem_backend.py` imports these helpers and still owns:
 
 - Flask app setup.
 - Auth/session/RBAC decorators and routes.
 - Admin routes.
-- Ingestion routes.
-- Detection functions.
-- Correlation functions.
+- Ingestion routes and `ingest_normalized_event` fan-out.
+- Detection functions (7 cores).
+- Correlation functions (2 engines).
 - Alert/event routes.
 - Reporting/export routes.
-- Reporting SQL/query helpers.
-- PDF rendering helpers.
 - Notes/actions/blocklist routes.
+- IP geolocation + reputation lookup (module-level caches).
+- Response action helpers.
 - Frontend serving.
 
-Backend reporting extraction should pause before PDF helper movement, SQL/query helper movement, or route movement.
+`siem_backend.py` line count: ~4,669 (down from 5,183 at start of modularization).
 
 ## 5. Current Architectural Rules
 
@@ -278,7 +305,7 @@ Run these before continuing modularization and before committing:
 
 ```bash
 cd frontend && npm run build
-python3 -m py_compile siem_backend.py backend_reporting_helpers.py backend_enrichment_helpers.py
+python3 -m py_compile siem_backend.py backend_reporting_helpers.py backend_enrichment_helpers.py backend_pdf_helpers.py backend_query_helpers.py backend_ingest_normalizers.py
 ```
 
 Useful backend compile expansion:
