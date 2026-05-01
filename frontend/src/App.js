@@ -18,6 +18,7 @@ import {
   filterAlerts,
   sortAlerts,
 } from "./utils/alertDashboardData";
+import { getApiErrorMessage, parseJsonResponse } from "./utils/apiResponse";
 
 function App() {
   const [alerts, setAlerts] = useState([]);
@@ -249,8 +250,14 @@ function App() {
         body: JSON.stringify({ status }),
       });
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || errorData.error || "Failed to update alert status");
+        const errorData = await parseJsonResponse(response, {});
+        throw new Error(
+          getApiErrorMessage(
+            errorData,
+            "Failed to update alert status",
+            ["message", "error"]
+          )
+        );
       }
 
       setAlerts((prevAlerts) =>

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import AdminStatusBadge from "./AdminStatusBadge";
+import { getApiErrorMessage, parseJsonResponse } from "../utils/apiResponse";
 import { buildSiemPath } from "../utils/siemPath";
 
 function AdminUsersPanel({
@@ -48,10 +49,10 @@ function AdminUsersPanel({
       const res = await fetch(buildSiemPath("/admin/users"), {
         credentials: "include",
       });
-      const data = await res.json().catch(() => []);
+      const data = await parseJsonResponse(res, []);
 
       if (!res.ok) {
-        throw new Error(data.error || "Unable to load users");
+        throw new Error(getApiErrorMessage(data, "Unable to load users", ["error"]));
       }
 
       setUsers(Array.isArray(data) ? data : []);
@@ -98,10 +99,12 @@ function AdminUsersPanel({
           role,
         }),
       });
-      const data = await res.json().catch(() => ({}));
+      const data = await parseJsonResponse(res, {});
 
       if (!res.ok) {
-        throw new Error(data.error || data.message || "Unable to create user");
+        throw new Error(
+          getApiErrorMessage(data, "Unable to create user", ["error", "message"])
+        );
       }
 
       setUsername("");
@@ -137,10 +140,12 @@ function AdminUsersPanel({
           is_active: isActive,
         }),
       });
-      const data = await res.json().catch(() => ({}));
+      const data = await parseJsonResponse(res, {});
 
       if (!res.ok) {
-        throw new Error(data.error || data.message || "Unable to update user status");
+        throw new Error(
+          getApiErrorMessage(data, "Unable to update user status", ["error", "message"])
+        );
       }
 
       setFeedback({
@@ -173,10 +178,12 @@ function AdminUsersPanel({
           password: passwordResetValue,
         }),
       });
-      const data = await res.json().catch(() => ({}));
+      const data = await parseJsonResponse(res, {});
 
       if (!res.ok) {
-        throw new Error(data.error || data.message || "Unable to update password");
+        throw new Error(
+          getApiErrorMessage(data, "Unable to update password", ["error", "message"])
+        );
       }
 
       setFeedback({
@@ -211,10 +218,12 @@ function AdminUsersPanel({
           role: pendingRoles[targetUsername],
         }),
       });
-      const data = await res.json().catch(() => ({}));
+      const data = await parseJsonResponse(res, {});
 
       if (!res.ok) {
-        throw new Error(data.error || data.message || "Unable to update user role");
+        throw new Error(
+          getApiErrorMessage(data, "Unable to update user role", ["error", "message"])
+        );
       }
 
       setFeedback({

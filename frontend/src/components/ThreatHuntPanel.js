@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import ThreatHuntEventDetails from "./ThreatHuntEventDetails";
+import { getApiErrorMessage, parseJsonResponse } from "../utils/apiResponse";
 import { buildSiemPath } from "../utils/siemPath";
 import {
   formatCreatedAt,
@@ -63,10 +64,10 @@ function ThreatHuntPanel({
       const res = await fetch(searchPath, {
         credentials: "include",
       });
-      const data = await res.json().catch(() => []);
+      const data = await parseJsonResponse(res, []);
 
       if (!res.ok) {
-        throw new Error(data.error || "Unable to search events");
+        throw new Error(getApiErrorMessage(data, "Unable to search events", ["error"]));
       }
 
       setEvents(Array.isArray(data) ? data : []);

@@ -9,6 +9,7 @@ import {
   getSourceBadgeMeta,
   isCorrelationAlert,
 } from "../utils/alertDisplay";
+import { getApiErrorMessage, parseJsonResponse } from "../utils/apiResponse";
 import { buildSiemPath } from "../utils/siemPath";
 
 // ============================================================================
@@ -343,10 +344,10 @@ const detailSectionStyle = {
         credentials: "include",
       });
 
-      const data = await res.json().catch(() => []);
+      const data = await parseJsonResponse(res, []);
 
       if (!res.ok) {
-        const errorMessage = data.error || "Unable to load notes";
+        const errorMessage = getApiErrorMessage(data, "Unable to load notes", ["error"]);
         throw new Error(errorMessage);
       }
 
@@ -398,10 +399,10 @@ const detailSectionStyle = {
         body: JSON.stringify({ note_text: noteText }),
       });
 
-      const data = await res.json().catch(() => ({}));
+      const data = await parseJsonResponse(res, {});
 
       if (!res.ok) {
-        const errorMessage = data.error || "Unable to add note";
+        const errorMessage = getApiErrorMessage(data, "Unable to add note", ["error"]);
         throw new Error(errorMessage);
       }
 
@@ -467,8 +468,10 @@ const detailSectionStyle = {
       });
 
       if (!executeRes.ok) {
-        const errorData = await executeRes.json().catch(() => ({}));
-        throw new Error(errorData.message || errorData.error || "Action failed");
+        const errorData = await parseJsonResponse(executeRes, {});
+        throw new Error(
+          getApiErrorMessage(errorData, "Action failed", ["message", "error"])
+        );
       }
 
       // refresh response log for that alert
