@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import AlertDetailsPanel from "./AlertDetailsPanel";
+import AlertResponseIndicator from "./AlertResponseIndicator";
 import AlertsToolbar from "./AlertsToolbar";
 
 // ============================================================================
@@ -535,13 +536,6 @@ const detailSectionStyle = {
     `/alerts/report/pdf${reportQuery.toString() ? `?${reportQuery.toString()}` : ""}`
   );
 
-  const getResponseIndicatorColor = (action) => {
-    if (action === "block_ip") return "#ef4444";
-    if (action === "flag_high_priority") return "#f59e0b";
-    if (action === "monitor") return "#22c55e";
-    return "#6b7280";
-  };
-
   const getSourceBadgeMeta = (source, sourceType) => {
     const normalizedSource = (source || "").toLowerCase();
 
@@ -1023,17 +1017,7 @@ const detailSectionStyle = {
                                 flexWrap: "wrap",
                               }}
                             >
-                              <span
-                                title={alert.response_action || "No response action"}
-                                style={{
-                                  width: "10px",
-                                  height: "10px",
-                                  borderRadius: "999px",
-                                  backgroundColor: getResponseIndicatorColor(alert.response_action),
-                                  boxShadow: `0 0 0 2px rgba(255, 255, 255, 0.04), 0 0 0 1px ${getResponseIndicatorColor(alert.response_action)}`,
-                                  flexShrink: 0,
-                                }}
-                              />
+                              <AlertResponseIndicator responseAction={alert.response_action} />
                               {alert.status === "open" && (
                                 <button
                                   onClick={(e) => handleResolve(e, alert.id)}
