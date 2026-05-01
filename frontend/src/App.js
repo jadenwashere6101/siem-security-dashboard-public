@@ -1,11 +1,8 @@
 import React, { useEffect, useState, useMemo, useRef } from "react";
 
-import SeverityChart from "./components/SeverityChart";
-import TopIPChart from "./components/TopIPChart";
-import TimelineChart from "./components/TimelineChart";
 import AlertsTable from "./components/AlertsTable";
-import MapView from "./components/MapView";
 import DashboardMetrics from "./components/DashboardMetrics";
+import DashboardVisuals from "./components/DashboardVisuals";
 import AdminUsersPanel from "./components/AdminUsersPanel";
 import AuditLogPanel from "./components/AuditLogPanel";
 import DetectionRulesPanel from "./components/DetectionRulesPanel";
@@ -628,48 +625,20 @@ function App() {
               metricValueStyle={metricValueStyle}
             />
 
-            <div style={chartsGridStyle}>
-              <SeverityChart
-                metrics={metrics}
-                tooltipStyle={tooltipStyle}
-                tooltipLabelStyle={tooltipLabelStyle}
-                tooltipItemStyle={tooltipItemStyle}
-                cardStyle={cardStyle}
-                cardHeaderStyle={cardHeaderStyle}
-                cardTitleStyle={cardTitleStyle}
-              />
-
-              <TopIPChart
-                data={topIPChartData}
-                tooltipStyle={tooltipStyle}
-                tooltipLabelStyle={tooltipLabelStyle}
-                tooltipItemStyle={tooltipItemStyle}
-                cardStyle={cardStyle}
-                cardHeaderStyle={cardHeaderStyle}
-                cardTitleStyle={cardTitleStyle}
-              />
-            </div>
-
-            <TimelineChart
-              data={alertTimelineData}
+            <DashboardVisuals
+              metrics={metrics}
+              topIPChartData={topIPChartData}
+              alertTimelineData={alertTimelineData}
+              sortedAlerts={sortedAlerts}
+              chartsGridStyle={chartsGridStyle}
               tooltipStyle={tooltipStyle}
               tooltipLabelStyle={tooltipLabelStyle}
               tooltipItemStyle={tooltipItemStyle}
               cardStyle={cardStyle}
               cardHeaderStyle={cardHeaderStyle}
               cardTitleStyle={cardTitleStyle}
+              cardSubtitleStyle={cardSubtitleStyle}
             />
-            <div style={cardStyle}>
-              <div style={cardHeaderStyle}>
-                <h2 style={cardTitleStyle}>Attack Map</h2>
-                <p style={cardSubtitleStyle}>
-                  Alert locations based on source IP geolocation
-                </p>
-              </div>
-              <div style={{ padding: "20px" }}>
-                <MapView alerts={sortedAlerts} />
-              </div>
-            </div>
             <div ref={alertsTableRef}>
               <AlertsTable
                 alerts={sortedAlerts}
