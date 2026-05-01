@@ -20,6 +20,7 @@ import {
 } from "./utils/alertDashboardData";
 import { updateAlertStatusRequest } from "./services/alertStatusService";
 import { loadAlerts } from "./services/alertsService";
+import { loginToDashboard } from "./services/authService";
 
 function App() {
   const [alerts, setAlerts] = useState([]);
@@ -97,28 +98,6 @@ function App() {
     } finally {
       setAuthLoading(false);
     }
-  };
-
-  const loginToDashboard = async (username, password) => {
-    const res = await fetch(buildSiemPath("/login"), {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        username,
-        password,
-      }),
-    });
-
-    const data = await res.json();
-
-    if (!res.ok) {
-      throw new Error(data.error || "Login failed");
-    }
-
-    return data;
   };
 
   const fetchAlerts = async () => {
