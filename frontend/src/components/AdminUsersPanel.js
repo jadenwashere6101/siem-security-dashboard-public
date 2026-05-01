@@ -7,6 +7,7 @@ import {
   updateAdminUserRole,
   updateAdminUserStatus,
 } from "../services/adminUsersService";
+import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
 
 function AdminUsersPanel({
   cardStyle,
@@ -29,24 +30,6 @@ function AdminUsersPanel({
   const [password, setPassword] = useState("");
   const [role, setRole] = useState("viewer");
   const [feedback, setFeedback] = useState({ type: "", message: "" });
-
-  const formatCreatedAt = (value) => {
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) {
-      return value;
-    }
-
-    return new Intl.DateTimeFormat("en-US", {
-      month: "short",
-      day: "2-digit",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-      timeZone: "UTC",
-      timeZoneName: "short",
-    }).format(date);
-  };
 
   const loadUsers = async () => {
     try {
@@ -345,7 +328,7 @@ function AdminUsersPanel({
                         <AdminStatusBadge isActive={user.is_active} />
                       </td>
                       <td style={{ ...bodyCellStyle, ...createdCellStyle }} title={user.created_at}>
-                        {formatCreatedAt(user.created_at)}
+                        {formatAdminTimestamp(user.created_at)}
                       </td>
                       <td style={bodyCellStyle}>
                         <div style={rowActionsStyle}>
