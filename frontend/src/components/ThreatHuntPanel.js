@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import ThreatHuntEventDetails from "./ThreatHuntEventDetails";
-import { getApiErrorMessage, parseJsonResponse } from "../utils/apiResponse";
-import { buildSiemPath } from "../utils/siemPath";
+import { searchThreatHuntEvents } from "../services/threatHuntService";
 import {
   formatCreatedAt,
   formatRawPayload,
@@ -50,25 +49,13 @@ function ThreatHuntPanel({
     setError("");
 
     try {
-      const params = new URLSearchParams();
-      if (sourceIpValue.trim()) params.set("source_ip", sourceIpValue.trim());
-      if (sourceValue) params.set("source", sourceValue);
-      if (eventTypeValue) params.set("event_type", eventTypeValue);
-      if (startTimeValue) params.set("start_time", new Date(startTimeValue).toISOString());
-      if (endTimeValue) params.set("end_time", new Date(endTimeValue).toISOString());
-
-      const searchPath = params.toString()
-        ? `${buildSiemPath("/events/search")}?${params.toString()}`
-        : buildSiemPath("/events/search");
-
-      const res = await fetch(searchPath, {
-        credentials: "include",
+      const data = await searchThreatHuntEvents({
+        sourceIpValue,
+        sourceValue,
+        eventTypeValue,
+        startTimeValue,
+        endTimeValue,
       });
-      const data = await parseJsonResponse(res, []);
-
-      if (!res.ok) {
-        throw new Error(getApiErrorMessage(data, "Unable to search events", ["error"]));
-      }
 
       setEvents(Array.isArray(data) ? data : []);
     } catch (err) {
