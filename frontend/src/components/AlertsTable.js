@@ -2,6 +2,13 @@ import React, { useState } from "react";
 import AlertDetailsPanel from "./AlertDetailsPanel";
 import AlertResponseIndicator from "./AlertResponseIndicator";
 import AlertsToolbar from "./AlertsToolbar";
+import {
+  buildSelectedAlertTimeline,
+  getCorrelationAlertTypes,
+  getReputationBadgeStyle,
+  getSourceBadgeMeta,
+  isCorrelationAlert,
+} from "../utils/alertDisplay";
 import { buildSiemPath } from "../utils/siemPath";
 
 // ============================================================================
@@ -530,110 +537,6 @@ const detailSectionStyle = {
     `/alerts/report/pdf${reportQuery.toString() ? `?${reportQuery.toString()}` : ""}`
   );
 
-  const getSourceBadgeMeta = (source, sourceType) => {
-    const normalizedSource = (source || "").toLowerCase();
-
-    if (normalizedSource === "bank_app") {
-      return {
-        label: "App / Bank",
-        subLabel: sourceType || "custom",
-        style: {
-          color: "#93c5fd",
-          backgroundColor: "rgba(59, 130, 246, 0.10)",
-          border: "1px solid rgba(59, 130, 246, 0.28)",
-        },
-      };
-    }
-
-    if (normalizedSource === "nginx") {
-      return {
-        label: "Web Log",
-        subLabel: sourceType || "web_log",
-        style: {
-          color: "#fbbf24",
-          backgroundColor: "rgba(251, 191, 36, 0.10)",
-          border: "1px solid rgba(251, 191, 36, 0.28)",
-        },
-      };
-    }
-
-    if (normalizedSource === "azure_insights") {
-      return {
-        label: "Azure",
-        subLabel: sourceType || "cloud_api",
-        style: {
-          color: "#67e8f9",
-          backgroundColor: "rgba(103, 232, 249, 0.10)",
-          border: "1px solid rgba(103, 232, 249, 0.26)",
-        },
-      };
-    }
-
-    if (normalizedSource === "opentelemetry") {
-      return {
-        label: "OTEL",
-        subLabel: sourceType || "telemetry",
-        style: {
-          color: "#c4b5fd",
-          backgroundColor: "rgba(196, 181, 253, 0.10)",
-          border: "1px solid rgba(196, 181, 253, 0.26)",
-        },
-      };
-    }
-
-    return {
-      label: "Unknown",
-      subLabel: sourceType || "Legacy",
-      style: {
-        color: "#c9d1d9",
-        backgroundColor: "rgba(148, 163, 184, 0.10)",
-        border: "1px solid rgba(148, 163, 184, 0.22)",
-      },
-    };
-  };
-
-  const getReputationBadgeStyle = (label) => {
-    const normalized = (label || "").toLowerCase();
-
-    if (normalized === "critical") {
-      return {
-        color: "#fecaca",
-        backgroundColor: "rgba(239, 68, 68, 0.16)",
-        border: "1px solid rgba(239, 68, 68, 0.34)",
-      };
-    }
-
-    if (normalized === "high risk") {
-      return {
-        color: "#fca5a5",
-        backgroundColor: "rgba(248, 113, 113, 0.12)",
-        border: "1px solid rgba(248, 113, 113, 0.28)",
-      };
-    }
-
-    if (normalized === "suspicious") {
-      return {
-        color: "#fcd34d",
-        backgroundColor: "rgba(251, 191, 36, 0.12)",
-        border: "1px solid rgba(251, 191, 36, 0.28)",
-      };
-    }
-
-    if (normalized === "low suspicion") {
-      return {
-        color: "#bfdbfe",
-        backgroundColor: "rgba(59, 130, 246, 0.10)",
-        border: "1px solid rgba(59, 130, 246, 0.24)",
-      };
-    }
-
-    return {
-      color: "#86efac",
-      backgroundColor: "rgba(74, 222, 128, 0.10)",
-      border: "1px solid rgba(74, 222, 128, 0.24)",
-    };
-  };
-
   const getTargetedAlertMeta = (alertType) => {
     if (alertType === "spray_then_success_pattern") {
       return {
@@ -698,24 +601,13 @@ const detailSectionStyle = {
     return null;
   };
 
-  const isCorrelationAlert = (alert) =>
-    alert?.is_correlation_alert || alert?.alert_type === "correlated_activity";
-
-  const getCorrelationAlertTypes = (alert) =>
-    Array.isArray(alert?.correlated_alert_types) ? alert.correlated_alert_types : [];
-
   // ==========================================================================
   // Timeline / Alert Details
   // ==========================================================================
 
   // Timeline is built from the currently selected alert and the already-loaded
   // alert collection. No extra API request is made for this view.
-  const selectedAlertTimeline = selectedAlert?.source_ip
-    ? alerts
-        .filter((candidate) => candidate.source_ip === selectedAlert.source_ip)
-        .slice()
-        .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
-    : [];
+  const selectedAlertTimeline = buildSelectedAlertTimeline(selectedAlert, alerts);
 
   const groupedFilteredAlerts = [];
   const groupedFilteredAlertsMap = new Map();
