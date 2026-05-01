@@ -1,5 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { buildSiemPath } from "../utils/siemPath";
+import {
+  loadDetectionRules,
+  updateDetectionRule,
+} from "../services/detectionRulesService";
 
 function DetectionRulesPanel({
   cardStyle,
@@ -43,14 +46,7 @@ function DetectionRulesPanel({
       setLoading(true);
       setError("");
 
-      const res = await fetch(buildSiemPath("/admin/detection-rules"), {
-        credentials: "include",
-      });
-      const data = await res.json().catch(() => []);
-
-      if (!res.ok) {
-        throw new Error(data.error || "Unable to load detection rules");
-      }
+      const data = await loadDetectionRules();
 
       setRules(Array.isArray(data) ? data : []);
     } catch (err) {
@@ -113,21 +109,7 @@ function DetectionRulesPanel({
         Object.entries(draftParameters).map(([key, value]) => [key, Number(value)])
       );
 
-      const res = await fetch(buildSiemPath(`/admin/detection-rules/${encodeURIComponent(ruleId)}`), {
-        method: "PATCH",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          parameters: payloadParameters,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-
-      if (!res.ok) {
-        throw new Error(data.error || "Unable to update detection rule");
-      }
+      await updateDetectionRule(ruleId, payloadParameters);
 
       await loadRules();
       setEditingRuleId("");
