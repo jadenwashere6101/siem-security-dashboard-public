@@ -5,6 +5,7 @@ import TopIPChart from "./components/TopIPChart";
 import TimelineChart from "./components/TimelineChart";
 import AlertsTable from "./components/AlertsTable";
 import MapView from "./components/MapView";
+import DashboardMetrics from "./components/DashboardMetrics";
 import AdminUsersPanel from "./components/AdminUsersPanel";
 import AuditLogPanel from "./components/AuditLogPanel";
 import DetectionRulesPanel from "./components/DetectionRulesPanel";
@@ -619,29 +620,13 @@ function App() {
 
         {activeSection === "dashboard" && (
           <>
-            <section style={metricsGridStyle}>
-              <div style={metricCardStyle}>
-                <p style={metricLabelStyle}>Total Alerts</p>
-                <h3 style={metricValueStyle}>{metrics.totalAlerts}</h3>
-              </div>
-
-              <div style={metricCardStyle}>
-                <p style={metricLabelStyle}>High Severity</p>
-                <h3 style={metricValueStyle}>{metrics.highCount}</h3>
-              </div>
-
-              <div style={metricCardStyle}>
-                <p style={metricLabelStyle}>Unique Source IPs</p>
-                <h3 style={metricValueStyle}>{metrics.uniqueIPs}</h3>
-              </div>
-
-              <div style={metricCardStyle}>
-                <p style={metricLabelStyle}>Medium / Low</p>
-                <h3 style={metricValueStyle}>
-                  {metrics.mediumCount} / {metrics.lowCount}
-                </h3>
-              </div>
-            </section>
+            <DashboardMetrics
+              metrics={metrics}
+              metricsGridStyle={metricsGridStyle}
+              metricCardStyle={metricCardStyle}
+              metricLabelStyle={metricLabelStyle}
+              metricValueStyle={metricValueStyle}
+            />
 
             <div style={chartsGridStyle}>
               <SeverityChart
