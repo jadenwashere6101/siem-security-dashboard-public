@@ -133,3 +133,79 @@ def build_next_steps(alert_type):
             "Document analyst findings and escalate if additional malicious evidence is found.",
         ],
     )
+
+
+def build_alert_report_sections(alert_data, response_logs, include_identifier=True):
+    lines = [
+        "SUMMARY",
+        "=======",
+        alert_data["summary"],
+        "",
+        "SEVERITY ANALYSIS",
+        "=================",
+        f"Severity Level: {alert_data['severity']}",
+        f"Confidence Level: {alert_data['confidence_level']}",
+        alert_data["severity_explanation"],
+        "",
+        "ALERT DETAILS",
+        "=============",
+    ]
+
+    if include_identifier:
+        lines.append(f"Alert ID: {alert_data['id']}")
+
+    lines.extend([
+        f"Alert Type: {alert_data['alert_type']}",
+        f"Source IP: {alert_data['source_ip']}",
+        f"Timestamp: {alert_data['timestamp']}",
+        f"Status: {alert_data['status']}",
+        f"Message: {alert_data['message']}",
+        "",
+        "SOURCE INTELLIGENCE",
+        "===================",
+        f"Location: {alert_data['location']}",
+        f"Reputation Label: {alert_data['reputation_label']}",
+        f"Reputation Summary: {alert_data['reputation_summary']}",
+        "",
+        "TIMELINE",
+        "========",
+        f"- Alert created: {alert_data['timestamp']}",
+    ])
+
+    if response_logs:
+        for log in response_logs:
+            executed_at = format_report_timestamp(log[3])
+            action = log[0] or "unknown"
+            log_status = log[1] or "unknown"
+            details = log[2] or "n/a"
+            lines.append(
+                f"- Response log: {executed_at} | action={action} | status={log_status} | details={details}"
+            )
+    else:
+        lines.append("- No response actions recorded")
+
+    lines.extend([
+        "",
+        "RESPONSE ACTION",
+        "===============",
+        f"Recommended Response Action: {alert_data['response_action']}",
+        f"Current Response Status: {alert_data['response_status']}",
+        "",
+        "RECOMMENDED NEXT STEPS",
+        "======================",
+    ])
+
+    for step in alert_data["recommended_steps"]:
+        lines.append(f"- {step}")
+
+    return lines
+
+
+def build_report_header(generated_at, scope):
+    return [
+        "SIEM INCIDENT REPORT",
+        "====================",
+        f"Generated At: {generated_at}",
+        f"Report Scope: {scope}",
+        "",
+    ]
