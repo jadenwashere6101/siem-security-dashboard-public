@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { buildSiemPath } from "../utils/siemPath";
+import { loadAuditLogEvents } from "../services/auditLogService";
 
 function AuditLogPanel({
   cardStyle,
@@ -34,14 +34,7 @@ function AuditLogPanel({
       setLoading(true);
       setError("");
 
-      const res = await fetch(buildSiemPath("/admin/audit-log"), {
-        credentials: "include",
-      });
-      const data = await res.json().catch(() => []);
-
-      if (!res.ok) {
-        throw new Error(data.error || "Unable to load audit log");
-      }
+      const data = await loadAuditLogEvents();
 
       setEvents(Array.isArray(data) ? data : []);
     } catch (err) {
