@@ -1,6 +1,12 @@
 import React, { useEffect, useState } from "react";
 import AdminStatusBadge from "./AdminStatusBadge";
 import { getApiErrorMessage, parseJsonResponse } from "../utils/apiResponse";
+import {
+  loadAdminUsers,
+  resetAdminUserPassword,
+  updateAdminUserRole,
+  updateAdminUserStatus,
+} from "../services/adminUsersService";
 import { buildSiemPath } from "../utils/siemPath";
 
 function AdminUsersPanel({
@@ -46,14 +52,7 @@ function AdminUsersPanel({
   const loadUsers = async () => {
     try {
       setLoading(true);
-      const res = await fetch(buildSiemPath("/admin/users"), {
-        credentials: "include",
-      });
-      const data = await parseJsonResponse(res, []);
-
-      if (!res.ok) {
-        throw new Error(getApiErrorMessage(data, "Unable to load users", ["error"]));
-      }
+      const data = await loadAdminUsers();
 
       setUsers(Array.isArray(data) ? data : []);
     } catch (err) {
@@ -130,23 +129,7 @@ function AdminUsersPanel({
 
     try {
       setStatusUpdating(targetUsername);
-      const res = await fetch(buildSiemPath(`/admin/users/${encodeURIComponent(targetUsername)}/status`), {
-        method: "PATCH",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          is_active: isActive,
-        }),
-      });
-      const data = await parseJsonResponse(res, {});
-
-      if (!res.ok) {
-        throw new Error(
-          getApiErrorMessage(data, "Unable to update user status", ["error", "message"])
-        );
-      }
+      const data = await updateAdminUserStatus(targetUsername, isActive);
 
       setFeedback({
         type: "success",
@@ -168,23 +151,7 @@ function AdminUsersPanel({
 
     try {
       setPasswordResetSubmitting(targetUsername);
-      const res = await fetch(buildSiemPath(`/admin/users/${encodeURIComponent(targetUsername)}/password`), {
-        method: "PATCH",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          password: passwordResetValue,
-        }),
-      });
-      const data = await parseJsonResponse(res, {});
-
-      if (!res.ok) {
-        throw new Error(
-          getApiErrorMessage(data, "Unable to update password", ["error", "message"])
-        );
-      }
+      const data = await resetAdminUserPassword(targetUsername, passwordResetValue);
 
       setFeedback({
         type: "success",
@@ -208,23 +175,7 @@ function AdminUsersPanel({
 
     try {
       setRoleUpdating(targetUsername);
-      const res = await fetch(buildSiemPath(`/admin/users/${encodeURIComponent(targetUsername)}/role`), {
-        method: "PATCH",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          role: pendingRoles[targetUsername],
-        }),
-      });
-      const data = await parseJsonResponse(res, {});
-
-      if (!res.ok) {
-        throw new Error(
-          getApiErrorMessage(data, "Unable to update user role", ["error", "message"])
-        );
-      }
+      const data = await updateAdminUserRole(targetUsername, pendingRoles[targetUsername]);
 
       setFeedback({
         type: "success",
