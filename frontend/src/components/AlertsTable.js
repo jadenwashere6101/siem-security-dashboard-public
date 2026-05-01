@@ -9,6 +9,7 @@ import {
   getSourceBadgeMeta,
   isCorrelationAlert,
 } from "../utils/alertDisplay";
+import { loadAlertResponseLog } from "../services/alertResponseService";
 import { getApiErrorMessage, parseJsonResponse } from "../utils/apiResponse";
 import { buildSiemPath } from "../utils/siemPath";
 
@@ -321,11 +322,7 @@ const detailSectionStyle = {
 
   const fetchResponseLog = async (alertId) => {
     try {
-      const res = await fetch(buildSiemPath(`/alerts/${alertId}/response-log`), {
-        credentials: "include",
-      });
-
-      const data = await res.json();
+      const data = await loadAlertResponseLog(alertId);
 
       setResponseLogs(prev => ({
         ...prev,
