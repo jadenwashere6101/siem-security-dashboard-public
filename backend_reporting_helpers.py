@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+from backend_enrichment_helpers import enrich_alert_with_mitre
+
 
 def format_report_timestamp(value):
     if value is None:
@@ -133,6 +135,34 @@ def build_next_steps(alert_type):
             "Document analyst findings and escalate if additional malicious evidence is found.",
         ],
     )
+
+
+def normalize_alert_report_data(alert_row):
+    location = "Location unavailable"
+    if alert_row[8] and alert_row[7]:
+        location = f"{alert_row[8]}, {alert_row[7]}"
+
+    severity = (alert_row[2] or "unknown").lower()
+    alert_type = alert_row[1] or "unknown_alert"
+
+    return enrich_alert_with_mitre({
+        "id": alert_row[0],
+        "alert_type": alert_type,
+        "severity": severity,
+        "source_ip": str(alert_row[3]) if alert_row[3] is not None else "Unknown",
+        "timestamp": format_report_timestamp(alert_row[4]),
+        "message": alert_row[5] or "No message provided",
+        "status": alert_row[6] or "unknown",
+        "location": location,
+        "reputation_label": alert_row[9] or "No reputation label",
+        "reputation_summary": alert_row[10] or "No reputation summary",
+        "response_action": alert_row[11] or "Not set",
+        "response_status": alert_row[12] or "Not set",
+        "summary": build_alert_summary(alert_type),
+        "severity_explanation": build_severity_explanation(severity),
+        "confidence_level": build_confidence_level(severity),
+        "recommended_steps": build_next_steps(alert_type),
+    })
 
 
 def build_alert_report_sections(alert_data, response_logs, include_identifier=True):

@@ -34,6 +34,7 @@ from backend_reporting_helpers import (
     format_display_value,
     format_pdf_timestamp,
     format_report_timestamp,
+    normalize_alert_report_data,
 )
 from adapters.azure_insights_adapter import (
     normalize_azure_identity_telemetry,
@@ -3881,35 +3882,6 @@ def enrich_alert_with_correlation_context(alert_dict):
     alert_dict["correlated_alert_count"] = len(correlated_alert_types)
 
     return alert_dict
-
-# Report data assembly helpers.
-def normalize_alert_report_data(alert_row):
-    location = "Location unavailable"
-    if alert_row[8] and alert_row[7]:
-        location = f"{alert_row[8]}, {alert_row[7]}"
-
-    severity = (alert_row[2] or "unknown").lower()
-    alert_type = alert_row[1] or "unknown_alert"
-
-    return enrich_alert_with_mitre({
-        "id": alert_row[0],
-        "alert_type": alert_type,
-        "severity": severity,
-        "source_ip": str(alert_row[3]) if alert_row[3] is not None else "Unknown",
-        "timestamp": format_report_timestamp(alert_row[4]),
-        "message": alert_row[5] or "No message provided",
-        "status": alert_row[6] or "unknown",
-        "location": location,
-        "reputation_label": alert_row[9] or "No reputation label",
-        "reputation_summary": alert_row[10] or "No reputation summary",
-        "response_action": alert_row[11] or "Not set",
-        "response_status": alert_row[12] or "Not set",
-        "summary": build_alert_summary(alert_type),
-        "severity_explanation": build_severity_explanation(severity),
-        "confidence_level": build_confidence_level(severity),
-        "recommended_steps": build_next_steps(alert_type),
-    })
-
 
 # Shared alert/report query helpers used by text, CSV, and PDF exports.
 def fetch_alert_rows(cur, filters=None):
