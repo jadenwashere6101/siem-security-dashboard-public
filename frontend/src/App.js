@@ -19,6 +19,7 @@ import {
   sortAlerts,
 } from "./utils/alertDashboardData";
 import { updateAlertStatusRequest } from "./services/alertStatusService";
+import { loadAlerts } from "./services/alertsService";
 
 function App() {
   const [alerts, setAlerts] = useState([]);
@@ -124,15 +125,7 @@ function App() {
     if (!isAuthenticated) return;
 
     try {
-      const res = await fetch(buildSiemPath("/alerts"), {
-        credentials: "include",
-      });
-
-      if (!res.ok) {
-        throw new Error("Failed to fetch alerts");
-      }
-
-      const data = await res.json();
+      const data = await loadAlerts();
 
       setAlerts(Array.isArray(data) ? data : []);
     } catch (err) {
