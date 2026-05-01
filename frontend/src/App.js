@@ -18,7 +18,7 @@ import {
   filterAlerts,
   sortAlerts,
 } from "./utils/alertDashboardData";
-import { getApiErrorMessage, parseJsonResponse } from "./utils/apiResponse";
+import { updateAlertStatusRequest } from "./services/alertStatusService";
 
 function App() {
   const [alerts, setAlerts] = useState([]);
@@ -241,24 +241,7 @@ function App() {
 
   const handleUpdateStatus = async (id, status) => {
     try {
-      const response = await fetch(buildSiemPath(`/alerts/${id}/status`), {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ status }),
-      });
-      if (!response.ok) {
-        const errorData = await parseJsonResponse(response, {});
-        throw new Error(
-          getApiErrorMessage(
-            errorData,
-            "Failed to update alert status",
-            ["message", "error"]
-          )
-        );
-      }
+      await updateAlertStatusRequest(id, status);
 
       setAlerts((prevAlerts) =>
         prevAlerts.map((alert) =>
