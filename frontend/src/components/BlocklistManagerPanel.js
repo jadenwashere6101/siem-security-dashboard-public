@@ -4,6 +4,7 @@ import {
   loadBlocklistEntries,
   unblockBlocklistEntry,
 } from "../services/blocklistService";
+import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
 
 function BlocklistManagerPanel({
   cardStyle,
@@ -42,26 +43,6 @@ function BlocklistManagerPanel({
   useEffect(() => {
     loadEntries();
   }, []);
-
-  const formatTimestamp = (value) => {
-    if (!value) return "None";
-
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) {
-      return value;
-    }
-
-    return new Intl.DateTimeFormat("en-US", {
-      month: "short",
-      day: "2-digit",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-      timeZone: "UTC",
-      timeZoneName: "short",
-    }).format(date);
-  };
 
   const handleAddBlockedIp = async (e) => {
     e.preventDefault();
@@ -202,8 +183,8 @@ function BlocklistManagerPanel({
                     </td>
                     <td style={bodyCellStyle}>{entry.reason || "No reason provided"}</td>
                     <td style={bodyCellStyle}>{entry.created_by || "Unknown"}</td>
-                    <td style={bodyCellStyle}>{formatTimestamp(entry.created_at)}</td>
-                    <td style={bodyCellStyle}>{formatTimestamp(entry.expires_at)}</td>
+                    <td style={bodyCellStyle}>{formatAdminTimestamp(entry.created_at, "None")}</td>
+                    <td style={bodyCellStyle}>{formatAdminTimestamp(entry.expires_at, "None")}</td>
                     <td style={bodyCellStyle}>
                       {entry.status === "active" ? (
                         <button

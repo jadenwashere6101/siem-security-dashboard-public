@@ -3,6 +3,7 @@ import {
   loadDetectionRules,
   updateDetectionRule,
 } from "../services/detectionRulesService";
+import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
 
 function DetectionRulesPanel({
   cardStyle,
@@ -18,28 +19,6 @@ function DetectionRulesPanel({
   const [saveError, setSaveError] = useState("");
   const [saveSuccess, setSaveSuccess] = useState("");
   const [saving, setSaving] = useState(false);
-
-  const formatUpdatedAt = (value) => {
-    if (!value) {
-      return "Code defaults";
-    }
-
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) {
-      return value;
-    }
-
-    return new Intl.DateTimeFormat("en-US", {
-      month: "short",
-      day: "2-digit",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-      timeZone: "UTC",
-      timeZoneName: "short",
-    }).format(date);
-  };
 
   const loadRules = async () => {
     try {
@@ -261,7 +240,7 @@ function DetectionRulesPanel({
                     </td>
                     <td style={bodyCellStyle}>
                       {rule.has_override ? (
-                        formatUpdatedAt(rule.updated_at)
+                        formatAdminTimestamp(rule.updated_at, "Code defaults")
                       ) : (
                         <span style={mutedTextStyle}>Code defaults</span>
                       )}

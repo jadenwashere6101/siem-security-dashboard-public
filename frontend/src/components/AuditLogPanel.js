@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { loadAuditLogEvents } from "../services/auditLogService";
+import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
 
 function AuditLogPanel({
   cardStyle,
@@ -10,24 +11,6 @@ function AuditLogPanel({
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-
-  const formatCreatedAt = (value) => {
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) {
-      return value;
-    }
-
-    return new Intl.DateTimeFormat("en-US", {
-      month: "short",
-      day: "2-digit",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-      timeZone: "UTC",
-      timeZoneName: "short",
-    }).format(date);
-  };
 
   const loadAuditLog = async () => {
     try {
@@ -116,7 +99,7 @@ function AuditLogPanel({
                         {event.source_ip || "N/A"}
                       </td>
                       <td style={{ ...bodyCellStyle, ...createdCellStyle }} title={event.created_at}>
-                        {formatCreatedAt(event.created_at)}
+                        {formatAdminTimestamp(event.created_at)}
                       </td>
                     </tr>
                   ))}
