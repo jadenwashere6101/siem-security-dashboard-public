@@ -21,3 +21,10 @@ export const loginToDashboard = async (username, password) => {
 
   return data;
 };
+
+export const logoutFromDashboard = async () => {
+  await fetch(buildSiemPath("/logout"), {
+    method: "POST",
+    credentials: "include",
+  });
+};

@@ -20,7 +20,7 @@ import {
 } from "./utils/alertDashboardData";
 import { updateAlertStatusRequest } from "./services/alertStatusService";
 import { loadAlerts } from "./services/alertsService";
-import { loginToDashboard } from "./services/authService";
+import { loginToDashboard, logoutFromDashboard } from "./services/authService";
 
 function App() {
   const [alerts, setAlerts] = useState([]);
@@ -132,10 +132,7 @@ function App() {
 
   const handleLogout = async () => {
     try {
-      await fetch(buildSiemPath("/logout"), {
-        method: "POST",
-        credentials: "include",
-      });
+      await logoutFromDashboard();
     } catch (err) {
       console.error("Logout error:", err);
     } finally {
