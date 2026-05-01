@@ -1,5 +1,9 @@
 import React, { useEffect, useState } from "react";
-import { buildSiemPath } from "../utils/siemPath";
+import {
+  addBlocklistEntry,
+  loadBlocklistEntries,
+  unblockBlocklistEntry,
+} from "../services/blocklistService";
 
 function BlocklistManagerPanel({
   cardStyle,
@@ -21,14 +25,7 @@ function BlocklistManagerPanel({
   const loadEntries = async () => {
     try {
       setLoading(true);
-      const res = await fetch(buildSiemPath("/blocked-ips"), {
-        credentials: "include",
-      });
-      const data = await res.json().catch(() => []);
-
-      if (!res.ok) {
-        throw new Error(data.error || "Unable to load blocked IPs");
-      }
+      const data = await loadBlocklistEntries();
 
       setEntries(Array.isArray(data) ? data : []);
     } catch (err) {
@@ -72,23 +69,7 @@ function BlocklistManagerPanel({
 
     try {
       setSubmitting(true);
-      const res = await fetch(buildSiemPath("/blocked-ips"), {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          ip_address: ipAddress,
-          reason,
-          expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-
-      if (!res.ok) {
-        throw new Error(data.error || "Unable to add blocked IP");
-      }
+      const data = await addBlocklistEntry({ ipAddress, reason, expiresAt });
 
       setIpAddress("");
       setReason("");
@@ -113,15 +94,7 @@ function BlocklistManagerPanel({
 
     try {
       setUnblockingId(String(blockId));
-      const res = await fetch(buildSiemPath(`/blocked-ips/${blockId}/unblock`), {
-        method: "PATCH",
-        credentials: "include",
-      });
-      const data = await res.json().catch(() => ({}));
-
-      if (!res.ok) {
-        throw new Error(data.error || "Unable to unblock IP");
-      }
+      const data = await unblockBlocklistEntry(blockId);
 
       setFeedback({
         type: "success",
