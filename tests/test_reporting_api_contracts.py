@@ -27,11 +27,11 @@ class _RouteSafeConnection:
 
 @contextmanager
 def _patched_app_db(conn):
-    """Patch route-level and audit-helper DB connections to use the test conn."""
+    """Patch route-level, reporting blueprint, and audit-helper DB connections to use the test conn."""
     wrapper = _RouteSafeConnection(conn)
     with patch("siem_backend.get_db_connection", return_value=wrapper), patch(
         "backend_audit_helpers.get_db_connection", return_value=wrapper
-    ):
+    ), patch("backend_reporting_routes.get_db_connection", return_value=wrapper):
         yield
 
 
@@ -39,7 +39,9 @@ def _patched_app_db(conn):
 def _patched_route_db_only(conn):
     """Patch route-level DB only — for routes that do not call log_audit_event."""
     wrapper = _RouteSafeConnection(conn)
-    with patch("siem_backend.get_db_connection", return_value=wrapper):
+    with patch("siem_backend.get_db_connection", return_value=wrapper), patch(
+        "backend_reporting_routes.get_db_connection", return_value=wrapper
+    ):
         yield
 
 
