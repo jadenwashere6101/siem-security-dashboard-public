@@ -1,7 +1,7 @@
 from contextlib import contextmanager
 from unittest.mock import patch
 
-import siem_backend
+from backend_alert_mutation_routes import MAX_ALERT_NOTE_LENGTH
 
 
 ADMIN_USER = "testadmin"
@@ -24,7 +24,7 @@ class _RouteSafeConnection:
 @contextmanager
 def _patched_app_db(conn):
     wrapper = _RouteSafeConnection(conn)
-    with patch("siem_backend.get_db_connection", return_value=wrapper), patch(
+    with patch("backend_alert_mutation_routes.get_db_connection", return_value=wrapper), patch(
         "backend_audit_helpers.get_db_connection", return_value=wrapper
     ):
         yield
@@ -87,7 +87,7 @@ def test_get_alert_notes_authenticated_returns_200_stable_json_shape(client, pos
 
 def test_post_alert_notes_invalid_or_too_long_returns_400(client):
     _login_super_admin(client)
-    max_len = siem_backend.MAX_ALERT_NOTE_LENGTH
+    max_len = MAX_ALERT_NOTE_LENGTH
 
     resp_empty = client.post("/alerts/99999/notes", json={"note_text": "   "})
     assert resp_empty.status_code == 400
