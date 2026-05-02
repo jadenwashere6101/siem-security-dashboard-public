@@ -24,7 +24,7 @@ class _RouteSafeConnection:
 @contextmanager
 def _patched_app_db(conn):
     wrapper = _RouteSafeConnection(conn)
-    with patch("siem_backend.get_db_connection", return_value=wrapper), patch(
+    with patch("backend_admin_routes.get_db_connection", return_value=wrapper), patch(
         "backend_audit_helpers.get_db_connection", return_value=wrapper
     ), patch("backend_detection_config.get_db_connection", return_value=wrapper):
         yield
