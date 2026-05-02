@@ -28,7 +28,6 @@ from backend_alert_mutation_routes import alert_mutation_bp
 from backend_alerts_events_routes import alerts_events_bp
 from backend_blocklist_routes import blocklist_bp
 from backend_db import get_db_connection
-from backend_enrichment_helpers import enrich_alert_with_correlation_context, enrich_alert_with_mitre
 from backend_correlation_engine import generate_correlated_activity_alerts, generate_targeted_correlation_alerts
 from backend_ip_helpers import (
     lookup_ip_location,
@@ -38,7 +37,6 @@ from backend_ingest_normalizers import (
     _get_azure_identity_app_name,
     _get_otel_app_name,
     _is_azure_identity_payload,
-    _safe_non_empty_string,
     has_valid_location,
 )
 from backend_api_guards import require_api_key, require_azure_api_key, require_otel_api_key
