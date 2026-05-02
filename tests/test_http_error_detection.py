@@ -106,7 +106,7 @@ def test_http_error_threshold_boundary_and_alert_field_fidelity(postgres_db):
     for seconds_ago in (5, 4, 3, 2):
         insert_http_event(cur, source_ip=source_ip, seconds_ago=seconds_ago, country="Canada", city="Toronto")
 
-    with siem_backend.app.app_context(), patch("siem_backend.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
         assert siem_backend._generate_http_error_alerts_core(cur, conn, source="nginx", source_type="web_log") == []
 
         insert_http_event(
@@ -163,7 +163,7 @@ def test_http_error_trigger_depends_on_http_error_event_type(postgres_db):
             seconds_ago=seconds_ago,
         )
 
-    with siem_backend.app.app_context(), patch("siem_backend.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
         assert siem_backend._generate_http_error_alerts_core(cur, conn, source="nginx", source_type="web_log") == []
 
         for seconds_ago in (5, 4, 3, 2, 1):
@@ -194,7 +194,7 @@ def test_http_error_duplicate_suppression_keeps_single_open_alert(postgres_db):
     for seconds_ago in (5, 4, 3, 2, 1):
         insert_http_event(cur, source_ip=source_ip, seconds_ago=seconds_ago)
 
-    with siem_backend.app.app_context(), patch("siem_backend.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
         first_result = siem_backend._generate_http_error_alerts_core(
             cur,
             conn,
@@ -232,7 +232,7 @@ def test_http_error_currval_links_response_action_to_inserted_alert(postgres_db)
     for seconds_ago in (5, 4, 3, 2, 1):
         insert_http_event(cur, source_ip=source_ip, seconds_ago=seconds_ago)
 
-    with siem_backend.app.app_context(), patch("siem_backend.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
         siem_backend._generate_http_error_alerts_core(cur, conn, source="nginx", source_type="web_log")
 
     cur.execute(
