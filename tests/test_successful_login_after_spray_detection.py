@@ -158,7 +158,7 @@ def test_success_after_spray_does_not_require_existing_spray_alert(postgres_db):
         city="New York",
     )
 
-    with siem_backend.app.app_context(), patch("siem_backend.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
         alerts_created = siem_backend._generate_successful_login_after_spray_alerts_core(
             cur,
             conn,
@@ -178,7 +178,7 @@ def test_success_after_spray_successful_login_trigger_and_alert_field_fidelity(p
     insert_password_spraying_alert(cur, source_ip=source_ip)
     insert_failed_login_spray_events(cur, source_ip=source_ip)
 
-    with siem_backend.app.app_context(), patch("siem_backend.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
         assert siem_backend._generate_successful_login_after_spray_alerts_core(
             cur,
             conn,
@@ -236,7 +236,7 @@ def test_success_after_spray_duplicate_suppression_keeps_single_open_alert(postg
     insert_failed_login_spray_events(cur, source_ip=source_ip)
     insert_auth_event(cur, event_type="successful_login", source_ip=source_ip, seconds_ago=1)
 
-    with siem_backend.app.app_context(), patch("siem_backend.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
         first_result = siem_backend._generate_successful_login_after_spray_alerts_core(
             cur,
             conn,
@@ -275,7 +275,7 @@ def test_success_after_spray_currval_links_response_action_to_inserted_alert(pos
     insert_failed_login_spray_events(cur, source_ip=source_ip)
     insert_auth_event(cur, event_type="successful_login", source_ip=source_ip, seconds_ago=1)
 
-    with siem_backend.app.app_context(), patch("siem_backend.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
         siem_backend._generate_successful_login_after_spray_alerts_core(
             cur,
             conn,

@@ -452,6 +452,344 @@ def _generate_port_scan_alerts_core(cur, conn, source=None, source_type=None):
     return alerts_created
 
 
+def _generate_password_spraying_alerts_core(cur, conn, source=None, source_type=None):
+    rule_config = get_effective_detection_rule("password_spraying_threshold", cur=cur)
+    threshold = rule_config["parameters"]["threshold"]
+    window_minutes = rule_config["parameters"]["window_minutes"]
+
+    cur.execute(
+        f"""
+        WITH extracted_failed_logins AS (
+            SELECT
+                source_ip,
+                NULLIF(
+                    LOWER(
+                        TRIM(
+                            COALESCE(
+                                raw_payload->>'username',
+                                SUBSTRING(raw_payload->>'message' FROM 'Failed login attempt for username:\\s*([^,;]+)')
+                            )
+                        )
+                    ),
+                    ''
+                ) AS extracted_username
+            FROM events
+            WHERE event_type = 'failed_login'
+              AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
+        )
+        SELECT source_ip, COUNT(DISTINCT extracted_username) AS distinct_username_count
+        FROM extracted_failed_logins
+        WHERE extracted_username IS NOT NULL
+        GROUP BY source_ip
+        HAVING COUNT(DISTINCT extracted_username) >= %s
+        """,
+        (threshold,)
+    )
+
+    rows = cur.fetchall()
+    alerts_created = []
+
+    for row in rows:
+        source_ip = row[0]
+        distinct_username_count = row[1]
+        reputation = lookup_ip_reputation(str(source_ip))
+        reputation_score = reputation["reputation_score"]
+        response_action = determine_response_action(reputation_score)
+        response_status = "pending"
+        reputation_label = reputation["reputation_label"]
+        reputation_source = reputation["reputation_source"]
+        reputation_summary = reputation["reputation_summary"]
+
+        cur.execute(
+            """
+            SELECT
+                raw_payload->'location'->>'country',
+                raw_payload->'location'->>'city',
+                NULLIF(raw_payload->'location'->>'lat', '')::double precision,
+                NULLIF(raw_payload->'location'->>'lon', '')::double precision
+            FROM events
+            WHERE source_ip = %s
+              AND event_type = 'failed_login'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (source_ip,)
+        )
+
+        location_row = cur.fetchone()
+        country = location_row[0] if location_row else None
+        city = location_row[1] if location_row else None
+        latitude = location_row[2] if location_row else None
+        longitude = location_row[3] if location_row else None
+
+        message = (
+            f"Password spraying suspected from {source_ip}: "
+            f"failed logins across {distinct_username_count} usernames"
+        )
+
+        cur.execute(
+            """
+            SELECT 1 FROM alerts
+            WHERE source_ip = %s
+              AND alert_type = %s
+              AND status = 'open'
+            """,
+            (source_ip, "password_spraying_threshold"),
+        )
+
+        if cur.fetchone():
+            continue
+
+        cur.execute(
+            """
+            INSERT INTO alerts (
+                source_ip,
+                alert_type,
+                severity,
+                source,
+                source_type,
+                message,
+                status,
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                source_ip,
+                "password_spraying_threshold",
+                "high",
+                source,
+                source_type,
+                message,
+                "open",
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary,
+            ),
+        )
+
+        cur.execute("SELECT currval(pg_get_serial_sequence('alerts', 'id'))")
+        alert_id = cur.fetchone()[0]
+
+        execution_status = execute_response_action(
+            cur,
+            alert_id,
+            str(source_ip),
+            response_action
+        )
+
+        cur.execute(
+            """
+            UPDATE alerts
+            SET response_status = %s
+            WHERE id = %s
+            """,
+            (execution_status, alert_id)
+        )
+
+        alerts_created.append(
+            {
+                "source_ip": source_ip,
+                "distinct_username_count": distinct_username_count,
+            }
+        )
+
+    return alerts_created
+
+
+def _generate_successful_login_after_spray_alerts_core(cur, conn, source=None, source_type=None):
+    rule_config = get_effective_detection_rule("successful_login_after_spray", cur=cur)
+    threshold = rule_config["parameters"]["threshold"]
+    success_window_minutes = rule_config["parameters"]["success_window_minutes"]
+    failed_lookback_minutes = rule_config["parameters"]["failed_lookback_minutes"]
+    correlation_window_minutes = rule_config["parameters"]["correlation_window_minutes"]
+
+    cur.execute(
+        f"""
+        WITH recent_successes AS (
+            SELECT source_ip, created_at AS success_at
+            FROM events
+            WHERE event_type = 'successful_login'
+              AND created_at >= NOW() - INTERVAL '{success_window_minutes} minutes'
+        ),
+        extracted_failed_logins AS (
+            SELECT
+                source_ip,
+                created_at,
+                NULLIF(
+                    LOWER(
+                        TRIM(
+                            COALESCE(
+                                raw_payload->>'username',
+                                SUBSTRING(raw_payload->>'message' FROM 'Failed login attempt for username:\\s*([^,;]+)')
+                            )
+                        )
+                    ),
+                    ''
+                ) AS extracted_username
+            FROM events
+            WHERE event_type = 'failed_login'
+              AND created_at >= NOW() - INTERVAL '{failed_lookback_minutes} minutes'
+        ),
+        qualifying_successes AS (
+            SELECT
+                recent_successes.source_ip,
+                MAX(recent_successes.success_at) AS success_at
+            FROM recent_successes
+            JOIN extracted_failed_logins
+              ON extracted_failed_logins.source_ip = recent_successes.source_ip
+             AND extracted_failed_logins.extracted_username IS NOT NULL
+             AND extracted_failed_logins.created_at >= recent_successes.success_at - INTERVAL '{correlation_window_minutes} minutes'
+             AND extracted_failed_logins.created_at <= recent_successes.success_at
+            GROUP BY recent_successes.source_ip, recent_successes.success_at
+            HAVING COUNT(DISTINCT extracted_failed_logins.extracted_username) >= %s
+        )
+        SELECT source_ip, success_at
+        FROM qualifying_successes
+        """,
+        (threshold,)
+    )
+
+    rows = cur.fetchall()
+    alerts_created = []
+
+    for row in rows:
+        source_ip = row[0]
+        success_at = row[1]
+        reputation = lookup_ip_reputation(str(source_ip))
+        reputation_score = reputation["reputation_score"]
+        response_action = determine_response_action(reputation_score)
+        response_status = "pending"
+        reputation_label = reputation["reputation_label"]
+        reputation_source = reputation["reputation_source"]
+        reputation_summary = reputation["reputation_summary"]
+
+        cur.execute(
+            """
+            SELECT
+                raw_payload->'location'->>'country',
+                raw_payload->'location'->>'city',
+                NULLIF(raw_payload->'location'->>'lat', '')::double precision,
+                NULLIF(raw_payload->'location'->>'lon', '')::double precision
+            FROM events
+            WHERE source_ip = %s
+              AND event_type IN ('successful_login', 'failed_login')
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (source_ip,)
+        )
+
+        location_row = cur.fetchone()
+        country = location_row[0] if location_row else None
+        city = location_row[1] if location_row else None
+        latitude = location_row[2] if location_row else None
+        longitude = location_row[3] if location_row else None
+
+        cur.execute(
+            """
+            SELECT 1 FROM alerts
+            WHERE source_ip = %s
+              AND alert_type = %s
+              AND status = 'open'
+            """,
+            (source_ip, "successful_login_after_spray"),
+        )
+
+        if cur.fetchone():
+            continue
+
+        message = f"Successful login after password spraying detected from {source_ip}"
+
+        cur.execute(
+            """
+            INSERT INTO alerts (
+                source_ip,
+                alert_type,
+                severity,
+                source,
+                source_type,
+                message,
+                status,
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                source_ip,
+                "successful_login_after_spray",
+                "critical",
+                source,
+                source_type,
+                message,
+                "open",
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary,
+            ),
+        )
+
+        cur.execute("SELECT currval(pg_get_serial_sequence('alerts', 'id'))")
+        alert_id = cur.fetchone()[0]
+
+        execution_status = execute_response_action(
+            cur,
+            alert_id,
+            str(source_ip),
+            response_action
+        )
+
+        cur.execute(
+            """
+            UPDATE alerts
+            SET response_status = %s
+            WHERE id = %s
+            """,
+            (execution_status, alert_id)
+        )
+
+        alerts_created.append(
+            {
+                "source_ip": source_ip,
+                "success_at": str(success_at),
+            }
+        )
+
+    return alerts_created
+
+
 def _generate_application_exception_alerts_core(cur, conn, source=None, source_type=None):
     threshold = APPLICATION_EXCEPTION_THRESHOLD
     window_minutes = APPLICATION_EXCEPTION_WINDOW_MINUTES
