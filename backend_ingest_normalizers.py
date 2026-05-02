@@ -19,6 +19,15 @@ def _is_azure_identity_payload(telemetry_item):
     return str(telemetry_item.get("baseType") or "").strip() in {"SignInData", "SignInLog"}
 
 
+def has_valid_location(location):
+    if not isinstance(location, dict):
+        return False
+
+    lat = location.get("lat")
+    lon = location.get("lon")
+    return lat not in (None, "") and lon not in (None, "")
+
+
 def _get_azure_identity_app_name(telemetry_item):
     if not isinstance(telemetry_item, dict):
         return "azure_identity"

@@ -36,3 +36,26 @@ def enrich_alert_with_mitre(alert_dict):
     alert_dict["mitre_tactic"] = mitre_data.get("mitre_tactic")
 
     return alert_dict
+
+
+def enrich_alert_with_correlation_context(alert_dict):
+    if alert_dict.get("alert_type") != "correlated_activity":
+        return alert_dict
+
+    message = str(alert_dict.get("message") or "")
+    marker = "involving:"
+    marker_index = message.lower().find(marker)
+
+    correlated_alert_types = []
+    if marker_index != -1:
+        correlated_alert_types = [
+            item.strip()
+            for item in message[marker_index + len(marker):].split(",")
+            if item.strip()
+        ]
+
+    alert_dict["is_correlation_alert"] = True
+    alert_dict["correlated_alert_types"] = correlated_alert_types
+    alert_dict["correlated_alert_count"] = len(correlated_alert_types)
+
+    return alert_dict

@@ -52,7 +52,7 @@ from backend_detection_config import (
     parse_detection_rule_parameters,
     validate_detection_rule_config,
 )
-from backend_enrichment_helpers import enrich_alert_with_mitre
+from backend_enrichment_helpers import enrich_alert_with_correlation_context, enrich_alert_with_mitre
 from backend_ip_helpers import (
     determine_response_action,
     execute_response_action,
@@ -67,6 +67,7 @@ from backend_ingest_normalizers import (
     _get_otel_app_name,
     _is_azure_identity_payload,
     _safe_non_empty_string,
+    has_valid_location,
 )
 from backend_api_guards import require_api_key, require_azure_api_key, require_otel_api_key
 from backend_query_helpers import fetch_alert_csv_rows, fetch_alert_rows, fetch_response_logs_by_alert_id
@@ -779,15 +780,6 @@ MAX_ALERT_NOTE_LENGTH = 2000
 # ============================================================================
 
 # Event validation sets used by ingest endpoints and search APIs.
-
-def has_valid_location(location):
-    if not isinstance(location, dict):
-        return False
-
-    lat = location.get("lat")
-    lon = location.get("lon")
-    return lat not in (None, "") and lon not in (None, "")
-
 
 # Central normalized event write path.
 def ingest_normalized_event(event_dict, conn, cur):
@@ -2958,30 +2950,6 @@ def backfill_alert_reputation():
 # ============================================================================
 
 # Reporting helpers below are formatting/rendering utilities for text, CSV, and PDF exports.
-
-def enrich_alert_with_correlation_context(alert_dict):
-    if alert_dict.get("alert_type") != "correlated_activity":
-        return alert_dict
-
-    message = str(alert_dict.get("message") or "")
-    marker = "involving:"
-    marker_index = message.lower().find(marker)
-
-    correlated_alert_types = []
-    if marker_index != -1:
-        correlated_alert_types = [
-            item.strip()
-            for item in message[marker_index + len(marker):].split(",")
-            if item.strip()
-        ]
-
-    alert_dict["is_correlation_alert"] = True
-    alert_dict["correlated_alert_types"] = correlated_alert_types
-    alert_dict["correlated_alert_count"] = len(correlated_alert_types)
-
-    return alert_dict
-
-
 
 # Export routes for single-alert and filtered multi-alert report downloads.
 @app.route("/alerts/<int:alert_id>/report", methods=["GET"])
