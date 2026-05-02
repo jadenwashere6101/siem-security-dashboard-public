@@ -20,8 +20,6 @@ from backend_detection_engine import (
     _generate_port_scan_alerts_core,
     _generate_successful_login_after_spray_alerts_core,
 )
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 import logging
@@ -61,6 +59,7 @@ from backend_ingest_normalizers import (
     has_valid_location,
 )
 from backend_api_guards import require_api_key, require_azure_api_key, require_otel_api_key
+from backend_extensions import limiter
 from backend_reporting_routes import reporting_bp
 from adapters.azure_insights_adapter import (
     normalize_azure_identity_telemetry,
@@ -150,11 +149,7 @@ load_dotenv()
 
 app = Flask(__name__, static_folder="frontend/build/static")
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
-limiter = Limiter(
-    key_func=get_remote_address,
-    app=app,
-    default_limits=[]
-)
+limiter.init_app(app)
 FRONTEND_BUILD_DIR = os.path.join(app.root_path, "frontend", "build")
 app.config["SECRET_KEY"] = env_first("SIEM_SECRET_KEY", "SECRET_KEY")
 app.config["SESSION_COOKIE_HTTPONLY"] = True
