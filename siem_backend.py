@@ -89,38 +89,6 @@ SIEM_BIND_HOST = env_first("SIEM_BIND_HOST", default="0.0.0.0")
 SIEM_PORT = int(env_first("SIEM_PORT", default="5051"))
 SIEM_DEBUG = env_first("SIEM_DEBUG", default="false").strip().lower() == "true"
 
-def backfill_alert_sources(conn, cur):
-    cur.execute(
-        """
-        WITH source_matches AS (
-            SELECT
-                a.id AS alert_id,
-                event_meta.source,
-                event_meta.source_type
-            FROM alerts a
-            JOIN LATERAL (
-                SELECT e.source, e.source_type
-                FROM events e
-                WHERE e.source_ip = a.source_ip
-                ORDER BY e.created_at ASC
-                LIMIT 1
-            ) AS event_meta ON TRUE
-            WHERE a.source IS NULL
-        )
-        UPDATE alerts a
-        SET
-            source = source_matches.source,
-            source_type = source_matches.source_type
-        FROM source_matches
-        WHERE a.id = source_matches.alert_id
-        """
-    )
-
-    updated_count = cur.rowcount
-    print(f"Updated {updated_count} alerts with source attribution")
-    return updated_count
-
-
 
 # ============================================================================
 # Flask App Setup
@@ -707,15 +675,6 @@ def add_otel_event():
             cur.close()
         if conn:
             conn.close()
-
-
-# ============================================================================
-# Correlation Engine
-# ============================================================================
-
-# ============================================================================
-# Alerts / Events APIs
-# ============================================================================
 
 
 # ============================================================================
