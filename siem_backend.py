@@ -68,6 +68,7 @@ from backend_ingest_normalizers import (
     _is_azure_identity_payload,
     _safe_non_empty_string,
 )
+from backend_api_guards import require_api_key, require_azure_api_key, require_otel_api_key
 from backend_query_helpers import fetch_alert_csv_rows, fetch_alert_rows, fetch_response_logs_by_alert_id
 from backend_reporting_helpers import (
     build_alert_report_sections,
@@ -758,49 +759,6 @@ def update_detection_rule(rule_id):
 
 
 logging.basicConfig(level=logging.INFO)
-
-
-# ============================================================================
-# API Key Helpers
-# ============================================================================
-
-
-API_KEY_HEADER = "X-API-Key"
-INGEST_API_KEY = env_first("SIEM_INGEST_API_KEY", "INGEST_API_KEY", default="")
-AZURE_INGEST_API_KEY = env_first("AZURE_INGEST_API_KEY", default="")
-OTEL_INGEST_API_KEY = env_first("OTEL_INGEST_API_KEY", default="")
-# Ingestion auth guards.
-def require_api_key():
-    if not INGEST_API_KEY:
-        return jsonify({"error": "Unauthorized"}), 401
-
-    api_key = request.headers.get(API_KEY_HEADER, "")
-    if api_key != INGEST_API_KEY:
-        return jsonify({"error": "Unauthorized"}), 401
-
-    return None
-
-
-def require_azure_api_key():
-    if not AZURE_INGEST_API_KEY:
-        return jsonify({"error": "Unauthorized"}), 401
-
-    api_key = request.headers.get(API_KEY_HEADER, "")
-    if api_key != AZURE_INGEST_API_KEY:
-        return jsonify({"error": "Unauthorized"}), 401
-
-    return None
-
-
-def require_otel_api_key():
-    if not OTEL_INGEST_API_KEY:
-        return jsonify({"error": "Unauthorized"}), 401
-
-    api_key = request.headers.get(API_KEY_HEADER, "")
-    if api_key != OTEL_INGEST_API_KEY:
-        return jsonify({"error": "Unauthorized"}), 401
-
-    return None
 
 
 VALID_SEVERITIES = {"low", "medium", "high", "critical"}
