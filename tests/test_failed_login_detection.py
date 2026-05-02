@@ -97,7 +97,7 @@ def test_failed_login_threshold_boundary_and_alert_field_fidelity(postgres_db):
     insert_failed_login_event(cur, source_ip=source_ip, seconds_ago=3, country="Canada", city="Toronto")
     insert_failed_login_event(cur, source_ip=source_ip, seconds_ago=2, country="Canada", city="Toronto")
 
-    with siem_backend.app.app_context(), patch("siem_backend.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
         assert siem_backend._generate_failed_login_alerts_core(cur, conn, source="bank_app", source_type="custom") == []
 
         insert_failed_login_event(
@@ -148,7 +148,7 @@ def test_failed_login_duplicate_suppression_keeps_single_open_alert(postgres_db)
     for seconds_ago in (4, 3, 2):
         insert_failed_login_event(cur, source_ip=source_ip, seconds_ago=seconds_ago)
 
-    with siem_backend.app.app_context(), patch("siem_backend.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
         first_result = siem_backend._generate_failed_login_alerts_core(
             cur,
             conn,
@@ -186,7 +186,7 @@ def test_failed_login_currval_links_response_action_to_inserted_alert(postgres_d
     for seconds_ago in (3, 2, 1):
         insert_failed_login_event(cur, source_ip=source_ip, seconds_ago=seconds_ago)
 
-    with siem_backend.app.app_context(), patch("siem_backend.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
         siem_backend._generate_failed_login_alerts_core(cur, conn, source="bank_app", source_type="custom")
 
     cur.execute(
