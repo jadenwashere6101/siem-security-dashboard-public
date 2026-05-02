@@ -112,6 +112,36 @@ def test_post_alert_status_invalid_status_returns_400(client):
     assert resp.get_json()["error"] == "Invalid status"
 
 
+def test_post_alert_execute_without_session_returns_401(client):
+    resp = client.post("/alerts/1/execute", json={"action": "monitor"})
+    assert resp.status_code == 401
+
+
+def test_post_alert_execute_missing_action_returns_400(client):
+    _login_super_admin(client)
+    resp = client.post("/alerts/1/execute", json={})
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "Missing action"
+
+
+def test_post_alert_execute_invalid_action_returns_400(client):
+    _login_super_admin(client)
+    resp = client.post("/alerts/1/execute", json={"action": "not_a_valid_action"})
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "Invalid response action"
+
+
+def test_post_alert_execute_nonexistent_alert_id_returns_404(client, postgres_db):
+    conn, _ = postgres_db
+    _login_super_admin(client)
+
+    with _patched_app_db(conn):
+        resp = client.post("/alerts/99999/execute", json={"action": "monitor"})
+
+    assert resp.status_code == 404
+    assert resp.get_json()["error"] == "Alert not found"
+
+
 def test_get_alert_response_log_authenticated_returns_200_stable_json_shape(client, postgres_db):
     conn, cur = postgres_db
     alert_id = _insert_alert(cur, source_ip="198.51.100.251", message="Response log contract")
