@@ -1,13 +1,9 @@
 from flask import Flask, current_app, jsonify, request, send_from_directory
 from flask_cors import CORS
-from flask_login import LoginManager, login_user, logout_user, login_required, current_user
+from flask_login import LoginManager
 from psycopg2.extras import Json
 from dotenv import load_dotenv
-from backend_auth import (
-    User,
-    get_user_by_username,
-    load_user,
-)
+from backend_auth import load_user
 from backend_detection_engine import (
     _generate_application_exception_alerts_core,
     _generate_failed_login_alerts_core,
@@ -18,14 +14,13 @@ from backend_detection_engine import (
     _generate_successful_login_after_spray_alerts_core,
 )
 from werkzeug.middleware.proxy_fix import ProxyFix
-from werkzeug.security import check_password_hash
 import logging
 import os
 import ipaddress
-from backend_audit_helpers import log_audit_event
 from backend_admin_routes import admin_bp
 from backend_alert_mutation_routes import alert_mutation_bp
 from backend_alerts_events_routes import alerts_events_bp
+from backend_auth_routes import auth_bp
 from backend_blocklist_routes import blocklist_bp
 from backend_db import get_db_connection
 from backend_correlation_engine import generate_correlated_activity_alerts, generate_targeted_correlation_alerts
@@ -114,7 +109,7 @@ def create_app():
     CORS(app, resources={r"/*": {"origins": SIEM_ALLOWED_ORIGINS}}, supports_credentials=True)
     login_manager = LoginManager()
     login_manager.init_app(app)
-    login_manager.login_view = "login"
+    login_manager.login_view = "auth.login"
 
     @login_manager.unauthorized_handler
     def unauthorized():
@@ -129,6 +124,7 @@ def create_app():
 
     login_manager.user_loader(load_user)
 
+    app.register_blueprint(auth_bp)
     app.register_blueprint(blocklist_bp)
     app.register_blueprint(reporting_bp)
     app.register_blueprint(admin_bp)
@@ -139,100 +135,6 @@ def create_app():
 
 
 app = create_app()
-
-
-# ============================================================================
-# Auth / RBAC Routes
-# ============================================================================
-
-
-@app.route("/login", methods=["POST"])
-@limiter.limit("5 per minute")
-def login():
-    data = request.get_json() or {}
-
-    username = data.get("username")
-    password = data.get("password")
-
-    if username == current_app.config["SIEM_ADMIN_USERNAME"] and password == current_app.config["SIEM_ADMIN_PASSWORD"]:
-        user = User("admin", role="super_admin")
-        login_user(user)
-        log_audit_event(
-            "login_success",
-            actor_username="admin",
-            actor_role="super_admin",
-            http_method=request.method,
-            request_path=request.path,
-            source_ip=request.remote_addr,
-        )
-        return jsonify({"message": "Login successful"}), 200
-
-    viewer_user = get_user_by_username(username)
-    if not viewer_user or not viewer_user["is_active"]:
-        log_audit_event(
-            "login_failure",
-            actor_username=username or None,
-            actor_role=None,
-            http_method=request.method,
-            request_path=request.path,
-            source_ip=request.remote_addr,
-            details={"reason": "invalid_credentials"},
-        )
-        return jsonify({"error": "Invalid credentials"}), 401
-
-    if not check_password_hash(viewer_user["password_hash"], password):
-        log_audit_event(
-            "login_failure",
-            actor_username=username or None,
-            actor_role=None,
-            http_method=request.method,
-            request_path=request.path,
-            source_ip=request.remote_addr,
-            details={"reason": "invalid_credentials"},
-        )
-        return jsonify({"error": "Invalid credentials"}), 401
-
-    user = User(viewer_user["username"], role=viewer_user["role"])
-    login_user(user)
-    log_audit_event(
-        "login_success",
-        actor_username=viewer_user["username"],
-        actor_role=viewer_user["role"],
-        http_method=request.method,
-        request_path=request.path,
-        source_ip=request.remote_addr,
-    )
-
-    return jsonify({"message": "Login successful"}), 200
-
-
-@app.route("/logout", methods=["POST"])
-@login_required
-def logout():
-    log_audit_event(
-        "LOGOUT",
-        actor_username=current_user.id,
-        actor_role=current_user.role,
-        http_method=request.method,
-        request_path=request.path,
-        source_ip=request.remote_addr,
-    )
-    logout_user()
-    return jsonify({"message": "Logout successful"}), 200
-
-
-@app.route("/auth/me", methods=["GET"])
-def auth_me():
-    if current_user.is_authenticated:
-        return jsonify({
-            "authenticated": True,
-            "user": current_user.id,
-            "role": current_user.role,
-        }), 200
-
-    return jsonify({
-        "authenticated": False
-    }), 200
 
 logging.basicConfig(level=logging.INFO)
 

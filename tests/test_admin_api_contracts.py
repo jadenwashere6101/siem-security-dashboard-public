@@ -71,7 +71,7 @@ def test_admin_list_routes_without_session_return_401(client, path):
 )
 def test_admin_list_routes_as_viewer_or_analyst_return_403(client, mock_db, path, fake_user, password):
     # load_user runs on every request; keep both namespaces patched through login + GET.
-    with patch("siem_backend.get_user_by_username", return_value=fake_user), patch(
+    with patch("backend_auth_routes.get_user_by_username", return_value=fake_user), patch(
         "backend_auth.get_user_by_username", return_value=fake_user
     ):
         login = client.post("/login", json={"username": fake_user["username"], "password": password})
