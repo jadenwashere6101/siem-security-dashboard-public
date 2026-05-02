@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, current_app, jsonify, request, send_from_directory
 from flask_cors import CORS
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from psycopg2.extras import Json
@@ -28,6 +28,7 @@ from backend_alert_mutation_routes import alert_mutation_bp
 from backend_alerts_events_routes import alerts_events_bp
 from backend_blocklist_routes import blocklist_bp
 from backend_db import get_db_connection
+from backend_enrichment_helpers import enrich_alert_with_correlation_context, enrich_alert_with_mitre
 from backend_correlation_engine import generate_correlated_activity_alerts, generate_targeted_correlation_alerts
 from backend_ip_helpers import (
     lookup_ip_location,
@@ -95,50 +96,51 @@ SIEM_DEBUG = env_first("SIEM_DEBUG", default="false").strip().lower() == "true"
 # ============================================================================
 
 
-load_dotenv()
+def create_app():
+    load_dotenv()
 
-app = Flask(__name__, static_folder="frontend/build/static")
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
-limiter.init_app(app)
-FRONTEND_BUILD_DIR = os.path.join(app.root_path, "frontend", "build")
-app.config["SECRET_KEY"] = env_first("SIEM_SECRET_KEY", "SECRET_KEY")
-app.config["SESSION_COOKIE_HTTPONLY"] = True
-app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.config["SESSION_COOKIE_SECURE"] = not SIEM_DEBUG
+    app = Flask(__name__, static_folder="frontend/build/static")
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+    limiter.init_app(app)
+    app.config["FRONTEND_BUILD_DIR"] = os.path.join(app.root_path, "frontend", "build")
+    app.config["SECRET_KEY"] = env_first("SIEM_SECRET_KEY", "SECRET_KEY")
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["SESSION_COOKIE_SECURE"] = not SIEM_DEBUG
+    app.config["SIEM_ADMIN_USERNAME"] = env_first("SIEM_ADMIN_USERNAME", "ADMIN_USERNAME")
+    app.config["SIEM_ADMIN_PASSWORD"] = env_first("SIEM_ADMIN_PASSWORD", "ADMIN_PASSWORD")
 
-admin_username = env_first("SIEM_ADMIN_USERNAME", "ADMIN_USERNAME")
-admin_password = env_first("SIEM_ADMIN_PASSWORD", "ADMIN_PASSWORD")
+    if not app.config["SIEM_ADMIN_USERNAME"] or not app.config["SIEM_ADMIN_PASSWORD"]:
+        raise RuntimeError("Missing ADMIN_USERNAME or ADMIN_PASSWORD environment variables")
 
-if not admin_username or not admin_password:
-    raise RuntimeError("Missing ADMIN_USERNAME or ADMIN_PASSWORD environment variables")
+    CORS(app, resources={r"/*": {"origins": SIEM_ALLOWED_ORIGINS}}, supports_credentials=True)
+    login_manager = LoginManager()
+    login_manager.init_app(app)
+    login_manager.login_view = "login"
 
-CORS(app, resources={r"/*": {"origins": SIEM_ALLOWED_ORIGINS}}, supports_credentials=True)
-login_manager = LoginManager()
-login_manager.init_app(app)
-login_manager.login_view = "login"
+    @login_manager.unauthorized_handler
+    def unauthorized():
+        return jsonify({"error": "Unauthorized"}), 401
+
+    @app.errorhandler(429)
+    def handle_rate_limit(_error):
+        return jsonify({
+            "error": "rate_limited",
+            "message": "Too many requests. Please try again later."
+        }), 429
+
+    login_manager.user_loader(load_user)
+
+    app.register_blueprint(blocklist_bp)
+    app.register_blueprint(reporting_bp)
+    app.register_blueprint(admin_bp)
+    app.register_blueprint(alerts_events_bp)
+    app.register_blueprint(alert_mutation_bp)
+
+    return app
 
 
-@login_manager.unauthorized_handler
-def unauthorized():
-    return jsonify({"error": "Unauthorized"}), 401
-
-
-@app.errorhandler(429)
-def handle_rate_limit(_error):
-    return jsonify({
-        "error": "rate_limited",
-        "message": "Too many requests. Please try again later."
-    }), 429
-
-
-
-login_manager.user_loader(load_user)
-
-app.register_blueprint(blocklist_bp)
-app.register_blueprint(reporting_bp)
-app.register_blueprint(admin_bp)
-app.register_blueprint(alerts_events_bp)
-app.register_blueprint(alert_mutation_bp)
+app = create_app()
 
 
 # ============================================================================
@@ -154,7 +156,7 @@ def login():
     username = data.get("username")
     password = data.get("password")
 
-    if username == admin_username and password == admin_password:
+    if username == current_app.config["SIEM_ADMIN_USERNAME"] and password == current_app.config["SIEM_ADMIN_PASSWORD"]:
         user = User("admin", role="super_admin")
         login_user(user)
         log_audit_event(
@@ -685,12 +687,13 @@ def add_otel_event():
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
 def serve_frontend(path):
-    file_path = os.path.join(FRONTEND_BUILD_DIR, path)
+    frontend_build_dir = current_app.config["FRONTEND_BUILD_DIR"]
+    file_path = os.path.join(frontend_build_dir, path)
 
     if path and os.path.exists(file_path) and os.path.isfile(file_path):
-        return send_from_directory(FRONTEND_BUILD_DIR, path)
+        return send_from_directory(frontend_build_dir, path)
 
-    return send_from_directory(FRONTEND_BUILD_DIR, "index.html")
+    return send_from_directory(frontend_build_dir, "index.html")
 
 
 if __name__ == "__main__":
