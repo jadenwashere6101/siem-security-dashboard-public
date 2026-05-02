@@ -59,8 +59,8 @@ def _login_as_super_admin(client):
 
 
 def _fetch_alerts_response(client, conn):
-    with patch("siem_backend.get_db_connection", return_value=_RouteSafeConnection(conn)), patch(
-        "siem_backend.get_ip_reputation", return_value=REPUTATION
+    with patch("backend_alerts_events_routes.get_db_connection", return_value=_RouteSafeConnection(conn)), patch(
+        "backend_alerts_events_routes.get_ip_reputation", return_value=REPUTATION
     ):
         return client.get("/alerts")
 
