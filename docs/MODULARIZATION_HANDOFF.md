@@ -1,6 +1,6 @@
 # Modularization Handoff
 
-Last updated: 2026-05-01 (Phase 3 complete; Phase 4 planned, not started)
+Last updated: 2026-05-02 (Phase 5 complete; extraction surface exhausted; next step is planning only)
 
 This document is the starting point for future sessions working on modularization. It summarizes the current project shape, what has already been extracted safely, what boundaries are still risky, and how to continue without drifting into broad refactors.
 
@@ -12,6 +12,9 @@ Backend:
 
 - Main backend entrypoint: `siem_backend.py`
 - Supporting backend modules:
+  - `backend_db.py`
+  - `backend_ip_helpers.py`
+  - `backend_detection_config.py`
   - `backend_reporting_helpers.py`
   - `backend_enrichment_helpers.py`
   - `backend_pdf_helpers.py`
@@ -45,11 +48,11 @@ Current stack:
 
 ## 2. Current Modularization Phase
 
-**Phase 3 is complete. Phase 4 is planned but has NOT started.**
+**Phase 5 is complete. The safe extraction surface is now exhausted. The next step is read-only planning only — no implementation.**
 
-All frontend work is done. The backend pure-utility extraction phase is done. The project is now at a natural boundary between "pure extraction" work and "controlled refactor" work.
+All frontend work is done. All backend helper clusters that could be safely extracted have been extracted. `siem_backend.py` is at ~4,018 lines (down from 5,183 at start of modularization). The remaining content is routes, detection/correlation engines, auth/RBAC, and orchestration — all blocked until a deliberate plan exists.
 
-Completed safely through Phase 3:
+Completed safely through Phase 5:
 
 - All frontend presentation components extracted.
 - All frontend utility helpers extracted (no state, no side effects).
@@ -58,14 +61,17 @@ Completed safely through Phase 3:
 - Backend PDF rendering helpers extracted (`backend_pdf_helpers.py`).
 - Backend SQL/query helpers extracted (`backend_query_helpers.py`).
 - Backend ingest app-name normalizers extracted (`backend_ingest_normalizers.py`).
+- Backend DB connection factory and blocklist helpers extracted (`backend_db.py`). Phase 4 Step 1.
+- Backend IP geolocation, reputation, and response action cluster extracted (`backend_ip_helpers.py`). Phase 4 Step 2.
+- Backend detection rule config constants and helpers extracted (`backend_detection_config.py`). Phase 5.
 
-What changed in the backend approach from Phase 3 to Phase 4:
+What distinguished Phase 4 and Phase 5 from earlier phases:
 
-- Phase 3 extractions were **pure lifts**: function bodies unchanged, zero imports in new files, no design decisions required.
-- Phase 4 extractions require **controlled body changes**: `app.logger` → `current_app.logger` in three functions; `env_first(...)` → `os.getenv(...)` in `get_db_connection`. These are minimal but real changes and must be deliberate.
-- Phase 4 also requires moving **mutable module-level state** (`geo_cache`, `REPUTATION_CACHE`) — not possible with pure lifting.
+- Phases 1–3 were **pure lifts**: function bodies unchanged, no imports in new files.
+- Phases 4–5 required **controlled body changes**: `app.logger` → `current_app.logger` in affected functions; `env_first(...)` → `os.getenv(...)` in `get_db_connection`. These were minimal but deliberate.
+- Phase 4 also required moving **mutable module-level state** (`geo_cache`, `REPUTATION_CACHE`) — not possible with pure lifting.
 
-Current stop point: `siem_backend.py` is at ~4,669 lines (down from 5,183). The remaining extractable clusters all require the Phase 4 approach. Do not attempt them as if they were Phase 3 work.
+Current stop point: all remaining content in `siem_backend.py` requires either a test harness (detection/correlation), a blueprint architecture decision (routes), or is Flask-session-bound (auth/RBAC). None of these are extraction-ready under the current rules.
 
 ## 3. Frontend Completed Work
 
@@ -149,6 +155,36 @@ Important frontend state ownership that has not moved:
 
 ## 4. Backend Completed Work
 
+`backend_db.py` currently owns DB connection factory and blocklist record helpers:
+
+- `get_db_connection` — psycopg2 connection factory; `env_first(...)` replaced with `os.getenv(...)` for four env pairs
+- `validate_blocked_ip` — IP address validation and normalization
+- `create_blocked_ip_record` — blocklist INSERT with alert source validation
+- No Flask deps. Imports: `os`, `psycopg2`, `ipaddress`.
+
+`backend_ip_helpers.py` currently owns IP geolocation, reputation, and response action cluster:
+
+- `_get_reputation_label`, `_build_reputation_summary` — pure label/summary formatters
+- `get_ip_reputation` — SIEM-internal behavioral reputation lookup
+- `lookup_ip_location` — ip-api.com geolocation with `geo_cache`
+- `lookup_ip_reputation` — AbuseIPDB external lookup with `REPUTATION_CACHE`
+- `determine_response_action` — reputation score → action mapping
+- `execute_response_action` — response action executor (calls `create_blocked_ip_record` from `backend_db`)
+- Module-level state: `geo_cache = {}`, `REPUTATION_CACHE = {}`, `ABUSEIPDB_API_KEY`
+- Body changes applied: `app.logger` → `current_app.logger` in `lookup_ip_location` (1 site), `lookup_ip_reputation` (3 sites), `execute_response_action` (4 sites).
+
+`backend_detection_config.py` currently owns detection rule configuration constants and helpers:
+
+- 21 constants: all detection thresholds, window minutes, spray parameters, and validation bounds
+- `get_detection_rule_defaults` — returns the default config dict for all 4 detection rules
+- `parse_detection_rule_parameters` — JSON parsing and type validation for rule parameters
+- `validate_detection_rule_config` — bounds checking for threshold and window values
+- `get_effective_detection_rule` — merges DB override with defaults; reads from `detection_config` table
+- `get_all_effective_detection_rules` — iterates all rule IDs through `get_effective_detection_rule`
+- Body changes applied: `app.logger` → `current_app.logger` in `get_effective_detection_rule` (2 sites) and `get_all_effective_detection_rules` (1 site).
+- Imports: `json`, `from flask import current_app`, `from backend_db import get_db_connection`.
+- Note: 7 constants (`HTTP_ERROR_THRESHOLD`, `HTTP_ERROR_WINDOW_MINUTES`, `APPLICATION_EXCEPTION_THRESHOLD`, `APPLICATION_EXCEPTION_WINDOW_MINUTES`, `HIGH_REQUEST_RATE_THRESHOLD`, `HIGH_REQUEST_RATE_WINDOW_MINUTES`, `CORRELATION_WINDOW_MINUTES`) are also used directly in detection core and correlation function bodies. They are re-imported into `siem_backend.py`'s namespace so those function bodies require no changes.
+
 `backend_reporting_helpers.py` currently owns pure reporting helpers:
 
 - `format_report_timestamp`
@@ -194,20 +230,22 @@ Important frontend state ownership that has not moved:
 
 `siem_backend.py` imports these helpers and still owns:
 
-- Flask app setup.
+- `env_first`, `env_csv` — runtime env helpers (used by Flask app setup itself, cannot move).
+- Flask app setup, CORS, rate limiter, session config.
 - Auth/session/RBAC decorators and routes.
-- Admin routes.
-- Ingestion routes and `ingest_normalized_event` fan-out.
-- Detection functions (7 cores).
-- Correlation functions (2 engines).
+- Admin routes (user management, audit log, detection rule admin).
+- Ingest API key guards, `has_valid_location`, `ingest_normalized_event` fan-out.
+- Ingestion routes (custom event, web log, Azure, OTel).
+- Detection functions (7 `_generate_*_core` functions — **BLOCKED**).
+- Correlation functions (2 engines — **BLOCKED**).
 - Alert/event routes.
 - Reporting/export routes.
-- Notes/actions/blocklist routes.
-- IP geolocation + reputation lookup (module-level caches).
-- Response action helpers.
+- Notes/actions/blocklist/status routes.
+- `enrich_alert_with_correlation_context` — pure helper, single caller, low value to move.
+- `backfill_alert_sources` — dead code, no callers, not needed.
 - Frontend serving.
 
-`siem_backend.py` line count: ~4,669 (down from 5,183 at start of modularization).
+`siem_backend.py` line count: ~4,018 (down from 5,183 at start of modularization).
 
 ## 5. Current Architectural Rules
 
@@ -222,31 +260,37 @@ Frontend rules (unchanged):
 - Do not move frontend API ownership broadly.
 - Prefer focused service modules before hooks.
 
-Backend rules — Phase 3 (now complete, preserved for reference):
+Backend rules — Phases 3–5 (all complete, preserved for reference):
 - Phase 3 was pure lifting only: no body changes, no imports in new files, no design decisions.
-- PDF, query, and ingest normalizer extractions are done and follow this pattern.
+- Phases 4–5 allowed only: `app.logger` → `current_app.logger`, and `env_first(...)` → `os.getenv(...)` in `get_db_connection`. No other body changes.
+- All extractions: one module per commit, verified before the next began.
 
-Backend rules — Phase 4 (active for the next session):
-- Extract one module per commit. Do not combine `backend_db.py` and `backend_ip_helpers.py` in a single commit.
-- `backend_db.py` must be extracted and verified before `backend_ip_helpers.py` begins. These are not parallel steps.
-- Allowed body changes in Phase 4 are limited to: `app.logger` → `current_app.logger`, and `env_first(...)` → inline `os.getenv()` in `get_db_connection` only. No other body changes are permitted.
-- Do not move backend routes in Phase 4.
-- Do not move detection, correlation, or `ingest_normalized_event` in Phase 4.
-- Do not move auth/RBAC helpers in Phase 4.
-- Stop if any extraction requires touching detection or correlation function bodies.
+Backend rules — current (extraction surface exhausted):
+- Do NOT start new helper extractions without a formal re-evaluation. The trivial remaining candidates (`enrich_alert_with_correlation_context`, `has_valid_location`) are not worth a commit on their own.
+- Do NOT move backend routes. Route grouping requires a Blueprint architecture decision first — planning only, no implementation.
+- Do NOT move detection cores, correlation engines, or `ingest_normalized_event`. These require a behavioral test harness before any movement.
+- Do NOT move auth/RBAC helpers — Flask-Login session bound, no safe extraction pattern exists yet.
+- Stop if any work requires touching detection or correlation function bodies.
 - Stop if imports become circular or confusing.
 
 ## 6. Current Safe Modularization Direction
 
-**Frontend: done.** All panels and `App.js` delegate HTTP calls to focused service modules. All utility helpers are extracted. Components still own all state, handlers, loading flags, feedback, and UI orchestration. No frontend work is needed before the next backend phase.
+**Backend helper extraction: done.** All extractable helper clusters have been moved. The safe extraction surface is exhausted.
+
+**Frontend: done.** All panels and `App.js` delegate HTTP calls to focused service modules. All utility helpers are extracted. Components still own all state, handlers, loading flags, feedback, and UI orchestration.
 
 **Frontend hooks: still on hold.** Moving hooks too early would mix API ownership, loading/error state, and behavior orchestration before service boundaries have been fully verified. Do not start with auth, alert polling, notes/actions, or `AlertsTable.js`.
 
 `AlertsTable.js` extraction remains paused. The remaining complexity is not presentation — it combines selected alert behavior, notes/actions, response logs, grouped/collapsed table state, exports/report links, hover/selection UI, and many display styles. Wait for a specific, clearly bounded target.
 
-**Backend next step: Phase 4 Step 1 — extract `backend_db.py`.**
+**Backend next step: read-only planning only.**
 
-This is the only safe next action. Do not skip to Step 2. Do not attempt `backend_ip_helpers.py` without `backend_db.py` in place first. See Section 12 for the full Phase 4 plan and the exact prompt for Step 1.
+The next session should choose ONE of:
+
+1. **Route grouping plan** — map route groups, identify shared decorator dependencies, and design a Flask Blueprint architecture. Planning only. Do not move any routes until the plan is written, reviewed, and the rollback strategy is clear.
+2. **Detection/correlation test harness plan** — design behavioral tests for all 7 detection cores and both correlation engines before any code moves. Planning only. Do not move detection or correlation code without passing tests.
+
+Do not begin implementation of either path without a written plan agreed on first.
 
 ## 7. Remaining High-Risk Areas
 
@@ -257,22 +301,23 @@ Frontend — permanently blocked until explicitly re-evaluated:
 - Auth/session state in `App.js`.
 - Broad custom hooks.
 
-Backend — off-limits in Phase 4, still blocked:
+Backend — permanently blocked until a test harness exists:
 
-- Detection engine (7 `_generate_*_core` functions, ~1,065 lines). These write alerts, suppress duplicates, and trigger correlation. Do not touch.
-- Correlation engine (`generate_correlated_activity_alerts`, `generate_targeted_correlation_alerts`, ~390 lines). Cross-references alert types. Do not touch.
-- `ingest_normalized_event` — orchestration fan-out hub. All 7 detection cores and both correlation engines are called from here. Do not touch.
-- All routes — no route movement in Phase 4.
-- Auth/RBAC helpers and routes — Flask-Login bound, session-critical.
-- `backfill_alert_sources` — maintenance utility, no callers in `siem_backend.py`, not needed by any helper module.
+- Detection engine (7 `_generate_*_core` functions, ~1,060 lines). These write alerts, suppress duplicates, and trigger correlation. Moving these requires behavioral tests that confirm identical alert output before and after. Do not touch without tests.
+- Correlation engine (`generate_correlated_activity_alerts`, `generate_targeted_correlation_alerts`, ~389 lines). Cross-references alert types, writes alerts. Same requirement. Do not touch without tests.
+- `ingest_normalized_event` — orchestration fan-out hub. All 7 detection cores and both correlation engines are called from here. Blocked until detection/correlation tests exist.
 
-Backend — planned for Phase 4 Step 1 (see Section 12):
+Backend — blocked until Blueprint architecture plan exists:
 
-- `get_db_connection`, `validate_blocked_ip`, `create_blocked_ip_record` — moving to `backend_db.py`.
+- All routes — grouping into Flask Blueprints requires a written plan covering shared decorators, import structure, and rollback strategy. Planning first, implementation after.
 
-Backend — planned for Phase 4 Step 2, blocked until Step 1 is committed (see Section 12):
+Backend — permanently blocked (Flask-session bound):
 
-- `lookup_ip_location`, `lookup_ip_reputation`, `get_ip_reputation`, `determine_response_action`, `execute_response_action`, `_get_reputation_label`, `_build_reputation_summary` — moving to `backend_ip_helpers.py`.
+- Auth/RBAC helpers, `User` class, `load_user`, login/logout/session routes — Flask-Login bound and session-critical. No safe extraction pattern exists.
+
+Backend — dead code (ignore):
+
+- `backfill_alert_sources` — maintenance utility, no callers in `siem_backend.py`. Not needed by any module.
 
 ## 8. Suggested Next Phases
 
@@ -292,53 +337,46 @@ Phase 3 — COMPLETE: Small pure backend utility extractions.
 - All extractions were pure lifts: no body changes, no imports in new files.
 - Pure utility extraction is now exhausted. Remaining functions require controlled body changes.
 
-Phase 4 — PLANNED, NOT STARTED: Backend DB foundation + IP/reputation cluster.
+Phase 4 — COMPLETE: Backend DB foundation + IP/reputation cluster.
 
-- See Section 12 for full design decisions, order of operations, and risk notes.
-- Step 1: Extract `backend_db.py`. Prerequisite for Step 2.
-- Step 2: Extract `backend_ip_helpers.py`. Requires Step 1 committed and verified first.
-- Do not combine Step 1 and Step 2 in a single commit.
-- This is a controlled refactor phase, not a pure extraction phase.
+- Step 1: `backend_db.py` — `get_db_connection`, `validate_blocked_ip`, `create_blocked_ip_record`. Committed, VM smoke verified.
+- Step 2: `backend_ip_helpers.py` — geo/reputation/response cluster (7 functions, 2 module-level caches). Committed, VM smoke verified.
+- Controlled refactor phase: `app.logger` → `current_app.logger` (8 sites total), `env_first` → `os.getenv` in `get_db_connection`, mutable state moved.
 
-Phase 5 — FUTURE: Frontend hooks (low-complexity domain only).
+Phase 5 — COMPLETE: Backend detection rule config extraction.
 
-- Only after Phase 4 is stable and smoke-tested.
+- `backend_detection_config.py` — 21 constants + 5 config/validation helpers. Committed, VM smoke verified.
+- Controlled refactor: `app.logger` → `current_app.logger` in `get_effective_detection_rule` (2 sites) and `get_all_effective_detection_rules` (1 site).
+- 7 constants also used directly in detection core and correlation bodies; re-imported into `siem_backend.py` namespace — zero call site changes.
+
+Phase 6 — FUTURE: Frontend hooks (low-complexity domain only).
+
+- Only after route grouping plan is stable and the backend is not actively changing.
 - Do not start with auth, alert polling, notes/actions, or `AlertsTable.js`.
 
-Phase 6 — FUTURE: Backend route grouping planning.
+Phase 7 — FUTURE: Backend route grouping planning.
 
-- Planning only at first. Identify route groups and shared dependencies.
-- Do not move routes until behavior checks and rollback points are clear.
+- Planning only at first. Map route groups, identify shared decorator dependencies, design Blueprint architecture.
+- Do not move routes until the plan is written, reviewed, and rollback strategy is clear.
 
-Phase 7 — FUTURE: Detection and correlation modularization.
+Phase 8 — FUTURE: Detection and correlation modularization.
 
-- Move only after detection/correlation behavior checks exist.
-- Expect high risk because these functions write alerts, suppress duplicates, and trigger related behavior.
+- Move only after behavioral tests exist for all 7 detection cores and both correlation engines.
+- Expect high risk: these functions write alerts, suppress duplicates, and trigger related behavior.
+- Tests are a hard prerequisite — do not begin without them.
 
 ## 9. Verification Checklist
 
-**Phase 3 baseline (current passing state):**
+**Phase 5 baseline (current passing state):**
 
 ```bash
-cd frontend && npm run build
-python3 -m py_compile siem_backend.py backend_reporting_helpers.py backend_enrichment_helpers.py backend_pdf_helpers.py backend_query_helpers.py backend_ingest_normalizers.py
+python3 -m py_compile siem_backend.py backend_detection_config.py backend_db.py backend_ip_helpers.py backend_reporting_helpers.py backend_enrichment_helpers.py backend_pdf_helpers.py backend_query_helpers.py backend_ingest_normalizers.py
 ```
 
-**After Phase 4 Step 1 (`backend_db.py`):**
-
-```bash
-python3 -m py_compile siem_backend.py backend_db.py backend_reporting_helpers.py backend_enrichment_helpers.py backend_pdf_helpers.py backend_query_helpers.py backend_ingest_normalizers.py
-```
-
-Smoke test after Step 1: login, blocklist add, blocklist remove, alert load.
-
-**After Phase 4 Step 2 (`backend_ip_helpers.py`):**
-
-```bash
-python3 -m py_compile siem_backend.py backend_ip_helpers.py backend_db.py backend_reporting_helpers.py backend_enrichment_helpers.py backend_pdf_helpers.py backend_query_helpers.py backend_ingest_normalizers.py
-```
-
-Smoke test after Step 2: ingest a test event (exercises `lookup_ip_location`), load alerts (exercises `get_ip_reputation`), trigger `/alerts/backfill-reputation` (exercises `lookup_ip_reputation`), verify reputation and response fields on a detection-generated alert.
+VM smoke tests verified after each phase:
+- Phase 4 Step 1: login, blocklist add/remove, alert load.
+- Phase 4 Step 2: alert load (reputation + geo fields present), `/alerts/backfill-reputation` (exercises `lookup_ip_reputation`).
+- Phase 5: `GET /admin/detection-rules` (4 rules returned, `override_status` correct), `PATCH /admin/detection-rules/failed_login_threshold` (exercises `get_effective_detection_rule` + `current_app.logger` inside Flask app context).
 
 **Adapter compile check (run if adapters are touched):**
 
@@ -413,9 +451,9 @@ Refresh the session when:
 
 Fresh context matters here because the project is intentionally modularizing in small steps. Long sessions can lose the exact boundary rules, which increases the chance of drifting into risky hook extraction, route movement, or large component rewrites.
 
-## 12. Phase 4 Architecture Notes
+## 12. Phase 4 and Phase 5 Architecture Notes
 
-**Status: planned and approved, not started. Next session begins with Step 1 only.**
+**Phase 4 status: COMPLETE. Phase 5 status: COMPLETE.**
 
 ### Why Phase 4 Cannot Be Done as Pure Lifting
 
@@ -523,7 +561,16 @@ ABUSEIPDB_API_KEY = os.getenv("SIEM_ABUSEIPDB_API_KEY") or os.getenv("ABUSEIPDB_
 ### Phase 4 Stop Boundary
 
 - Phase 3: COMPLETE.
-- Phase 4 Step 1 (`backend_db.py`): NOT STARTED. Begin here next session.
-- Phase 4 Step 2 (`backend_ip_helpers.py`): NOT STARTED. Do not start until Step 1 is committed and verified.
-- Do not combine Step 1 and Step 2 in a single commit.
-- Do not attempt detection, correlation, route, or auth extraction in Phase 4.
+- Phase 4 Step 1 (`backend_db.py`): COMPLETE. Commit: `b5ddea3`.
+- Phase 4 Step 2 (`backend_ip_helpers.py`): COMPLETE. Commit: `f6200b5`.
+- Phase 5 (`backend_detection_config.py`): COMPLETE. VM smoke verified.
+
+### Phase 5 Architecture Notes
+
+**Why `backend_detection_config.py` followed the Phase 4 pattern:**
+
+- `get_effective_detection_rule` and `get_all_effective_detection_rules` used `app.logger` directly (3 sites total). Same `current_app.logger` fix as Phase 4.
+- 21 detection constants moved with the cluster. 7 of those constants (`HTTP_ERROR_THRESHOLD`, `HTTP_ERROR_WINDOW_MINUTES`, `APPLICATION_EXCEPTION_THRESHOLD`, `APPLICATION_EXCEPTION_WINDOW_MINUTES`, `HIGH_REQUEST_RATE_THRESHOLD`, `HIGH_REQUEST_RATE_WINDOW_MINUTES`, `CORRELATION_WINDOW_MINUTES`) are also referenced directly in detection core and correlation function bodies in `siem_backend.py`. These were re-exported via the `from backend_detection_config import ...` block so detection function bodies required zero changes.
+- `import json` was confirmed unused in `siem_backend.py` after the move (only user was `parse_detection_rule_parameters`) and was removed.
+
+**Current stop point:** `siem_backend.py` is at ~4,018 lines. The safe extraction surface is exhausted. Next work is planning only.
