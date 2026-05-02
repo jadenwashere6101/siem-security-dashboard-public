@@ -15,6 +15,7 @@ import csv
 from io import StringIO
 from datetime import datetime, timezone
 import psycopg2
+from backend_audit_helpers import log_audit_event
 from backend_db import create_blocked_ip_record, get_db_connection, validate_blocked_ip
 from backend_detection_config import (
     APPLICATION_EXCEPTION_THRESHOLD,
@@ -188,58 +189,6 @@ def get_user_by_username(username):
         if conn:
             conn.close()
 
-
-def log_audit_event(
-    event_type,
-    actor_username=None,
-    actor_role=None,
-    target_username=None,
-    target_alert_id=None,
-    http_method=None,
-    request_path=None,
-    source_ip=None,
-    details=None
-):
-    conn = None
-    cur = None
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO audit_log (
-                event_type,
-                actor_username,
-                actor_role,
-                target_username,
-                target_alert_id,
-                http_method,
-                request_path,
-                source_ip,
-                details
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                event_type,
-                actor_username,
-                actor_role,
-                target_username,
-                target_alert_id,
-                http_method,
-                request_path,
-                source_ip,
-                Json(details) if details is not None else None,
-            ),
-        )
-        conn.commit()
-    except Exception as e:
-        app.logger.error("Failed to write audit log event=%s error=%s", event_type, e)
-    finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
 
 
 # ============================================================================
