@@ -107,7 +107,9 @@ def test_ingest_normalized_event_routes_into_port_scan_detection_core(postgres_d
     conn, cur = postgres_db
     source_ip = "198.51.100.133"
 
-    with siem_backend.app.app_context(), patch("siem_backend.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), \
+         patch("siem_backend.lookup_ip_reputation", return_value=REPUTATION), \
+         patch("backend_correlation_engine.lookup_ip_reputation", return_value=REPUTATION):
         first_result = siem_backend.ingest_normalized_event(
             make_event(event_type="port_scan", source_ip=source_ip, source="nginx", source_type="web_log"),
             conn,
@@ -139,7 +141,9 @@ def test_ingest_normalized_event_runs_detection_then_correlation_on_same_cursor(
     conn, cur = postgres_db
     source_ip = "198.51.100.134"
 
-    with siem_backend.app.app_context(), patch("siem_backend.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), \
+         patch("siem_backend.lookup_ip_reputation", return_value=REPUTATION), \
+         patch("backend_correlation_engine.lookup_ip_reputation", return_value=REPUTATION):
         for username in ("alice", "bob"):
             siem_backend.ingest_normalized_event(
                 make_event(
