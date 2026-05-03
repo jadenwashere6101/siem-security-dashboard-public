@@ -1,8 +1,12 @@
 import React, { useState } from "react";
+import AlertCorrelationSignals from "./AlertCorrelationSignals";
 import AlertDetailsPanel from "./AlertDetailsPanel";
 import AlertExportLinks from "./AlertExportLinks";
+import AlertMitreDetails from "./AlertMitreDetails";
+import AlertReputationDetails from "./AlertReputationDetails";
 import AlertsEmptyState from "./AlertsEmptyState";
 import AlertResponseIndicator from "./AlertResponseIndicator";
+import AlertSourceDetails from "./AlertSourceDetails";
 import AlertsToolbar from "./AlertsToolbar";
 import AlertsToast from "./AlertsToast";
 import ResolvedAlertsTable from "./ResolvedAlertsTable";
@@ -776,29 +780,16 @@ function AlertsTable({
                             />
                           )}
 
-                          <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
-                            <strong style={detailLabelTextStyle}>Source:</strong>{" "}
-                            <span style={detailValueTextStyle}>{sourceBadge.label}</span>{" "}
-                            <span style={expandedSecondaryTextStyle}>
-                              ({sourceBadge.subLabel})
-                            </span>
-                          </p>
-
-                          <div style={detailSectionStyle}>
-                            <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
-                              <strong style={detailLabelTextStyle}>Source IP:</strong>{" "}
-                              <span style={{ ...monoCellStyle, ...detailValueTextStyle }}>
-                                {alert.source_ip}
-                              </span>
-                            </p>
-
-                            <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
-                              <strong style={detailLabelTextStyle}>Location:</strong>{" "}
-                              <span style={detailValueTextStyle}>{alert.city && alert.country
-                                ? `${alert.city}, ${alert.country}`
-                                : "Location unavailable"}</span>
-                            </p>
-                          </div>
+                          <AlertSourceDetails
+                            alert={alert}
+                            sourceBadge={sourceBadge}
+                            expandedTextStyle={expandedTextStyle}
+                            detailLabelTextStyle={detailLabelTextStyle}
+                            detailValueTextStyle={detailValueTextStyle}
+                            expandedSecondaryTextStyle={expandedSecondaryTextStyle}
+                            detailSectionStyle={detailSectionStyle}
+                            monoCellStyle={monoCellStyle}
+                          />
 
                           <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
                             <strong style={detailLabelTextStyle}>Severity:</strong>{" "}
@@ -810,61 +801,31 @@ function AlertsTable({
                             <span style={detailValueTextStyle}>{alert.message}</span>
                           </p>
 
-                          {(alert.mitre_technique_id || alert.mitre_technique_name || alert.mitre_tactic) && (
-                            <div style={mitreSectionStyle}>
-                              <p style={expandedLabelStyle}>MITRE ATT&CK</p>
-                              <div style={mitreHeaderRowStyle}>
-                                {alert.mitre_technique_id && (
-                                  <span style={mitreTechniqueBadgeStyle}>
-                                    {alert.mitre_technique_id}
-                                  </span>
-                                )}
-                                {alert.mitre_technique_name && (
-                                  <span style={mitreTechniqueNameStyle}>
-                                    {alert.mitre_technique_name}
-                                  </span>
-                                )}
-                              </div>
-                              {alert.mitre_tactic && (
-                                <p style={mitreTacticStyle}>
-                                  <strong>Tactic:</strong> {alert.mitre_tactic}
-                                </p>
-                              )}
-                            </div>
-                          )}
+                          <AlertMitreDetails
+                            alert={alert}
+                            mitreSectionStyle={mitreSectionStyle}
+                            expandedLabelStyle={expandedLabelStyle}
+                            mitreHeaderRowStyle={mitreHeaderRowStyle}
+                            mitreTechniqueBadgeStyle={mitreTechniqueBadgeStyle}
+                            mitreTechniqueNameStyle={mitreTechniqueNameStyle}
+                            mitreTacticStyle={mitreTacticStyle}
+                          />
 
-                          <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
-                            <strong style={detailLabelTextStyle}>Behavioral Reputation:</strong>{" "}
-                            <span
-                              style={{ ...sourceBadgeStyle, ...getReputationBadgeStyle(alert.reputation_label) }}
-                              title={`Behavioral reputation: ${alert.reputation_label || "Normal"} (${alert.reputation_score ?? 0})`}
-                            >
-                              {alert.reputation_label || "Normal"} ({alert.reputation_score ?? 0})
-                            </span>
-                          </p>
-                          <p style={expandedSecondaryTextStyle}>
-                            Internal SIEM-generated behavioral score
-                          </p>
-                          <p style={{ marginTop: "8px" }}>
-                            {alert.reputation_summary || "No reputation details available"}
-                          </p>
-                          <div style={detailSectionStyle}>
-                            <strong>Contributing Signals:</strong>
-                            {Array.isArray(alert.contributing_signals) && alert.contributing_signals.length > 0 ? (
-                              alert.contributing_signals.map((signal) => (
-                                <div key={signal.signal} style={signalRowStyle}>
-                                  <span>{signal.label}</span>
-                                  <span style={sourceTypeTextStyle}>
-                                    count {signal.count} · weight {signal.weight} · total {signal.total}
-                                  </span>
-                                </div>
-                              ))
-                            ) : (
-                              <div style={{ fontSize: "12px", color: "#8b949e", marginTop: "4px" }}>
-                                No contributing signals
-                              </div>
-                            )}
-                          </div>
+                          <AlertReputationDetails
+                            alert={alert}
+                            expandedTextStyle={expandedTextStyle}
+                            detailLabelTextStyle={detailLabelTextStyle}
+                            expandedSecondaryTextStyle={expandedSecondaryTextStyle}
+                            sourceBadgeStyle={sourceBadgeStyle}
+                            getReputationBadgeStyle={getReputationBadgeStyle}
+                          />
+
+                          <AlertCorrelationSignals
+                            alert={alert}
+                            detailSectionStyle={detailSectionStyle}
+                            signalRowStyle={signalRowStyle}
+                            sourceTypeTextStyle={sourceTypeTextStyle}
+                          />
 
                           <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
                             <strong style={detailLabelTextStyle}>Response Action:</strong>{" "}
