@@ -15,7 +15,7 @@ LOCAL_FRONTEND="frontend"
 MSG=${1:-"update"}
 
 echo "Committing local changes..."
-git add .
+git add -u
 git commit -m "$MSG" || echo "No changes to commit"
 
 echo "Syncing with remote repository..."
