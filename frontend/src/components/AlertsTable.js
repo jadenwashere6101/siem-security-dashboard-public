@@ -1,39 +1,21 @@
 import React, { useState } from "react";
-import AlertCorrelationSignals from "./AlertCorrelationSignals";
 import AlertDetailsPanel from "./AlertDetailsPanel";
-import AlertExportLinks from "./AlertExportLinks";
+import AlertExpandedRow from "./AlertExpandedRow";
 import AlertGroupHeader from "./AlertGroupHeader";
-import AlertMitreDetails from "./AlertMitreDetails";
 import AlertManualActions from "./AlertManualActions";
-import AlertReputationDetails from "./AlertReputationDetails";
 import AlertResponseLog from "./AlertResponseLog";
 import AlertSidePanel from "./AlertSidePanel";
 import AlertsEmptyState from "./AlertsEmptyState";
 import AlertResponseIndicator from "./AlertResponseIndicator";
 import AlertNotesPanel from "./AlertNotesPanel";
-import AlertSourceDetails from "./AlertSourceDetails";
 import AlertsTableHeader from "./AlertsTableHeader";
 import AlertsToolbar from "./AlertsToolbar";
 import AlertsToast from "./AlertsToast";
 import ResolvedAlertsTable from "./ResolvedAlertsTable";
-import TargetedAlertPanel from "./TargetedAlertPanel";
 import {
   correlationBadgeStyle,
   correlationListStyle,
   correlationPanelStyle,
-  detailLabelTextStyle,
-  detailSectionStyle,
-  detailValueTextStyle,
-  expandedSecondaryTextStyle,
-  exportDividerStyle,
-  exportLabelStyle,
-  exportRowStyle,
-  inlineExportLinkStyle,
-  mitreHeaderRowStyle,
-  mitreSectionStyle,
-  mitreTacticStyle,
-  mitreTechniqueBadgeStyle,
-  mitreTechniqueNameStyle,
   signalRowStyle,
   sourceBadgeStackStyle,
   sourceBadgeStyle,
@@ -718,120 +700,25 @@ function AlertsTable({
                         </tr>
 
                         {selectedAlertId === alert.id && (
-                          <tr onClick={(e) => e.stopPropagation()}>
-                            <td colSpan="9" style={expandedCellStyle}>
-                              <div style={expandedContentStyle}>
-                          <p style={{ ...expandedLabelStyle, marginBottom: "10px" }}>Alert Details</p>
-
-                          <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
-                            <strong style={detailLabelTextStyle}>ID:</strong>{" "}
-                            <span style={detailValueTextStyle}>{alert.id}</span>
-                          </p>
-
-                          <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
-                            <strong style={detailLabelTextStyle}>Type:</strong>{" "}
-                            <span style={detailValueTextStyle}>{alert.alert_type}</span>
-                          </p>
-
-                          {targetedAlertMeta && (
-                            <TargetedAlertPanel
-                              targetedAlertMeta={targetedAlertMeta}
-                              correlationAlert={correlationAlert}
-                              correlatedAlertTypes={correlatedAlertTypes}
-                              correlationPanelStyle={correlationPanelStyle}
-                              targetedAlertPanelStyle={targetedAlertPanelStyle}
-                              expandedLabelStyle={expandedLabelStyle}
-                              expandedTextStyle={expandedTextStyle}
-                              correlationListStyle={correlationListStyle}
-                              monoCellStyle={monoCellStyle}
-                              alert={alert}
-                            />
-                          )}
-
-                          <AlertSourceDetails
+                          <AlertExpandedRow
                             alert={alert}
                             sourceBadge={sourceBadge}
-                            expandedTextStyle={expandedTextStyle}
-                            detailLabelTextStyle={detailLabelTextStyle}
-                            detailValueTextStyle={detailValueTextStyle}
-                            expandedSecondaryTextStyle={expandedSecondaryTextStyle}
-                            detailSectionStyle={detailSectionStyle}
-                            monoCellStyle={monoCellStyle}
-                          />
-
-                          <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
-                            <strong style={detailLabelTextStyle}>Severity:</strong>{" "}
-                            <span style={detailValueTextStyle}>{alert.severity}</span>
-                          </p>
-
-                          <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
-                            <strong style={detailLabelTextStyle}>Message:</strong>{" "}
-                            <span style={detailValueTextStyle}>{alert.message}</span>
-                          </p>
-
-                          <AlertMitreDetails
-                            alert={alert}
-                            mitreSectionStyle={mitreSectionStyle}
+                            correlationAlert={correlationAlert}
+                            targetedAlertMeta={targetedAlertMeta}
+                            correlatedAlertTypes={correlatedAlertTypes}
+                            responseLog={responseLogs[alert.id]}
+                            expandedCellStyle={expandedCellStyle}
+                            expandedContentStyle={expandedContentStyle}
                             expandedLabelStyle={expandedLabelStyle}
-                            mitreHeaderRowStyle={mitreHeaderRowStyle}
-                            mitreTechniqueBadgeStyle={mitreTechniqueBadgeStyle}
-                            mitreTechniqueNameStyle={mitreTechniqueNameStyle}
-                            mitreTacticStyle={mitreTacticStyle}
-                          />
-
-                          <AlertReputationDetails
-                            alert={alert}
                             expandedTextStyle={expandedTextStyle}
-                            detailLabelTextStyle={detailLabelTextStyle}
-                            expandedSecondaryTextStyle={expandedSecondaryTextStyle}
-                            sourceBadgeStyle={sourceBadgeStyle}
-                            getReputationBadgeStyle={getReputationBadgeStyle}
-                          />
-
-                          <AlertCorrelationSignals
-                            alert={alert}
-                            detailSectionStyle={detailSectionStyle}
-                            signalRowStyle={signalRowStyle}
-                            sourceTypeTextStyle={sourceTypeTextStyle}
-                          />
-
-                          <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
-                            <strong style={detailLabelTextStyle}>Response Action:</strong>{" "}
-                            <span style={detailValueTextStyle}>{alert.response_action || "Not set"}</span>
-                          </p>
-                          <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
-                            <strong style={detailLabelTextStyle}>Response Status:</strong>{" "}
-                            <span style={detailValueTextStyle}>{alert.response_status || "Not set"}</span>
-                          </p>
-
-                          <AlertExportLinks
-                            alert={alert}
-                            exportRowStyle={exportRowStyle}
-                            exportLabelStyle={exportLabelStyle}
-                            inlineExportLinkStyle={inlineExportLinkStyle}
-                            exportDividerStyle={exportDividerStyle}
+                            monoCellStyle={monoCellStyle}
+                            canTakeAlertActions={canTakeAlertActions}
                             downloadPdfReport={downloadPdfReport}
-                          />
-
-                          <AlertResponseLog logs={responseLogs[alert.id]} />
-
-                          <AlertManualActions
-                            alertId={alert.id}
                             executeAction={executeAction}
                             executingActionId={executingActionId}
-                            canTakeAlertActions={canTakeAlertActions}
                             getActionButtonStyle={getActionButtonStyle}
+                            getReputationBadgeStyle={getReputationBadgeStyle}
                           />
-
-                          <p style={{ ...expandedTextStyle, marginBottom: "0" }}>
-                            <strong style={detailLabelTextStyle}>Created At:</strong>{" "}
-                            <span style={{ ...monoCellStyle, ...detailValueTextStyle }}>
-                              {alert.created_at}
-                            </span>
-                          </p>
-                              </div>
-                            </td>
-                          </tr>
                         )}
                       </React.Fragment>
                       );
