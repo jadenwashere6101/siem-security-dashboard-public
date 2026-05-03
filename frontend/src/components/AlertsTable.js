@@ -12,6 +12,7 @@ import AlertsEmptyState from "./AlertsEmptyState";
 import AlertResponseIndicator from "./AlertResponseIndicator";
 import AlertNotesPanel from "./AlertNotesPanel";
 import AlertSourceDetails from "./AlertSourceDetails";
+import AlertsTableHeader from "./AlertsTableHeader";
 import AlertsToolbar from "./AlertsToolbar";
 import AlertsToast from "./AlertsToast";
 import ResolvedAlertsTable from "./ResolvedAlertsTable";
@@ -565,19 +566,7 @@ function AlertsTable({
               }}
             >
             <table style={tableStyle}>
-              <thead>
-                <tr>
-                  <th style={headerCellStyle}>ID</th>
-                  <th style={headerCellStyle}>Type</th>
-                  <th style={headerCellStyle}>Source</th>
-                  <th style={headerCellStyle}>Source IP</th>
-                  <th style={headerCellStyle}>Behavior</th>
-                  <th style={headerCellStyle}>Severity</th>
-                  <th style={headerCellStyle}>Message</th>
-                  <th style={headerCellStyle}>Created At</th>
-                  <th style={headerCellStyle}>Action</th>
-                </tr>
-              </thead>
+              <AlertsTableHeader headerCellStyle={headerCellStyle} />
 
             <tbody>
               {groupedFilteredAlerts.map((group) => (
