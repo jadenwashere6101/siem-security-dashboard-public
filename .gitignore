@@ -2,7 +2,12 @@
 # 🔐 ENV / SECRETS
 # =========================
 .env
+.env.*
 .envrc
+*.pem
+*.key
+*.p12
+*.crt
 
 # =========================
 # 🐍 PYTHON
@@ -47,6 +52,10 @@ Thumbs.db
 # =========================
 db.sqlite3
 db.sqlite3-journal
+*.sqlite
+*.sqlite3
+*.db
+*.dump
 
 # =========================
 # ⚙️ FLASK
@@ -60,6 +69,8 @@ instance/
 .coverage
 coverage.xml
 .pytest_cache/
+coverage/
+htmlcov/
 
 # =========================
 # 🧠 EDITORS / IDE
@@ -78,10 +89,13 @@ dist/
 # 🧠 MISC
 # =========================
 *.swp
+*.swo
+*.tmp
 
 # Backup / old files
 *backup*
 *old*
+*.bak
 
 *before_patch*
 
