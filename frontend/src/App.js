@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo, useRef } from "react";
+import React, { useCallback, useEffect, useState, useMemo, useRef } from "react";
 
 import DashboardSection from "./components/DashboardSection";
 import AdminUsersPanel from "./components/AdminUsersPanel";
@@ -99,7 +99,7 @@ function App() {
     }
   };
 
-  const fetchAlerts = async () => {
+  const fetchAlerts = useCallback(async () => {
     if (!isAuthenticated) return;
 
     try {
@@ -110,7 +110,7 @@ function App() {
       console.error("Error fetching alerts:", err);
       setAlerts([]);
     }
-  };
+  }, [isAuthenticated]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -158,7 +158,7 @@ function App() {
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [isAuthenticated]);
+  }, [isAuthenticated, fetchAlerts]);
 
   useEffect(() => {
     if (!sessionNotice) return;
