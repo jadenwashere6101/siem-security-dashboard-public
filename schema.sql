@@ -120,4 +120,3 @@ CREATE INDEX IF NOT EXISTS idx_alert_notes_alert_id ON alert_notes (alert_id);
 CREATE INDEX IF NOT EXISTS idx_alert_notes_created_at ON alert_notes (created_at);
 CREATE INDEX IF NOT EXISTS idx_blocked_ips_ip_address ON blocked_ips (ip_address);
 CREATE INDEX IF NOT EXISTS idx_blocked_ips_status ON blocked_ips (status);
-;
