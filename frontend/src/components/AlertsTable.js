@@ -6,6 +6,7 @@ import AlertMitreDetails from "./AlertMitreDetails";
 import AlertManualActions from "./AlertManualActions";
 import AlertReputationDetails from "./AlertReputationDetails";
 import AlertResponseLog from "./AlertResponseLog";
+import AlertSidePanel from "./AlertSidePanel";
 import AlertsEmptyState from "./AlertsEmptyState";
 import AlertResponseIndicator from "./AlertResponseIndicator";
 import AlertNotesPanel from "./AlertNotesPanel";
@@ -892,61 +893,12 @@ function AlertsTable({
       )}
 
       {selectedAlert && (
-        <div
-          style={{
-            position: "fixed",
-            top: 0,
-            right: 0,
-            width: "420px",
-            height: "100vh",
-            backgroundColor: "#0f172a",
-            color: "#fff",
-            boxShadow: "-4px 0 20px rgba(0,0,0,0.35)",
-            zIndex: 9998,
-            borderLeft: "1px solid #1f2937",
-            display: "flex",
-            flexDirection: "column"
+        <AlertSidePanel
+          onClose={() => {
+            setSelectedAlert(null);
+            setSelectedAlertId(null);
           }}
         >
-          <div
-            onWheel={(e) => {
-              e.stopPropagation();
-            }}
-            style={{
-              height: "100%",
-              overflowY: "auto",
-              overflowX: "hidden",
-              WebkitOverflowScrolling: "touch",
-              padding: "20px"
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: "16px"
-              }}
-            >
-              <h2 style={{ margin: 0, fontSize: "20px" }}>Alert Details</h2>
-
-              <button
-                onClick={() => {
-                  setSelectedAlert(null);
-                  setSelectedAlertId(null);
-                }}
-                style={{
-                  background: "transparent",
-                  color: "#fff",
-                  border: "none",
-                  fontSize: "22px",
-                  cursor: "pointer"
-                }}
-              >
-                ×
-              </button>
-            </div>
-
             <AlertDetailsPanel
               selectedAlert={selectedAlert}
               selectedAlertTimeline={selectedAlertTimeline}
@@ -994,8 +946,7 @@ function AlertsTable({
                 formatNoteTimestamp={formatNoteTimestamp}
               />
             )}
-          </div>
-        </div>
+        </AlertSidePanel>
       )}
     </>
   );
