@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 import siem_backend
+import backend_correlation_engine
 
 
 REPUTATION = {
@@ -163,7 +164,7 @@ def test_targeted_correlation_web_to_app_attack_pattern(postgres_db):
     )
 
     with siem_backend.app.app_context(), patch("backend_correlation_engine.lookup_ip_reputation", return_value=REPUTATION):
-        siem_backend.generate_targeted_correlation_alerts(cur, conn, source_ip)
+        backend_correlation_engine.generate_targeted_correlation_alerts(cur, conn, source_ip)
 
     alert = fetch_targeted_alert(cur, source_ip, "web_to_app_attack_pattern")
     assert alert is not None
@@ -209,7 +210,7 @@ def test_targeted_correlation_spray_then_success_pattern(postgres_db):
     )
 
     with siem_backend.app.app_context(), patch("backend_correlation_engine.lookup_ip_reputation", return_value=REPUTATION):
-        siem_backend.generate_targeted_correlation_alerts(cur, conn, source_ip)
+        backend_correlation_engine.generate_targeted_correlation_alerts(cur, conn, source_ip)
 
     alert = fetch_targeted_alert(cur, source_ip, "spray_then_success_pattern")
     assert alert is not None
@@ -250,7 +251,7 @@ def test_targeted_correlation_cloud_app_error_pattern(postgres_db):
     )
 
     with siem_backend.app.app_context(), patch("backend_correlation_engine.lookup_ip_reputation", return_value=REPUTATION):
-        siem_backend.generate_targeted_correlation_alerts(cur, conn, source_ip)
+        backend_correlation_engine.generate_targeted_correlation_alerts(cur, conn, source_ip)
 
     alert = fetch_targeted_alert(cur, source_ip, "cloud_app_error_pattern")
     assert alert is not None
@@ -289,8 +290,8 @@ def test_targeted_correlation_duplicate_suppression_keeps_single_open_alert(post
     )
 
     with siem_backend.app.app_context(), patch("backend_correlation_engine.lookup_ip_reputation", return_value=REPUTATION):
-        siem_backend.generate_targeted_correlation_alerts(cur, conn, source_ip)
-        siem_backend.generate_targeted_correlation_alerts(cur, conn, source_ip)
+        backend_correlation_engine.generate_targeted_correlation_alerts(cur, conn, source_ip)
+        backend_correlation_engine.generate_targeted_correlation_alerts(cur, conn, source_ip)
 
     cur.execute(
         """

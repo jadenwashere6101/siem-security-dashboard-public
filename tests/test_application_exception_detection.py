@@ -3,6 +3,7 @@ from unittest.mock import patch
 from psycopg2.extras import Json
 
 import siem_backend
+import backend_detection_engine
 
 
 REPUTATION = {
@@ -107,7 +108,7 @@ def test_application_exception_threshold_boundary_and_alert_field_fidelity(postg
         insert_application_event(cur, source_ip=source_ip, seconds_ago=seconds_ago, country="Canada", city="Toronto")
 
     with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
-        assert siem_backend._generate_application_exception_alerts_core(
+        assert backend_detection_engine._generate_application_exception_alerts_core(
             cur,
             conn,
             source="opentelemetry",
@@ -123,7 +124,7 @@ def test_application_exception_threshold_boundary_and_alert_field_fidelity(postg
             lat="40.7128",
             lon="-74.0060",
         )
-        alerts_created = siem_backend._generate_application_exception_alerts_core(
+        alerts_created = backend_detection_engine._generate_application_exception_alerts_core(
             cur,
             conn,
             source="opentelemetry",
@@ -169,7 +170,7 @@ def test_application_exception_trigger_depends_on_application_exception_event_ty
         )
 
     with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
-        assert siem_backend._generate_application_exception_alerts_core(
+        assert backend_detection_engine._generate_application_exception_alerts_core(
             cur,
             conn,
             source="opentelemetry",
@@ -185,7 +186,7 @@ def test_application_exception_trigger_depends_on_application_exception_event_ty
                 seconds_ago=seconds_ago,
             )
 
-        alerts_created = siem_backend._generate_application_exception_alerts_core(
+        alerts_created = backend_detection_engine._generate_application_exception_alerts_core(
             cur,
             conn,
             source="opentelemetry",
@@ -205,14 +206,14 @@ def test_application_exception_duplicate_suppression_keeps_single_open_alert(pos
         insert_application_event(cur, source_ip=source_ip, seconds_ago=seconds_ago)
 
     with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
-        first_result = siem_backend._generate_application_exception_alerts_core(
+        first_result = backend_detection_engine._generate_application_exception_alerts_core(
             cur,
             conn,
             source="opentelemetry",
             source_type="telemetry",
         )
         insert_application_event(cur, source_ip=source_ip, seconds_ago=1)
-        second_result = siem_backend._generate_application_exception_alerts_core(
+        second_result = backend_detection_engine._generate_application_exception_alerts_core(
             cur,
             conn,
             source="opentelemetry",
@@ -243,7 +244,7 @@ def test_application_exception_currval_links_response_action_to_inserted_alert(p
         insert_application_event(cur, source_ip=source_ip, seconds_ago=seconds_ago)
 
     with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
-        siem_backend._generate_application_exception_alerts_core(
+        backend_detection_engine._generate_application_exception_alerts_core(
             cur,
             conn,
             source="opentelemetry",

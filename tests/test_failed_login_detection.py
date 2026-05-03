@@ -3,6 +3,7 @@ from unittest.mock import patch
 from psycopg2.extras import Json
 
 import siem_backend
+import backend_detection_engine
 
 
 REPUTATION = {
@@ -98,7 +99,7 @@ def test_failed_login_threshold_boundary_and_alert_field_fidelity(postgres_db):
     insert_failed_login_event(cur, source_ip=source_ip, seconds_ago=2, country="Canada", city="Toronto")
 
     with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
-        assert siem_backend._generate_failed_login_alerts_core(cur, conn, source="bank_app", source_type="custom") == []
+        assert backend_detection_engine._generate_failed_login_alerts_core(cur, conn, source="bank_app", source_type="custom") == []
 
         insert_failed_login_event(
             cur,
@@ -109,7 +110,7 @@ def test_failed_login_threshold_boundary_and_alert_field_fidelity(postgres_db):
             lat="40.7128",
             lon="-74.0060",
         )
-        alerts_created = siem_backend._generate_failed_login_alerts_core(
+        alerts_created = backend_detection_engine._generate_failed_login_alerts_core(
             cur,
             conn,
             source="bank_app",
@@ -149,14 +150,14 @@ def test_failed_login_duplicate_suppression_keeps_single_open_alert(postgres_db)
         insert_failed_login_event(cur, source_ip=source_ip, seconds_ago=seconds_ago)
 
     with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
-        first_result = siem_backend._generate_failed_login_alerts_core(
+        first_result = backend_detection_engine._generate_failed_login_alerts_core(
             cur,
             conn,
             source="bank_app",
             source_type="custom",
         )
         insert_failed_login_event(cur, source_ip=source_ip, seconds_ago=1)
-        second_result = siem_backend._generate_failed_login_alerts_core(
+        second_result = backend_detection_engine._generate_failed_login_alerts_core(
             cur,
             conn,
             source="bank_app",
@@ -187,7 +188,7 @@ def test_failed_login_currval_links_response_action_to_inserted_alert(postgres_d
         insert_failed_login_event(cur, source_ip=source_ip, seconds_ago=seconds_ago)
 
     with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
-        siem_backend._generate_failed_login_alerts_core(cur, conn, source="bank_app", source_type="custom")
+        backend_detection_engine._generate_failed_login_alerts_core(cur, conn, source="bank_app", source_type="custom")
 
     cur.execute(
         """
