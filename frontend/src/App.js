@@ -730,14 +730,6 @@ const titleStyle = {
   letterSpacing: "-0.01em",
 };
 
-const subtitleStyle = {
-  margin: 0,
-  color: "#8b949e",
-  fontSize: "16px",
-  maxWidth: "760px",
-  lineHeight: "1.5",
-};
-
 const logoutButtonStyle = {
   padding: "8px 12px",
   borderRadius: "999px",

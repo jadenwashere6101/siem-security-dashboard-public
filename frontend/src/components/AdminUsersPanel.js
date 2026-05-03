@@ -433,7 +433,6 @@ const panelContentStyle = {
 };
 
 const formSectionStyle = {
-  paddingTop: "2px",
   paddingBottom: "2px",
   borderTop: "1px solid #21262d",
   marginTop: "4px",
