@@ -3,6 +3,35 @@ import AlertDetailsPanel from "./AlertDetailsPanel";
 import AlertResponseIndicator from "./AlertResponseIndicator";
 import AlertsToolbar from "./AlertsToolbar";
 import {
+  correlationBadgeStyle,
+  correlationListStyle,
+  correlationPanelStyle,
+  detailLabelTextStyle,
+  detailSectionStyle,
+  detailValueTextStyle,
+  expandedSecondaryTextStyle,
+  exportDividerStyle,
+  exportLabelStyle,
+  exportRowStyle,
+  groupCountBadgeStyle,
+  groupHeaderContentStyle,
+  groupHeaderMetaStyle,
+  groupHeaderRowStyle,
+  groupHeaderSubtextStyle,
+  groupHeaderTitleStyle,
+  inlineExportLinkStyle,
+  mitreHeaderRowStyle,
+  mitreSectionStyle,
+  mitreTacticStyle,
+  mitreTechniqueBadgeStyle,
+  mitreTechniqueNameStyle,
+  signalRowStyle,
+  sourceBadgeStackStyle,
+  sourceBadgeStyle,
+  sourceTypeTextStyle,
+  targetedAlertPanelStyle,
+} from "./alertsTableStyles";
+import {
   buildSelectedAlertTimeline,
   getCorrelationAlertTypes,
   getReputationBadgeStyle,
@@ -73,207 +102,12 @@ function AlertsTable({
   const [hoveredAlertId, setHoveredAlertId] = useState(null);
   const [collapsedGroups, setCollapsedGroups] = useState({});
 
-  // ==========================================================================
-  // Inline Styles
-  // ==========================================================================
-  // Large style clusters stay in-file for now to avoid changing props or JSX
-  // structure during this readability-only pass.
+  const groupHeaderCellStyle = {
+    ...bodyCellStyle,
+    padding: "10px 14px",
+    backgroundColor: "#101722",
+  };
 
-  const exportRowStyle = {
-    display: "flex",
-    alignItems: "center",
-    gap: "8px",
-    marginTop: "10px",
-    flexWrap: "wrap",
-  };
-  const exportLabelStyle = {
-    color: "#9ca3af",
-    fontSize: "12px",
-    fontWeight: "700",
-    letterSpacing: "0.04em",
-    textTransform: "uppercase",
-  };
-  const inlineExportLinkStyle = {
-    display: "inline-flex",
-    alignItems: "center",
-    color: "#93c5fd",
-    textDecoration: "none",
-    fontSize: "12px",
-    fontWeight: "700",
-    letterSpacing: "0.02em",
-  };
-  const exportDividerStyle = {
-    color: "#4b5563",
-    fontSize: "12px",
-  };
-  const mitreSectionStyle = {
-    margin: "12px 0 10px",
-    padding: "10px 12px",
-    borderRadius: "10px",
-    border: "1px solid #30363d",
-    backgroundColor: "#111827",
-  };
-  const mitreHeaderRowStyle = {
-    display: "flex",
-    alignItems: "center",
-    gap: "8px",
-    flexWrap: "wrap",
-    marginBottom: "6px",
-  };
-  const mitreTechniqueBadgeStyle = {
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "4px 8px",
-    borderRadius: "999px",
-    backgroundColor: "rgba(59, 130, 246, 0.14)",
-    border: "1px solid rgba(59, 130, 246, 0.3)",
-    color: "#93c5fd",
-    fontSize: "11px",
-    fontWeight: "700",
-    letterSpacing: "0.03em",
-  };
-  const mitreTechniqueNameStyle = {
-    color: "#e6edf3",
-    fontSize: "13px",
-    fontWeight: "600",
-  };
-const mitreTacticStyle = {
-  margin: 0,
-  color: "#9ca3af",
-  fontSize: "12px",
-};
-const sourceBadgeStackStyle = {
-  display: "flex",
-  flexDirection: "column",
-  gap: "4px",
-};
-const sourceBadgeStyle = {
-  display: "inline-block",
-  width: "fit-content",
-  padding: "4px 8px",
-  borderRadius: "999px",
-  fontSize: "10px",
-  fontWeight: "700",
-  letterSpacing: "0.04em",
-  textTransform: "uppercase",
-};
-const sourceTypeTextStyle = {
-  color: "#8b949e",
-  fontSize: "11px",
-};
-const detailLabelTextStyle = {
-  color: "#cbd5e1",
-  fontSize: "12px",
-  fontWeight: "700",
-  letterSpacing: "0.02em",
-};
-const detailValueTextStyle = {
-  color: "#e6edf3",
-  fontSize: "14px",
-};
-const expandedSecondaryTextStyle = {
-  color: "#8b949e",
-  fontSize: "12px",
-};
-const signalRowStyle = {
-  marginTop: "6px",
-  padding: "8px 10px",
-  borderRadius: "8px",
-  backgroundColor: "#111827",
-  border: "1px solid #30363d",
-  display: "flex",
-  justifyContent: "space-between",
-  gap: "12px",
-  flexWrap: "wrap",
-  fontSize: "12px",
-  color: "#e6edf3",
-};
-const correlationBadgeStyle = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: "6px",
-  width: "fit-content",
-  padding: "4px 8px",
-  borderRadius: "999px",
-  fontSize: "10px",
-  fontWeight: "800",
-  letterSpacing: "0.04em",
-  textTransform: "uppercase",
-  color: "#fde68a",
-  backgroundColor: "rgba(245, 158, 11, 0.12)",
-  border: "1px solid rgba(245, 158, 11, 0.34)",
-};
-const correlationPanelStyle = {
-  margin: "12px 0 10px",
-  padding: "10px 12px",
-  borderRadius: "10px",
-  border: "1px solid rgba(245, 158, 11, 0.32)",
-  backgroundColor: "rgba(120, 53, 15, 0.18)",
-};
-const correlationListStyle = {
-  margin: "8px 0 0",
-  paddingLeft: "18px",
-  color: "#fef3c7",
-  fontSize: "12px",
-};
-const targetedAlertPanelStyle = {
-  margin: "12px 0 10px",
-  padding: "10px 12px",
-  borderRadius: "10px",
-  border: "1px solid rgba(239, 68, 68, 0.28)",
-  backgroundColor: "rgba(69, 10, 10, 0.16)",
-};
-const groupHeaderRowStyle = {
-  backgroundColor: "#101722",
-  borderTop: "1px solid #30363d",
-  borderBottom: "1px solid #253041",
-  cursor: "pointer",
-};
-const groupHeaderCellStyle = {
-  ...bodyCellStyle,
-  padding: "10px 14px",
-  backgroundColor: "#101722",
-};
-const groupHeaderContentStyle = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: "12px",
-  flexWrap: "wrap",
-};
-const groupHeaderMetaStyle = {
-  display: "flex",
-  alignItems: "center",
-  gap: "10px",
-  flexWrap: "wrap",
-};
-const groupHeaderTitleStyle = {
-  color: "#e6edf3",
-  fontSize: "13px",
-  fontWeight: "700",
-};
-const groupHeaderSubtextStyle = {
-  color: "#94a3b8",
-  fontSize: "11px",
-};
-const groupCountBadgeStyle = {
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: "4px 8px",
-  borderRadius: "999px",
-  fontSize: "10px",
-  fontWeight: "700",
-  letterSpacing: "0.04em",
-  textTransform: "uppercase",
-  color: "#cbd5e1",
-  backgroundColor: "rgba(148, 163, 184, 0.12)",
-  border: "1px solid rgba(148, 163, 184, 0.22)",
-};
-const detailSectionStyle = {
-  marginTop: "10px",
-};
   const severityRank = {
     critical: 1,
     high: 2,
