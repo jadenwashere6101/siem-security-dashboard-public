@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import AlertCorrelationSignals from "./AlertCorrelationSignals";
 import AlertDetailsPanel from "./AlertDetailsPanel";
 import AlertExportLinks from "./AlertExportLinks";
+import AlertGroupHeader from "./AlertGroupHeader";
 import AlertMitreDetails from "./AlertMitreDetails";
 import AlertManualActions from "./AlertManualActions";
 import AlertReputationDetails from "./AlertReputationDetails";
@@ -26,12 +27,6 @@ import {
   exportDividerStyle,
   exportLabelStyle,
   exportRowStyle,
-  groupCountBadgeStyle,
-  groupHeaderContentStyle,
-  groupHeaderMetaStyle,
-  groupHeaderRowStyle,
-  groupHeaderSubtextStyle,
-  groupHeaderTitleStyle,
   inlineExportLinkStyle,
   mitreHeaderRowStyle,
   mitreSectionStyle,
@@ -587,31 +582,13 @@ function AlertsTable({
             <tbody>
               {groupedFilteredAlerts.map((group) => (
                 <React.Fragment key={group.sourceIp}>
-                  <tr
-                    style={groupHeaderRowStyle}
-                    onClick={() => toggleGroup(group.sourceIp)}
-                    title={collapsedGroups[group.sourceIp] ? "Expand group" : "Collapse group"}
-                  >
-                    <td colSpan="9" style={groupHeaderCellStyle}>
-                      <div style={groupHeaderContentStyle}>
-                        <div style={groupHeaderMetaStyle}>
-                          <span style={groupHeaderTitleStyle}>
-                            {collapsedGroups[group.sourceIp] ? "▸" : "▾"} {group.sourceIp}
-                          </span>
-                          <span style={groupHeaderSubtextStyle}>{group.locationLabel}</span>
-                          <span style={groupCountBadgeStyle}>
-                            {group.alerts.length} {group.alerts.length === 1 ? "alert" : "alerts"}
-                          </span>
-                        </div>
-                        <div style={groupHeaderMetaStyle}>
-                          <span style={groupHeaderSubtextStyle}>Highest severity</span>
-                          <span style={getSeverityBadgeStyle(group.highestSeverity)}>
-                            {group.highestSeverity}
-                          </span>
-                        </div>
-                      </div>
-                    </td>
-                  </tr>
+                  <AlertGroupHeader
+                    group={group}
+                    isCollapsed={collapsedGroups[group.sourceIp]}
+                    onToggle={() => toggleGroup(group.sourceIp)}
+                    getSeverityBadgeStyle={getSeverityBadgeStyle}
+                    groupHeaderCellStyle={groupHeaderCellStyle}
+                  />
 
                   {!collapsedGroups[group.sourceIp] &&
                     group.alerts.map((alert) => {
