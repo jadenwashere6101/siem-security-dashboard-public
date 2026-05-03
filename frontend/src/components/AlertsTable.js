@@ -3,6 +3,7 @@ import AlertCorrelationSignals from "./AlertCorrelationSignals";
 import AlertDetailsPanel from "./AlertDetailsPanel";
 import AlertExportLinks from "./AlertExportLinks";
 import AlertMitreDetails from "./AlertMitreDetails";
+import AlertManualActions from "./AlertManualActions";
 import AlertReputationDetails from "./AlertReputationDetails";
 import AlertResponseLog from "./AlertResponseLog";
 import AlertsEmptyState from "./AlertsEmptyState";
@@ -848,97 +849,13 @@ function AlertsTable({
 
                           <AlertResponseLog logs={responseLogs[alert.id]} />
 
-                          <div style={{ marginTop: "10px" }}>
-                            <strong>Manual Actions:</strong>
-                            {!canTakeAlertActions && (
-                              <div style={{ fontSize: "12px", color: "#8b949e", marginTop: "4px" }}>
-                                Requires elevated privileges
-                              </div>
-                            )}
-
-                            <div style={{ display: "flex", gap: "8px", marginTop: "6px", flexWrap: "wrap" }}>
-                              <button
-                                onClick={() => executeAction(alert.id, "block_ip")}
-                                onMouseOver={(e) => e.target.style.opacity = "0.85"}
-                                onMouseOut={(e) => e.target.style.opacity = "1"}
-                                disabled={executingActionId === alert.id}
-                                title={canTakeAlertActions ? "Block IP" : "Requires elevated privileges"}
-                                style={{
-                                  ...getActionButtonStyle(
-                                    {
-                                      backgroundColor: "#ff4d4f",
-                                      color: "white",
-                                      border: "none",
-                                      padding: "6px 10px",
-                                      borderRadius: "6px",
-                                      cursor: executingActionId === alert.id ? "not-allowed" : "pointer",
-                                      fontWeight: "bold",
-                                      opacity: executingActionId === alert.id ? 0.6 : 1,
-                                      transition: "opacity 120ms ease, border-color 120ms ease, background-color 120ms ease",
-                                    },
-                                    "#ff4d4f"
-                                  ),
-                                  opacity: executingActionId === alert.id ? 0.6 : 1,
-                                }}
-                              >
-                                {executingActionId === alert.id ? "Executing..." : canTakeAlertActions ? "Block IP" : "🔒 Block IP"}
-                              </button>
-
-                              <button
-                                onClick={() => executeAction(alert.id, "flag_high_priority")}
-                                onMouseOver={(e) => e.target.style.opacity = "0.85"}
-                                onMouseOut={(e) => e.target.style.opacity = "1"}
-                                disabled={executingActionId === alert.id}
-                                title={canTakeAlertActions ? "Escalate" : "Requires elevated privileges"}
-                                style={{
-                                  ...getActionButtonStyle(
-                                    {
-                                      backgroundColor: "#faad14",
-                                      color: "black",
-                                      border: "none",
-                                      padding: "6px 10px",
-                                      borderRadius: "6px",
-                                      cursor: executingActionId === alert.id ? "not-allowed" : "pointer",
-                                      fontWeight: "bold",
-                                      opacity: executingActionId === alert.id ? 0.6 : 1,
-                                      transition: "opacity 120ms ease, border-color 120ms ease, background-color 120ms ease",
-                                    },
-                                    "#f59e0b"
-                                  ),
-                                  opacity: executingActionId === alert.id ? 0.6 : 1,
-                                }}
-                              >
-                                {executingActionId === alert.id ? "Executing..." : canTakeAlertActions ? "Escalate" : "🔒 Escalate"}
-                              </button>
-
-                              <button
-                                onClick={() => executeAction(alert.id, "monitor")}
-                                onMouseOver={(e) => e.target.style.opacity = "0.85"}
-                                onMouseOut={(e) => e.target.style.opacity = "1"}
-                                disabled={executingActionId === alert.id}
-                                title={canTakeAlertActions ? "Monitor" : "Requires elevated privileges"}
-                                style={{
-                                  ...getActionButtonStyle(
-                                    {
-                                      backgroundColor: "#52c41a",
-                                      color: "white",
-                                      border: "none",
-                                      padding: "6px 10px",
-                                      borderRadius: "6px",
-                                      cursor: executingActionId === alert.id ? "not-allowed" : "pointer",
-                                      fontWeight: "bold",
-                                      opacity: executingActionId === alert.id ? 0.6 : 1,
-                                      transition: "opacity 120ms ease, border-color 120ms ease, background-color 120ms ease",
-                                    },
-                                    "#22c55e"
-                                  ),
-                                  opacity: executingActionId === alert.id ? 0.6 : 1,
-                                }}
-                              >
-                                {executingActionId === alert.id ? "Executing..." : canTakeAlertActions ? "Monitor" : "🔒 Monitor"}
-                              </button>
-                            </div>
-                          </div>
+                          <AlertManualActions
+                            alertId={alert.id}
+                            executeAction={executeAction}
+                            executingActionId={executingActionId}
+                            canTakeAlertActions={canTakeAlertActions}
+                            getActionButtonStyle={getActionButtonStyle}
+                          />
 
                           <p style={{ ...expandedTextStyle, marginBottom: "0" }}>
                             <strong style={detailLabelTextStyle}>Created At:</strong>{" "}
@@ -1052,76 +969,14 @@ function AlertsTable({
 
             <AlertResponseLog logs={responseLogs[selectedAlert.id]} variant="panel" />
 
-            <div style={{ marginTop: "20px" }}>
-              <strong>Manual Actions:</strong>
-              {!canTakeAlertActions && (
-                <div style={{ marginTop: "6px", fontSize: "12px", color: "#94a3b8" }}>
-                  Requires elevated privileges
-                </div>
-              )}
-
-              <div style={{ display: "flex", gap: "8px", marginTop: "8px", flexWrap: "wrap" }}>
-                <button
-                  onClick={() => executeAction(selectedAlert.id, "block_ip")}
-                  title={canTakeAlertActions ? "Block IP" : "Requires elevated privileges"}
-                  style={getActionButtonStyle(
-                    {
-                      backgroundColor: "#ff4d4f",
-                      color: "white",
-                      border: "none",
-                      padding: "6px 10px",
-                      borderRadius: "6px",
-                      cursor: "pointer",
-                      fontWeight: "bold",
-                      transition: "opacity 120ms ease, border-color 120ms ease, background-color 120ms ease",
-                    },
-                    "#ff4d4f"
-                  )}
-                >
-                  {canTakeAlertActions ? "Block IP" : "🔒 Block IP"}
-                </button>
-
-                <button
-                  onClick={() => executeAction(selectedAlert.id, "flag_high_priority")}
-                  title={canTakeAlertActions ? "Escalate" : "Requires elevated privileges"}
-                  style={getActionButtonStyle(
-                    {
-                      backgroundColor: "#faad14",
-                      color: "black",
-                      border: "none",
-                      padding: "6px 10px",
-                      borderRadius: "6px",
-                      cursor: "pointer",
-                      fontWeight: "bold",
-                      transition: "opacity 120ms ease, border-color 120ms ease, background-color 120ms ease",
-                    },
-                    "#f59e0b"
-                  )}
-                >
-                  {canTakeAlertActions ? "Escalate" : "🔒 Escalate"}
-                </button>
-
-                <button
-                  onClick={() => executeAction(selectedAlert.id, "monitor")}
-                  title={canTakeAlertActions ? "Monitor" : "Requires elevated privileges"}
-                  style={getActionButtonStyle(
-                    {
-                      backgroundColor: "#52c41a",
-                      color: "white",
-                      border: "none",
-                      padding: "6px 10px",
-                      borderRadius: "6px",
-                      cursor: "pointer",
-                      fontWeight: "bold",
-                      transition: "opacity 120ms ease, border-color 120ms ease, background-color 120ms ease",
-                    },
-                    "#22c55e"
-                  )}
-                >
-                  {canTakeAlertActions ? "Monitor" : "🔒 Monitor"}
-                </button>
-              </div>
-            </div>
+            <AlertManualActions
+              alertId={selectedAlert.id}
+              executeAction={executeAction}
+              executingActionId={null}
+              canTakeAlertActions={canTakeAlertActions}
+              getActionButtonStyle={getActionButtonStyle}
+              variant="panel"
+            />
 
             {canTakeAlertActions && (
               <div style={{ marginTop: "24px" }}>
