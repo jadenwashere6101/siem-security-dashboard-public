@@ -4,6 +4,7 @@ import AlertDetailsPanel from "./AlertDetailsPanel";
 import AlertExportLinks from "./AlertExportLinks";
 import AlertMitreDetails from "./AlertMitreDetails";
 import AlertReputationDetails from "./AlertReputationDetails";
+import AlertResponseLog from "./AlertResponseLog";
 import AlertsEmptyState from "./AlertsEmptyState";
 import AlertResponseIndicator from "./AlertResponseIndicator";
 import AlertSourceDetails from "./AlertSourceDetails";
@@ -845,49 +846,7 @@ function AlertsTable({
                             downloadPdfReport={downloadPdfReport}
                           />
 
-                          <div style={{ marginTop: "10px" }}>
-                            <strong>Response Log:</strong>
-
-                            {responseLogs[alert.id] && responseLogs[alert.id].length > 0 ? (
-                              responseLogs[alert.id].map((log) => {
-                                let color = "#999";
-
-                                if (log.action === "block_ip") color = "#ff4d4f";
-                                else if (log.action === "flag_high_priority") color = "#faad14";
-                                else if (log.action === "monitor") color = "#52c41a";
-
-                                return (
-                                  <div
-                                    key={log.id}
-                                    style={{
-                                      marginTop: "5px",
-                                      padding: "6px",
-                                      borderRadius: "6px",
-                                      backgroundColor: "#1e1e1e",
-                                      color: "#fff",
-                                      fontSize: "12px",
-                                      display: "flex",
-                                      justifyContent: "space-between"
-                                    }}
-                                  >
-                                    <span>
-                                      <strong style={{ color }}>{log.action.toUpperCase()}</strong>
-                                      {" \u2192 "}
-                                      {log.status}
-                                    </span>
-
-                                    <span style={{ opacity: 0.7 }}>
-                                      {new Date(log.executed_at).toLocaleTimeString()}
-                                    </span>
-                                  </div>
-                                );
-                              })
-                            ) : (
-                              <div style={{ fontSize: "12px", opacity: 0.6 }}>
-                                No response actions logged
-                              </div>
-                            )}
-                          </div>
+                          <AlertResponseLog logs={responseLogs[alert.id]} />
 
                           <div style={{ marginTop: "10px" }}>
                             <strong>Manual Actions:</strong>
@@ -1091,47 +1050,7 @@ function AlertsTable({
             <p><strong>Response Action:</strong> {selectedAlert.response_action || "N/A"}</p>
             <p><strong>Response Status:</strong> {selectedAlert.response_status || "N/A"}</p>
 
-            <div style={{ marginTop: "20px" }}>
-              <strong>Response Log:</strong>
-
-              {responseLogs[selectedAlert.id] && responseLogs[selectedAlert.id].length > 0 ? (
-                responseLogs[selectedAlert.id].map((log) => {
-                  let color = "#999";
-
-                  if (log.action === "block_ip") color = "#ff4d4f";
-                  else if (log.action === "flag_high_priority") color = "#faad14";
-                  else if (log.action === "monitor") color = "#52c41a";
-
-                  return (
-                    <div
-                      key={log.id}
-                      style={{
-                        marginTop: "8px",
-                        padding: "8px",
-                        borderRadius: "8px",
-                        backgroundColor: "#1e293b",
-                        fontSize: "12px",
-                        display: "flex",
-                        justifyContent: "space-between"
-                      }}
-                    >
-                      <span>
-                        <strong style={{ color }}>{log.action.toUpperCase()}</strong>
-                        {" \u2192 "}
-                        {log.status}
-                      </span>
-                      <span style={{ opacity: 0.7 }}>
-                        {new Date(log.executed_at).toLocaleTimeString()}
-                      </span>
-                    </div>
-                  );
-                })
-              ) : (
-                <div style={{ marginTop: "8px", fontSize: "12px", opacity: 0.7 }}>
-                  No response actions logged
-                </div>
-              )}
-            </div>
+            <AlertResponseLog logs={responseLogs[selectedAlert.id]} variant="panel" />
 
             <div style={{ marginTop: "20px" }}>
               <strong>Manual Actions:</strong>
