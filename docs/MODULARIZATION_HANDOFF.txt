@@ -1,8 +1,10 @@
 # Modularization Handoff
 
-Last updated: 2026-05-01
+Last updated: 2026-05-02
 
-This document is the starting point for future Codex sessions working on modularization. It summarizes the current project shape, what has already been extracted safely, what boundaries are still risky, and how to continue without drifting into broad refactors.
+This document is the starting point for future sessions working on modularization. It summarizes the current project shape, what has already been extracted safely, what boundaries are still risky, and how to continue without drifting into broad refactors.
+
+---
 
 ## 1. Project Overview
 
@@ -11,13 +13,23 @@ The project is a SIEM security dashboard with a Flask backend and a React fronte
 Backend:
 
 - Main backend entrypoint: `siem_backend.py`
-- Supporting backend modules:
+- Supporting backend modules (all extracted and verified):
+  - `backend_db.py`
+  - `backend_ip_helpers.py`
+  - `backend_detection_config.py`
   - `backend_reporting_helpers.py`
   - `backend_enrichment_helpers.py`
+  - `backend_pdf_helpers.py`
+  - `backend_query_helpers.py`
+  - `backend_ingest_normalizers.py`
+  - `backend_audit_helpers.py`
+  - `backend_auth.py`
+  - `backend_api_guards.py`
+- Adapter modules (untouched):
   - `adapters/azure_insights_adapter.py`
   - `adapters/nginx_adapter.py`
   - `adapters/otel_adapter.py`
-- Supporting scripts:
+- Supporting scripts (untouched):
   - `scripts/ingest_log_files.py`
 
 Frontend:
@@ -30,31 +42,38 @@ Frontend:
   - `frontend/src/components/AuditLogPanel.js`
   - `frontend/src/components/DetectionRulesPanel.js`
   - `frontend/src/components/BlocklistManagerPanel.js`
-- Shared frontend utilities:
-  - `frontend/src/utils/`
-- Focused frontend service modules:
-  - `frontend/src/services/`
+- Shared frontend utilities: `frontend/src/utils/`
+- Focused frontend service modules: `frontend/src/services/`
 
 Current stack:
 
-- Backend: Flask, Flask-Login/session auth, PostgreSQL access through `psycopg2`, ReportLab PDF generation, local ingestion adapters.
-- Frontend: React, `react-scripts`, Recharts, `react-simple-maps`, browser `fetch`, session storage, component-local state.
+- Backend: Flask, Flask-Login/session auth, PostgreSQL via psycopg2, ReportLab PDF, local ingestion adapters.
+- Frontend: React, Recharts, react-simple-maps, browser fetch, session storage, component-local state.
+
+---
 
 ## 2. Current Modularization Phase
 
-The project is past the first presentation-only extraction phase and is now entering a cautious service-boundary phase.
+**TEST-GATED ARCHITECTURE PHASE**
 
-Completed safely:
+The safe helper extraction phase is complete. No further architectural movement
+(Blueprints, create_app(), route movement, detection/correlation extraction) should
+happen until behavioral test coverage is in place.
 
-- Small frontend presentation components were extracted.
-- Pure frontend utility helpers were extracted.
-- Two focused frontend service modules were introduced.
-- Backend reporting/enrichment helpers were extracted without moving routes or DB logic.
+Completed phases:
+
+- Frontend presentation component extractions.
+- Frontend utility and service module extractions.
+- Backend helper modularization (all phases verified with py_compile).
+- Minimum pytest infrastructure + first auth/RBAC behavioral test suite.
 
 Current phase:
 
-- Continue with narrow frontend service boundaries only when a component already has a clean request/response boundary.
-- Do not start broad hooks, state movement, backend route movement, DB extraction, ingestion extraction, detection extraction, or correlation extraction yet.
+- Expand test coverage before any further architectural changes.
+- The next structural move (Blueprint introduction) must be gated on having
+  detection core, correlation engine, and ingest rollback tests passing first.
+
+---
 
 ## 3. Frontend Completed Work
 
@@ -73,256 +92,337 @@ Presentation component extractions:
 Utility extractions:
 
 - `frontend/src/utils/siemPath.js`
-  - Shared SIEM base path and path builder.
 - `frontend/src/utils/sessionIdentity.js`
-  - Session identity storage key and read/write helpers.
 - `frontend/src/utils/alertDashboardData.js`
-  - Pure dashboard derived-data helpers for filtering, sorting, metrics, top IP chart data, and timeline data.
 - `frontend/src/utils/threatHuntDisplay.js`
-  - Pure threat hunt formatting, badge, payload, and date grouping helpers.
 - `frontend/src/utils/alertDisplay.js`
-  - Pure alert display helpers for source/reputation metadata, correlation display, and selected-alert timeline construction.
 - `frontend/src/utils/apiResponse.js`
-  - Shared JSON parsing and API error-message helpers.
 
 Service extractions:
 
 - `frontend/src/services/adminUsersService.js`
-  - `loadAdminUsers`
-  - `updateAdminUserStatus`
-  - `resetAdminUserPassword`
-  - `updateAdminUserRole`
-  - `AdminUsersPanel.js` still owns state, handlers, feedback, loading flags, and the create-user flow.
 - `frontend/src/services/threatHuntService.js`
-  - `searchThreatHuntEvents`
-  - `ThreatHuntPanel.js` still owns search/filter state, expanded event state, copy/pivot handlers, loading, and errors.
 
-Important frontend state ownership that has not moved:
+Important frontend state ownership that has NOT moved:
 
-- `App.js` still owns auth/session state, alert polling, active section, alert list, dashboard filters, and derived-data `useMemo` ownership.
-- `AlertsTable.js` still owns selected alert behavior, notes, response logs, response actions, grouped/collapsed state, hover state, exports, and table rendering.
+- `App.js` still owns auth/session state, alert polling, active section, alert list,
+  dashboard filters, and derived-data useMemo ownership.
+- `AlertsTable.js` still owns selected alert behavior, notes, response logs, response
+  actions, grouped/collapsed state, hover state, exports, and table rendering.
 - `ThreatHuntPanel.js` still owns threat hunt orchestration.
 - `AdminUsersPanel.js` still owns admin user UI orchestration.
 
+---
+
 ## 4. Backend Completed Work
 
-`backend_reporting_helpers.py` currently owns pure reporting helpers:
+### Extracted helper modules (all py_compile verified)
 
-- `format_report_timestamp`
-- `format_pdf_timestamp`
-- `format_csv_timestamp`
+`backend_db.py`
+- `get_db_connection`
+- `validate_blocked_ip`
+- `create_blocked_ip_record`
+
+`backend_ip_helpers.py`
+- `get_ip_reputation`
+- `lookup_ip_reputation`
+- `lookup_ip_location`
+- `determine_response_action`
+- `execute_response_action`
+
+`backend_detection_config.py`
+- All detection threshold constants
+- `get_effective_detection_rule`
+- `get_all_effective_detection_rules`
+- `get_detection_rule_defaults`
+- `parse_detection_rule_parameters`
+- `validate_detection_rule_config`
+
+`backend_reporting_helpers.py`
+- `format_report_timestamp`, `format_pdf_timestamp`, `format_csv_timestamp`
 - `format_display_value`
-- `build_alert_summary`
-- `build_severity_explanation`
-- `build_confidence_level`
-- `build_next_steps`
-- `normalize_alert_report_data`
-- `build_alert_report_sections`
+- `build_alert_summary`, `build_severity_explanation`, `build_confidence_level`
+- `build_next_steps`, `normalize_alert_report_data`, `build_alert_report_sections`
 - `build_report_header`
 
-`backend_enrichment_helpers.py` currently owns MITRE enrichment:
-
+`backend_enrichment_helpers.py`
 - `MITRE_ATTACK_MAPPINGS`
 - `enrich_alert_with_mitre`
+- `enrich_alert_with_correlation_context`
 
-`siem_backend.py` imports these helpers and still owns:
+`backend_pdf_helpers.py`
+- `build_pdf_report_response`
 
-- Flask app setup.
-- Auth/session/RBAC decorators and routes.
-- Admin routes.
-- Ingestion routes.
-- Detection functions.
-- Correlation functions.
-- Alert/event routes.
-- Reporting/export routes.
-- Reporting SQL/query helpers.
-- PDF rendering helpers.
-- Notes/actions/blocklist routes.
-- Frontend serving.
+`backend_query_helpers.py`
+- `fetch_alert_rows`
+- `fetch_alert_csv_rows`
+- `fetch_response_logs_by_alert_id`
 
-Backend reporting extraction should pause before PDF helper movement, SQL/query helper movement, or route movement.
+`backend_ingest_normalizers.py`
+- `_safe_non_empty_string`
+- `_get_azure_app_name`
+- `_get_azure_identity_app_name`
+- `_get_otel_app_name`
+- `_is_azure_identity_payload`
+- `has_valid_location`
 
-## 5. Current Architectural Rules
+`backend_audit_helpers.py`
+- `log_audit_event`
+
+`backend_auth.py`
+- `get_user_by_username`
+- `User` (UserMixin class)
+- `load_user` (registered via `login_manager.user_loader(load_user)` in siem_backend.py)
+- `deny_rbac_access`
+- `admin_required`
+- `super_admin_required`
+- `analyst_or_super_admin_required`
+
+`backend_api_guards.py`
+- `API_KEY_HEADER`
+- `require_api_key`
+- `require_azure_api_key`
+- `require_otel_api_key`
+
+### What remains in siem_backend.py (correct and intentional)
+
+- `env_first`, `env_csv` — must stay; used in module-level constant initialization
+  that runs before load_dotenv() completes on import
+- `SIEM_ALLOWED_ORIGINS`, `SIEM_BIND_HOST`, `SIEM_PORT`, `SIEM_DEBUG` — startup config
+- `VALID_SEVERITIES`, `VALID_EVENT_TYPES`, `VALID_EVENT_SOURCES`, `VALID_RESPONSE_ACTIONS`,
+  `MAX_ALERT_NOTE_LENGTH` — validation sets used across many routes; moving them would
+  ripple across 6+ routes for zero functional gain
+- `backfill_alert_sources(conn, cur)` — defined but has NO call site anywhere in the
+  codebase; a one-time migration utility, do NOT extract without confirming its purpose
+- Flask app object, CORS, login_manager, limiter, ProxyFix, FRONTEND_BUILD_DIR setup
+- `admin_username`, `admin_password` module-level credentials
+- `unauthorized()`, `handle_rate_limit()` error handlers
+- `ingest_normalized_event` — orchestration hub, intentionally centralized
+- All 7 detection core functions (`_generate_*_core`) — intentionally centralized,
+  share cursor state with ingest_normalized_event
+- `generate_correlated_activity_alerts`, `generate_targeted_correlation_alerts` —
+  intentionally centralized, read uncommitted detection writes via shared cursor
+- All routes (25+)
+
+### Critical architectural invariants — DO NOT BREAK
+
+1. `ingest_normalized_event`, the 7 detection cores, and both correlation functions
+   all share a single `conn`/`cur` pair within one transaction. The correlation engine
+   reads UNCOMMITTED detection inserts via this shared cursor. Any refactor that opens
+   a second connection for detection or correlation silently breaks correlation — no
+   exception, no log error, just zero correlated alerts.
+
+2. `currval(pg_get_serial_sequence('alerts', 'id'))` is called in every detection core
+   and both correlation functions immediately after an INSERT. This is cursor-position-
+   dependent. It silently returns the wrong ID if the cursor is different from the one
+   that did the INSERT.
+
+3. `login_manager.user_loader(load_user)` in siem_backend.py registers the load_user
+   function imported from backend_auth. The admin user ("admin") is returned by
+   load_user without any DB call; changing this breaks the hardcoded admin session path.
+
+---
+
+## 5. Test Infrastructure
+
+### What exists
+
+`tests/conftest.py`
+- Sets required env vars before siem_backend import (prevents RuntimeError)
+- Sets `SIEM_DEBUG=true` so SESSION_COOKIE_SECURE=False (test client can send cookies)
+- Disables rate limiting: `siem_backend.limiter.enabled = False`
+- `client` fixture: function-scoped Flask test client
+- `mock_db` fixture: patches `backend_auth.get_db_connection` and
+  `backend_audit_helpers.get_db_connection` with MagicMock, silencing all DB I/O
+  for auth and audit log writes
+
+`tests/test_auth_rbac.py` — 11 passing tests covering:
+- Admin env-var login success
+- Wrong password and unknown user → 401
+- Unauthenticated requests → 401 (not 403), verifying decorator order
+- RBAC denial for viewer role on super_admin and analyst routes → 403
+- Admin env-var user can access super_admin routes → 200
+
+### Critical fixture pattern — dual-namespace import
+
+`get_user_by_username` is imported into two namespaces:
+- `siem_backend.get_user_by_username` — used by the /login route
+- `backend_auth.get_user_by_username` — used by load_user on every subsequent request
+
+Any test that mocks user lookup for login + session persistence MUST patch both:
+```python
+with patch("siem_backend.get_user_by_username", return_value=fake_user), \
+     patch("backend_auth.get_user_by_username", return_value=fake_user):
+    ...
+```
+Patching only one namespace causes login to succeed but session restore to fail → 401
+on protected routes instead of the expected 403.
+
+### Platform note
+
+`generate_password_hash` defaults to `scrypt` in Werkzeug 3.x.
+Python 3.9 on macOS (LibreSSL) does not expose `hashlib.scrypt`.
+Always use `method="pbkdf2:sha256"` when generating test password hashes.
+
+### What tests do NOT yet exist (needed before next architecture phase)
+
+- Detection core threshold + duplicate suppression tests (requires real PostgreSQL)
+- Correlation engine tests (requires real PostgreSQL — uncommitted-read contract)
+- Ingest rollback / atomicity tests (requires real PostgreSQL + Flask test client)
+- Route contract / response shape tests
+
+---
+
+## 6. Current Architectural Rules
 
 Keep these rules active until the roadmap is intentionally updated:
 
-- Keep state ownership in parent components.
-- Avoid new custom hooks for now unless they are clearly safer than utilities/services.
-- Avoid `GroupedAlertsTable` extraction for now.
-- Do not move auth/session state yet.
-- Do not move alert polling yet.
-- Do not move frontend API ownership broadly.
-- Extract one focused module/component per commit.
-- Prefer pure utilities before behavior movement.
-- Prefer focused service modules before hooks.
-- Do not move backend routes yet.
-- Do not move backend DB helpers yet.
-- Do not move ingestion, detection, or correlation logic yet.
-- Do not move PDF/report rendering helpers yet.
-- Stop if imports become confusing, behavior becomes unclear, or multiple unrelated files need to change at once.
+- Do NOT introduce Blueprints yet.
+- Do NOT introduce create_app() factory yet.
+- Do NOT move routes yet.
+- Do NOT move detection or correlation logic yet.
+- Do NOT touch ingest_normalized_event.
+- Do NOT change the shared-cursor transaction pattern.
+- Do NOT change auth/session/RBAC behavior.
+- Keep state ownership in parent frontend components.
+- Extract one focused module per commit.
+- Prefer pure utilities/helpers before behavior movement.
+- Stop if imports become confusing, behavior becomes unclear, or multiple unrelated
+  files need to change at once.
 
-## 6. Current Safe Modularization Direction
-
-The safest current direction is focused frontend service-boundary modularization.
-
-Services are safer than hooks right now because:
-
-- They can move request/response mechanics without moving React state.
-- They keep components as orchestration owners.
-- They do not change render timing, lifecycle behavior, or dependency arrays.
-- They are easier to verify with existing UI flows.
-
-Hooks should wait because moving hooks too early would mix API ownership, loading/error state, and behavior orchestration. That increases regression risk before the service boundaries are stable.
-
-`AlertsTable.js` extraction is paused because the remaining complexity is not just presentation. It combines:
-
-- selected alert behavior
-- notes/actions behavior
-- response logs
-- grouped/collapsed table state
-- exports/report links
-- hover/selection UI
-- many display styles
-
-More `AlertsTable.js` movement should wait until there is a specific behavior boundary with clear tests or a much smaller target than the grouped table.
+---
 
 ## 7. Remaining High-Risk Areas
 
-Frontend high-risk areas:
+Frontend:
 
-- `AlertsTable.js` behavior coupling.
-- Alert notes.
-- Response actions.
-- Response logs.
-- Alert export/report link generation.
-- Grouped alert table rendering.
-- Alert polling in `App.js`.
-- Auth/session state in `App.js`.
-- Broad API ownership movement.
-- Broad custom hooks.
+- `AlertsTable.js` behavior coupling (notes, response actions, response logs,
+  grouped table state, exports, selection)
+- Alert polling and auth/session state in `App.js`
+- Broad API ownership movement
+- Broad custom hooks
 
-Backend high-risk areas:
+Backend:
 
-- Detection logic.
-- Correlation logic.
-- Ingestion routes and ingestion normalization.
-- DB helpers and SQL/query helper extraction.
-- Auth/session/RBAC route movement.
-- Backend route grouping.
-- PDF/report rendering helpers.
-- Report/export route movement.
+- Detection engine (shared-cursor dependency)
+- Correlation engine (uncommitted-read dependency)
+- `ingest_normalized_event` orchestration
+- Route movement of any kind
+- Blueprint introduction (requires test coverage first)
+- `create_app()` factory introduction (requires test coverage first)
+
+---
 
 ## 8. Suggested Next Phases
 
-Phase 1: Verify and stabilize current extractions.
+Phase 1 (current): Expand test coverage.
 
-- Run frontend and backend checks.
-- Smoke test important UI flows.
-- Commit only after the diff is reviewed.
+- Write detection core integration tests against a real PostgreSQL test DB.
+  Priority: threshold boundary, duplicate suppression, currval linkage.
+- Write correlation engine integration tests.
+  Priority: shared-cursor uncommitted-read contract.
+- Write ingest rollback tests.
+  Priority: full-chain atomic commit, exception rollback.
+- Route contract/shape tests with Flask test client.
 
-Phase 2: Continue focused frontend services.
+Phase 2: Blueprint introduction (gated on Phase 1 tests passing).
 
-- Extract one small service at a time where request/response logic is already isolated.
-- Keep state, handlers, loading flags, feedback messages, and UI orchestration in the component.
-- Good candidates may include focused services for audit log, detection rules, blocklist, or the remaining admin create-user request, but only one at a time.
+- Plan only first, do not implement.
+- Identify route groups: auth/admin, ingest, alerts/events, exports, ops.
+- Confirm that detection/correlation test suite covers shared-cursor contract before
+  moving anything into Blueprints.
 
-Phase 3: Consider small hooks after services are stable.
+Phase 3: create_app() factory (gated on Blueprint phase stable).
 
-- Only introduce hooks when the service boundary is already clean.
-- Start with a single domain where state ownership is simple.
-- Do not start with auth, alert polling, notes/actions, or `AlertsTable.js`.
+- Required before any meaningful testing of the app across different configurations.
 
-Phase 4: Plan backend route grouping.
+Phase 4: Detection/correlation extraction (last, highest risk).
 
-- Planning only at first.
-- Identify route groups and shared dependencies.
-- Do not move routes until behavior checks and rollback points are clear.
+- Only after: Blueprints stable, test suite covers full ingest → detect → correlate chain.
 
-Phase 5: Backend extraction after stronger checks.
-
-- Consider route grouping before deeper behavior movement.
-- Keep DB helpers, ingestion, detection, and correlation delayed until targeted checks exist.
-
-Phase 6: Detection and correlation modularization.
-
-- Move only after detection/correlation behavior checks exist.
-- Expect higher risk because these functions write alerts, suppress duplicates, and trigger related behavior.
+---
 
 ## 9. Verification Checklist
 
-Run these before continuing modularization and before committing:
+Run before continuing modularization and before committing:
 
 ```bash
-cd frontend && npm run build
-python3 -m py_compile siem_backend.py backend_reporting_helpers.py backend_enrichment_helpers.py
-```
+cd /path/to/siem-security-dashboard-public
 
-Useful backend compile expansion:
+# Compile all 12 backend modules
+python3 -m py_compile \
+  siem_backend.py \
+  backend_db.py \
+  backend_ip_helpers.py \
+  backend_detection_config.py \
+  backend_reporting_helpers.py \
+  backend_enrichment_helpers.py \
+  backend_pdf_helpers.py \
+  backend_query_helpers.py \
+  backend_ingest_normalizers.py \
+  backend_audit_helpers.py \
+  backend_auth.py \
+  backend_api_guards.py
 
-```bash
-python3 -m py_compile adapters/azure_insights_adapter.py adapters/nginx_adapter.py adapters/otel_adapter.py scripts/ingest_log_files.py
+# Run the auth/RBAC test suite
+python3 -m pytest tests/test_auth_rbac.py -v
+
+# Compile adapter modules
+python3 -m py_compile \
+  adapters/azure_insights_adapter.py \
+  adapters/nginx_adapter.py \
+  adapters/otel_adapter.py \
+  scripts/ingest_log_files.py
 ```
 
 Manual smoke-test areas:
 
-- Login.
-- Logout.
-- `/auth/me` session restore.
-- Alert loading.
-- Dashboard metrics/charts/map.
-- Alert filtering and sorting.
-- Alert selection and details panel.
-- Alert timeline.
-- Alert notes.
-- Response actions.
-- Response logs.
-- Alert report/export flows.
-- Threat hunt search.
-- Threat hunt expanded event details.
-- Threat hunt copy/pivot actions.
-- Admin user load.
-- Admin role/status/password actions.
-- Admin create-user flow.
-- Audit log panel.
-- Detection rules panel.
-- Blocklist manager panel.
+- Login / logout / /auth/me session restore.
+- Alert loading, filtering, sorting, selection, details panel, timeline.
+- Alert notes and response actions and response logs.
+- Alert report/export flows (txt, PDF, CSV).
+- Threat hunt search and expanded event details.
+- Admin user load, role/status/password actions, create-user flow.
+- Audit log panel, detection rules panel, blocklist manager panel.
 
-Known existing frontend build warnings to track separately:
+Known frontend build warnings (track separately, do not mix into modularization commits):
 
 - `App.js` hook dependency warnings around `checkAuth` and `fetchAlerts`.
 - `App.js` unused `subtitleStyle`.
 - `AdminUsersPanel.js` duplicate `paddingTop` style key.
 
-These warnings should not be mixed into modularization commits unless the user explicitly asks for cleanup.
+---
 
 ## 10. Git Workflow Rules
 
 - Run `git status --short` before starting.
 - Inspect relevant files before editing.
-- Make one module/component extraction per commit.
-- Do not mix unrelated frontend and backend changes in the same commit unless the task explicitly requires it.
+- Make one extraction per commit.
+- Do not mix unrelated frontend and backend changes in the same commit.
 - Run verification before committing.
 - Inspect the generated diff before committing.
-- Avoid giant mixed commits.
 - Do not commit build artifacts.
 - Do not revert user changes unless explicitly asked.
-- If a change starts requiring state movement, route movement, or broad behavior changes, stop and re-plan.
+- If a change starts requiring state movement, route movement, or broad behavior
+  changes, stop and re-plan.
+
+---
 
 ## 11. Context-Window Guidance
 
-Use this handoff at the start of a fresh Codex session.
+Use this handoff at the start of a fresh session.
 
 Recommended startup sequence:
 
-1. Read `docs/MODULARIZATION_HANDOFF.md`.
-2. Read `docs/modularization-dependency-map.md` only for deeper background.
-3. Run `git status --short`.
-4. Inspect only the files needed for the next task.
-5. Execute one small modularization step.
+1. Read `docs/MODULARIZATION_HANDOFF.txt`.
+2. Run `git status --short`.
+3. Run `python3 -m pytest tests/test_auth_rbac.py -v` to confirm baseline is green.
+4. Read only the files needed for the next task.
+5. Execute one small step.
 6. Run verification.
 7. Show the diff.
 
-Refresh the Codex session when:
+Refresh the session when:
 
 - The conversation becomes very long.
 - Multiple extractions have happened in one session.
@@ -330,4 +430,6 @@ Refresh the Codex session when:
 - The model starts suggesting broad refactors instead of small bounded moves.
 - The repo has just reached a clean commit checkpoint.
 
-Fresh context matters here because the project is intentionally modularizing in small steps. Long sessions can lose the exact boundary rules, which increases the chance of drifting into risky hook extraction, route movement, or large component rewrites.
+The project is intentionally modularizing in small steps. Long sessions lose the exact
+boundary rules, which increases the chance of drifting into risky hook extraction, route
+movement, or large component rewrites.

@@ -1,0 +1,766 @@
+FUTURE ARCHITECTURE BOUNDARY ANALYSIS
+siem-security-dashboard-public
+======================================
+Status: READ-ONLY ANALYSIS. No implementation. No code changes. No folder structures.
+Date: 2026-05-02
+Follows: ARCHITECTURE_DISCOVERY_REPORT.txt
+
+
+================================================================================
+1. WHICH RESPONSIBILITIES SHOULD PROBABLY REMAIN CENTRALIZED
+================================================================================
+
+--- 1A. Flask App Object Ownership ---
+SHOULD STAY CENTRALIZED in siem_backend.py.
+
+The app object is the root of ProxyFix, Limiter, CORS, LoginManager, and session
+config. All of these must be configured against the same object in a specific order
+(see the 38-step initialization sequence in the discovery report). There is no
+create_app() factory. Splitting this across files would require introducing a
+factory pattern as a prerequisite — that is a separate, large piece of work with
+its own risk profile. Until a factory is deliberately introduced, app ownership
+must remain in one place.
+
+WHY centralization is beneficial here: the current startup guard (RuntimeError if
+admin credentials are missing) fires at import time. It protects against partial
+initialization. A distributed app setup could allow routes to register before the
+guard fires, creating a window where unauthenticated requests could land.
+
+--- 1B. ingest_normalized_event (Orchestration Hub) ---
+SHOULD STAY CENTRALIZED in siem_backend.py for now.
+
+This function owns the transaction contract for the entire detection + correlation
+pipeline. It does not commit — it writes events, dispatches detection cores, then
+dispatches correlation engines, all within the caller's transaction. Centralizing
+the fan-out dispatch here means there is exactly one place where the
+event_type → detector mapping is defined and one place where the
+correlation trigger is called.
+
+WHY centralization is beneficial here: distributed dispatch (e.g., each ingest
+route calling detectors directly) would mean the mapping lives in 4 places and
+must stay synchronized. Extraction is blocked anyway until tests exist. For now,
+centralization is the correct and safer posture.
+
+--- 1C. Transaction Coordination ---
+SHOULD STAY CENTRALIZED per-route.
+
+Each ingest route opens its own conn/cur and passes it through the entire
+event → detection → correlation chain. The commit happens only once, at the end
+of the route. This is the right pattern. Introducing a transaction manager or
+context manager abstraction is unnecessary complexity for a single-process Flask
+app with direct psycopg2 connections.
+
+WHY centralization is beneficial here: the shared cursor is the mechanism that
+allows correlation engines to read uncommitted detection writes. Splitting
+transaction coordination would require either (a) moving to a different DB
+isolation level with different performance/correctness tradeoffs or (b) buffering
+detection results in memory before calling correlation. Neither is trivial.
+
+--- 1D. RBAC Decorator Logic ---
+SHOULD STAY CENTRALIZED (same module as Flask app) until log_audit_event is
+extracted and a create_app() factory exists.
+
+The RBAC decorators call deny_rbac_access, which calls log_audit_event, which
+needs a DB connection. If decorators move to a separate module before
+log_audit_event does, you get a circular import. The dependency chain is:
+decorator → deny_rbac_access → log_audit_event → get_db_connection.
+The only safe extraction order is: log_audit_event first, then decorators.
+
+--- 1E. Admin Credential Resolution and Startup Guard ---
+SHOULD STAY CENTRALIZED at module level, permanently.
+
+The env_first calls and the RuntimeError guard are not modularization targets.
+They exist to guarantee the app cannot start in a broken state. Moving them would
+require either a create_app() factory or pre-import configuration, both of which
+are larger architectural changes. The value of extracting these is zero.
+
+--- 1F. Alert Polling (App.js) ---
+SHOULD STAY CENTRALIZED in App.js, currently.
+
+The 5-second polling interval in App.js is tied directly to isAuthenticated state.
+The interval is set up, torn down, and restarted based on session state changes.
+Moving this to a hook or a service layer would require that layer to have access
+to auth state, which is currently also owned by App.js. These two concerns
+(polling lifecycle and auth lifecycle) are coupled by design. Until auth state is
+stabilized, polling should not be extracted.
+
+
+================================================================================
+2. WHICH RESPONSIBILITIES ARE THE BEST FUTURE MODULARIZATION TARGETS
+================================================================================
+
+These are evaluated for: cohesion, coupling level, architectural stability, and
+independent testability.
+
+--- 2A. log_audit_event → backend_audit_helpers.py ---
+CANDIDATE QUALITY: HIGH
+
+Cohesion: Single responsibility. Writes a structured row to audit_log. All
+parameters are explicit. No Flask request context required (callers pass in
+request data explicitly).
+
+Coupling: Has exactly one app.logger call (line 237). Once changed to
+current_app.logger, it has zero binding to the Flask app object. Imports only
+get_db_connection (already extracted).
+
+Stability: This function's signature and behavior haven't changed during
+modularization. It is the most stable cross-cutting helper in the file.
+
+Independent testability: Can be tested by calling it directly with a real or
+test DB connection. No Flask app context needed beyond current_app (satisfied by
+app.app_context() in tests).
+
+Prerequisite: current_app.logger swap (1 site). That's it.
+
+This is the most important extraction target because it unblocks everything else.
+Once log_audit_event is in a shared module:
+  - Admin route Blueprint becomes feasible.
+  - RBAC decorator extraction becomes feasible.
+  - Ingest route Blueprint becomes feasible.
+Without it, none of those can move without creating a circular import back to
+siem_backend.py.
+
+--- 2B. Export Routes → exports Blueprint ---
+CANDIDATE QUALITY: MEDIUM-HIGH (after log_audit_event is extracted)
+
+The five export routes (single TXT, single PDF, multi TXT, multi CSV, multi PDF)
+are the thinnest non-trivial route group in the file. Each one:
+  - Opens a DB connection
+  - Calls already-extracted helpers (fetch_alert_rows, fetch_response_logs_by_alert_id,
+    normalize_alert_report_data, build_pdf_report_response, etc.)
+  - Calls log_audit_event once
+  - Returns a file download Response
+
+There are no detection calls, no correlation calls, no auth mutations. The routes
+do not interact with each other's state. They are the best-isolated route group
+that currently exists.
+
+Prerequisite: log_audit_event must be in a shared module first. Otherwise the
+Blueprint has to import from siem_backend.py (circular).
+
+--- 2C. Admin Mutation Routes → admin Blueprint ---
+CANDIDATE QUALITY: MEDIUM (after log_audit_event and RBAC decorators are extracted)
+
+The admin routes (user CRUD, audit log read, detection rule admin) are already
+cohesive: they are all @super_admin_required, they all touch the users/audit_log/
+detection_config tables, and none of them interact with the detection engine.
+
+One complication: the dual audit log call invariant in update_user_status,
+update_user_password, and update_user_role. This is an existing behavioral
+quirk (two log_audit_event calls per mutation) that any refactor must preserve
+exactly. Not a blocker, but it must be explicitly documented before extraction.
+
+Another complication: update_detection_rule has real orchestration —
+get_effective_detection_rule is called twice (before and after the INSERT),
+and a parameter diff is computed. This route is not a thin wrapper.
+
+Prerequisite: log_audit_event in shared module. RBAC decorators importable
+without circular reference.
+
+--- 2D. Alert Mutation Routes → alerts Blueprint ---
+CANDIDATE QUALITY: MEDIUM (after log_audit_event extracted)
+
+Notes CRUD, response log read, blocklist CRUD, manual execute, status update.
+Most are thin. The one exception is manual_execute_alert, which calls
+execute_response_action (in backend_ip_helpers.py), then updates alerts,
+then logs. It has a three-table write sequence. Not a blocker — the dependencies
+are already in external modules.
+
+All routes in this group use @analyst_or_super_admin_required.
+
+Prerequisite: log_audit_event in shared module. RBAC decorators importable.
+
+--- 2E. RBAC Decorators → backend_auth_helpers.py ---
+CANDIDATE QUALITY: MEDIUM (after log_audit_event extracted)
+
+admin_required, super_admin_required, analyst_or_super_admin_required, and
+deny_rbac_access form a natural group. They have no Flask app binding other than
+through log_audit_event and current_user (Flask-Login proxy, importable from flask).
+
+The User class and load_user are Flask-Login bound and should move with the
+decorators if they move at all — but load_user requires get_user_by_username,
+which currently also lives in siem_backend.py. So the extraction surface for
+auth is: get_user_by_username + User + load_user + RBAC decorators + deny_rbac_access.
+
+This is a natural cohesive cluster but it is the second extraction, not the first.
+
+Prerequisite: log_audit_event must be extracted first. Then this cluster can
+move without creating a circular import.
+
+--- 2F. Ingest Routes → ingest Blueprint ---
+CANDIDATE QUALITY: LOW-MEDIUM currently. Higher after detection/correlation tested.
+
+The four ingest routes (/ingest, /ingest/web-log, /ingest/azure, /ingest/otlp)
+are cohesive — they all call ingest_normalized_event and share the API key guard
+pattern. But they cannot safely move until:
+  (a) ingest_normalized_event is stable and importable without pulling in the
+      entire detection engine.
+  (b) The shared-transaction batch pattern is explicitly tested.
+
+This is a late-stage Blueprint candidate, not an early one.
+
+
+================================================================================
+3. REQUIRED PRECONDITIONS BEFORE FUTURE EXTRACTIONS
+================================================================================
+
+--- PRECONDITION A: current_app.logger in log_audit_event (line 237) ---
+Required before: log_audit_event can move.
+Scope: 1 line change. Same pattern as Phase 4/5 logger fixes.
+Risk: LOW. log_audit_event is called synchronously from within request handlers.
+  Flask app context is always active. current_app resolves correctly.
+
+--- PRECONDITION B: log_audit_event in a shared module ---
+Required before: any Blueprint grouping. Any RBAC extraction. Admin routes can move.
+  Export routes can move. Alert mutation routes can move.
+This is the single most load-bearing prerequisite in the entire future roadmap.
+Everything else chains off this one.
+
+--- PRECONDITION C: Behavioral Tests for Detection Cores ---
+Required before: any detection core moves. Before ingest_normalized_event moves.
+What the tests must prove:
+  - Given an event sequence, the exact set of alert rows written (type, severity,
+    source_ip, source, source_type, response_action, response_status) is identical
+    before and after extraction.
+  - The duplicate-suppression logic (check for open alert before INSERT) fires
+    correctly.
+  - The currval pattern still retrieves the correct alert_id after extraction.
+  - execute_response_action is called with the correct alert_id.
+This requires a real test database or a carefully controlled psycopg2 mock that
+correctly implements currval behavior. A mock that does not implement currval
+will silently produce wrong alert_ids.
+
+--- PRECONDITION D: Behavioral Tests for Correlation Engines ---
+Required before: either correlation engine moves.
+What the tests must prove:
+  - Given a known set of alert rows in the DB (inserted in the same test
+    transaction), generate_correlated_activity_alerts produces the expected
+    correlated_activity alert.
+  - Given the same, generate_targeted_correlation_alerts produces the expected
+    targeted pattern alerts.
+  - The "not enough qualifying alerts" skip conditions fire correctly.
+  - The "duplicate open alert" skip conditions fire correctly.
+  - The two-source minimum requirement for correlated_activity fires correctly.
+The critical test: call correlation in the same transaction as the detection
+inserts. Verify it sees the uncommitted rows. Then extract and verify it still
+does. This is the test that validates the shared-cursor contract survived.
+
+--- PRECONDITION E: Transaction Behavior Tests for Batch Ingest ---
+Required before: ingest routes move to a Blueprint.
+What the tests must prove:
+  - A batch of 3 items where item 2 fails: all items roll back.
+  - A batch of 3 items where all succeed: all items commit together.
+  - Single-item (dict) payload behaves identically to a 1-item list payload.
+These tests validate the shared-transaction contract that batch routes rely on.
+
+--- PRECONDITION F: Route Contract Tests ---
+Required before: any route moves to a Blueprint.
+Minimum coverage needed:
+  - Each route returns the expected HTTP status for valid input.
+  - Each route returns 401 for unauthenticated requests.
+  - Each route returns 403 for insufficient RBAC role.
+  - Each mutating route returns the correct error for invalid input.
+These tests create a behavioral baseline. After Blueprint introduction, run the
+same tests against the Blueprint-registered route to verify nothing regressed.
+
+--- PRECONDITION G: create_app() Factory (if Blueprints are introduced) ---
+Required before: Blueprints can be registered cleanly.
+The current module-level initialization (38 steps, no factory) means all extensions
+(Limiter, CORS, LoginManager) are bound to the app at import time. Blueprints that
+use @limiter.limit or @login_required need those extensions to be initialized
+before they are used. With a factory, extensions are initialized inside create_app()
+before blueprints are registered. Without a factory, route decorators that reference
+limiter must import limiter from siem_backend.py — which is a circular import.
+
+This is a significant prerequisite. A create_app() refactor is its own distinct
+piece of work with its own risk. It should not be combined with a Blueprint
+grouping in the same commit.
+
+
+================================================================================
+4. BLUEPRINT FEASIBILITY ANALYSIS
+================================================================================
+
+--- Is Blueprint architecture appropriate for this project? ---
+
+Yes, but only for organizational clarity — not for deployment separation.
+This is a single-process Flask app serving a React frontend. Blueprints won't
+improve performance or enable independent deployment. The benefit is purely
+navigational: distinct route files with clear ownership.
+
+At 24 routes and 4,018 lines, the current file is large but not unnavigable.
+Blueprints become more valuable if the route count grows (adding new alert types,
+new admin operations, API versioning) or if multiple developers need to work on
+different route groups simultaneously without constant merge conflicts.
+
+The project is at the threshold where Blueprints are worth planning but not
+urgently needed. They are not blocking anything today.
+
+--- Safest First Blueprint Candidates ---
+
+Order matters. The safest first extraction is the one with the fewest
+shared-import dependencies:
+
+1. exports Blueprint (SAFEST FIRST)
+   - No detection/correlation dependency.
+   - No RBAC decorator dependency (routes use @login_required only).
+   - Only dependency: log_audit_event (must be extracted first).
+   - All formatting/rendering helpers are already external.
+   - Clean, reversible, bounded.
+
+2. admin Blueprint (SECOND)
+   - Depends on: log_audit_event extracted. RBAC decorators importable.
+   - The dual-audit-log invariant must be documented explicitly first.
+   - update_detection_rule has real orchestration (not a thin wrapper).
+     It can still move but should be flagged as a complex route.
+
+3. alerts Blueprint (THIRD)
+   - Depends on: log_audit_event extracted. RBAC decorators importable.
+   - execute_response_action is already in backend_ip_helpers.py.
+   - Clean extraction after prerequisites are met.
+
+--- Route Groups That Should NEVER Move Early ---
+
+Ingest routes (/ingest, /ingest/web-log, /ingest/azure, /ingest/otlp):
+  Cannot move until detection cores and correlation engines have behavioral tests.
+  Moving these routes to a Blueprint before ingest_normalized_event is importable
+  creates either a circular import (Blueprint imports from siem_backend.py) or
+  forces ingest_normalized_event to move prematurely.
+
+Auth routes (/login, /logout, /auth/me):
+  Flask-Login session is registered at module level (login_manager.init_app(app)).
+  Moving auth routes to a Blueprint before a create_app() factory is introduced
+  means the Blueprint's @login_required decorator references a login_manager that
+  was initialized against the main app — which works, but creates a fragile
+  dependency on initialization order. Low risk but architecturally messy.
+  Move these last, or not at all until create_app() exists.
+
+--- Initialization / Lifecycle Blockers ---
+
+1. limiter is a module-level object. Blueprint routes that use @limiter.limit
+   must import limiter from wherever it is defined. If limiter stays in
+   siem_backend.py, Blueprints import from siem_backend.py — circular.
+   Solution: limiter must move to a shared extensions module, or a create_app()
+   factory must bind it after app creation.
+
+2. login_manager.login_view = "login" references the "login" route by name.
+   If the login route moves to an auth Blueprint, the view name becomes
+   "auth.login" (Blueprint prefix). This must be updated when the route moves.
+   Missing this update causes redirect loops on unauthenticated requests.
+
+3. The 429 error handler (@app.errorhandler(429)) and the unauthorized handler
+   (@login_manager.unauthorized_handler) are registered against the app object.
+   These work correctly regardless of Blueprint grouping. Not a blocker.
+
+
+================================================================================
+5. TESTING PRIORITY ANALYSIS
+================================================================================
+
+Listed in priority order: highest risk first.
+
+--- PRIORITY 1: Detection Core Behavioral Tests ---
+Most dangerous untested assumption: The currval → alert_id → execute_response_action
+chain produces the correct alert_id for each INSERT. If the sequence is ever
+interrupted (e.g., by a future refactor that adds an intermediate INSERT), the
+wrong alert_id gets the response action logged against it. No error is thrown.
+The data is silently wrong.
+
+Minimum viable coverage:
+  - _generate_failed_login_alerts_core: given N failed_login events from the same
+    IP within the window, assert exactly 1 alert row of type failed_login_threshold
+    with the correct source_ip, severity=high, and a response_actions_log row.
+  - _generate_password_spraying_alerts_core: given failed_login events with
+    M distinct usernames from the same IP, assert spraying alert created only
+    when M >= threshold.
+  - Duplicate suppression: given an existing open alert of the correct type,
+    assert no new alert is created.
+  - For each of the 7 cores: at minimum the happy path and the duplicate
+    suppression path.
+
+--- PRIORITY 2: Correlation Engine Behavioral Tests ---
+Most dangerous untested assumption: correlation reads uncommitted detection writes
+via shared cursor. If this ever silently breaks, correlation alerts stop being
+generated with zero observable errors. The only symptom is missing correlated_activity
+rows in the DB.
+
+Minimum viable coverage:
+  - generate_correlated_activity_alerts: given 2+ open alerts of different types
+    from the same IP within CORRELATION_WINDOW_MINUTES, assert a correlated_activity
+    alert is created.
+  - Two-source minimum: given 2 alerts from the same source (e.g., both nginx),
+    assert no correlated_activity alert (requires distinct sources).
+  - Duplicate suppression: given an existing open correlated_activity alert for
+    that IP, assert no second one is created.
+  - generate_targeted_correlation_alerts: for each of the 3 rules
+    (web_to_app_attack_pattern, spray_then_success_pattern, cloud_app_error_pattern),
+    assert the correct alert type is created when required groups are matched.
+  - For each targeted rule: assert no alert when only one group matches.
+
+--- PRIORITY 3: Transaction Behavior Tests ---
+Most dangerous untested assumption: batch ingest (/ingest/azure, /ingest/otlp)
+commits all events atomically. If an exception is raised mid-batch, the partial
+state must roll back.
+
+Minimum viable coverage:
+  - Happy path: batch of 3 valid items produces 3 event rows.
+  - Failure path: batch of 3 items where item 2 raises ValueError produces 0
+    event rows (full rollback).
+  - Single-dict payload behaves identically to a 1-item list payload.
+
+--- PRIORITY 4: Auth and Session Behavior Tests ---
+Most dangerous untested assumption: load_user correctly returns None for inactive
+DB users, preventing them from authenticating despite valid session cookies.
+
+Minimum viable coverage:
+  - POST /login with admin hardcoded credentials returns 200.
+  - POST /login with valid DB user credentials returns 200.
+  - POST /login with deactivated DB user returns 401.
+  - POST /login with wrong password returns 401.
+  - GET /auth/me with valid session returns authenticated=True with correct role.
+  - GET /auth/me with no session returns authenticated=False.
+  - @login_required route with no session returns 401.
+
+--- PRIORITY 5: Route Contract Tests (RBAC) ---
+Most dangerous untested assumption: the three RBAC decorator levels (admin_required,
+super_admin_required, analyst_or_super_admin_required) correctly block lower roles
+AND write RBAC deny audit log entries.
+
+Minimum viable coverage:
+  - viewer role attempting an @admin_required route returns 403.
+  - viewer role attempting an @super_admin_required route returns 403.
+  - analyst role attempting a @super_admin_required route returns 403.
+  - analyst role on an @analyst_or_super_admin_required route returns 200.
+  - Each RBAC denial produces a row in audit_log with event_type=rbac_deny.
+
+--- PRIORITY 6: Route Contract Tests (Ingest Validation) ---
+Minimum viable coverage:
+  - POST /ingest with missing required fields returns 400.
+  - POST /ingest with invalid source_ip returns 400.
+  - POST /ingest with invalid event_type returns 400.
+  - POST /ingest without API key returns 401.
+  - POST /ingest/azure with a batch > 25 items returns 400.
+
+
+================================================================================
+6. FRONTEND ORGANIZATION ANALYSIS
+================================================================================
+
+--- Is App.js centralization currently GOOD or BAD? ---
+
+GOOD for logic ownership. MARGINAL for style ownership.
+
+App.js owns:
+  - Auth lifecycle (checkAuth, handleLogin, handleLogout, session detection)
+  - Alert list state (alerts, setAlerts, 5-second polling)
+  - Filter + sort state (searchTerm, severityFilter, statusFilter, sourceFilter, sortOption)
+  - Active section state (navigation between dashboard / blocklist / threat-hunt / admin)
+  - RBAC-derived flags (isSuperAdmin, isAnalyst, canTakeAlertActions)
+  - Derived dashboard data (filteredAlerts, sortedAlerts, metrics, topIPChartData,
+    alertTimelineData via useMemo)
+  - handleUpdateStatus (optimistic alert list update)
+  - handleViewRelatedAlerts (cross-section navigation)
+  - Session change detection via previousSessionRef
+
+All of this legitimately belongs in App.js. These concerns are genuinely
+interconnected: polling depends on auth state, derived data depends on filter state,
+navigation depends on RBAC flags. Centralizing them avoids prop-threading auth state
+into every panel.
+
+The problem area: App.js lines 604-957 are entirely inline style objects — 354 lines.
+These styles are then prop-drilled down through DashboardSection into AlertsTable
+as roughly 25 style props. This is the actual source of App.js's size problem, not
+the logic.
+
+The style prop-drilling is not architecturally wrong, but it is the largest
+source of friction: any visual change to the table requires tracing the prop from
+the style definition in App.js through DashboardSection into AlertsTable.
+
+--- Is AlertsTable.js oversized due to legitimate orchestration or poor boundaries? ---
+
+MOSTLY LEGITIMATE. One real inconsistency.
+
+AlertsTable.js owns at 1,610 lines:
+  - Notes state (alertNotes, noteDrafts, loadingNotesForAlertId, addingNoteForAlertId)
+  - Response log state (responseLogs)
+  - Toast notification system (toastMessage, toastType)
+  - Selected alert state (selectedAlert) — duplicates selectedAlertId from App.js
+  - Hover state (hoveredAlertId)
+  - Collapsed group state (collapsedGroups)
+  - Inline grouping algorithm (groupedFilteredAlerts, groupedFilteredAlertsMap)
+  - Inline severity ranking for group headers
+  - Notes CRUD (fetchAlertNotes, addAlertNote)
+  - Response log fetch (fetchResponseLog)
+  - Manual action execution (executeAction)
+  - PDF download handler (downloadPdfReport)
+  - Report/export URL generation (multiAlertReportHref, etc.)
+  - Large inline style cluster (~200 lines at top of function body)
+  - Full table rendering with grouped rows, collapsed groups, expanded rows
+
+Most of this is appropriate. AlertsTable is a detail-heavy interactive table.
+Its complexity is intrinsic to what it does, not to poor boundaries.
+
+THE ONE REAL INCONSISTENCY:
+executeAction (line 454) does its own GET /alerts fetch after completing an action
+(lines 478-490). This means there are two separate alert list refresh paths:
+  1. App.js's handleUpdateStatus → optimistic setAlerts (used by resolve button)
+  2. AlertsTable's executeAction → full fetch from /alerts → setAlerts (used by
+     block IP, flag_high_priority, monitor)
+
+This is not a catastrophic bug — both paths write to the same setAlerts — but it
+means the response action path bypasses App.js's alert polling and does an ad-hoc
+reload. If the /alerts endpoint ever returns an error, executeAction silently fails
+to refresh the UI while the toast says "executed successfully."
+
+This inconsistency should be noted but is not worth fixing during modularization.
+
+--- What frontend ownership boundaries appear unstable? ---
+
+1. selectedAlert (AlertsTable, line 72) vs selectedAlertId (App.js, line 33)
+   App.js owns selectedAlertId (used by DashboardSection → AlertsTable for scroll
+   behavior). AlertsTable owns its own selectedAlert (the full alert object, used
+   for timeline construction). These are two representations of the same selection.
+   Drift risk: if one is updated without the other, the expanded row and the
+   alertsTableRef scroll behavior fall out of sync.
+
+2. Style prop-drilling from App.js through DashboardSection into AlertsTable.
+   Changes to any shared style (cardStyle, bodyCellStyle, etc.) require updating
+   the definition in App.js and verifying rendering in AlertsTable. The chain is
+   long and grep-unfriendly.
+
+3. The two alert refresh paths (see above). Both call setAlerts from App.js's prop,
+   but the path through executeAction is not subject to App.js's error handling.
+
+--- Which frontend areas are safest for future extraction? ---
+
+SAFE NOW (if needed):
+  - formatNoteTimestamp (AlertsTable, line 363) — pure formatting function, no state
+  - getTargetedAlertMeta (AlertsTable, line 540) — pure lookup, no side effects
+  - The grouping algorithm (lines 612-654) — pure derived data from the alerts prop,
+    could move to alertDashboardData.js or a new utility
+
+SAFE LATER (after service/state boundaries stabilize):
+  - The notes CRUD cluster (fetchAlertNotes, addAlertNote, noteDrafts, alertNotes state)
+    — cohesive, but would require a custom hook or lifted state
+  - The response log fetch cluster (fetchResponseLog, responseLogs state)
+    — already has a service (loadAlertResponseLog in alertResponseService.js),
+    the state is the remaining piece
+
+NOT SAFE YET:
+  - Alert polling (App.js) — coupled to auth state
+  - Auth/session state (App.js) — coupled to polling
+  - The grouped table rendering — complexity is intrinsic
+  - Toast system in AlertsTable — small and local, no value in extracting
+
+
+================================================================================
+7. "DO NOT CHASE FILE SIZE" ANALYSIS
+================================================================================
+
+--- siem_backend.py (~4,018 lines) ---
+
+Is it large because of bad organization, or because of legitimate ownership?
+
+LEGITIMATE OWNERSHIP ACCOUNTS FOR THE SIZE.
+
+Breakdown of what remains:
+  - App lifecycle + middleware setup:         ~130 lines
+  - env_first / env_csv:                       ~15 lines
+  - Auth helpers + RBAC decorators:           ~180 lines
+  - Auth + admin routes (8 routes):           ~420 lines
+  - API key guards + validation constants:     ~60 lines
+  - ingest_normalized_event hub:               ~85 lines
+  - Ingest routes (4 routes):                 ~330 lines
+  - Detection engine (7 cores):             ~1,060 lines
+  - Correlation engine (2 functions):         ~390 lines
+  - Alert/event read routes (3 routes):       ~200 lines
+  - Export routes (5 routes):                 ~360 lines
+  - Alert mutation routes (8 routes):         ~430 lines
+  - Misc helpers (enrich_*, has_valid_location): ~40 lines
+  - Frontend serving:                          ~15 lines
+  Total:                                    ~3,715 lines of meaningful content
+
+The detection engine (~1,060 lines) and correlation engine (~390 lines) account
+for ~36% of the file. They are large because the detection patterns are genuinely
+complex (multi-table CTEs, behavioral reputation lookups per row, INSERT + currval +
+response action execution per detected IP). This complexity is intrinsic, not
+organizational.
+
+The remaining file is large because it is a single-service backend that does a lot:
+ingestion, detection, correlation, reporting, auth, admin, and frontend serving.
+Splitting it will reduce line counts per file, but will not reduce total complexity.
+
+Do not chase the line count. Chase testability and deployment concerns instead.
+
+--- App.js (958 lines) ---
+
+Is it large because of bad organization?
+
+PARTIALLY. About 37% of App.js (354 lines) is inline style objects. The logic
+is approximately 600 lines, which is reasonable for a top-level shell component
+that owns auth, polling, navigation, and derived data for a multi-panel dashboard.
+
+The style cluster is the only genuine organizational problem in App.js. The styles
+could be extracted to a separate theme/styles file without any prop drilling changes.
+That is the only reduction that would genuinely improve navigability — but it is
+also the lowest-priority change in the codebase.
+
+--- AlertsTable.js (1,610 lines) ---
+
+Is it large because of bad organization?
+
+NO. The size is intrinsic to the feature.
+
+AlertsTable renders a grouped, expandable, interactive security alert table with:
+inline notes CRUD, response log display, manual action execution, export links,
+PDF downloads, per-row hover/selection state, correlation display, MITRE display,
+reputation signal display, and toast notifications. This is genuinely a lot of UI.
+
+The inline style cluster (~200 lines at the top of the function body) inflates the
+number but is not a structural problem. The styles are used only within this
+component and do not need to be elsewhere.
+
+The file should not be broken up to reduce line count. If it is ever broken up,
+the only justified targets are the pure utility functions (formatNoteTimestamp,
+getTargetedAlertMeta, the grouping algorithm) — not the stateful interactive
+logic clusters.
+
+
+================================================================================
+SAFEST FUTURE EXTRACTION CANDIDATES
+================================================================================
+
+In recommended order:
+
+1. log_audit_event → backend_audit_helpers.py
+   Prerequisite: 1 logger site change (current_app.logger).
+   Why first: unblocks every Blueprint and RBAC extraction downstream.
+
+2. Export routes → exports Blueprint
+   Prerequisite: log_audit_event extracted. create_app() factory or limiter
+   in a shared extensions module.
+   Why second: thinnest route group, all helpers already external.
+
+3. RBAC decorators + User class + get_user_by_username + load_user → backend_auth.py
+   Prerequisite: log_audit_event extracted.
+   Why third: enables Blueprint imports without circular references.
+
+4. Admin routes → admin Blueprint
+   Prerequisite: log_audit_event extracted. RBAC decorators importable.
+   Note: document dual audit log invariant before extraction.
+
+5. Alert mutation routes → alerts Blueprint
+   Prerequisite: log_audit_event extracted. RBAC decorators importable.
+
+6. Detection cores + correlation engines (only after behavioral tests exist)
+   Prerequisite: full behavioral test suite. Tests are the gate, not organizational
+   readiness.
+
+7. Ingest routes → ingest Blueprint (only after #6 is complete)
+   Prerequisite: detection/correlation extracted and tested. Transaction behavior
+   tests passing.
+
+
+================================================================================
+ARCHITECTURE PREREQUISITES BEFORE MORE MODULARIZATION
+================================================================================
+
+These must happen in order. Skipping any one blocks the next.
+
+Step 1: Extract log_audit_event (1 logger site change + new file).
+Step 2: Write behavioral tests for detection cores (hard gate before extraction).
+Step 3: Write behavioral tests for correlation engines (hard gate before extraction).
+Step 4: Write transaction behavior tests for batch ingest.
+Step 5: Write route contract tests for auth and RBAC.
+Step 6: Introduce create_app() factory (required for clean Blueprint registration).
+Step 7: Begin Blueprint grouping in the order above.
+
+
+================================================================================
+HIGHEST-RISK FUTURE REFACTORS
+================================================================================
+
+1. Introducing create_app() without re-validating the full initialization sequence.
+   Risk: silent misconfiguration of session security, CORS, or rate limiting.
+
+2. Extracting detection cores without behavioral tests.
+   Risk: silent alert data loss or wrong alert_id in response_actions_log.
+
+3. Moving correlation engines to a different DB connection context.
+   Risk: silent loss of all correlation alerts (read-your-own-writes dependency
+   breaks without any error).
+
+4. Changing the message format in generate_correlated_activity_alerts without
+   updating enrich_alert_with_correlation_context.
+   Risk: frontend correlation display silently shows empty correlated_alert_types.
+
+5. Changing the Alert refresh path in executeAction (AlertsTable.js) to use
+   App.js's optimistic update pattern without testing the response action → blocklist
+   → alert status chain end-to-end.
+
+6. Adding @limiter.limit to a Blueprint route before limiter is moved out of
+   siem_backend.py.
+   Risk: circular import at startup, hard failure.
+
+
+================================================================================
+WHAT SHOULD INTENTIONALLY STAY CENTRALIZED
+================================================================================
+
+- Flask app object (until create_app() is deliberately introduced)
+- ProxyFix / Limiter / CORS / LoginManager binding
+- env_first / env_csv (consumed by Flask setup itself)
+- Admin credential resolution and startup guard
+- ingest_normalized_event (until detection cores are tested)
+- Detection engine fan-out dispatch (the event_type → core mapping)
+- Transaction coordination per ingest route (each route owns its own commit)
+- App.js auth lifecycle
+- App.js alert polling (tied to auth state)
+- AlertsTable.js stateful interaction logic (notes, response logs, grouping, toasts)
+
+
+================================================================================
+MOST IMPORTANT MISSING TESTS
+================================================================================
+
+In order of risk:
+
+1. Detection core behavioral tests (especially duplicate suppression + currval)
+2. Correlation engine behavioral tests (especially shared-cursor read of uncommitted rows)
+3. Transaction rollback tests for batch ingest
+4. Auth/session behavioral tests (inactive user, wrong password, session restore)
+5. RBAC denial tests (role enforcement + audit log write on deny)
+6. Route contract tests for all ingest validation paths
+
+
+================================================================================
+FRONTEND STABILITY ASSESSMENT
+================================================================================
+
+STABLE AND COMPLETE:
+  - All service modules (authService, alertsService, alertStatusService,
+    alertResponseService, auditLogService, blocklistService, detectionRulesService,
+    adminUsersService, threatHuntService)
+  - All utility modules (siemPath, sessionIdentity, alertDashboardData,
+    threatHuntDisplay, alertDisplay, apiResponse, adminPanelDisplay)
+  - All extracted presentation components (AlertTimeline, AlertsToolbar,
+    AlertDetailsPanel, AlertResponseIndicator, ThreatHuntEventDetails,
+    AdminStatusBadge, DashboardMetrics, DashboardVisuals, DashboardSection)
+  - All panel components (ThreatHuntPanel, AdminUsersPanel, AuditLogPanel,
+    DetectionRulesPanel, BlocklistManagerPanel)
+
+STABLE BUT HAS KNOWN ISSUES (do not fix during modularization):
+  - App.js hook dependency warnings around checkAuth and fetchAlerts
+  - App.js unused subtitleStyle
+  - AdminUsersPanel.js duplicate paddingTop style key
+  - AlertsTable.js dual alert refresh paths (executeAction vs handleUpdateStatus)
+
+MONITOR FOR DRIFT:
+  - selectedAlert (AlertsTable) vs selectedAlertId (App.js) — dual selection state
+  - Style prop drilling from App.js through DashboardSection into AlertsTable
+
+NOT READY FOR EXTRACTION:
+  - Auth/session state from App.js
+  - Alert polling from App.js
+  - AlertsTable stateful interaction clusters (notes, response logs, actions)
+  - GroupedAlertsTable (not a target — complexity is intrinsic)

@@ -1,0 +1,646 @@
+ARCHITECTURE DISCOVERY REPORT — siem_backend.py
+================================================
+Status: READ-ONLY ANALYSIS. No implementation. No code changes.
+Date: 2026-05-02
+
+
+================================================================================
+1. HIGH-LEVEL RESPONSIBILITY AREAS
+================================================================================
+
+1.1 Flask App Lifecycle
+Lines 250-376.
+load_dotenv(), Flask(...), ProxyFix, Limiter, CORS, LoginManager, session config,
+error handlers. This block is the single initialization root. Everything downstream
+depends on the app object being fully initialized before routes register. There is
+no application factory — the app object is created at module level.
+
+1.2 Runtime Environment Setup
+Lines 90-121.
+env_first, env_csv, and the module-level runtime constants (SIEM_ALLOWED_ORIGINS,
+SIEM_PORT, SIEM_DEBUG). These resolve at import time and are consumed by the Flask
+setup block itself. They cannot be separated from app creation without introducing
+import-ordering problems.
+
+1.3 Auth and Session Ownership
+Lines 360-470.
+The User class, load_user (@login_manager.user_loader), and the /login, /logout,
+/auth/me routes. Flask-Login session is owned entirely within this file. current_user
+is not a passed parameter anywhere — it is a request-scoped Flask-Login proxy that
+all downstream decorators and routes consume implicitly.
+
+1.4 RBAC and Access Control
+Lines 290-357.
+deny_rbac_access, admin_required, super_admin_required, analyst_or_super_admin_required.
+These are decorator factories that wrap current_user, request, and log_audit_event.
+They are woven into virtually every route's decorator chain and reference app.logger
+through deny_rbac_access calling log_audit_event.
+
+1.5 Audit Logging (Cross-Cutting)
+Lines 192-243.
+log_audit_event is called from at least 18 distinct call sites: login/logout, every
+admin mutation, report downloads, blocklist mutations, response action execution,
+status updates. It uses app.logger directly (line 237) and opens its own DB connection
+per call. It is the only cross-cutting operational concern — not scoped to any one domain.
+
+1.6 API Key Guards
+Lines 933-968.
+require_api_key, require_azure_api_key, require_otel_api_key. Module-level constants,
+called as the first line inside each ingest route body (not as decorators). They read
+request.headers and are stateless.
+
+1.7 Ingest Orchestration Hub
+Lines 999-1084.
+ingest_normalized_event is the single fan-out hub for the entire event → detection →
+correlation pipeline. It receives normalized event dicts, writes to the events table,
+dispatches to all 7 detection cores based on event_type, then loops over alerted IPs
+and calls both correlation engines. All four ingest routes converge on this function.
+It runs entirely within the caller's transaction.
+
+1.8 Detection Engine
+Lines 1435-2492.
+Seven _generate_*_core functions. Each performs a fixed multi-step sequence within
+the shared cursor:
+  1. query events
+  2. check for duplicate open alert
+  3. INSERT alert
+  4. currval(pg_get_serial_sequence('alerts', 'id'))
+  5. execute_response_action
+  6. UPDATE alert response_status
+At least two cores (_generate_failed_login_alerts_core, _generate_port_scan_alerts_core)
+use app.logger directly.
+
+Detection cores:
+  - _generate_failed_login_alerts_core       (lines ~1435-1582)
+  - _generate_password_spraying_alerts_core  (lines ~1585-1743)
+  - _generate_successful_login_after_spray_alerts_core (lines ~1746-1920)
+  - _generate_port_scan_alerts_core          (lines ~1923-2070)
+  - _generate_http_error_alerts_core         (lines ~2073-2210)
+  - _generate_application_exception_alerts_core (lines ~2213-2350)
+  - _generate_high_request_rate_alerts_core  (lines ~2353-2492)
+
+1.9 Correlation Engine
+Lines 2501-2882.
+generate_correlated_activity_alerts and generate_targeted_correlation_alerts.
+Both read from the alerts table for rows that the detection cores just inserted but
+have not yet committed — this only works because they share the same cursor. Both use
+app.logger heavily (8 combined call sites). generate_targeted_correlation_alerts
+contains inline rule definitions with Python lambdas as match predicates.
+
+1.10 Alert and Event Read Paths
+Lines 2889-3084.
+GET /alerts, GET /events/search, POST /alerts/backfill-reputation.
+The GET /alerts route chains three enrichment layers per alert:
+  - SIEM-internal reputation (get_ip_reputation)
+  - MITRE tagging (enrich_alert_with_mitre)
+  - Correlation context parsing (enrich_alert_with_correlation_context)
+
+1.11 Report and Export Orchestration
+Lines 3163-3521.
+Five export routes: single-alert TXT, single-alert PDF, multi-alert TXT,
+multi-alert CSV, multi-alert PDF. Each follows the same pattern:
+fetch rows → build content context → audit log → respond.
+All heavy formatting/rendering is delegated to extracted helper modules.
+
+Export routes:
+  - GET  /alerts/<id>/report       → single-alert TXT
+  - GET  /alerts/<id>/report/pdf   → single-alert PDF
+  - GET  /alerts/report            → multi-alert TXT
+  - GET  /alerts/export/csv        → multi-alert CSV
+  - GET  /alerts/report/pdf        → multi-alert PDF
+
+1.12 Alert Mutation Paths
+Lines 3524-3998.
+Notes CRUD, response log read, blocklist CRUD, manual response execute, status update.
+Most are thin routes with inline SQL plus an audit log call at the end.
+
+Mutation routes:
+  - GET  /alerts/<id>/response-log
+  - GET  /alerts/<id>/notes
+  - POST /alerts/<id>/notes
+  - GET  /blocked-ips
+  - POST /blocked-ips
+  - PATCH /blocked-ips/<id>/unblock
+  - POST /alerts/<id>/execute
+  - POST /alerts/<id>/status
+
+1.13 Frontend Serving
+Lines 4001-4018.
+Catch-all route for the React build. Completely isolated; has no state or logic
+dependencies.
+
+
+================================================================================
+2. RUNTIME OWNERSHIP BOUNDARIES
+================================================================================
+
+ORCHESTRATION is owned by ingest_normalized_event exclusively.
+No other function orchestrates the detection pipeline. It is a single synchronous
+call chain. Detection and correlation are not scheduled, not queued, not async —
+they run inline, per-request, within the ingest route's transaction.
+
+INITIALIZATION is owned by module-level code in siem_backend.py.
+All of the following run at import time, in order:
+  load_dotenv()
+  Flask(...)
+  ProxyFix
+  Limiter
+  CORS
+  LoginManager
+  admin credential resolution
+  the startup RuntimeError guard
+  all route registrations
+There is no create_app() factory. The application is fully initialized by the time
+the module finishes loading.
+
+THERE IS NO SCHEDULER.
+No APScheduler, Celery, cron, or background thread exists. All detection runs
+per-request. The only periodic behavior originates externally
+(scripts/ingest_log_files.py calling ingest routes on a schedule).
+
+REQUEST COORDINATION is owned by each ingest route individually.
+Each opens its own conn/cur, calls ingest_normalized_event, and commits.
+For batch endpoints (/ingest/azure, /ingest/otlp), a loop over multiple normalized
+events shares a single transaction — meaning all events in a batch either all commit
+or all roll back together.
+
+DETECTION FLOW DISPATCH is owned by ingest_normalized_event's hardcoded if/elif chain.
+The mapping of event_type strings to detection core functions is compile-time logic,
+not configuration. There is no registry or dispatch table.
+
+
+================================================================================
+3. COUPLING ANALYSIS
+================================================================================
+
+3.1 Detection Cores + Shared Transaction
+All 7 detection cores receive cur and conn from the ingest route. The
+currval(pg_get_serial_sequence('alerts', 'id')) call after each INSERT is the
+tightest coupling point: it assumes the INSERT just happened on this cursor,
+within this transaction. This pattern breaks immediately if detection cores are
+ever called from a different connection context.
+
+3.2 Correlation Reads Uncommitted Detection Writes
+Both correlation engines query the alerts table for rows inserted by detection
+cores during the same request — rows that have not yet committed. This is
+intentional: they share the same cursor, so they can see their own transaction's
+writes. If correlation were ever given a separate connection, it would not see
+those rows and would silently produce incorrect results.
+
+3.3 app.logger Binding in 11+ Remaining Sites
+log_audit_event (line 237)
+_generate_failed_login_alerts_core (line 1489)
+_generate_port_scan_alerts_core (line 1976)
+generate_correlated_activity_alerts (lines 2511, 2525, 2551, 2565, 2670)
+generate_targeted_correlation_alerts (lines 2742, 2756, 2789, 2875)
+All bind directly to the module-level app object. These are not yet fixed
+(unlike the extracted helpers that were updated in Phases 4-5).
+
+3.4 RBAC Decorators → log_audit_event → DB
+deny_rbac_access calls log_audit_event, which opens a new DB connection to write
+to audit_log. This means RBAC enforcement has an implicit dependency on DB
+availability. If the DB is unreachable, the 403 response is still returned correctly
+(exception is caught inside log_audit_event), but the audit record is silently lost.
+Access control and audit logging are architecturally coupled here.
+
+3.5 enrich_alert_with_correlation_context → Message String Format
+This function (lines 3169-3189) parses the message field of correlation alerts to
+reconstruct the list of correlated alert types. It depends on the exact string format
+produced by generate_correlated_activity_alerts ("... involving: type_a, type_b").
+Any change to that message format silently breaks the frontend's correlation display.
+
+3.6 Admin Credential Guard at Module Level
+admin_username and admin_password are resolved at import time (lines 265-269),
+and a RuntimeError fires at module level if either is missing. This guard prevents
+the app from starting without credentials, but it also means the guard and the
+credential resolution are inseparable from the module load sequence.
+
+3.7 Dual Audit Log Calls in Three Admin Routes
+update_user_status, update_user_password, and update_user_role each call
+log_audit_event twice per mutation — once with a lowercase operational event type,
+once with an uppercase display event type. This is a behavioral invariant that any
+future refactor of those routes must preserve.
+
+
+================================================================================
+4. SAFE vs. UNSAFE EXTRACTION SURFACES
+================================================================================
+
+--- PROBABLY SAFE LATER ---
+
+enrich_alert_with_correlation_context (lines 3169-3189):
+  Pure function, no Flask deps, single caller. Could move to
+  backend_enrichment_helpers.py in a zero-risk lift. Not worth a commit on its own.
+
+has_valid_location (lines 990-996):
+  Six-line pure function, no Flask deps, single caller. Low value but zero risk
+  if ever moved.
+
+backfill_alert_sources (lines 123-152):
+  Dead code, no callers. Safe to delete outright, not worth extracting.
+
+Export routes as a Blueprint group:
+  The five export routes all follow the same thin orchestration pattern.
+  Grouping them into a Blueprint is safe structurally, but only after a Blueprint
+  architecture plan exists — not a standalone extraction.
+
+--- RISKY ---
+
+log_audit_event (lines 192-243):
+  Has a single app.logger site (line 237). Would need current_app.logger before
+  it can move. Blast radius is large: 18+ call sites including RBAC decorators
+  and detection cores. Behavior must be identical before and after.
+
+Ingestion routes as a Blueprint group:
+  The shared single-transaction pattern (batch items sharing one conn.commit())
+  must be explicitly preserved. These routes are structurally clean candidates
+  but require transaction behavior testing before any grouping.
+
+Admin routes as a Blueprint group:
+  Clean boundary, but log_audit_event must be extractable first (to avoid
+  importing it from siem_backend.py). RBAC decorators must also be importable
+  by the Blueprint without creating a circular import.
+
+--- EXTREMELY RISKY ---
+
+All 7 detection cores:
+  The currval pattern, the duplicate-check-before-INSERT pattern, and the
+  execute_response_action call within the same transaction are a tightly coupled
+  three-step sequence with no test coverage. Behavioral tests confirming identical
+  alert output before and after any move are a hard prerequisite. app.logger sites
+  in at least 2 cores also need fixing.
+
+Both correlation engines:
+  The read-your-own-writes dependency on a shared cursor is invisible to static
+  analysis. Any move that results in a new DB connection for correlation silently
+  breaks the alerting pipeline with no error — it just silently produces no
+  correlation alerts. Tests are a hard prerequisite.
+
+ingest_normalized_event:
+  The fan-out hub. Cannot extract without detection cores and correlation engines
+  being stable, tested, and importable. Any change to the dispatch logic risks
+  silently dropping detection for a given event_type. Blocked until everything
+  it calls has tests.
+
+
+================================================================================
+5. APP INITIALIZATION FLOW
+================================================================================
+
+Order of operations at module load (siem_backend.py import):
+
+  1.  Standard library + third-party imports resolved
+  2.  Helper module imports resolved (backend_db, backend_ip_helpers, etc.)
+  3.  Adapter imports resolved
+  4.  env_first / env_csv helpers defined
+  5.  Module-level runtime constants resolved:
+        SIEM_ALLOWED_ORIGINS, SIEM_BIND_HOST, SIEM_PORT, SIEM_DEBUG
+  6.  backfill_alert_sources defined (dead code)
+  7.  get_user_by_username defined
+  8.  log_audit_event defined
+  9.  load_dotenv() called — .env loaded into os.environ
+  10. Flask app object created: Flask(__name__, static_folder=...)
+  11. ProxyFix middleware applied to app.wsgi_app
+  12. Limiter created and bound to app
+  13. FRONTEND_BUILD_DIR resolved
+  14. Session config applied (SECRET_KEY, HTTPONLY, SAMESITE, SECURE)
+  15. Admin credentials resolved from env (admin_username, admin_password)
+  16. RuntimeError raised if credentials missing — startup aborted here
+  17. CORS applied to app
+  18. LoginManager created and bound to app
+  19. @login_manager.unauthorized_handler registered
+  20. @app.errorhandler(429) registered
+  21. deny_rbac_access / RBAC decorator factories defined
+  22. User class defined
+  23. @login_manager.user_loader registered
+  24. Auth/admin routes registered (@app.route decorators execute)
+  25. logging.basicConfig called
+  26. API key constants resolved (INGEST_API_KEY, AZURE_INGEST_API_KEY, etc.)
+  27. API key guard functions defined
+  28. Validation constant sets defined (VALID_SEVERITIES, VALID_EVENT_TYPES, etc.)
+  29. has_valid_location defined
+  30. ingest_normalized_event defined
+  31. Ingest routes registered
+  32. All 7 detection core functions defined
+  33. Both correlation engine functions defined
+  34. Alert/event read routes registered
+  35. enrich_alert_with_correlation_context defined
+  36. Export routes registered
+  37. Alert mutation routes registered
+  38. Frontend catch-all route registered
+
+There is no deferred initialization, no setup() call, no create_app() factory,
+and no post-init hook. All state is live at import completion.
+
+
+================================================================================
+6. ROUTE OWNERSHIP ANALYSIS
+================================================================================
+
+--- THIN WRAPPERS (low orchestration, mostly SQL + response) ---
+
+GET  /health                        Trivial. Static response.
+GET  /auth/me                       Thin. Reads current_user, returns JSON.
+GET  /logout                        Thin. Calls logout_user() + audit log.
+GET  /admin/detection-rules         Thin. Delegates entirely to get_all_effective_detection_rules().
+GET  /alerts/<id>/response-log      Thin. One SELECT, serialize rows.
+GET  /alerts/<id>/notes             Thin. One SELECT, serialize rows.
+POST /alerts/<id>/notes             Thin. Validate input + INSERT + audit log.
+POST /alerts/<id>/status            Thin. One UPDATE + audit log.
+GET  /blocked-ips                   Thin. One SELECT, serialize rows.
+PATCH /blocked-ips/<id>/unblock     Thin. One SELECT + one UPDATE + audit log.
+GET  /alerts/export/csv             Thin. Delegates fetch to helper, writes CSV writer loop.
+
+--- MODERATE ORCHESTRATION ---
+
+POST /login                         Two credential paths (admin hardcoded vs DB user),
+                                    both paths call audit log.
+GET  /admin/users                   SELECT + audit log. Thin but audit log adds implicit DB call.
+POST /admin/users                   INSERT + audit log. Thin but dual writes.
+PATCH /admin/users/<u>/status       UPDATE + two audit log calls (behavioral invariant).
+PATCH /admin/users/<u>/password     UPDATE + two audit log calls (behavioral invariant).
+PATCH /admin/users/<u>/role         UPDATE + two audit log calls (behavioral invariant).
+GET  /admin/audit-log               SELECT only. No audit log on reads.
+GET  /alerts                        SELECT + per-row enrichment loop (reputation, MITRE, correlation context).
+GET  /events/search                 Dynamic WHERE clause building + per-row reputation enrichment.
+GET  /alerts/<id>/report            Fetch → normalize → build text sections → audit log → respond.
+GET  /alerts/<id>/report/pdf        Fetch → normalize → audit log → delegate to pdf helper.
+GET  /alerts/report                 Fetch → severity counts → scope text → build TXT → audit log → respond.
+GET  /alerts/report/pdf             Fetch → severity counts → scope text → build sections → audit log → delegate to pdf helper.
+
+--- DANGEROUS TO MOVE (high orchestration or critical behavioral dependencies) ---
+
+POST /ingest                        Validates input + geo lookup + calls ingest_normalized_event
+                                    (detection + correlation). Full pipeline entry point.
+
+POST /ingest/web-log                Parses nginx line → classifies event_type → calls
+                                    ingest_normalized_event. Full pipeline entry point.
+
+POST /ingest/azure                  Batch loop → adapter normalize → calls ingest_normalized_event
+                                    per item in a single shared transaction.
+
+POST /ingest/otlp                   Same as /ingest/azure pattern. Single shared transaction.
+
+PATCH /admin/detection-rules/<id>   Reads current rule → validates → INSERT/UPDATE detection_config
+                                    → re-reads effective rule → audit log. Multi-step with rollback.
+
+POST /alerts/backfill-reputation    Bulk UPDATE loop, no transaction batching, direct reputation
+                                    lookups. Side-effect-heavy admin operation.
+
+POST /alerts/<id>/execute           Calls execute_response_action (which may write to blocked_ips),
+                                    then UPDATE alerts, then audit log. Three-table write sequence.
+
+POST /blocked-ips                   Calls create_blocked_ip_record + validate_blocked_ip + audit log.
+                                    Cross-module write with audit dependency.
+
+
+================================================================================
+7. ARCHITECTURAL STOP CONDITIONS
+================================================================================
+
+STOP CONDITION A — Detection engine extraction without tests:
+Any extraction of _generate_*_core functions without behavioral tests will produce
+silent correctness regressions. The currval pattern is cursor-position-dependent.
+A test suite must confirm identical alert rows (count, type, source_ip, severity,
+response_action, response_status) before and after any extraction.
+
+STOP CONDITION B — Correlation engine extraction without tests:
+The read-your-own-writes shared-cursor dependency is the single highest-risk
+invisible coupling in the codebase. Moving correlation to a separate module that
+receives a different cursor or connection produces zero errors but silently generates
+no correlation alerts. No static analysis tool will catch this.
+
+STOP CONDITION C — Blueprint splitting before log_audit_event is extractable:
+If routes are moved to Blueprints before log_audit_event can be imported from a
+shared location, every Blueprint will either re-import it from siem_backend.py
+(creating a circular import) or duplicate it (creating drift). Blueprint work
+requires log_audit_event to be in a shared module first.
+
+STOP CONDITION D — RBAC decorator extraction before auth module exists:
+admin_required, super_admin_required, analyst_or_super_admin_required all depend
+on current_user (Flask-Login proxy) and call log_audit_event. They cannot move to
+a Blueprint or helper without log_audit_event being in a shared module first.
+Moving decorators before that creates a three-way coupling: siem_backend →
+Blueprint → auth decorator → log_audit_event → siem_backend (circular).
+
+STOP CONDITION E — Removing create_app() absence without testing startup sequence:
+There is no application factory. All module-level state (app, limiter, CORS config,
+login_manager) is created once at import. Introducing a create_app() pattern to
+support Blueprints requires carefully re-ordering the 38-step initialization
+sequence above. Doing this incorrectly causes silent misconfiguration (wrong session
+settings, limiter not bound, CORS not applied) rather than hard errors.
+
+STOP CONDITION F — AI-assisted extraction of ingest_normalized_event:
+This function is the highest architecture-drift risk for AI-assisted extraction.
+Its structure looks simple (write event + if/elif dispatch), but it encodes:
+  - Transaction ownership (the caller commits, not this function)
+  - Detection-to-correlation ordering (detection must run before correlation)
+  - Source and source_type propagation into all downstream cores
+  - The deduplication contract (cores check for open alerts before INSERT)
+An AI that sees this function in isolation is likely to suggest wrapping it as a
+"service" or giving it its own connection/commit, both of which break it.
+
+
+================================================================================
+CURRENT BACKEND OWNERSHIP MAP
+================================================================================
+
+  siem_backend.py owns:
+    - Flask app object (the only one; no factory)
+    - All WSGI middleware (ProxyFix, Limiter, CORS)
+    - Session configuration
+    - Flask-Login configuration and user loader
+    - Admin hardcoded credential resolution and startup guard
+    - env_first / env_csv (used by Flask setup itself, cannot move)
+    - All RBAC decorator factories
+    - User class
+    - log_audit_event (cross-cutting, 18+ call sites)
+    - get_user_by_username (used only by load_user and /login)
+    - API key constants and guard functions
+    - Validation constant sets (VALID_SEVERITIES, VALID_EVENT_TYPES, etc.)
+    - has_valid_location (single caller: /ingest)
+    - ingest_normalized_event (orchestration hub)
+    - All 7 detection core functions
+    - Both correlation engine functions
+    - enrich_alert_with_correlation_context (single caller: GET /alerts)
+    - All route definitions (24 routes)
+    - Frontend catch-all
+    - App entrypoint (if __name__ == "__main__")
+
+  backend_db.py owns:
+    - get_db_connection
+    - validate_blocked_ip
+    - create_blocked_ip_record
+
+  backend_ip_helpers.py owns:
+    - IP geolocation (lookup_ip_location, geo_cache)
+    - External reputation lookup (lookup_ip_reputation, REPUTATION_CACHE)
+    - SIEM-internal reputation (get_ip_reputation)
+    - Response action mapping (determine_response_action)
+    - Response action execution (execute_response_action)
+
+  backend_detection_config.py owns:
+    - 21 detection threshold/window constants
+    - Detection rule config helpers (get_effective_detection_rule, etc.)
+
+  backend_reporting_helpers.py owns:
+    - All text/CSV/PDF timestamp formatters
+    - Alert summary/section builders
+
+  backend_enrichment_helpers.py owns:
+    - MITRE_ATTACK_MAPPINGS
+    - enrich_alert_with_mitre
+
+  backend_pdf_helpers.py owns:
+    - All PDF rendering primitives
+    - build_pdf_report_response
+
+  backend_query_helpers.py owns:
+    - fetch_alert_rows
+    - fetch_response_logs_by_alert_id
+    - fetch_alert_csv_rows
+
+  backend_ingest_normalizers.py owns:
+    - App-name normalization for Azure, OTel, custom events
+
+
+================================================================================
+HIGHEST RISK AREAS
+================================================================================
+
+1. Shared-cursor transaction chain: ingest_normalized_event → detection cores →
+   correlation engines.
+   Risk: The implicit contract (shared cursor, uncommitted reads, currval pattern)
+   is invisible and has no tests. Breaking it produces silent data loss, not errors.
+
+2. app.logger binding in 11+ remaining call sites inside detection cores and
+   correlation engines.
+   Risk: These sites must be fixed to current_app.logger before any of those
+   functions can be extracted, same as the Phase 4/5 pattern. Currently unfixed.
+
+3. generate_targeted_correlation_alerts Python lambda rule definitions.
+   Risk: The three inline rule dicts with lambda predicates are not serializable
+   and not testable in isolation. Any extraction must preserve the exact lambda
+   behavior for all three rules.
+
+4. enrich_alert_with_correlation_context string parsing dependency on
+   generate_correlated_activity_alerts message format.
+   Risk: No contract enforces the message format. A message change silently breaks
+   the frontend correlation display.
+
+5. log_audit_event dual-call invariant in three admin mutation routes.
+   Risk: Any route refactor must preserve both calls exactly. The distinction
+   between the lowercase and uppercase event type is not documented inline.
+
+6. Module-level initialization order (38 steps, no factory).
+   Risk: The sequence is currently correct. Introducing any factory pattern or
+   Blueprint splitting without re-validating the full sequence risks silent
+   misconfiguration.
+
+
+================================================================================
+POTENTIAL FUTURE MODULARIZATION CANDIDATES
+================================================================================
+
+These are observations only. No extraction should happen without a formal plan
+and the prerequisite conditions stated below.
+
+CANDIDATE A: log_audit_event → backend_audit_helpers.py
+  Prerequisite: Change app.logger (line 237) to current_app.logger.
+  Prerequisite: Verify all 18+ call sites still resolve after import change.
+  Prerequisite: Test that audit records are still written identically for all
+    event types (login, RBAC deny, admin mutation, report download, etc.).
+  Value: Unlocks Blueprint grouping by removing the only non-route non-decorator
+    cross-cutting function that blocks shared imports.
+
+CANDIDATE B: RBAC decorators → backend_auth.py (or auth Blueprint)
+  Prerequisite: log_audit_event must be in a shared module first.
+  Prerequisite: User class and load_user must also move (Flask-Login bound).
+  Prerequisite: No circular import between auth module and any Blueprint.
+  Risk level: MEDIUM. The Flask-Login proxy (current_user) is imported from flask
+    and will still resolve correctly — but the import order and Blueprint
+    registration order must be verified.
+
+CANDIDATE C: Detection cores → backend_detection_engine.py
+  Prerequisite: Behavioral test suite must exist first (hard gate).
+  Prerequisite: Fix app.logger → current_app.logger in at least 2 cores.
+  Prerequisite: Verify currval pattern still works after extraction
+    (still same cursor, still same transaction).
+  Risk level: HIGH. Transaction contract is invisible to static analysis.
+
+CANDIDATE D: Correlation engines → backend_correlation_engine.py
+  Prerequisite: Detection cores must be extracted and tested first.
+  Prerequisite: Behavioral tests for correlation (hard gate).
+  Prerequisite: Verify shared-cursor read-your-own-writes behavior survives.
+  Risk level: EXTREMELY HIGH. Shared cursor dependency is silent on failure.
+
+CANDIDATE E: Ingest routes → ingest Blueprint
+  Prerequisite: Candidates C and D must be complete and tested.
+  Prerequisite: log_audit_event in a shared module.
+  Prerequisite: Transaction behavior across batch ingest tested explicitly.
+  Risk level: HIGH after prerequisites. Currently blocked.
+
+CANDIDATE F: Admin routes → admin Blueprint
+  Prerequisite: log_audit_event in a shared module.
+  Prerequisite: RBAC decorators importable from a shared location.
+  Prerequisite: Dual audit log call invariant explicitly documented and tested.
+  Risk level: MEDIUM after prerequisites. Currently blocked.
+
+CANDIDATE G: Alert mutation routes → alerts Blueprint
+  Prerequisite: log_audit_event in a shared module.
+  Prerequisite: RBAC decorators importable.
+  Risk level: LOW-MEDIUM after prerequisites. Routes are thin.
+
+CANDIDATE H: Export routes → exports Blueprint
+  Prerequisite: log_audit_event in a shared module.
+  Risk level: LOW after prerequisites. Routes are thin wrappers over
+    already-extracted helpers.
+
+
+================================================================================
+DO NOT TOUCH YET
+================================================================================
+
+The following areas must not be modified, extracted, or reorganized until their
+stated prerequisites are met. Violations risk silent runtime regressions that
+produce no startup errors and no exceptions at the time of the change.
+
+DO NOT TOUCH: All 7 _generate_*_core detection functions.
+  Reason: No behavioral tests exist. The currval + shared transaction contract
+    has no safety net. Extraction without tests will produce silent alert loss.
+
+DO NOT TOUCH: generate_correlated_activity_alerts
+              generate_targeted_correlation_alerts
+  Reason: The read-your-own-writes shared cursor dependency is the single most
+    dangerous invisible coupling in the codebase. Silent failure on extraction.
+
+DO NOT TOUCH: ingest_normalized_event
+  Reason: Fan-out hub. Blocked until everything it dispatches to is tested and
+    stable. Any refactor risks silently dropping detection for specific event types.
+
+DO NOT TOUCH: The module-level initialization sequence (lines 250-376).
+  Reason: 38-step initialization with no factory. Re-ordering or splitting any
+    part of this sequence without a create_app() plan risks silent misconfiguration
+    of middleware, session security, CORS, or rate limiting.
+
+DO NOT TOUCH: Flask-Login User class and load_user.
+  Reason: Flask-Login session-bound. Extraction requires the auth module to be
+    importable before the app object is configured, which conflicts with the
+    current module-level initialization order.
+
+DO NOT TOUCH: env_first / env_csv.
+  Reason: Consumed by Flask setup at module level. Cannot be in a separate module
+    without introducing an import that runs before load_dotenv() is called.
+
+DO NOT TOUCH: The dual audit log call pattern in update_user_status,
+              update_user_password, update_user_role.
+  Reason: Behavioral invariant. Must be preserved exactly in any route refactor.
+    Not documented inline — only visible by reading the route bodies.
+
+DO NOT TOUCH: backfill_alert_sources.
+  Reason: Dead code. Safe to delete, not safe to extract. Do not extract dead code.
+
+DO NOT TOUCH: enrich_alert_with_correlation_context message parsing.
+  Reason: Implicitly coupled to the exact message format written by
+    generate_correlated_activity_alerts. Touching either side without touching
+    the other silently breaks frontend correlation display.

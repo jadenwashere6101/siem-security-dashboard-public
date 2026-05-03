@@ -1,6 +1,6 @@
 # Modularization Handoff
 
-Last updated: 2026-05-02 (detection/correlation complete; route contract coverage in place; blocklist + reporting Blueprints registered; `create_app()` still blocked)
+Last updated: 2026-05-02 (backend modularization effectively complete; `create_app()` in place; route groups extracted to Blueprints; full pytest suite passing)
 
 This document is the starting point for future sessions working on modularization. It summarizes the current project shape, what has already been extracted safely, what boundaries are still risky, and how to continue without drifting into broad refactors.
 
@@ -20,8 +20,15 @@ Backend:
   - `backend_audit_helpers.py`
   - `backend_auth.py`
   - `backend_api_guards.py`
+  - `backend_extensions.py`
+  - `backend_ingest_engine.py`
+  - `backend_auth_routes.py` (Flask Blueprint: `auth_bp`)
   - `backend_blocklist_routes.py` (Flask Blueprint: `blocklist_bp`)
   - `backend_reporting_routes.py` (Flask Blueprint: `reporting_bp`)
+  - `backend_admin_routes.py` (Flask Blueprint: `admin_bp`)
+  - `backend_alerts_events_routes.py` (Flask Blueprint: `alerts_events_bp`)
+  - `backend_alert_mutation_routes.py` (Flask Blueprint: `alert_mutation_bp`)
+  - `backend_ingest_routes.py` (Flask Blueprint: `ingest_bp`)
   - `backend_reporting_helpers.py`
   - `backend_enrichment_helpers.py`
   - `backend_pdf_helpers.py`
@@ -55,17 +62,17 @@ Current stack:
 
 ## 2. Current Modularization Phase
 
-**Backend helper extraction is complete. Detection/correlation extraction is complete. Route architecture is no longer “all or nothing”: incremental Blueprint extraction is in progress on the existing module-level `app`; `create_app()` remains intentionally blocked.**
+**Backend modularization is effectively complete. Helper extraction, detection/correlation extraction, shared extension extraction, `create_app()` Phase 1, ingest engine extraction, and all major API route Blueprint extractions are complete.**
 
-All frontend work is done. All backend helper clusters that could be safely extracted have been extracted. Detection and correlation engines were moved only after PostgreSQL-backed behavioral coverage existed. `siem_backend.py` is ~1,795 lines (down from ~5,183 at start of modularization; line count drops further as additional route modules are split out). The remaining weight is mostly Flask app initialization, routes not yet moved to Blueprints, auth/session/RBAC, and the ingest orchestration hub.
+All frontend work is done. All backend helper clusters that could be safely extracted have been extracted. Detection and correlation engines were moved only after PostgreSQL-backed behavioral coverage existed. `siem_backend.py` is now the app shell: environment helpers, startup constants, `create_app()`, extension setup, Blueprint registration, module-level `app = create_app()` compatibility, `GET /health`, frontend catch-all serving, and the `__main__` run block.
 
 ### Current architecture snapshot (concise)
 
 - **Detection/correlation:** implemented in `backend_detection_engine.py` and `backend_correlation_engine.py`; PostgreSQL-backed tests protect behavior and shared-cursor assumptions.
-- **Ingest orchestration:** `ingest_normalized_event` remains **centralized in `siem_backend.py`** (intentional hub; do not relocate without a dedicated plan).
-- **Blueprints registered** (no `url_prefix`; URLs unchanged): `blocklist_bp` from `backend_blocklist_routes.py`; `reporting_bp` from `backend_reporting_routes.py` — both registered via `app.register_blueprint(...)` in `siem_backend.py` after Flask-Login setup.
-- **Still implemented as routes on the core app module** (non-exhaustive): auth/session, admin, ingest endpoints, alert list and alert mutation/execute, health, events search, reputation backfill, frontend static shell.
-- **Contract tests** exist for ingest, alerts, events search, reporting/export, alert mutation, admin (subset), and blocklist — see `tests/test_*api_contracts.py` (plus `tests/test_auth_rbac.py` for session/RBAC smoke).
+- **Ingest orchestration:** `ingest_normalized_event` lives in `backend_ingest_engine.py`; `siem_backend.py` imports/re-exports it for compatibility.
+- **Blueprints registered** (no `url_prefix`; URLs unchanged): `auth_bp`, `blocklist_bp`, `reporting_bp`, `admin_bp`, `alerts_events_bp`, `alert_mutation_bp`, and `ingest_bp`, all registered inside `create_app()`.
+- **Still implemented directly on the app shell:** `GET /health` and frontend catch-all routes only.
+- **Contract tests** exist for ingest, auth/RBAC, alerts, events search, reporting/export, alert mutation, admin, backfill reputation, and blocklist. Full pytest sweep passes.
 
 Completed safely through the current phase:
 
@@ -79,11 +86,14 @@ Completed safely through the current phase:
 - Backend audit helpers extracted (`backend_audit_helpers.py`).
 - Backend auth/RBAC helpers extracted (`backend_auth.py`).
 - Backend API guard helpers extracted (`backend_api_guards.py`).
+- Shared Flask-Limiter object extracted (`backend_extensions.py`).
 - Backend DB connection factory and blocklist helpers extracted (`backend_db.py`). Phase 4 Step 1.
 - Backend IP geolocation, reputation, and response action cluster extracted (`backend_ip_helpers.py`). Phase 4 Step 2.
 - Backend detection rule config constants and helpers extracted (`backend_detection_config.py`). Phase 5.
 - Backend correlation engines extracted (`backend_correlation_engine.py`).
 - Backend detection cores extracted (`backend_detection_engine.py`).
+- Ingest orchestration extracted (`backend_ingest_engine.py`).
+- Major backend API route groups extracted to Blueprints.
 
 What distinguished the later backend phases from earlier phases:
 
@@ -92,7 +102,7 @@ What distinguished the later backend phases from earlier phases:
 - Phase 4 also required moving **mutable module-level state** (`geo_cache`, `REPUTATION_CACHE`) — not possible with pure lifting.
 - Detection/correlation movement was **test-gated**: PostgreSQL-backed tests were added first, then functions moved while preserving the existing conn/cur ownership and shared-cursor behavior.
 
-Current stop point: continue **small, test-backed** route/Blueprint steps only. Route/API contract coverage for the groups listed above is in place; further Blueprint moves require the same discipline (surgical diff, no behavior drift, watch limiter/auth/import boundaries). Do **not** introduce `create_app()` or relocate `ingest_normalized_event` without an explicit reviewed plan.
+Current stop point: backend modularization should stop here. Further movement would mostly be churn unless it targets a concrete bug or deployment need. Keep `GET /health`, frontend catch-all routes, and module-level `app = create_app()` in `siem_backend.py`.
 
 ## 3. Frontend Completed Work
 
@@ -248,6 +258,27 @@ Important frontend state ownership that has not moved:
 - `require_azure_api_key`
 - `require_otel_api_key`
 
+`backend_extensions.py` currently owns shared Flask extension objects:
+
+- `limiter` — initialized in `create_app()` with `limiter.init_app(app)`.
+- Do not move `login_manager`, CORS, ProxyFix, app construction, or config into this module without a new plan.
+
+`backend_ingest_engine.py` currently owns normalized ingest orchestration:
+
+- `ingest_normalized_event`
+- Receives `conn` and `cur` from route callers.
+- Preserves detector-before-correlation ordering, shared-cursor behavior, rollback assumptions, and transaction ownership by the caller.
+
+Route Blueprint modules currently own API route groups:
+
+- `backend_auth_routes.py` / `auth_bp`: `POST /login`, `POST /logout`, `GET /auth/me`.
+- `backend_blocklist_routes.py` / `blocklist_bp`: blocklist list/create/unblock routes.
+- `backend_reporting_routes.py` / `reporting_bp`: alert reports, PDF reports, multi-alert reports, CSV export.
+- `backend_admin_routes.py` / `admin_bp`: admin user routes, audit log, detection rule routes, `POST /alerts/backfill-reputation`.
+- `backend_alerts_events_routes.py` / `alerts_events_bp`: `GET /alerts`, `GET /events/search`.
+- `backend_alert_mutation_routes.py` / `alert_mutation_bp`: alert notes, status, execute, and response-log routes.
+- `backend_ingest_routes.py` / `ingest_bp`: `POST /ingest`, `POST /ingest/web-log`, `POST /ingest/azure`, `POST /ingest/otlp`.
+
 `backend_reporting_helpers.py` currently owns pure reporting helpers:
 
 - `format_report_timestamp`
@@ -293,20 +324,18 @@ Important frontend state ownership that has not moved:
 - `_get_otel_app_name` — resolves app name from normalized OTel telemetry or payload
 - No imports — pure Python, zero dependencies.
 
-`siem_backend.py` imports these helpers and still owns:
+`siem_backend.py` is now the app shell and still owns:
 
-- `env_first`, `env_csv` — runtime env helpers (used by Flask app setup itself, cannot move).
-- Flask app setup, CORS, rate limiter, session config.
-- Auth/session routes and Flask-Login initialization.
-- Admin routes (user management, audit log, detection rule admin).
-- `ingest_normalized_event` fan-out and transaction orchestration.
-- Ingestion routes (custom event, web log, Azure, OTel).
-- Alert/event routes (list, search, mutation, execute, reputation backfill, etc.).
-- Registration of `blocklist_bp` and `reporting_bp` (route implementations live in `backend_blocklist_routes.py` and `backend_reporting_routes.py`).
-- `backfill_alert_sources` — dead code, no callers, not needed.
-- Frontend serving.
+- `env_first`, `env_csv` — runtime env helpers used by app setup and module-level startup constants.
+- `DEFAULT_ALLOWED_ORIGINS`, `SIEM_ALLOWED_ORIGINS`, `SIEM_BIND_HOST`, `SIEM_PORT`, `SIEM_DEBUG`.
+- `create_app()` — Flask construction, ProxyFix, limiter initialization, app config, CORS, LoginManager setup, unauthorized handler, 429 handler, user loader, and Blueprint registration.
+- `app = create_app()` — required compatibility surface for tests, scripts, and deployment imports.
+- `GET /health`.
+- Frontend catch-all serving (`/` and `/<path:path>`), intentionally after API Blueprint registration.
+- `if __name__ == "__main__"` run block.
+- Compatibility import/re-export of `ingest_normalized_event`.
 
-`siem_backend.py` line count: ~1,795 (down from ~5,183 at start of modularization).
+`siem_backend.py` should not regain route groups or domain logic unless a specific operational need is identified.
 
 ## 5. Current Architectural Rules
 
@@ -327,23 +356,21 @@ Backend rules — Phases 3–5 (all complete, preserved for reference):
 - All extractions: one module per commit, verified before the next began.
 
 Backend rules — current:
-- Do NOT start random modularization. Helper extraction is complete. Detection/correlation extraction is complete.
-- **Blueprint extraction is incremental and surgical:** register Blueprints on the existing module-level `app` with `app.register_blueprint(...)`; preserve URL paths, decorators, SQL, response shapes, and conn/cur ownership. **Do not** add `url_prefix` unless explicitly planned (current Blueprints define full paths on the blueprint).
-- **Contract tests first:** new route groups should mirror the existing `tests/test_*api_contracts.py` pattern; patch `get_db_connection` in the **route module namespace** when tests use isolated PostgreSQL schemas (see blocklist/reporting tests).
-- Do NOT move `ingest_normalized_event`. It remains the orchestration hub and owns the shared transaction/cursor fan-out. **Ingest HTTP routes** stay in `siem_backend.py` for now (API-key guards, limiter, and tight coupling to the hub).
-- Do NOT introduce `create_app()` yet. App initialization remains module-level.
-- **Auth/session routes** stay in `siem_backend.py` for now (module-level `admin_username` / `admin_password`, `login_manager`, and Flask-Login wiring).
-- **Limiter / imports:** several **admin** and **alert-mutation** routes use `@limiter.limit(...)`. Extracting those groups risks **circular imports** (`limiter` ↔ route module ↔ `siem_backend`). Do not move them until a deliberate pattern is chosen (e.g. defer applying decorators, a tiny extensions module, or limit registration order documented and tested).
-- Do NOT change conn/cur ownership. The shared-cursor transaction behavior is intentional and now test-protected.
+- Do NOT start new modularization by default. Helper extraction, detection/correlation extraction, ingest engine extraction, app factory Phase 1, and route Blueprint extraction are complete.
+- Keep `siem_backend.py` as the app shell. `GET /health`, frontend catch-all serving, module-level `app = create_app()`, and the `__main__` run block should stay there.
+- Keep Blueprint routes using full paths and no `url_prefix` unless a separately planned routing change is approved.
+- Patch `get_db_connection` in the module namespace that imports it. For extracted routes, that means the route module, not `siem_backend.py`.
+- Do NOT change conn/cur ownership. The shared-cursor transaction behavior is intentional and test-protected.
 - Do NOT create new DB connections inside detection, correlation, or ingest orchestration.
-- Stop if imports become circular or confusing.
-- Stop if a route move requires changing request/response shapes, auth semantics, session behavior, or transaction boundaries.
+- Stop if a change requires altering request/response shapes, auth semantics, session behavior, rate limiting, transaction boundaries, or frontend catch-all ordering.
 
 ## 6. Current Safe Modularization Direction
 
 **Backend helper extraction: done.** All extractable helper clusters have been moved.
 
-**Backend detection/correlation extraction: done.** All 7 detection cores are in `backend_detection_engine.py`. Both correlation engines are in `backend_correlation_engine.py`. `ingest_normalized_event` remains in `siem_backend.py` as the orchestration hub.
+**Backend detection/correlation extraction: done.** All 7 detection cores are in `backend_detection_engine.py`. Both correlation engines are in `backend_correlation_engine.py`.
+
+**Backend ingest orchestration extraction: done.** `ingest_normalized_event` is in `backend_ingest_engine.py` and is re-exported from `siem_backend.py` for compatibility.
 
 **Frontend: done.** All panels and `App.js` delegate HTTP calls to focused service modules. All utility helpers are extracted. Components still own all state, handlers, loading flags, feedback, and UI orchestration.
 
@@ -351,15 +378,9 @@ Backend rules — current:
 
 `AlertsTable.js` extraction remains paused. The remaining complexity is not presentation — it combines selected alert behavior, notes/actions, response logs, grouped/collapsed table state, exports/report links, hover/selection UI, and many display styles. Wait for a specific, clearly bounded target.
 
-**Backend next step: incremental Blueprint planning + dependency untangling — not broad refactors.**
+**Backend next step: stop modularization.**
 
-Reporting and blocklist Blueprint extractions are complete. Before the next Blueprint:
-
-1. **Plan** the next route group with explicit notes on **limiter** binding and **auth/session** imports (avoid circular imports with `siem_backend`).
-2. **Optionally harden tests** where gaps remain (e.g. admin **write** routes, `POST /alerts/<id>/execute`) so the next extraction stays test-gated.
-3. **`create_app()`** remains **planning-only** until factory-relevant behavior (session cookies, limiter attachment, login manager order) is enumerated and optionally covered.
-
-Do not begin `create_app()` implementation without a reviewed plan. Do not move `ingest_normalized_event` or ingest routes without a dedicated orchestration/import strategy.
+The remaining backend work should be ordinary maintenance, documentation, or test hardening, not additional route movement. If a future change touches app setup, preserve extension initialization order, Blueprint registration order, frontend catch-all ordering, and module-level `app = create_app()` compatibility.
 
 ## 7. Remaining High-Risk Areas
 
@@ -374,22 +395,15 @@ Backend — extracted and now test-protected:
 
 - Detection engine (7 `_generate_*_core` functions, ~1,072 lines in `backend_detection_engine.py`). These write alerts, suppress duplicates, and trigger response actions. PostgreSQL-backed behavioral tests exist for all 7 cores.
 - Correlation engine (`generate_correlated_activity_alerts`, `generate_targeted_correlation_alerts`, ~387 lines in `backend_correlation_engine.py`). PostgreSQL-backed behavioral tests exist for generic and targeted correlation.
-- `ingest_normalized_event` — orchestration fan-out hub. All 7 detection cores and both correlation engines are called from here. It remains intentionally centralized in `siem_backend.py`; rollback, ordering, and shared-cursor behavior are now test-protected.
+- `ingest_normalized_event` — orchestration fan-out hub in `backend_ingest_engine.py`. All 7 detection cores and both correlation engines are called from here. Rollback, ordering, and shared-cursor behavior are test-protected.
 
-Backend — incremental Blueprint / factory blockers:
+Backend — remaining app-shell boundaries:
 
-- **Further route Blueprints** — contract coverage exists for the major groups listed in §2; each **next** extraction still needs a short plan (rollback, limiter/auth import graph, test patch targets for `get_db_connection` in the new module).
-- **`create_app()`** — app initialization remains module-level. Do not introduce an app factory until route/auth/session and extension attachment behavior are explicitly accounted for.
-- **Ingest routes + hub** — blocked from Blueprint moves by intentional `ingest_normalized_event` centralization and ingest-specific wiring (API keys, rate limits, orchestration).
-- **Auth/session routes** — blocked from casual moves by module-level env bootstrap and Flask-Login initialization coupling to `siem_backend.py`.
+- **`GET /health`** — stays in `siem_backend.py` as platform/app-shell behavior.
+- **Frontend catch-all** — stays in `siem_backend.py`; registration order after API Blueprints matters.
+- **Module-level `app = create_app()`** — stays for compatibility with tests, scripts, and deployment imports.
 
-Backend — Flask-session bound:
-
-- Login/logout/session routes and Flask-Login app setup remain in `siem_backend.py`. Auth/RBAC helpers are already extracted to `backend_auth.py`, but broader route movement remains session-critical.
-
-Backend — dead code (ignore):
-
-- `backfill_alert_sources` — maintenance utility, no callers in `siem_backend.py`. Not needed by any module.
+Backend — no known modularization blockers remain. New architectural work should be justified by a concrete feature, bug, or deployment need.
 
 ## 8. Suggested Next Phases
 
@@ -435,40 +449,45 @@ Phase 7 — COMPLETE: Backend correlation and detection engine extraction.
 
 - `backend_correlation_engine.py` owns `generate_correlated_activity_alerts` and `generate_targeted_correlation_alerts`.
 - `backend_detection_engine.py` owns all 7 `_generate_*_core` detection functions.
-- `ingest_normalized_event` remains in `siem_backend.py`.
+- `ingest_normalized_event` later moved to `backend_ingest_engine.py` during Phase 9 closeout.
 - Conn/cur ownership did not change.
 - No new DB connections were introduced.
 - At Phase 7 closeout, no Blueprints or `create_app()` existed yet; **Phase 9** later added `blocklist_bp` and `reporting_bp` (see §2 and Phase 9).
 
-Phase 8 — COMPLETE (for the current contract scope): Route contract and API response-shape testing.
+Phase 8 — COMPLETE: Route contract and API response-shape testing.
 
-- Contract-level tests exist for: ingest, alerts list, events search, reporting/export, alert mutation (notes/status/response-log), admin (subset), blocklist.
-- Tests live primarily under `tests/test_*api_contracts.py` with PostgreSQL fixtures where needed; patch `get_db_connection` in **both** `siem_backend` and the **route module** (`backend_blocklist_routes`, `backend_reporting_routes`, etc.) when isolating DB state.
+- Contract-level tests exist for: ingest, auth/RBAC, alerts list, events search, reporting/export, alert mutation, admin, backfill reputation, and blocklist.
+- Tests live primarily under `tests/test_*api_contracts.py` with PostgreSQL fixtures where needed; patch `get_db_connection` in the module namespace that imports it.
 
-Phase 9 — IN PROGRESS: Backend route grouping via Flask Blueprints (incremental).
+Phase 9 — COMPLETE: Backend app shell, ingest engine, and route grouping.
 
-- **Done:** `backend_blocklist_routes.py` / `blocklist_bp`; `backend_reporting_routes.py` / `reporting_bp` — registered in `siem_backend.py` after Flask-Login setup, no `url_prefix`, behavior-preserving moves.
-- **Next:** plan the following groups carefully — **admin** and **alert mutation** routes often use `@limiter.limit` (circular-import risk with `limiter`); **auth/session** routes are tied to module-level env and `login_manager`; **ingest** routes tied to `ingest_normalized_event`.
-- Do not introduce `create_app()` until app initialization and session behavior are explicitly covered or documented for a factory.
+- `backend_extensions.py` owns `limiter`.
+- `create_app()` exists in `siem_backend.py`, with module-level `app = create_app()` preserved.
+- `backend_ingest_engine.py` owns `ingest_normalized_event`.
+- Blueprint route modules own auth, ingest, admin/backfill, alerts/events search, alert mutation, blocklist, and reporting/export routes.
+- `siem_backend.py` owns only the app shell, health route, frontend catch-all, compatibility app object, and main run block.
+- Final full test sweep passed: `116 passed, 2 warnings`.
 
-Phase 10 — FUTURE: Frontend hooks (low-complexity domain only).
+Phase 10 — FUTURE: Frontend hooks or test fixture cleanup, only if specifically needed.
 
 - Only after route grouping plan is stable and the backend is not actively changing.
 - Do not start with auth, alert polling, notes/actions, or `AlertsTable.js`.
 
 ## 9. Verification Checklist
 
-**Current baseline (post detection/correlation extraction):**
+**Current baseline (final modularized backend):**
 
 ```bash
-python3 -m py_compile siem_backend.py backend_blocklist_routes.py backend_reporting_routes.py backend_detection_engine.py backend_correlation_engine.py backend_detection_config.py backend_db.py backend_ip_helpers.py backend_audit_helpers.py backend_auth.py backend_api_guards.py backend_reporting_helpers.py backend_enrichment_helpers.py backend_pdf_helpers.py backend_query_helpers.py backend_ingest_normalizers.py
+python3 -m py_compile siem_backend.py backend_*.py
 ```
 
-Focused PostgreSQL-backed behavioral test baseline:
+Full regression baseline:
 
 ```bash
-python3 -m pytest tests/test_auth_rbac.py tests/test_failed_login_detection.py tests/test_port_scan_detection.py tests/test_password_spraying_detection.py tests/test_successful_login_after_spray_detection.py tests/test_http_error_detection.py tests/test_application_exception_detection.py tests/test_high_request_rate_detection.py tests/test_correlated_activity.py tests/test_targeted_correlation.py tests/test_ingest_normalized_event.py -v -rs
+python3 -m pytest -v -rs
 ```
+
+Last verified result: `116 passed, 2 warnings`.
 
 VM smoke tests verified after each phase:
 - Phase 4 Step 1: login, blocklist add/remove, alert load.
@@ -573,7 +592,7 @@ Three constraints block copy-and-paste extraction for the IP/reputation cluster:
 | `validate_blocked_ip(ip_address)` | ~20 | Pure — move verbatim |
 | `create_blocked_ip_record(cur, ...)` | ~50 | Cursor-passing pattern — move verbatim |
 
-**Do NOT move** `backfill_alert_sources` — it is a maintenance utility with no callers in `siem_backend.py`.
+Historical note: `backfill_alert_sources` was later confirmed dead and cleaned up; it is no longer part of `siem_backend.py`.
 
 **`backend_db.py` imports:** `import os`, `import psycopg2`, `import ipaddress`. No Flask deps.
 
@@ -602,7 +621,7 @@ Three constraints block copy-and-paste extraction for the IP/reputation cluster:
 > - `validate_blocked_ip` — move verbatim.
 > - `create_blocked_ip_record` — move verbatim.
 >
-> Do NOT move `backfill_alert_sources`.
+> Historical only: the original extraction prompt said not to move `backfill_alert_sources`; it was later removed as dead code.
 >
 > `backend_db.py` imports: `import os`, `import psycopg2`, `import ipaddress`. No other imports.
 >
@@ -682,13 +701,12 @@ ABUSEIPDB_API_KEY = os.getenv("SIEM_ABUSEIPDB_API_KEY") or os.getenv("ABUSEIPDB_
 
 **Preserved architecture decisions:**
 
-- `ingest_normalized_event` remains the orchestration hub inside `siem_backend.py`.
+- `ingest_normalized_event` is the orchestration hub in `backend_ingest_engine.py`; `siem_backend.py` re-exports it for compatibility.
 - Detection cores live in `backend_detection_engine.py`.
 - Correlation engines live in `backend_correlation_engine.py`.
-- App initialization remains module-level in `siem_backend.py`.
-- **Flask Blueprints:** `blocklist_bp` and `reporting_bp` are registered on the same `app` object (no `create_app()` factory).
-- No `create_app()` factory exists.
+- `create_app()` owns app setup in `siem_backend.py`, and module-level `app = create_app()` remains for compatibility.
+- Flask Blueprints own all major API route groups and are registered from `create_app()` with no `url_prefix`.
 - Conn/cur ownership remains shared and centralized; detection and correlation functions receive the caller's cursor and connection.
 - Shared-cursor transaction behavior remains critical and test-protected.
 
-**Current stop point:** `siem_backend.py` is ~1,795 lines. Helper extraction and detection/correlation extraction are complete. **Route contract tests** cover the main public API groups; **two Blueprints** (blocklist, reporting) are live. Next work is **incremental** Blueprint/import planning (watch **limiter** and **auth/session** coupling), optional **test gap fill** (admin writes, alert execute), and eventual **`create_app()`** planning only when warranted — not random modularization.
+**Current stop point:** backend modularization is effectively complete. `siem_backend.py` is the app shell plus health/frontend serving. Full verification passed with `python3 -m py_compile siem_backend.py backend_*.py` and `python3 -m pytest -v -rs` (`116 passed, 2 warnings`). Future work should be ordinary maintenance, focused test cleanup, or feature work, not additional route movement by default.
