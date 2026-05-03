@@ -34,8 +34,8 @@ class _RouteSafeConnection:
 @contextmanager
 def _patched_app_db(conn):
     wrapper = _RouteSafeConnection(conn)
-    with patch("backend_admin_routes.get_db_connection", return_value=wrapper), patch(
-        "backend_admin_routes.lookup_ip_reputation", return_value=REPUTATION
+    with patch("backend_alerts_events_routes.get_db_connection", return_value=wrapper), patch(
+        "backend_alerts_events_routes.lookup_ip_reputation", return_value=REPUTATION
     ):
         yield
 

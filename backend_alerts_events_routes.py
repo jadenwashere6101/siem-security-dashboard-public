@@ -4,10 +4,10 @@ from datetime import datetime
 from flask import Blueprint, current_app, jsonify, request
 from flask_login import login_required
 
-from backend_auth import analyst_or_super_admin_required
+from backend_auth import admin_required, analyst_or_super_admin_required
 from backend_db import get_db_connection
 from backend_enrichment_helpers import enrich_alert_with_correlation_context, enrich_alert_with_mitre
-from backend_ip_helpers import get_ip_reputation
+from backend_ip_helpers import determine_response_action, get_ip_reputation, lookup_ip_reputation
 
 
 alerts_events_bp = Blueprint("alerts_events", __name__)
@@ -100,6 +100,82 @@ def get_alerts():
     except Exception as e:
         current_app.logger.error("Error in get_alerts: %s", e)
         return jsonify({"error": "Internal server error"}), 500
+
+
+@alerts_events_bp.route("/alerts/backfill-reputation", methods=["POST"])
+@login_required
+@admin_required
+def backfill_alert_reputation():
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT id, source_ip
+            FROM alerts
+            WHERE
+                reputation_score IS NULL
+                OR reputation_source IN ('mock', 'fallback')
+                OR response_action IS NULL
+                OR response_status IS NULL
+            """
+        )
+
+        rows = cur.fetchall()
+        updated = 0
+
+        for row in rows:
+            alert_id = row[0]
+            source_ip = str(row[1])
+
+            reputation = lookup_ip_reputation(source_ip)
+            response_action = determine_response_action(reputation["reputation_score"])
+            response_status = "pending"
+
+            cur.execute(
+                """
+                UPDATE alerts
+                SET
+                    reputation_score = %s,
+                    reputation_label = %s,
+                    reputation_source = %s,
+                    reputation_summary = %s,
+                    response_action = %s,
+                    response_status = %s
+                WHERE id = %s
+                """,
+                (
+                    reputation["reputation_score"],
+                    reputation["reputation_label"],
+                    reputation["reputation_source"],
+                    reputation["reputation_summary"],
+                    response_action,
+                    response_status,
+                    alert_id
+                )
+            )
+
+            updated += 1
+
+        conn.commit()
+
+        return jsonify({
+            "message": "Reputation backfill completed",
+            "updated_alerts": updated
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error("Error in backfill_alert_reputation: %s", e)
+        return jsonify({"error": "Internal server error"}), 500
+
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 
 @alerts_events_bp.route("/events/search", methods=["GET"])
