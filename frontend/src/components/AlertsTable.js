@@ -8,6 +8,7 @@ import AlertReputationDetails from "./AlertReputationDetails";
 import AlertResponseLog from "./AlertResponseLog";
 import AlertsEmptyState from "./AlertsEmptyState";
 import AlertResponseIndicator from "./AlertResponseIndicator";
+import AlertNotesPanel from "./AlertNotesPanel";
 import AlertSourceDetails from "./AlertSourceDetails";
 import AlertsToolbar from "./AlertsToolbar";
 import AlertsToast from "./AlertsToast";
@@ -56,8 +57,6 @@ import { buildSiemPath } from "../utils/siemPath";
 // ============================================================================
 // Imports / Utilities
 // ============================================================================
-
-const MAX_ALERT_NOTE_LENGTH = 2000;
 
 function AlertsTable({
   alerts,
@@ -979,103 +978,21 @@ function AlertsTable({
             />
 
             {canTakeAlertActions && (
-              <div style={{ marginTop: "24px" }}>
-                <strong>Analyst Notes:</strong>
-                <div style={{ marginTop: "10px" }}>
-                  <textarea
-                    value={noteDrafts[selectedAlert.id] || ""}
-                    onChange={(e) =>
-                      setNoteDrafts((prev) => ({
-                        ...prev,
-                        [selectedAlert.id]: e.target.value,
-                      }))
-                    }
-                    maxLength={MAX_ALERT_NOTE_LENGTH}
-                    placeholder="Add investigation notes..."
-                    style={{
-                      width: "100%",
-                      minHeight: "96px",
-                      padding: "10px 12px",
-                      borderRadius: "10px",
-                      border: "1px solid #334155",
-                      backgroundColor: "#111827",
-                      color: "#e5e7eb",
-                      resize: "vertical",
-                      boxSizing: "border-box",
-                      fontSize: "13px",
-                    }}
-                  />
-                  <div
-                    style={{
-                      marginTop: "8px",
-                      fontSize: "12px",
-                      color: "#94a3b8",
-                      textAlign: "right",
-                    }}
-                  >
-                    {(noteDrafts[selectedAlert.id] || "").length} / {MAX_ALERT_NOTE_LENGTH}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => addAlertNote(selectedAlert.id)}
-                    disabled={addingNoteForAlertId === selectedAlert.id}
-                    style={{
-                      marginTop: "10px",
-                      padding: "8px 12px",
-                      borderRadius: "8px",
-                      border: "1px solid rgba(59, 130, 246, 0.35)",
-                      backgroundColor: "rgba(37, 99, 235, 0.18)",
-                      color: "#bfdbfe",
-                      fontWeight: "700",
-                      cursor: addingNoteForAlertId === selectedAlert.id ? "not-allowed" : "pointer",
-                      opacity: addingNoteForAlertId === selectedAlert.id ? 0.7 : 1,
-                    }}
-                  >
-                    {addingNoteForAlertId === selectedAlert.id ? "Adding..." : "Add Note"}
-                  </button>
-                </div>
-
-                <div style={{ marginTop: "14px" }}>
-                  {loadingNotesForAlertId === selectedAlert.id ? (
-                    <div style={{ fontSize: "12px", opacity: 0.7 }}>Loading notes...</div>
-                  ) : alertNotes[selectedAlert.id] && alertNotes[selectedAlert.id].length > 0 ? (
-                    alertNotes[selectedAlert.id].map((note) => (
-                      <div
-                        key={note.id}
-                        style={{
-                          marginTop: "8px",
-                          padding: "10px 12px",
-                          borderRadius: "10px",
-                          backgroundColor: "#111827",
-                          border: "1px solid #1f2937",
-                        }}
-                      >
-                        <div
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "space-between",
-                            gap: "12px",
-                            marginBottom: "6px",
-                            fontSize: "12px",
-                            color: "#94a3b8",
-                          }}
-                        >
-                          <span>{note.author}</span>
-                          <span>{formatNoteTimestamp(note.created_at)}</span>
-                        </div>
-                        <div style={{ fontSize: "13px", lineHeight: "1.55", color: "#e5e7eb" }}>
-                          {note.note_text}
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div style={{ fontSize: "12px", opacity: 0.7 }}>
-                      No notes yet. Add the first note.
-                    </div>
-                  )}
-                </div>
-              </div>
+              <AlertNotesPanel
+                alertId={selectedAlert.id}
+                noteDraft={noteDrafts[selectedAlert.id] || ""}
+                notes={alertNotes[selectedAlert.id] || []}
+                isLoadingNotes={loadingNotesForAlertId === selectedAlert.id}
+                isAddingNote={addingNoteForAlertId === selectedAlert.id}
+                onDraftChange={(value) =>
+                  setNoteDrafts((prev) => ({
+                    ...prev,
+                    [selectedAlert.id]: value,
+                  }))
+                }
+                onAddNote={addAlertNote}
+                formatNoteTimestamp={formatNoteTimestamp}
+              />
             )}
           </div>
         </div>
