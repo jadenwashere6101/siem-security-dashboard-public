@@ -1,10 +1,12 @@
 import React, { useState } from "react";
 import AlertDetailsPanel from "./AlertDetailsPanel";
+import AlertExportLinks from "./AlertExportLinks";
 import AlertsEmptyState from "./AlertsEmptyState";
 import AlertResponseIndicator from "./AlertResponseIndicator";
 import AlertsToolbar from "./AlertsToolbar";
 import AlertsToast from "./AlertsToast";
 import ResolvedAlertsTable from "./ResolvedAlertsTable";
+import TargetedAlertPanel from "./TargetedAlertPanel";
 import {
   correlationBadgeStyle,
   correlationListStyle,
@@ -760,37 +762,18 @@ function AlertsTable({
                           </p>
 
                           {targetedAlertMeta && (
-                            <div style={correlationAlert ? correlationPanelStyle : targetedAlertPanelStyle}>
-                              <p style={expandedLabelStyle}>
-                                {correlationAlert ? "Correlation Alert" : "Targeted Correlation Alert"}
-                              </p>
-                              <div style={{ marginBottom: "8px" }}>
-                                <span style={targetedAlertMeta.badgeStyle}>{targetedAlertMeta.badge}</span>
-                              </div>
-                              <p style={expandedTextStyle}>
-                                {targetedAlertMeta.description}
-                              </p>
-                              {correlationAlert && correlatedAlertTypes.length > 0 ? (
-                                <div>
-                                  <p style={expandedTextStyle}>
-                                    <strong>Involved Alert Types:</strong>
-                                  </p>
-                                  <ul style={correlationListStyle}>
-                                    {correlatedAlertTypes.map((alertType) => (
-                                      <li key={alertType}>
-                                        <span style={{ ...monoCellStyle, fontSize: "12px" }}>
-                                          {alertType}
-                                        </span>
-                                      </li>
-                                    ))}
-                                  </ul>
-                                </div>
-                              ) : (
-                                <p style={expandedTextStyle}>
-                                  <strong>{correlationAlert ? "Correlation Message" : "Alert Message"}:</strong> {alert.message}
-                                </p>
-                              )}
-                            </div>
+                            <TargetedAlertPanel
+                              targetedAlertMeta={targetedAlertMeta}
+                              correlationAlert={correlationAlert}
+                              correlatedAlertTypes={correlatedAlertTypes}
+                              correlationPanelStyle={correlationPanelStyle}
+                              targetedAlertPanelStyle={targetedAlertPanelStyle}
+                              expandedLabelStyle={expandedLabelStyle}
+                              expandedTextStyle={expandedTextStyle}
+                              correlationListStyle={correlationListStyle}
+                              monoCellStyle={monoCellStyle}
+                              alert={alert}
+                            />
                           )}
 
                           <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
@@ -892,36 +875,14 @@ function AlertsTable({
                             <span style={detailValueTextStyle}>{alert.response_status || "Not set"}</span>
                           </p>
 
-                          <div style={exportRowStyle}>
-                            <span style={exportLabelStyle}>Export:</span>
-                            <a
-                              href={buildSiemPath(`/alerts/${alert.id}/report`)}
-                              style={inlineExportLinkStyle}
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              Download Incident Report (TXT)
-                            </a>
-                            <span style={exportDividerStyle}>|</span>
-                            <button
-                              type="button"
-                              style={{
-                                ...inlineExportLinkStyle,
-                                border: "none",
-                                backgroundColor: "transparent",
-                                padding: 0,
-                                cursor: "pointer",
-                              }}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                downloadPdfReport(
-                                  buildSiemPath(`/alerts/${alert.id}/report/pdf`),
-                                  `siem-alert-${alert.id}-report.pdf`
-                                );
-                              }}
-                            >
-                              Download PDF Report
-                            </button>
-                          </div>
+                          <AlertExportLinks
+                            alert={alert}
+                            exportRowStyle={exportRowStyle}
+                            exportLabelStyle={exportLabelStyle}
+                            inlineExportLinkStyle={inlineExportLinkStyle}
+                            exportDividerStyle={exportDividerStyle}
+                            downloadPdfReport={downloadPdfReport}
+                          />
 
                           <div style={{ marginTop: "10px" }}>
                             <strong>Response Log:</strong>
