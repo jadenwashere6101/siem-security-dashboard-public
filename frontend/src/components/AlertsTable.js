@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import AlertDetailsPanel from "./AlertDetailsPanel";
+import AlertsEmptyState from "./AlertsEmptyState";
 import AlertResponseIndicator from "./AlertResponseIndicator";
 import AlertsToolbar from "./AlertsToolbar";
 import ResolvedAlertsTable from "./ResolvedAlertsTable";
@@ -567,11 +568,10 @@ function AlertsTable({
         />
 
         {filteredAlerts.length === 0 ? (
-          <div style={emptyStateStyle}>
-            <p style={emptyStateTextStyle}>
-              No alerts found for the selected filters.
-            </p>
-          </div>
+          <AlertsEmptyState
+            emptyStateStyle={emptyStateStyle}
+            emptyStateTextStyle={emptyStateTextStyle}
+          />
         ) : (
           <div style={tableWrapperStyle}>
             <div
