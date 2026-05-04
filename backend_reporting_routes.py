@@ -9,7 +9,7 @@ from backend_audit_helpers import log_audit_event
 from backend_auth import analyst_or_super_admin_required
 from backend_db import get_db_connection
 from backend_pdf_helpers import build_pdf_report_response
-from backend_query_helpers import fetch_alert_csv_rows, fetch_alert_rows, fetch_response_logs_by_alert_id
+from helpers.query_helpers import fetch_alert_csv_rows, fetch_alert_rows, fetch_response_logs_by_alert_id
 from backend_reporting_helpers import (
     build_alert_report_sections,
     build_report_header,
