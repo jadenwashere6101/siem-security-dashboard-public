@@ -5,7 +5,7 @@ from reportlab.lib import colors
 from reportlab.lib.colors import HexColor
 from reportlab.lib.utils import simpleSplit
 from reportlab.pdfgen import canvas
-from backend_reporting_helpers import format_display_value, format_pdf_timestamp
+from helpers.reporting_helpers import format_display_value, format_pdf_timestamp
 
 
 def get_pdf_severity_palette(severity):
