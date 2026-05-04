@@ -6,7 +6,7 @@ from core.auth import load_user
 from werkzeug.middleware.proxy_fix import ProxyFix
 import logging
 import os
-from backend_admin_routes import admin_bp
+from routes.admin_routes import admin_bp
 from backend_alert_mutation_routes import alert_mutation_bp
 from backend_alerts_events_routes import alerts_events_bp
 from backend_auth_routes import auth_bp
