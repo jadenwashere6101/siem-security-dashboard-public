@@ -10,7 +10,7 @@ from backend_admin_routes import admin_bp
 from backend_alert_mutation_routes import alert_mutation_bp
 from backend_alerts_events_routes import alerts_events_bp
 from backend_auth_routes import auth_bp
-from backend_blocklist_routes import blocklist_bp
+from routes.blocklist_routes import blocklist_bp
 from backend_ingest_engine import ingest_normalized_event
 from core.extensions import limiter
 from backend_ingest_routes import ingest_bp
