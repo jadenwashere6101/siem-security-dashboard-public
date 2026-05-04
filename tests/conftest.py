@@ -39,7 +39,7 @@ def mock_db():
     """Silence all DB I/O in the auth and audit modules.
 
     backend_auth and backend_audit_helpers each imported get_db_connection
-    into their own namespace via `from backend_db import get_db_connection`.
+    into their own namespace via `from core.db import get_db_connection`.
     Patching the name in each module's namespace is the correct target.
 
     The mock cursor returns None from fetchone() by default, which makes

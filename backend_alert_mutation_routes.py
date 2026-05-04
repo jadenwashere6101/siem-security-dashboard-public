@@ -3,7 +3,7 @@ from flask_login import current_user, login_required
 
 from backend_audit_helpers import log_audit_event
 from backend_auth import analyst_or_super_admin_required
-from backend_db import get_db_connection
+from core.db import get_db_connection
 from core.extensions import limiter
 from backend_ip_helpers import execute_response_action
 

@@ -1,6 +1,6 @@
 from flask import current_app
 from psycopg2.extras import Json
-from backend_db import get_db_connection
+from core.db import get_db_connection
 
 
 def log_audit_event(

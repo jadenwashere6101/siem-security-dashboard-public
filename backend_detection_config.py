@@ -2,7 +2,7 @@ import json
 
 from flask import current_app
 
-from backend_db import get_db_connection
+from core.db import get_db_connection
 
 
 # Detector defaults.

@@ -9,7 +9,7 @@ from adapters.azure_insights_adapter import (
 from adapters.nginx_adapter import parse_nginx_access_log_line
 from adapters.otel_adapter import normalize_otel_telemetry
 from helpers.api_guards import require_api_key, require_azure_api_key, require_otel_api_key
-from backend_db import get_db_connection
+from core.db import get_db_connection
 from core.extensions import limiter
 from backend_ingest_engine import ingest_normalized_event
 from helpers.ingest_normalizers import (

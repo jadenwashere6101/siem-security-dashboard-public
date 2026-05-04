@@ -2,7 +2,7 @@ from functools import wraps
 from flask import current_app, jsonify, request
 from flask_login import UserMixin, current_user
 from backend_audit_helpers import log_audit_event
-from backend_db import get_db_connection
+from core.db import get_db_connection
 
 
 def get_user_by_username(username):

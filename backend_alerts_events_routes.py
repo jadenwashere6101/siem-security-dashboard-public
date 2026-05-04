@@ -5,7 +5,7 @@ from flask import Blueprint, current_app, jsonify, request
 from flask_login import login_required
 
 from backend_auth import admin_required, analyst_or_super_admin_required
-from backend_db import get_db_connection
+from core.db import get_db_connection
 from helpers.enrichment_helpers import enrich_alert_with_correlation_context, enrich_alert_with_mitre
 from backend_ip_helpers import determine_response_action, get_ip_reputation, lookup_ip_reputation
 

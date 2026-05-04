@@ -3,7 +3,7 @@ import os
 import requests
 from flask import current_app
 
-from backend_db import create_blocked_ip_record, get_db_connection
+from core.db import create_blocked_ip_record, get_db_connection
 
 
 geo_cache = {}
