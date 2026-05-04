@@ -4,7 +4,7 @@ from flask import Blueprint, current_app, jsonify, request
 from flask_login import current_user, login_required
 
 from core.audit_helpers import log_audit_event
-from backend_auth import analyst_or_super_admin_required
+from core.auth import analyst_or_super_admin_required
 from core.db import create_blocked_ip_record, get_db_connection, validate_blocked_ip
 
 blocklist_bp = Blueprint("blocklist", __name__)

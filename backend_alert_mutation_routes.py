@@ -2,7 +2,7 @@ from flask import Blueprint, current_app, jsonify, request
 from flask_login import current_user, login_required
 
 from core.audit_helpers import log_audit_event
-from backend_auth import analyst_or_super_admin_required
+from core.auth import analyst_or_super_admin_required
 from core.db import get_db_connection
 from core.extensions import limiter
 from core.ip_helpers import execute_response_action

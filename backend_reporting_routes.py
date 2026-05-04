@@ -6,7 +6,7 @@ from flask import Blueprint, Response, current_app, jsonify, request
 from flask_login import current_user, login_required
 
 from core.audit_helpers import log_audit_event
-from backend_auth import analyst_or_super_admin_required
+from core.auth import analyst_or_super_admin_required
 from core.db import get_db_connection
 from helpers.pdf_helpers import build_pdf_report_response
 from helpers.query_helpers import fetch_alert_csv_rows, fetch_alert_rows, fetch_response_logs_by_alert_id

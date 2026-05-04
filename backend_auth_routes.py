@@ -3,7 +3,7 @@ from flask_login import current_user, login_required, login_user, logout_user
 from werkzeug.security import check_password_hash
 
 from core.audit_helpers import log_audit_event
-from backend_auth import User, get_user_by_username
+from core.auth import User, get_user_by_username
 from core.extensions import limiter
 
 

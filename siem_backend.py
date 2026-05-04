@@ -2,7 +2,7 @@ from flask import Flask, current_app, jsonify, send_from_directory
 from flask_cors import CORS
 from flask_login import LoginManager
 from dotenv import load_dotenv
-from backend_auth import load_user
+from core.auth import load_user
 from werkzeug.middleware.proxy_fix import ProxyFix
 import logging
 import os

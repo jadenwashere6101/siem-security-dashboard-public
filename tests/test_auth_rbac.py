@@ -69,16 +69,16 @@ class TestRBACDenial:
     def _login_as_viewer(self, client, fake_viewer):
         # get_user_by_username is imported into TWO namespaces:
         #   backend_auth_routes (used by the /login route)
-        #   backend_auth  (used by load_user on every subsequent request)
+        #   core.auth  (used by load_user on every subsequent request)
         # Both must be patched for login + session restore to work correctly.
         with patch("backend_auth_routes.get_user_by_username", return_value=fake_viewer), \
-             patch("backend_auth.get_user_by_username", return_value=fake_viewer):
+             patch("core.auth.get_user_by_username", return_value=fake_viewer):
             yield client
 
     def test_viewer_denied_super_admin_route_returns_403(self, client, mock_db):
         fake_viewer = self._make_fake_viewer()
         with patch("backend_auth_routes.get_user_by_username", return_value=fake_viewer), \
-             patch("backend_auth.get_user_by_username", return_value=fake_viewer):
+             patch("core.auth.get_user_by_username", return_value=fake_viewer):
             login = client.post("/login", json={"username": "testviewer", "password": "viewerpass"})
             assert login.status_code == 200
 
@@ -89,7 +89,7 @@ class TestRBACDenial:
     def test_viewer_denied_analyst_route_returns_403(self, client, mock_db):
         fake_viewer = self._make_fake_viewer()
         with patch("backend_auth_routes.get_user_by_username", return_value=fake_viewer), \
-             patch("backend_auth.get_user_by_username", return_value=fake_viewer):
+             patch("core.auth.get_user_by_username", return_value=fake_viewer):
             client.post("/login", json={"username": "testviewer", "password": "viewerpass"})
 
             resp = client.get("/events/search")
