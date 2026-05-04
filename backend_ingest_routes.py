@@ -12,7 +12,7 @@ from backend_api_guards import require_api_key, require_azure_api_key, require_o
 from backend_db import get_db_connection
 from backend_extensions import limiter
 from backend_ingest_engine import ingest_normalized_event
-from backend_ingest_normalizers import (
+from helpers.ingest_normalizers import (
     _get_azure_app_name,
     _get_azure_identity_app_name,
     _get_otel_app_name,
