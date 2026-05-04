@@ -13,7 +13,7 @@ from backend_auth_routes import auth_bp
 from routes.blocklist_routes import blocklist_bp
 from backend_ingest_engine import ingest_normalized_event
 from core.extensions import limiter
-from backend_ingest_routes import ingest_bp
+from routes.ingest_routes import ingest_bp
 from backend_reporting_routes import reporting_bp
 
 
