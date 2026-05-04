@@ -1,7 +1,7 @@
 from contextlib import contextmanager
 from unittest.mock import patch
 
-from backend_alert_mutation_routes import MAX_ALERT_NOTE_LENGTH
+from routes.alert_mutation_routes import MAX_ALERT_NOTE_LENGTH
 
 
 ADMIN_USER = "testadmin"
@@ -24,7 +24,7 @@ class _RouteSafeConnection:
 @contextmanager
 def _patched_app_db(conn):
     wrapper = _RouteSafeConnection(conn)
-    with patch("backend_alert_mutation_routes.get_db_connection", return_value=wrapper), patch(
+    with patch("routes.alert_mutation_routes.get_db_connection", return_value=wrapper), patch(
         "core.audit_helpers.get_db_connection", return_value=wrapper
     ):
         yield
