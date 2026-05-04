@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 import siem_backend
 import backend_correlation_engine
-import backend_enrichment_helpers
+from helpers import enrichment_helpers
 
 
 REPUTATION = {
@@ -244,7 +244,7 @@ def test_enrich_alert_with_correlation_context_parses_involving_message():
         ),
     }
 
-    enriched = backend_enrichment_helpers.enrich_alert_with_correlation_context(alert)
+    enriched = enrichment_helpers.enrich_alert_with_correlation_context(alert)
 
     assert enriched["is_correlation_alert"] is True
     assert enriched["correlated_alert_types"] == [

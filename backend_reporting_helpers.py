@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from backend_enrichment_helpers import enrich_alert_with_mitre
+from helpers.enrichment_helpers import enrich_alert_with_mitre
 
 
 def format_report_timestamp(value):
