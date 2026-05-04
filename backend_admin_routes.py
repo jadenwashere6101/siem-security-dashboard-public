@@ -4,7 +4,7 @@ from flask_login import current_user, login_required
 from psycopg2.extras import Json
 from werkzeug.security import generate_password_hash
 
-from backend_audit_helpers import log_audit_event
+from core.audit_helpers import log_audit_event
 from backend_auth import super_admin_required
 from core.db import get_db_connection
 from backend_detection_config import (

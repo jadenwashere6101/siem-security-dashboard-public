@@ -38,7 +38,7 @@ def client():
 def mock_db():
     """Silence all DB I/O in the auth and audit modules.
 
-    backend_auth and backend_audit_helpers each imported get_db_connection
+    backend_auth and core.audit_helpers each imported get_db_connection
     into their own namespace via `from core.db import get_db_connection`.
     Patching the name in each module's namespace is the correct target.
 
@@ -51,7 +51,7 @@ def mock_db():
     mock_cur.fetchone.return_value = None
 
     with patch("backend_auth.get_db_connection", return_value=mock_conn), \
-         patch("backend_audit_helpers.get_db_connection", return_value=mock_conn):
+         patch("core.audit_helpers.get_db_connection", return_value=mock_conn):
         yield mock_conn, mock_cur
 
 

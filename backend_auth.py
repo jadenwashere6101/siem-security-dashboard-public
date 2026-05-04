@@ -1,7 +1,7 @@
 from functools import wraps
 from flask import current_app, jsonify, request
 from flask_login import UserMixin, current_user
-from backend_audit_helpers import log_audit_event
+from core.audit_helpers import log_audit_event
 from core.db import get_db_connection
 
 

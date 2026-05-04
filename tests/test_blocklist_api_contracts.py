@@ -46,7 +46,7 @@ class _RouteSafeConnection:
 def _patched_app_db(conn):
     """Patch route, blocklist blueprint, and audit-helper DB connections to use the test conn."""
     wrapper = _RouteSafeConnection(conn)
-    with patch("backend_audit_helpers.get_db_connection", return_value=wrapper), patch(
+    with patch("core.audit_helpers.get_db_connection", return_value=wrapper), patch(
         "backend_blocklist_routes.get_db_connection", return_value=wrapper
     ):
         yield
