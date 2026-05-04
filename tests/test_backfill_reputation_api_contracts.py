@@ -63,7 +63,7 @@ def test_backfill_reputation_without_session_returns_401(client):
 def test_backfill_reputation_as_non_admin_returns_403(client, mock_db):
     fake_user = _fake_analyst()
 
-    with patch("backend_auth_routes.get_user_by_username", return_value=fake_user), patch(
+    with patch("routes.auth_routes.get_user_by_username", return_value=fake_user), patch(
         "core.auth.get_user_by_username", return_value=fake_user
     ):
         login = client.post("/login", json={"username": fake_user["username"], "password": "analystpass"})
