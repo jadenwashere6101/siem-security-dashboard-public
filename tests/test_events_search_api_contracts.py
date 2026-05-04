@@ -86,8 +86,8 @@ def _login_as_super_admin(client):
 
 
 def _fetch_events_search(client, conn, **params):
-    with patch("backend_alerts_events_routes.get_db_connection", return_value=_RouteSafeConnection(conn)), patch(
-        "backend_alerts_events_routes.get_ip_reputation", return_value=REPUTATION
+    with patch("routes.alerts_events_routes.get_db_connection", return_value=_RouteSafeConnection(conn)), patch(
+        "routes.alerts_events_routes.get_ip_reputation", return_value=REPUTATION
     ):
         return client.get("/events/search", query_string=params or None)
 
