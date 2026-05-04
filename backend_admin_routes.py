@@ -7,7 +7,7 @@ from werkzeug.security import generate_password_hash
 from core.audit_helpers import log_audit_event
 from core.auth import super_admin_required
 from core.db import get_db_connection
-from backend_detection_config import (
+from engines.detection_config import (
     get_all_effective_detection_rules,
     get_detection_rule_defaults,
     get_effective_detection_rule,

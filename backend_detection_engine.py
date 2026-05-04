@@ -1,6 +1,6 @@
 from flask import current_app
 
-from backend_detection_config import (
+from engines.detection_config import (
     APPLICATION_EXCEPTION_THRESHOLD,
     APPLICATION_EXCEPTION_WINDOW_MINUTES,
     HIGH_REQUEST_RATE_THRESHOLD,

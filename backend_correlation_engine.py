@@ -1,6 +1,6 @@
 from flask import current_app
 
-from backend_detection_config import CORRELATION_WINDOW_MINUTES
+from engines.detection_config import CORRELATION_WINDOW_MINUTES
 from core.ip_helpers import determine_response_action, execute_response_action, lookup_ip_reputation
 
 
