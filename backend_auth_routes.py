@@ -4,7 +4,7 @@ from werkzeug.security import check_password_hash
 
 from backend_audit_helpers import log_audit_event
 from backend_auth import User, get_user_by_username
-from backend_extensions import limiter
+from core.extensions import limiter
 
 
 auth_bp = Blueprint("auth", __name__)

@@ -13,7 +13,7 @@ from backend_detection_config import (
     get_effective_detection_rule,
     validate_detection_rule_config,
 )
-from backend_extensions import limiter
+from core.extensions import limiter
 
 
 admin_bp = Blueprint("admin", __name__)
