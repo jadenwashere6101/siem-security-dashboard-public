@@ -1,7 +1,7 @@
 from flask import current_app
 
 from backend_detection_config import CORRELATION_WINDOW_MINUTES
-from backend_ip_helpers import determine_response_action, execute_response_action, lookup_ip_reputation
+from core.ip_helpers import determine_response_action, execute_response_action, lookup_ip_reputation
 
 
 def generate_correlated_activity_alerts(cur, conn, source_ip):

@@ -9,7 +9,7 @@ from backend_detection_config import (
     HTTP_ERROR_WINDOW_MINUTES,
     get_effective_detection_rule,
 )
-from backend_ip_helpers import determine_response_action, execute_response_action, lookup_ip_reputation
+from core.ip_helpers import determine_response_action, execute_response_action, lookup_ip_reputation
 
 
 def _generate_failed_login_alerts_core(cur, conn, source=None, source_type=None):

@@ -19,7 +19,7 @@ from helpers.ingest_normalizers import (
     _is_azure_identity_payload,
     has_valid_location,
 )
-from backend_ip_helpers import lookup_ip_location
+from core.ip_helpers import lookup_ip_location
 
 
 ingest_bp = Blueprint("ingest", __name__)
