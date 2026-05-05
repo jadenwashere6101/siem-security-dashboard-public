@@ -270,12 +270,23 @@
 
   ## Spec-Driven Development
 
-  This project uses a spec-first workflow:
+  Features were designed and documented before implementation using an OpenSpec-style
+  workflow. Each change followed a structured process:
 
-  1. Define changes in openspec/
-  2. Review before implementation
-  3. Apply minimal, controlled updates
-  4. Validate before deployment
+  1. A proposal defined the problem and intended solution.
+  2. A spec detailed expected behavior and acceptance criteria.
+  3. Implementation was performed against the spec, not open-ended.
+  4. Completed changes were verified and archived.
+
+  Specs are plain markdown files stored under `openspec/`. All 42 completed changes are
+  archived in `openspec/changes/archive/`, covering the full feature set of the platform.
+
+  AI-assisted development was used throughout, but scoped to individual specs rather than
+  open-ended sessions. Each feature had defined requirements before any code was written.
+  This kept the backend modularization phase controlled and prevented unscoped changes
+  from accumulating.
+
+  OpenSpec organized the planning process. It did not generate the code.
 
   ———
 
