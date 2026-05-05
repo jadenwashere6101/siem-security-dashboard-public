@@ -1,20 +1,43 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  Project: SIEM Security Dashboard
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+  Backend:
+  - Python Flask API
+  - PostgreSQL database
+  - Modular architecture (blueprints, engines, helpers)
+
+  Frontend:
+  - React (functional components)
+  - Dark theme dashboard UI
+
+  Key Concepts:
+  - Multi-source ingestion (bank_app, web_log, Azure, OTLP)
+  - Detection pipeline (threshold + correlation rules)
+  - Alert lifecycle management
+  - RBAC (super_admin role)
+  - Audit logging for all sensitive actions
+
+  Development Approach:
+  - Spec-driven development (OpenSpec-style)
+  - Changes defined before implementation
+  - Completed work archived under openspec/changes/archive
+  - AI-assisted development with strict scoped changes
+  - No large unverified changes
+
+rules:
+  proposal:
+    - Focus on problem, goal, and constraints
+    - Keep under 400–600 words
+    - Avoid implementation details
+
+  spec:
+    - Must define exact behavior, inputs, and outputs
+    - Must match current API contracts and validation rules
+    - Avoid vague language
+
+  tasks:
+    - Break into small, verifiable steps
+    - Each task must be testable
+    - No large multi-file changes without verification
