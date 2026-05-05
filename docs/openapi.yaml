@@ -1,0 +1,584 @@
+openapi: 3.0.3
+
+info:
+  title: SIEM Ingestion API
+  description: >
+    Ingestion endpoints for the SIEM Security Dashboard.
+    Each endpoint accepts security telemetry from external sources,
+    normalizes it, and feeds it into the detection engine.
+  version: 1.0.0
+
+servers:
+  - url: http://127.0.0.1:5051
+    description: Local development server
+
+# ---------------------------------------------------------------------------
+# Security schemes
+# All three use the same X-API-Key header but are backed by separate env vars.
+# ---------------------------------------------------------------------------
+components:
+  securitySchemes:
+    IngestApiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Set via env var SIEM_INGEST_API_KEY. Used by /ingest and /ingest/web-log.
+
+    AzureApiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Set via env var AZURE_INGEST_API_KEY. Used by /ingest/azure.
+
+    OtelApiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Set via env var OTEL_INGEST_API_KEY. Used by /ingest/otlp.
+
+  schemas:
+
+    IngestEventRequest:
+      type: object
+      required:
+        - event_type
+        - severity
+        - source_ip
+        - message
+        - app_name
+        - environment
+      properties:
+        event_type:
+          type: string
+          enum:
+            - failed_login
+            - login_failure
+            - successful_login
+            - port_scan
+            - normal_activity
+        severity:
+          type: string
+          enum:
+            - low
+            - medium
+            - high
+            - critical
+        source_ip:
+          type: string
+          description: Valid IPv4 or IPv6 address. Rejected if malformed.
+          example: "203.0.113.42"
+        message:
+          type: string
+          example: "Login failure for user admin from 203.0.113.42"
+        app_name:
+          type: string
+          example: "bank_app"
+        environment:
+          type: string
+          example: "prod"
+        location:
+          type: object
+          description: >
+            Optional. If omitted or incomplete, the backend attempts
+            geo-enrichment from source_ip automatically.
+          properties:
+            city:
+              type: string
+            country:
+              type: string
+            lat:
+              type: number
+              format: float
+            lon:
+              type: number
+              format: float
+
+    WebLogRequest:
+      type: object
+      required:
+        - line
+      properties:
+        line:
+          type: string
+          description: >
+            A single raw nginx combined access log line.
+            Must match the standard nginx combined log format.
+          example: '203.0.113.42 - - [05/May/2026:10:22:01 +0000] "POST /login HTTP/1.1" 401 512 "-" "Mozilla/5.0"'
+        environment:
+          type: string
+          description: Defaults to "prod" if omitted.
+          default: prod
+          example: prod
+
+    AzureTelemetryItem:
+      type: object
+      description: >
+        Azure telemetry payload. Two shapes are supported:
+
+        1. Azure Application Insights — any telemetry with a data.baseType
+           field (RequestData, ExceptionData, TraceData, etc.).
+           Source IP is extracted from data.baseData fields.
+
+        2. Azure Identity (SignInData / SignInLog) — detected when baseType
+           at the root level is "SignInData" or "SignInLog".
+           Requires userPrincipalName (or username / upn) and result (or resultType).
+      properties:
+        baseType:
+          type: string
+          description: >
+            Root-level baseType triggers Azure Identity path.
+            Accepted values: SignInData, SignInLog.
+          example: SignInData
+        userPrincipalName:
+          type: string
+          description: Required for Identity payloads. Also accepted as username or upn.
+          example: "user@example.com"
+        source_ip:
+          type: string
+          description: >
+            Required for Identity payloads. Also accepted as sourceIp, client_IP, clientIp.
+          example: "203.0.113.42"
+        result:
+          type: string
+          description: >
+            Required for Identity payloads. Also accepted as resultType.
+            Accepted values: success, 0 (→ successful_login) or failure, non-zero integer (→ failed_login).
+          example: "failure"
+        message:
+          type: string
+          description: Optional. Auto-generated from username and result if omitted.
+        data:
+          type: object
+          description: Application Insights envelope. Contains baseType and baseData.
+        tags:
+          type: object
+          description: >
+            Application Insights tags. ai.cloud.roleName used as app_name if present.
+        environment:
+          type: string
+          default: prod
+
+    OtelTelemetryItem:
+      type: object
+      description: >
+        JSON-style OpenTelemetry payload. The adapter extracts source_ip,
+        status_code, and event classification from top-level fields or
+        from nested attributes (OTel KeyValue list or flat dict).
+        This is not a full OTLP protobuf implementation.
+      properties:
+        source_ip:
+          type: string
+          description: >
+            Required. Also accepted as sourceIp, or via attributes:
+            net.peer.ip, client.address, http.client_ip.
+          example: "203.0.113.42"
+        status_code:
+          type: integer
+          description: >
+            HTTP status code. Also accepted as statusCode or via attributes.
+            401/403 → unauthorized_access, 5xx → http_error, error status → application_exception.
+          example: 500
+        name:
+          type: string
+          description: Operation name, used to build the event message.
+          example: "POST /api/transfer"
+        body:
+          type: string
+          description: Log body or message text.
+          example: "Internal Server Error"
+        timeUnixNano:
+          type: string
+          description: >
+            Event timestamp in Unix nanoseconds as a string.
+            Also accepted as observedTimeUnixNano, startTimeUnixNano, timestamp, time.
+          example: "1746441600000000000"
+        attributes:
+          description: >
+            OTel attributes. Accepted as a flat object or as a KeyValue list
+            [{key, value: {stringValue}}]. Checked for service.name, exception.type,
+            http.status_code, otel.status_code, and IP fields.
+          oneOf:
+            - type: object
+            - type: array
+              items:
+                type: object
+                properties:
+                  key:
+                    type: string
+                  value:
+                    type: object
+        environment:
+          type: string
+          default: prod
+
+    IngestResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: "Event added successfully"
+        alerts_created:
+          type: array
+          description: List of alert IDs or objects created as a result of this event.
+          items:
+            type: object
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "Missing required fields"
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+paths:
+
+  /ingest:
+    post:
+      summary: Ingest a security event
+      description: >
+        Accepts a single structured security event. Validates all required fields,
+        rejects unknown event types and severities, validates source_ip format,
+        auto-enriches location if missing, then stores the event and runs detection.
+      security:
+        - IngestApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IngestEventRequest'
+            examples:
+              failed_login:
+                summary: Failed login event
+                value:
+                  event_type: failed_login
+                  severity: medium
+                  source_ip: "203.0.113.42"
+                  message: "Login failure for user admin from 203.0.113.42"
+                  app_name: bank_app
+                  environment: prod
+              port_scan:
+                summary: Port scan event
+                value:
+                  event_type: port_scan
+                  severity: high
+                  source_ip: "198.51.100.7"
+                  message: "Port scan detected from 198.51.100.7"
+                  app_name: bank_app
+                  environment: prod
+              with_location:
+                summary: Event with pre-supplied location (skips geo-enrichment)
+                value:
+                  event_type: successful_login
+                  severity: low
+                  source_ip: "203.0.113.42"
+                  message: "Successful login for user jsmith"
+                  app_name: bank_app
+                  environment: prod
+                  location:
+                    city: "Austin"
+                    country: "US"
+                    lat: 30.2672
+                    lon: -97.7431
+      responses:
+        '201':
+          description: Event accepted and stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResponse'
+              example:
+                message: "Event added successfully"
+                alerts_created: []
+        '400':
+          description: "Validation failure. Possible error values: Missing required fields, Missing required field: message, Missing required field: app_name, Missing required field: environment, Invalid source_ip, Invalid event_type, Invalid severity, Invalid JSON."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Invalid event_type"
+        '401':
+          description: Missing or incorrect API key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Unauthorized"
+        '429':
+          description: Rate limit exceeded. Limit is 200 requests per minute.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "rate_limited"
+
+  /ingest/web-log:
+    post:
+      summary: Ingest a raw nginx access log line
+      description: >
+        Accepts a single raw nginx combined access log line.
+        The backend parses it, classifies the event (unauthorized_access,
+        http_error, or normal_activity) based on HTTP status code, and
+        stores the normalized event. source_ip and event_timestamp are
+        extracted from the log line itself.
+      security:
+        - IngestApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebLogRequest'
+            examples:
+              unauthorized:
+                summary: 401 response — classified as unauthorized_access
+                value:
+                  line: '203.0.113.42 - - [05/May/2026:10:22:01 +0000] "POST /login HTTP/1.1" 401 512 "-" "Mozilla/5.0"'
+                  environment: prod
+              server_error:
+                summary: 500 response — classified as http_error
+                value:
+                  line: '198.51.100.7 - - [05/May/2026:10:25:14 +0000] "GET /api/transfer HTTP/1.1" 500 0 "-" "curl/7.88"'
+              normal:
+                summary: 200 response — classified as normal_activity
+                value:
+                  line: '10.0.0.1 - - [05/May/2026:09:00:00 +0000] "GET /dashboard HTTP/1.1" 200 4096 "-" "Mozilla/5.0"'
+      responses:
+        '201':
+          description: Log line parsed and event stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResponse'
+              example:
+                message: "Event added successfully"
+                alerts_created: []
+        '400':
+          description: Missing line field, or log line does not match nginx combined format.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Malformed nginx access log line"
+        '401':
+          description: Missing or incorrect API key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Unauthorized"
+
+  /ingest/azure:
+    post:
+      summary: Ingest Azure telemetry (Application Insights or Identity)
+      description: >
+        Accepts a single Azure telemetry object or a batch of up to 25 items.
+        Two payload types are supported and auto-detected:
+
+        - Azure Application Insights (RequestData, ExceptionData, TraceData, etc.)
+          — source IP extracted from envelope fields, event type derived from HTTP status.
+
+        - Azure Identity (SignInData / SignInLog)
+          — requires userPrincipalName, source IP, and result fields.
+          Maps to failed_login or successful_login.
+
+        Items that fail validation cause the entire batch to be rejected with 400.
+      security:
+        - AzureApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/AzureTelemetryItem'
+                - type: array
+                  items:
+                    $ref: '#/components/schemas/AzureTelemetryItem'
+                  minItems: 1
+                  maxItems: 25
+            examples:
+              app_insights_request:
+                summary: Application Insights — HTTP request telemetry
+                value:
+                  data:
+                    baseType: RequestData
+                    baseData:
+                      url: "https://api.example.com/login"
+                      resultCode: "401"
+                      source: "203.0.113.42"
+                      name: "POST /login"
+                  tags:
+                    ai.cloud.roleName: bank-api
+              identity_failure:
+                summary: Azure Identity — failed login (SignInData)
+                value:
+                  baseType: SignInData
+                  userPrincipalName: "user@example.com"
+                  source_ip: "203.0.113.42"
+                  result: "failure"
+                  resultDescription: "Invalid credentials"
+              identity_success:
+                summary: Azure Identity — successful login
+                value:
+                  baseType: SignInLog
+                  userPrincipalName: "admin@example.com"
+                  sourceIp: "10.0.0.5"
+                  result: "success"
+              batch:
+                summary: Batch of two items (max 25)
+                value:
+                  - baseType: SignInData
+                    userPrincipalName: "user@example.com"
+                    source_ip: "203.0.113.42"
+                    result: "failure"
+                  - baseType: SignInData
+                    userPrincipalName: "user@example.com"
+                    source_ip: "203.0.113.42"
+                    result: "failure"
+      responses:
+        '201':
+          description: All items accepted and stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResponse'
+              examples:
+                single:
+                  value:
+                    message: "Event added successfully"
+                    alerts_created: []
+                batch:
+                  value:
+                    message: "Events added successfully"
+                    alerts_created: []
+        '400':
+          description: >
+            Validation failure. Any item in a batch that fails validation rejects
+            the entire request. Possible errors — Missing username, Missing valid
+            source/client IP, Missing or unrecognized login result,
+            Telemetry batch exceeds maximum size of 25, Telemetry batch must not be empty.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Missing username"
+        '401':
+          description: Missing or incorrect API key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Unauthorized"
+
+  /ingest/otlp:
+    post:
+      summary: Ingest OpenTelemetry telemetry
+      description: >
+        Accepts a single OpenTelemetry JSON object or a batch of up to 25 items.
+        This is not a full OTLP protobuf implementation — it expects JSON payloads.
+        source_ip is required (directly or via OTel attributes).
+        Event type is derived from HTTP status code or OTel error status.
+        Items that fail validation reject the entire batch.
+      security:
+        - OtelApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/OtelTelemetryItem'
+                - type: array
+                  items:
+                    $ref: '#/components/schemas/OtelTelemetryItem'
+                  minItems: 1
+                  maxItems: 25
+            examples:
+              http_error:
+                summary: HTTP 500 telemetry — classified as http_error
+                value:
+                  source_ip: "203.0.113.42"
+                  status_code: 500
+                  name: "POST /api/transfer"
+                  body: "Internal Server Error"
+                  environment: prod
+                  attributes:
+                    - key: service.name
+                      value:
+                        stringValue: bank-api
+              unauthorized:
+                summary: HTTP 401 telemetry — classified as unauthorized_access
+                value:
+                  source_ip: "198.51.100.7"
+                  status_code: 401
+                  name: "POST /login"
+                  environment: prod
+              exception:
+                summary: Exception telemetry — classified as application_exception
+                value:
+                  source_ip: "10.0.0.2"
+                  name: "process_payment"
+                  attributes:
+                    - key: exception.type
+                      value:
+                        stringValue: "ValueError"
+                    - key: exception.message
+                      value:
+                        stringValue: "Payment amount exceeded limit"
+                    - key: service.name
+                      value:
+                        stringValue: payments-service
+              with_timestamp:
+                summary: Event with nanosecond timestamp
+                value:
+                  source_ip: "203.0.113.42"
+                  status_code: 500
+                  name: "GET /api/accounts"
+                  timeUnixNano: "1746441600000000000"
+                  environment: prod
+      responses:
+        '201':
+          description: All items accepted and stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResponse'
+              examples:
+                single:
+                  value:
+                    message: "Event added successfully"
+                    alerts_created: []
+                batch:
+                  value:
+                    message: "Events added successfully"
+                    alerts_created: []
+        '400':
+          description: >
+            Validation failure. Possible errors — Missing valid source/client IP,
+            Telemetry item must be an object, Telemetry batch must not be empty,
+            Telemetry batch exceeds maximum size of 25.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Missing valid source/client IP"
+        '401':
+          description: Missing or incorrect API key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Unauthorized"
