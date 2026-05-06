@@ -63,6 +63,18 @@ def get_queue_action(conn, queue_id):
         return _queue_row_from_record(cur.fetchone())
 
 
+def get_queue_status_counts(conn):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT status, COUNT(*) AS count
+            FROM response_actions_queue
+            GROUP BY status
+            """
+        )
+        return {row[0]: row[1] for row in cur.fetchall()}
+
+
 def claim_next_pending_action(conn, now=None):
     with conn.cursor() as cur:
         cur.execute(

@@ -1,4 +1,5 @@
 import argparse
+import json
 import logging
 import os
 import sys
@@ -16,6 +17,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from engines.soar_action_worker import process_batch
 from engines.soar_executor import AdapterBackedExecutor, SimulationExecutor
+from core.response_action_queue_store import get_queue_status_counts
 from integrations.soar_adapters.config import SoarAdapterConfig
 from integrations.soar_adapters.linux_firewall import LinuxFirewallDryRunAdapter
 from integrations.soar_adapters.registry import SoarAdapterRegistry
@@ -23,27 +25,56 @@ from integrations.soar_adapters.registry import SoarAdapterRegistry
 DEFAULT_BATCH_SIZE = 10
 MAX_BATCH_SIZE = 50
 VALID_EXECUTION_MODES = {"simulation", "real"}
+_KNOWN_STATUSES = ["pending", "running", "failed", "skipped", "success"]
 
 
-def main():
+def _parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Run one SOAR worker batch and exit.")
     parser.add_argument(
         "--batch-size",
         type=int,
+        default=None,
         help=f"Override SOAR_RUNNER_BATCH_SIZE (1-{MAX_BATCH_SIZE})",
     )
-    parser.parse_known_args()
+    parser.add_argument(
+        "--mode",
+        choices=["simulation", "real"],
+        default=None,
+        help="Execution mode. Overrides SOAR_EXECUTION_MODE.",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        help="Emit all output as a single JSON object to stdout.",
+    )
+    parser.add_argument(
+        "--dry-run-info",
+        action="store_true",
+        default=False,
+        help="Print queue status counts and exit without processing any actions.",
+    )
+    return parser.parse_args(argv)
 
+
+def main(argv=None):
+    args = _parse_args(argv)
     logging.basicConfig(level=logging.INFO)
 
     try:
         _ensure_not_in_flask_context()
-        mode, batch_size = _load_and_validate_config()
-        _print_start_header(mode, batch_size)
+        if args.dry_run_info:
+            return _run_dry_run_info(args)
+        mode, batch_size = _load_and_validate_config(args)
+        header = _build_header_dict(mode, batch_size)
+        _print_start_header(header, json_mode=args.json)
         database_url = _read_database_url()
         executor = _build_executor(mode)
     except RunnerConfigError as error:
-        print(f"ERROR: {error}", file=sys.stderr)
+        if args.json:
+            print(json.dumps({"error": str(error)}))
+        else:
+            print(f"ERROR: {error}", file=sys.stderr)
         return 1
 
     conn = None
@@ -57,7 +88,21 @@ def main():
     try:
         results = process_batch(conn, limit=batch_size, executor=executor)
         counts = _aggregate_results(results)
-        _print_summary(counts)
+        if args.json:
+            print(
+                json.dumps(
+                    {
+                        "mode": mode,
+                        "batch_size": batch_size,
+                        "started_at": header["started_at"],
+                        "results": results,
+                        "summary": counts,
+                    },
+                    default=str,
+                )
+            )
+        else:
+            _print_summary(counts)
         return 0
     except Exception:
         traceback.print_exc()
@@ -83,14 +128,17 @@ def _ensure_not_in_flask_context():
         return
 
 
-def _load_and_validate_config():
-    raw_mode = os.getenv("SOAR_EXECUTION_MODE", "simulation").strip().lower()
+def _load_and_validate_config(args):
+    raw_mode = (args.mode or os.getenv("SOAR_EXECUTION_MODE", "simulation")).strip().lower()
     if raw_mode not in VALID_EXECUTION_MODES:
         raise RunnerConfigError(
             f"SOAR_EXECUTION_MODE must be one of {sorted(VALID_EXECUTION_MODES)}; got '{raw_mode}'"
         )
 
-    raw_batch_size = os.getenv("SOAR_RUNNER_BATCH_SIZE", str(DEFAULT_BATCH_SIZE)).strip()
+    if args.batch_size is not None:
+        raw_batch_size = str(args.batch_size)
+    else:
+        raw_batch_size = os.getenv("SOAR_RUNNER_BATCH_SIZE", str(DEFAULT_BATCH_SIZE)).strip()
     try:
         batch_size = int(raw_batch_size)
     except ValueError as error:
@@ -168,13 +216,19 @@ def _aggregate_results(results):
     }
 
 
-def _print_start_header(mode, batch_size):
-    started_at = datetime.now(timezone.utc).isoformat()
+def _build_header_dict(mode, batch_size):
+    started_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return {"mode": mode, "batch_size": batch_size, "started_at": started_at}
+
+
+def _print_start_header(header, json_mode=False):
+    if json_mode:
+        return
     print("=== SOAR Worker Runner ===")
-    print(f"Mode:        {mode}")
-    print(f"Batch size:  {batch_size}")
-    print(f"Started at:  {started_at}")
-    if mode == "real":
+    print(f"Mode:        {header['mode']}")
+    print(f"Batch size:  {header['batch_size']}")
+    print(f"Started at:  {header['started_at']}")
+    if header["mode"] == "real":
         print("WARNING: Real execution mode is active. Actions will be dispatched to adapters.")
     print("=========================")
 
@@ -192,6 +246,49 @@ def _print_summary(counts):
     print(f"  Skipped:  {counts['skipped']}")
     print(f"  Requeued: {counts['requeued']}")
     print("Done.")
+
+
+def _normalize_queue_counts(raw):
+    return {status: raw.get(status, 0) for status in _KNOWN_STATUSES}
+
+
+def _run_dry_run_info(args):
+    try:
+        database_url = _read_database_url()
+    except RunnerConfigError as error:
+        if args.json:
+            print(json.dumps({"error": str(error)}))
+        else:
+            print(f"ERROR: {error}", file=sys.stderr)
+        return 1
+
+    conn = None
+    try:
+        conn = psycopg2.connect(database_url, cursor_factory=RealDictCursor)
+        conn.autocommit = False
+        raw_counts = get_queue_status_counts(conn)
+        counts = _normalize_queue_counts(raw_counts)
+
+        if args.json:
+            print(json.dumps({"mode": "dry_run_info", "queue_counts": counts}))
+        else:
+            print("=== SOAR Queue Status ===")
+            print(f"  Pending:  {counts['pending']}")
+            print(f"  Running:  {counts['running']}")
+            print(f"  Failed:   {counts['failed']}")
+            print(f"  Skipped:  {counts['skipped']}")
+            print(f"  Success:  {counts['success']}")
+            print("=========================")
+        return 0
+    except Exception as error:
+        if args.json:
+            print(json.dumps({"error": str(error)}))
+        else:
+            print(f"ERROR: Unable to read queue status: {error}", file=sys.stderr)
+        return 1
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 if __name__ == "__main__":

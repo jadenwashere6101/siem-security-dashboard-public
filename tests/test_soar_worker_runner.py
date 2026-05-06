@@ -1,4 +1,5 @@
 from unittest.mock import MagicMock, patch
+import json
 
 import siem_backend
 from core.ip_helpers import enqueue_response_action
@@ -17,7 +18,7 @@ def test_runner_refuses_active_flask_context(monkeypatch):
     with siem_backend.app.app_context(), patch(
         "scripts.soar_worker_run.process_batch"
     ) as process_batch_mock:
-        code = soar_worker_run.main()
+        code = soar_worker_run.main([])
     assert code == 1
     process_batch_mock.assert_not_called()
 
@@ -25,28 +26,29 @@ def test_runner_refuses_active_flask_context(monkeypatch):
 def test_runner_unknown_mode_exits_1(monkeypatch):
     monkeypatch.setenv("SOAR_EXECUTION_MODE", "invalid")
     monkeypatch.setenv("SOAR_RUNNER_BATCH_SIZE", "10")
-    code = soar_worker_run.main()
+    code = soar_worker_run.main([])
     assert code == 1
 
 
 def test_runner_non_integer_batch_exits_1(monkeypatch):
     monkeypatch.setenv("SOAR_EXECUTION_MODE", "simulation")
     monkeypatch.setenv("SOAR_RUNNER_BATCH_SIZE", "abc")
-    code = soar_worker_run.main()
+    code = soar_worker_run.main([])
     assert code == 1
 
 
 def test_runner_batch_below_one_exits_1(monkeypatch):
     monkeypatch.setenv("SOAR_EXECUTION_MODE", "simulation")
     monkeypatch.setenv("SOAR_RUNNER_BATCH_SIZE", "0")
-    code = soar_worker_run.main()
+    code = soar_worker_run.main([])
     assert code == 1
 
 
 def test_runner_batch_clamped_to_50(monkeypatch):
     monkeypatch.setenv("SOAR_EXECUTION_MODE", "simulation")
     monkeypatch.setenv("SOAR_RUNNER_BATCH_SIZE", "999")
-    mode, batch_size = soar_worker_run._load_and_validate_config()
+    args = MagicMock(mode=None, batch_size=None)
+    mode, batch_size = soar_worker_run._load_and_validate_config(args)
     assert mode == "simulation"
     assert batch_size == 50
 
@@ -55,7 +57,7 @@ def test_runner_missing_database_url_exits_1(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("SOAR_EXECUTION_MODE", "simulation")
     monkeypatch.setenv("SOAR_RUNNER_BATCH_SIZE", "10")
-    code = soar_worker_run.main()
+    code = soar_worker_run.main([])
     assert code == 1
 
 
@@ -65,7 +67,7 @@ def test_runner_connect_uses_database_url(monkeypatch):
     with patch("scripts.soar_worker_run.psycopg2.connect", return_value=mock_conn) as connect_mock, patch(
         "scripts.soar_worker_run.process_batch", return_value=[]
     ):
-        code = soar_worker_run.main()
+        code = soar_worker_run.main([])
     assert code == 0
     connect_mock.assert_called_once()
     assert connect_mock.call_args.args[0] == "postgresql://example/db"
@@ -117,8 +119,70 @@ def test_runner_process_batch_uncaught_exception_exits_2(monkeypatch):
     with patch("scripts.soar_worker_run.psycopg2.connect", return_value=mock_conn), patch(
         "scripts.soar_worker_run.process_batch", side_effect=Exception("boom")
     ):
-        code = soar_worker_run.main()
+        code = soar_worker_run.main([])
     assert code == 2
+
+
+def test_cli_batch_size_overrides_env(monkeypatch):
+    monkeypatch.setenv("SOAR_RUNNER_BATCH_SIZE", "20")
+    args = MagicMock(mode=None, batch_size=5)
+    _, batch_size = soar_worker_run._load_and_validate_config(args)
+    assert batch_size == 5
+
+
+def test_cli_mode_overrides_env(monkeypatch):
+    monkeypatch.setenv("SOAR_EXECUTION_MODE", "simulation")
+    args = MagicMock(mode="real", batch_size=None)
+    mode, _ = soar_worker_run._load_and_validate_config(args)
+    assert mode == "real"
+
+
+def test_env_batch_size_used_when_cli_not_set(monkeypatch):
+    monkeypatch.setenv("SOAR_RUNNER_BATCH_SIZE", "15")
+    args = MagicMock(mode=None, batch_size=None)
+    _, batch_size = soar_worker_run._load_and_validate_config(args)
+    assert batch_size == 15
+
+
+def test_env_mode_defaults_to_simulation_when_cli_not_set(monkeypatch):
+    monkeypatch.delenv("SOAR_EXECUTION_MODE", raising=False)
+    args = MagicMock(mode=None, batch_size=None)
+    mode, _ = soar_worker_run._load_and_validate_config(args)
+    assert mode == "simulation"
+
+
+def test_runner_json_config_error_output(monkeypatch, capsys):
+    monkeypatch.setenv("SOAR_EXECUTION_MODE", "invalid")
+    code = soar_worker_run.main(["--json"])
+    assert code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert "error" in payload
+
+
+def test_runner_json_output_parseable(monkeypatch, capsys):
+    _set_base_env(monkeypatch)
+    mock_conn = MagicMock()
+    with patch("scripts.soar_worker_run.psycopg2.connect", return_value=mock_conn), patch(
+        "scripts.soar_worker_run.process_batch", return_value=[{"outcome": "success"}]
+    ):
+        code = soar_worker_run.main(["--json"])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert {"mode", "batch_size", "started_at", "results", "summary"} <= set(payload.keys())
+    assert payload["summary"]["processed"] == len(payload["results"])
+
+
+def test_runner_json_output_empty_queue(monkeypatch, capsys):
+    _set_base_env(monkeypatch)
+    mock_conn = MagicMock()
+    with patch("scripts.soar_worker_run.psycopg2.connect", return_value=mock_conn), patch(
+        "scripts.soar_worker_run.process_batch", return_value=[]
+    ):
+        code = soar_worker_run.main(["--json"])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["results"] == []
+    assert payload["summary"]["processed"] == 0
 
 
 def _insert_alert(cur, source_ip):
@@ -136,6 +200,22 @@ def _insert_alert(cur, source_ip):
 def _count_queue_by_status(cur, status):
     cur.execute("SELECT COUNT(*) FROM response_actions_queue WHERE status = %s", (status,))
     return cur.fetchone()[0]
+
+
+def _snapshot_queue_statuses(cur):
+    cur.execute("SELECT id, status FROM response_actions_queue ORDER BY id")
+    return cur.fetchall()
+
+
+class _NoCloseConnectionProxy:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def close(self):
+        return None
 
 
 def test_runner_db_backed_simulation_success(postgres_db):
@@ -183,4 +263,84 @@ def test_runner_db_backed_empty_queue(postgres_db):
     results = soar_worker_run.process_batch(conn, limit=10, executor=soar_worker_run.SimulationExecutor())
     counts = soar_worker_run._aggregate_results(results)
     assert counts["processed"] == 0
+
+
+def test_normalize_queue_counts_defaults_and_filters():
+    assert soar_worker_run._normalize_queue_counts({}) == {
+        "pending": 0,
+        "running": 0,
+        "failed": 0,
+        "skipped": 0,
+        "success": 0,
+    }
+    normalized = soar_worker_run._normalize_queue_counts(
+        {"pending": 3, "failed": 1, "unknown_status": 99}
+    )
+    assert normalized == {
+        "pending": 3,
+        "running": 0,
+        "failed": 1,
+        "skipped": 0,
+        "success": 0,
+    }
+
+
+def test_dry_run_info_does_not_call_process_batch(postgres_db, monkeypatch):
+    conn, cur = postgres_db
+    monkeypatch.setenv("DATABASE_URL", "postgresql://example/db")
+    alert_id = _insert_alert(cur, "8.8.8.8")
+    enqueue_response_action(cur, alert_id, "8.8.8.8", "block_ip")
+    conn.commit()
+
+    with patch(
+        "scripts.soar_worker_run.psycopg2.connect",
+        return_value=_NoCloseConnectionProxy(conn),
+    ), patch(
+        "scripts.soar_worker_run.process_batch"
+    ) as process_batch_mock:
+        code = soar_worker_run.main(["--dry-run-info"])
+    assert code == 0
+    process_batch_mock.assert_not_called()
+
+
+def test_dry_run_info_keeps_queue_unchanged(postgres_db, monkeypatch):
+    conn, cur = postgres_db
+    monkeypatch.setenv("DATABASE_URL", "postgresql://example/db")
+    alert_id = _insert_alert(cur, "8.8.8.8")
+    enqueue_response_action(cur, alert_id, "8.8.8.8", "block_ip")
+    conn.commit()
+    before = _snapshot_queue_statuses(cur)
+
+    with patch(
+        "scripts.soar_worker_run.psycopg2.connect",
+        return_value=_NoCloseConnectionProxy(conn),
+    ):
+        code = soar_worker_run.main(["--dry-run-info"])
+    assert code == 0
+    after = _snapshot_queue_statuses(cur)
+    assert before == after
+
+
+def test_dry_run_info_json_output(postgres_db, capsys, monkeypatch):
+    conn, cur = postgres_db
+    monkeypatch.setenv("DATABASE_URL", "postgresql://example/db")
+    alert_id = _insert_alert(cur, "8.8.8.8")
+    enqueue_response_action(cur, alert_id, "8.8.8.8", "block_ip")
+    conn.commit()
+
+    with patch(
+        "scripts.soar_worker_run.psycopg2.connect",
+        return_value=_NoCloseConnectionProxy(conn),
+    ):
+        code = soar_worker_run.main(["--dry-run-info", "--json"])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["mode"] == "dry_run_info"
+    assert set(payload["queue_counts"].keys()) == {
+        "pending",
+        "running",
+        "failed",
+        "skipped",
+        "success",
+    }
 

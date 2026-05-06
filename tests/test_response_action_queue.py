@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from core.response_action_queue_store import (
     QueueTransitionError,
     claim_next_pending_action,
+    get_queue_status_counts,
     mark_action_failed,
     mark_action_skipped,
     mark_action_success,
@@ -713,3 +714,49 @@ def test_stale_running_recovery_ignores_fresh_running_row(postgres_db):
 
     assert recovered == []
     assert fetch_queue_row(cur, row_id)[4] == "running"
+
+
+def test_get_queue_status_counts_empty_queue_returns_empty_dict(postgres_db):
+    conn, _cur = postgres_db
+    assert get_queue_status_counts(conn) == {}
+
+
+def test_get_queue_status_counts_pending_only(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur, source_ip="8.8.8.8")
+    enqueue_response_action(cur, alert_id, "8.8.8.8", "block_ip")
+    enqueue_response_action(cur, alert_id, "8.8.8.8", "monitor")
+    conn.commit()
+
+    counts = get_queue_status_counts(conn)
+    assert counts == {"pending": 2}
+
+
+def test_get_queue_status_counts_mixed_statuses_without_mutation(postgres_db):
+    conn, cur = postgres_db
+    a1 = insert_minimal_alert(cur, source_ip="8.8.8.8")
+    a2 = insert_minimal_alert(cur, source_ip="1.1.1.1")
+    a3 = insert_minimal_alert(cur, source_ip="9.9.9.9")
+    q1 = enqueue_response_action(cur, a1, "8.8.8.8", "block_ip")
+    q2 = enqueue_response_action(cur, a2, "1.1.1.1", "block_ip")
+    q3 = enqueue_response_action(cur, a3, "9.9.9.9", "block_ip")
+    conn.commit()
+
+    cur.execute(
+        "UPDATE response_actions_queue SET status = 'success' WHERE id = %s",
+        (q2,),
+    )
+    cur.execute(
+        "UPDATE response_actions_queue SET status = 'failed' WHERE id = %s",
+        (q3,),
+    )
+    conn.commit()
+    cur.execute("SELECT id, status FROM response_actions_queue ORDER BY id")
+    before = cur.fetchall()
+
+    counts = get_queue_status_counts(conn)
+    cur.execute("SELECT id, status FROM response_actions_queue ORDER BY id")
+    after = cur.fetchall()
+
+    assert counts == {"pending": 1, "success": 1, "failed": 1}
+    assert before == after

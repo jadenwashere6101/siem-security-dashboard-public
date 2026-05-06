@@ -4,17 +4,17 @@
 
 ## Completion Checklist
 
-- [ ] Task 1 — Wire `parse_args()` and thread `args` through `main()`
-- [ ] Task 2 — Add `--mode` and `--json` arg definitions
-- [ ] Task 3 — Update `_load_and_validate_config` to accept `args` and apply precedence
-- [ ] Task 4 — Add `get_queue_status_counts` to queue store
-- [ ] Task 5 — Implement `--dry-run-info` branch in `main()`
-- [ ] Task 6 — Implement `--json` output path
-- [ ] Task 7 — Arg wiring unit tests
-- [ ] Task 8 — `--dry-run-info` DB-backed tests
-- [ ] Task 9 — `--json` output tests
-- [ ] Task 10 — `get_queue_status_counts` DB-backed tests
-- [ ] Task 11 — Regression check
+- [x] Task 1 — Wire `parse_args()` and thread `args` through `main()`
+- [x] Task 2 — Add `--mode` and `--json` arg definitions
+- [x] Task 3 — Update `_load_and_validate_config` to accept `args` and apply precedence
+- [x] Task 4 — Add `get_queue_status_counts` to queue store
+- [x] Task 5 — Implement `--dry-run-info` branch in `main()`
+- [x] Task 6 — Implement `--json` output path
+- [x] Task 7 — Arg wiring unit tests
+- [x] Task 8 — `--dry-run-info` DB-backed tests
+- [x] Task 9 — `--json` output tests
+- [x] Task 10 — `get_queue_status_counts` DB-backed tests
+- [x] Task 11 — Regression check
 
 ---
 
