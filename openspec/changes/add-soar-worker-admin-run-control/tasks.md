@@ -4,7 +4,7 @@ Implement later as a small backend-only control.
 
 ---
 
-## Task 1 — Inspect current worker and admin route contracts
+## Task 1 — Inspect current worker and admin route contracts [x]
 
 Inspect:
 
@@ -22,7 +22,7 @@ Confirm:
 
 ---
 
-## Task 2 — Add route constants/helpers
+## Task 2 — Add route constants/helpers [x]
 
 In `routes/admin_routes.py`, add:
 
@@ -35,7 +35,7 @@ Keep helpers local unless reuse is clearly valuable.
 
 ---
 
-## Task 3 — Add run-once endpoint
+## Task 3 — Add run-once endpoint [x]
 
 Add:
 
@@ -58,7 +58,7 @@ Rules:
 
 ---
 
-## Task 4 — Enforce simulation-only behavior
+## Task 4 — Enforce simulation-only behavior [x]
 
 Reject request bodies that try to set:
 
@@ -73,7 +73,7 @@ env var to `real` and confirm the response still reports `"mode": "simulation"`.
 
 ---
 
-## Task 5 — Add audit/logging
+## Task 5 — Add audit/logging [x]
 
 If `log_audit_event()` fits the current route pattern, write an audit event:
 
@@ -95,7 +95,7 @@ Do not include secrets or raw errors.
 
 ---
 
-## Task 6 — Add tests
+## Task 6 — Add tests [x]
 
 Create:
 
@@ -155,4 +155,3 @@ Do not:
 - add retry/replay individual item controls
 - change ingest/detection/correlation
 - change schema
-

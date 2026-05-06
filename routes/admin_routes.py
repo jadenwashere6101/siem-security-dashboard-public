@@ -13,16 +13,20 @@ from core.response_action_queue_store import (
     get_queue_action,
     list_recent_queue_actions,
 )
+from engines.soar_action_worker import process_batch
 from engines.detection_config import (
     get_all_effective_detection_rules,
     get_detection_rule_defaults,
     get_effective_detection_rule,
     validate_detection_rule_config,
 )
+from engines.soar_executor import SimulationExecutor
 from core.extensions import limiter
 
 
 admin_bp = Blueprint("admin", __name__)
+DEFAULT_ADMIN_RUN_BATCH_SIZE = 10
+MAX_ADMIN_RUN_BATCH_SIZE = 25
 
 
 @admin_bp.route("/admin/users", methods=["POST"])
@@ -519,6 +523,32 @@ def _serialize_queue_item_for_detail(queue_row):
     return item
 
 
+def _parse_soar_run_batch_size(data):
+    raw_batch_size = (data or {}).get("batch_size", DEFAULT_ADMIN_RUN_BATCH_SIZE)
+    if isinstance(raw_batch_size, bool):
+        raise ValueError("batch_size must be an integer")
+
+    try:
+        requested_batch_size = int(raw_batch_size)
+    except (TypeError, ValueError) as error:
+        raise ValueError("batch_size must be an integer") from error
+
+    if requested_batch_size < 1:
+        raise ValueError("batch_size must be >= 1")
+
+    return requested_batch_size, min(requested_batch_size, MAX_ADMIN_RUN_BATCH_SIZE)
+
+
+def _summarize_soar_worker_results(results):
+    return {
+        "processed": len(results),
+        "success": sum(1 for row in results if row.get("outcome") == "success"),
+        "failed": sum(1 for row in results if row.get("outcome") == "failed"),
+        "skipped": sum(1 for row in results if row.get("outcome") == "skipped"),
+        "requeued": sum(1 for row in results if row.get("outcome") == "requeued"),
+    }
+
+
 @admin_bp.route("/admin/soar/queue/status", methods=["GET"])
 @limiter.limit("30 per minute")
 @login_required
@@ -611,6 +641,68 @@ def get_queue_item_detail(queue_id):
     except Exception:
         current_app.logger.exception("Error reading SOAR queue item detail queue_id=%s", queue_id)
         return jsonify({"error": "Unable to read SOAR queue"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@admin_bp.route("/admin/soar/worker/run-once", methods=["POST"])
+@limiter.limit("10 per minute")
+@login_required
+@super_admin_required
+def run_soar_worker_once():
+    """Run one bounded SOAR worker batch in simulation mode."""
+    data = request.get_json(silent=True) or {}
+    requested_mode = (data.get("mode") or "simulation").strip().lower() if isinstance(data.get("mode") or "simulation", str) else data.get("mode")
+    if requested_mode != "simulation":
+        return jsonify({"error": "SOAR worker admin run is simulation-only"}), 400
+
+    try:
+        requested_batch_size, batch_size = _parse_soar_run_batch_size(data)
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+
+    started_at = datetime.now(timezone.utc).isoformat()
+    conn = None
+    try:
+        conn = get_db_connection()
+        results = process_batch(conn, limit=batch_size, executor=SimulationExecutor())
+        summary = _summarize_soar_worker_results(results)
+        completed_at = datetime.now(timezone.utc).isoformat()
+
+        log_audit_event(
+            "SOAR_WORKER_RUN_ONCE",
+            actor_username=current_user.id,
+            actor_role=current_user.role,
+            http_method=request.method,
+            request_path=request.path,
+            source_ip=request.remote_addr,
+            details={
+                "mode": "simulation",
+                "requested_batch_size": requested_batch_size,
+                "batch_size": batch_size,
+                "summary": summary,
+            },
+        )
+        current_app.logger.info(
+            "SOAR worker run-once triggered actor=%s batch_size=%s summary=%s",
+            current_user.id,
+            batch_size,
+            summary,
+        )
+
+        return jsonify({
+            "mode": "simulation",
+            "requested_batch_size": requested_batch_size,
+            "batch_size": batch_size,
+            "started_at": started_at,
+            "completed_at": completed_at,
+            "summary": summary,
+            "results": results,
+        }), 200
+    except Exception:
+        current_app.logger.exception("Error running SOAR worker batch")
+        return jsonify({"error": "Unable to run SOAR worker batch"}), 500
     finally:
         if conn:
             conn.close()
