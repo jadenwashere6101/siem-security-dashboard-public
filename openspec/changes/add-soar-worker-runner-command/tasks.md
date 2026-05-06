@@ -2,6 +2,23 @@
 
 ---
 
+## Completion Checklist
+
+- [x] Task 1 — Create `scripts/soar_worker_run.py` skeleton
+- [x] Task 2 — Implement Flask context guard
+- [x] Task 3 — Implement config reading and validation
+- [x] Task 4 — Implement startup header printer
+- [x] Task 5 — Implement DB connection setup
+- [x] Task 6 — Implement executor selection
+- [x] Task 7 — Implement `process_batch` call and result aggregation
+- [x] Task 8 — Implement exit summary printer
+- [x] Task 9 — Implement exit codes
+- [x] Task 10 — DB-backed end-to-end test (simulation)
+- [x] Task 11 — DB-backed partial failure test (simulation)
+- [x] Task 12 — Empty queue test
+- [x] Task 13 — Regression check
+- [x] Task 14 — Review against stop conditions
+
 ## Task 1 — Create `scripts/soar_worker_run.py` skeleton
 
 Create `scripts/soar_worker_run.py` with:
