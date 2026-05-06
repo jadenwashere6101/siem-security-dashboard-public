@@ -4,6 +4,7 @@ import DashboardSection from "./components/DashboardSection";
 import AdminUsersPanel from "./components/AdminUsersPanel";
 import AuditLogPanel from "./components/AuditLogPanel";
 import DetectionRulesPanel from "./components/DetectionRulesPanel";
+import SoarQueuePanel from "./components/SoarQueuePanel";
 import ThreatHuntPanel from "./components/ThreatHuntPanel";
 import BlocklistManagerPanel from "./components/BlocklistManagerPanel";
 import {
@@ -489,6 +490,18 @@ function App() {
               Administration
             </button>
           )}
+          {isSuperAdmin && (
+            <button
+              type="button"
+              onClick={() => setActiveSection("soar-queue")}
+              style={{
+                ...sectionTabStyle,
+                ...(activeSection === "soar-queue" ? activeSectionTabStyle : inactiveSectionTabStyle),
+              }}
+            >
+              SOAR Queue
+            </button>
+          )}
         </div>
 
         {activeSection === "dashboard" && (
@@ -590,6 +603,17 @@ function App() {
               cardSubtitleStyle={cardSubtitleStyle}
             />
           </>
+        )}
+
+        {isSuperAdmin && activeSection === "soar-queue" && (
+          <SoarQueuePanel
+            cardStyle={cardStyle}
+            cardHeaderStyle={cardHeaderStyle}
+            cardTitleStyle={cardTitleStyle}
+            cardSubtitleStyle={cardSubtitleStyle}
+            filterLabelStyle={filterLabelStyle}
+            selectStyle={selectStyle}
+          />
         )}
 
 

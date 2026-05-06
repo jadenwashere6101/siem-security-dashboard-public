@@ -5,7 +5,7 @@ compatibility issue is discovered.
 
 ---
 
-## Task 1 — Inspect current frontend navigation and admin panel patterns
+## Task 1 — Inspect current frontend navigation and admin panel patterns [x]
 
 Inspect:
 
@@ -18,7 +18,7 @@ Decide where `"SOAR Queue"` belongs without redesigning navigation.
 
 ---
 
-## Task 2 — Add frontend service
+## Task 2 — Add frontend service [x]
 
 Create:
 
@@ -42,7 +42,7 @@ Rules:
 
 ---
 
-## Task 3 — Add queue display helpers
+## Task 3 — Add queue display helpers [x]
 
 Either inside the component or in a small utility if reused:
 
@@ -60,7 +60,7 @@ Nullable alert behavior:
 
 ---
 
-## Task 4 — Add read-only panel component
+## Task 4 — Add read-only panel component [x]
 
 Create:
 
@@ -97,7 +97,7 @@ Do not include:
 
 ---
 
-## Task 5 — Wire panel into app navigation
+## Task 5 — Wire panel into app navigation [x]
 
 Update the existing app shell minimally to expose the panel to admin users.
 
@@ -110,7 +110,7 @@ Rules:
 
 ---
 
-## Task 6 — Optional detail view
+## Task 6 — Optional detail view [x]
 
 If backend detail endpoint exists and the UI remains small, add a read-only row
 detail view.
@@ -130,7 +130,7 @@ If detail endpoint is absent or inconsistent, defer detail UI.
 
 ---
 
-## Task 7 — Add tests where supported
+## Task 7 — Add tests where supported [x]
 
 If frontend service tests exist:
 
@@ -182,4 +182,3 @@ Do not:
 - change queue mutation behavior
 - change ingest/detection/correlation flow
 - expose `idempotency_key` in list view
-
