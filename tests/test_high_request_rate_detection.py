@@ -3,7 +3,7 @@ from unittest.mock import patch
 from psycopg2.extras import Json
 
 import siem_backend
-import backend_detection_engine
+import engines.detection_engine as backend_detection_engine
 
 
 REPUTATION = {
@@ -102,7 +102,7 @@ def test_high_request_rate_threshold_boundary_and_alert_field_fidelity(postgres_
     for seconds_ago in range(20, 1, -1):
         insert_request_event(cur, source_ip=source_ip, seconds_ago=seconds_ago, country="Canada", city="Toronto")
 
-    with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION):
         assert backend_detection_engine._generate_high_request_rate_alerts_core(cur, conn, source="nginx", source_type="web_log") == []
 
         insert_request_event(
@@ -166,7 +166,7 @@ def test_high_request_rate_trigger_filters_event_type_and_source_type(postgres_d
             seconds_ago=seconds_ago,
         )
 
-    with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION):
         assert backend_detection_engine._generate_high_request_rate_alerts_core(cur, conn, source="nginx", source_type="web_log") == []
 
         for seconds_ago in range(20, 0, -1):
@@ -197,7 +197,7 @@ def test_high_request_rate_duplicate_suppression_keeps_single_open_alert(postgre
     for seconds_ago in range(20, 0, -1):
         insert_request_event(cur, source_ip=source_ip, seconds_ago=seconds_ago)
 
-    with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION):
         first_result = backend_detection_engine._generate_high_request_rate_alerts_core(
             cur,
             conn,
@@ -235,7 +235,7 @@ def test_high_request_rate_currval_links_response_action_to_inserted_alert(postg
     for seconds_ago in range(20, 0, -1):
         insert_request_event(cur, source_ip=source_ip, seconds_ago=seconds_ago)
 
-    with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION):
         backend_detection_engine._generate_high_request_rate_alerts_core(cur, conn, source="nginx", source_type="web_log")
 
     cur.execute(

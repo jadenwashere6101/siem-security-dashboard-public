@@ -3,7 +3,7 @@ from unittest.mock import patch
 from psycopg2.extras import Json
 
 import siem_backend
-import backend_detection_engine
+import engines.detection_engine as backend_detection_engine
 
 
 REPUTATION = {
@@ -116,7 +116,7 @@ def test_password_spraying_threshold_boundary_and_alert_field_fidelity(postgres_
             city="Toronto",
         )
 
-    with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION):
         assert backend_detection_engine._generate_password_spraying_alerts_core(
             cur,
             conn,
@@ -173,7 +173,7 @@ def test_password_spraying_requires_distinct_usernames(postgres_db):
     for seconds_ago, username in enumerate(("alice", "alice", "bob", "bob", "carol"), start=1):
         insert_failed_login_event(cur, source_ip=source_ip, username=username, seconds_ago=seconds_ago)
 
-    with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION):
         assert backend_detection_engine._generate_password_spraying_alerts_core(
             cur,
             conn,
@@ -215,7 +215,7 @@ def test_password_spraying_extracts_distinct_usernames_from_message_payload(post
     for seconds_ago, message in enumerate(messages, start=1):
         insert_failed_login_event(cur, source_ip=source_ip, message=message, seconds_ago=seconds_ago)
 
-    with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION):
         alerts_created = backend_detection_engine._generate_password_spraying_alerts_core(
             cur,
             conn,
@@ -235,7 +235,7 @@ def test_password_spraying_duplicate_suppression_keeps_single_open_alert(postgre
     for seconds_ago, username in enumerate(("alice", "bob", "carol", "dave", "erin"), start=1):
         insert_failed_login_event(cur, source_ip=source_ip, username=username, seconds_ago=seconds_ago)
 
-    with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION):
         first_result = backend_detection_engine._generate_password_spraying_alerts_core(
             cur,
             conn,
@@ -273,7 +273,7 @@ def test_password_spraying_currval_links_response_action_to_inserted_alert(postg
     for seconds_ago, username in enumerate(("alice", "bob", "carol", "dave", "erin"), start=1):
         insert_failed_login_event(cur, source_ip=source_ip, username=username, seconds_ago=seconds_ago)
 
-    with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION):
         backend_detection_engine._generate_password_spraying_alerts_core(cur, conn, source="bank_app", source_type="custom")
 
     cur.execute(

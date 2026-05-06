@@ -3,7 +3,7 @@ from unittest.mock import patch
 from psycopg2.extras import Json
 
 import siem_backend
-import backend_detection_engine
+import engines.detection_engine as backend_detection_engine
 
 
 REPUTATION = {
@@ -107,7 +107,7 @@ def test_application_exception_threshold_boundary_and_alert_field_fidelity(postg
     for seconds_ago in (3, 2):
         insert_application_event(cur, source_ip=source_ip, seconds_ago=seconds_ago, country="Canada", city="Toronto")
 
-    with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION):
         assert backend_detection_engine._generate_application_exception_alerts_core(
             cur,
             conn,
@@ -169,7 +169,7 @@ def test_application_exception_trigger_depends_on_application_exception_event_ty
             seconds_ago=seconds_ago,
         )
 
-    with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION):
         assert backend_detection_engine._generate_application_exception_alerts_core(
             cur,
             conn,
@@ -205,7 +205,7 @@ def test_application_exception_duplicate_suppression_keeps_single_open_alert(pos
     for seconds_ago in (3, 2, 1):
         insert_application_event(cur, source_ip=source_ip, seconds_ago=seconds_ago)
 
-    with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION):
         first_result = backend_detection_engine._generate_application_exception_alerts_core(
             cur,
             conn,
@@ -243,7 +243,7 @@ def test_application_exception_currval_links_response_action_to_inserted_alert(p
     for seconds_ago in (3, 2, 1):
         insert_application_event(cur, source_ip=source_ip, seconds_ago=seconds_ago)
 
-    with siem_backend.app.app_context(), patch("backend_detection_engine.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION):
         backend_detection_engine._generate_application_exception_alerts_core(
             cur,
             conn,
