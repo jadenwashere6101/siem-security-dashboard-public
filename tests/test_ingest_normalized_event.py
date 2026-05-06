@@ -221,7 +221,7 @@ def test_ingest_normalized_event_rolls_back_event_insert_on_downstream_failure(p
     def fail_detector(_cur, _conn, source=None, source_type=None):
         raise RuntimeError("forced downstream failure")
 
-    with patch("backend_ingest_engine._generate_port_scan_alerts_core", side_effect=fail_detector):
+    with patch("engines.ingest_engine._generate_port_scan_alerts_core", side_effect=fail_detector):
         with pytest.raises(RuntimeError, match="forced downstream failure"):
             siem_backend.ingest_normalized_event(
                 make_event(event_type="port_scan", source_ip=source_ip, source="nginx", source_type="web_log"),
@@ -254,9 +254,9 @@ def test_ingest_normalized_event_orchestration_ordering_uses_detection_before_co
         calls.append(("targeted_correlation", source_ip))
         shared_ids.append((id(cur), id(conn), id(_cur), id(_conn)))
 
-    with patch("backend_ingest_engine._generate_port_scan_alerts_core", side_effect=fake_port_scan), \
-         patch("backend_ingest_engine.generate_correlated_activity_alerts", side_effect=fake_generic_correlation), \
-         patch("backend_ingest_engine.generate_targeted_correlation_alerts", side_effect=fake_targeted_correlation):
+    with patch("engines.ingest_engine._generate_port_scan_alerts_core", side_effect=fake_port_scan), \
+         patch("engines.ingest_engine.generate_correlated_activity_alerts", side_effect=fake_generic_correlation), \
+         patch("engines.ingest_engine.generate_targeted_correlation_alerts", side_effect=fake_targeted_correlation):
         result = siem_backend.ingest_normalized_event(
             make_event(event_type="port_scan", source_ip="198.51.100.136", source="nginx", source_type="web_log"),
             conn,

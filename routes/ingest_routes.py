@@ -11,7 +11,7 @@ from adapters.otel_adapter import normalize_otel_telemetry
 from helpers.api_guards import require_api_key, require_azure_api_key, require_otel_api_key
 from core.db import get_db_connection
 from core.extensions import limiter
-from backend_ingest_engine import ingest_normalized_event
+from engines.ingest_engine import ingest_normalized_event
 from helpers.ingest_normalizers import (
     _get_azure_app_name,
     _get_azure_identity_app_name,
