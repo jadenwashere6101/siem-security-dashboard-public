@@ -11,7 +11,9 @@ from core.response_action_queue_store import (
     recover_stale_running_actions,
 )
 from core.ip_helpers import _compute_idempotency_key, enqueue_response_action
-from engines.soar_action_worker import RetryableActionError, SkippedAction, process_next_action
+from engines.soar_action_worker import process_next_action
+from engines.soar_errors import RetryableActionError, SkippedAction
+from engines.soar_executor import SimulationExecutor
 
 
 # ---------------------------------------------------------------------------
@@ -382,10 +384,10 @@ def test_retryable_failure_stays_failed_when_retries_exhausted(postgres_db):
     assert updated["retry_count"] == 1
 
 
-def test_process_next_action_success_uses_placeholder_without_response_log(postgres_db):
+def test_process_next_action_default_simulation_executor_without_response_log(postgres_db):
     conn, cur = postgres_db
     alert_id = insert_minimal_alert(cur)
-    row_id = enqueue_response_action(cur, alert_id, "10.5.0.9", "block_ip")
+    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "block_ip")
     conn.commit()
 
     result = process_next_action(conn)
@@ -393,6 +395,7 @@ def test_process_next_action_success_uses_placeholder_without_response_log(postg
     assert result["queue_id"] == row_id
     assert result["outcome"] == "success"
     assert result["new_status"] == "success"
+    assert result["message"] == "Simulated IP block for 8.8.8.8"
     cur.execute("SELECT COUNT(*) FROM response_actions_log")
     assert cur.fetchone()[0] == 0
 
@@ -430,6 +433,99 @@ def test_process_next_action_skip_executor_marks_skipped(postgres_db):
     assert result["outcome"] == "skipped"
     assert result["new_status"] == "skipped"
     assert result["error_code"] == "policy_disabled"
+
+
+def test_process_next_action_simulation_executor_block_ip_success(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "1.1.1.1", "block_ip")
+    conn.commit()
+
+    result = process_next_action(conn, executor=SimulationExecutor())
+
+    assert result["queue_id"] == row_id
+    assert result["outcome"] == "success"
+    assert fetch_queue_row(cur, row_id)[4] == "success"
+
+
+def test_process_next_action_simulation_executor_flag_high_priority_success(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "10.5.0.12", "flag_high_priority")
+    conn.commit()
+
+    result = process_next_action(conn, executor=SimulationExecutor())
+
+    assert result["queue_id"] == row_id
+    assert result["outcome"] == "success"
+    assert fetch_queue_row(cur, row_id)[4] == "success"
+
+
+def test_process_next_action_simulation_executor_monitor_success(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "10.5.0.13", "monitor")
+    conn.commit()
+
+    result = process_next_action(conn, executor=SimulationExecutor())
+
+    assert result["queue_id"] == row_id
+    assert result["outcome"] == "success"
+    assert fetch_queue_row(cur, row_id)[4] == "success"
+
+
+def test_process_next_action_simulation_executor_private_block_ip_skipped(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "10.5.0.14", "block_ip")
+    conn.commit()
+
+    result = process_next_action(conn, executor=SimulationExecutor())
+
+    assert result["queue_id"] == row_id
+    assert result["outcome"] == "skipped"
+    assert result["new_status"] == "skipped"
+    assert result["error_code"] == "validation_private_ip"
+    assert fetch_queue_row(cur, row_id)[4] == "skipped"
+
+
+def test_process_next_action_simulation_executor_unknown_action_skipped(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "8.8.4.4", "unknown_action")
+    conn.commit()
+
+    result = process_next_action(conn, executor=SimulationExecutor())
+
+    assert result["queue_id"] == row_id
+    assert result["outcome"] == "skipped"
+    assert result["error_code"] == "unsupported_action"
+    assert fetch_queue_row(cur, row_id)[4] == "skipped"
+
+
+@pytest.mark.parametrize(
+    "executor_result",
+    [
+        {},
+        {"code": "missing_message"},
+        {"message": "missing code"},
+        {"code": "", "message": "empty code"},
+        {"code": "empty_message", "message": ""},
+    ],
+)
+def test_process_next_action_invalid_executor_result_fails_terminally(postgres_db, executor_result):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "10.5.0.15", "monitor")
+    conn.commit()
+
+    result = process_next_action(conn, executor=lambda _row: executor_result)
+
+    assert result["queue_id"] == row_id
+    assert result["outcome"] == "failed"
+    assert result["new_status"] == "failed"
+    assert result["retryable"] is False
+    assert fetch_queue_row(cur, row_id)[4] == "failed"
 
 
 def test_stale_running_recovery_requeues_when_retries_remain(postgres_db):

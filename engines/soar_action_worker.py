@@ -4,38 +4,12 @@ from core.response_action_queue_store import (
     mark_action_success,
     record_action_failure,
 )
-
-
-class RetryableActionError(Exception):
-    def __init__(self, message, code="retryable_error"):
-        super().__init__(message)
-        self.code = code
-
-
-class SkippedAction(Exception):
-    def __init__(self, message, code="skipped"):
-        super().__init__(message)
-        self.code = code
-
-
-SUPPORTED_PLACEHOLDER_ACTIONS = {"block_ip", "flag_high_priority", "monitor"}
-
-
-def placeholder_execute_action(row):
-    if row["action"] not in SUPPORTED_PLACEHOLDER_ACTIONS:
-        raise SkippedAction(
-            f"Unsupported response action: {row['action']}",
-            code="unsupported_action",
-        )
-
-    return {
-        "code": "placeholder_success",
-        "message": f"Placeholder worker accepted {row['action']}",
-    }
+from engines.soar_errors import RetryableActionError, SkippedAction
+from engines.soar_executor import SimulationExecutor
 
 
 def process_next_action(conn, now=None, executor=None):
-    executor = executor or placeholder_execute_action
+    executor = executor or SimulationExecutor()
     row = claim_next_pending_action(conn, now=now)
     if row is None:
         conn.commit()
@@ -44,6 +18,7 @@ def process_next_action(conn, now=None, executor=None):
     conn.commit()
     try:
         execution_result = executor(row)
+        _validate_executor_result(execution_result)
         updated = mark_action_success(conn, row["id"], now=now)
         conn.commit()
         return _worker_result(
@@ -51,8 +26,8 @@ def process_next_action(conn, now=None, executor=None):
             updated,
             outcome="success",
             retryable=False,
-            code=_result_code(execution_result, "success"),
-            message=_result_message(execution_result, "Response action completed"),
+            code=execution_result["code"],
+            message=execution_result["message"],
         )
     except SkippedAction as error:
         updated = mark_action_skipped(conn, row["id"], str(error), now=now)
@@ -139,13 +114,12 @@ def _worker_result(
     }
 
 
-def _result_code(execution_result, default):
-    if isinstance(execution_result, dict):
-        return execution_result.get("code") or default
-    return default
+def _validate_executor_result(execution_result):
+    if not isinstance(execution_result, dict):
+        raise Exception("Executor result must be a dict")
 
+    if not execution_result.get("code"):
+        raise Exception("Executor result missing required code")
 
-def _result_message(execution_result, default):
-    if isinstance(execution_result, dict):
-        return execution_result.get("message") or default
-    return default
+    if not execution_result.get("message"):
+        raise Exception("Executor result missing required message")

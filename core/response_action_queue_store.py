@@ -42,7 +42,7 @@ def _queue_row_from_record(record):
 
 def _returning_queue_row_sql():
     return """
-        RETURNING id, alert_id, source_ip::text, action, status,
+        RETURNING id, alert_id, host(source_ip), action, status,
                   retry_count, max_retries, last_error,
                   idempotency_key, created_at, updated_at
     """
@@ -52,7 +52,7 @@ def get_queue_action(conn, queue_id):
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT id, alert_id, source_ip::text, action, status,
+            SELECT id, alert_id, host(source_ip), action, status,
                    retry_count, max_retries, last_error,
                    idempotency_key, created_at, updated_at
             FROM response_actions_queue
@@ -174,7 +174,7 @@ def recover_stale_running_actions(conn, now=None, stale_after=STALE_RUNNING_TIME
                 updated_at = COALESCE(%s::timestamptz, NOW())
             FROM stale
             WHERE queue.id = stale.id
-            RETURNING queue.id, queue.alert_id, queue.source_ip::text, queue.action,
+            RETURNING queue.id, queue.alert_id, host(queue.source_ip), queue.action,
                       queue.status, queue.retry_count, queue.max_retries,
                       queue.last_error, queue.idempotency_key,
                       queue.created_at, queue.updated_at
