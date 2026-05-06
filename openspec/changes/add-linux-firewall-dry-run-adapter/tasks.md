@@ -4,6 +4,18 @@ This change is dry-run only. Do not add real command execution.
 
 ---
 
+## Completion Checklist
+
+- [x] Task 1 — Confirm adapter foundation
+- [x] Task 2 — Add dry-run adapter module
+- [x] Task 3 — Implement configuration gate
+- [x] Task 4 — Implement IP safety validation
+- [x] Task 5 — Generate dry-run command plan
+- [x] Task 6 — Register adapter
+- [x] Task 7 — Unit tests
+- [x] Task 8 — Integration tests
+- [x] Task 9 — No external action guard tests
+
 ## Task 1 — Confirm adapter foundation
 
 Inspect:
