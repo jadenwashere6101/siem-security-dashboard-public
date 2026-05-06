@@ -156,6 +156,8 @@ def _generate_failed_login_alerts_core(cur, conn, source=None, source_type=None)
             {
                 "source_ip": source_ip,
                 "attempts": attempts,
+                "alert_id": alert_id,
+                "response_action": response_action,
             }
         )
 
@@ -296,6 +298,8 @@ def _generate_http_error_alerts_core(cur, conn, source=None, source_type=None):
             {
                 "source_ip": source_ip,
                 "attempts": attempts,
+                "alert_id": alert_id,
+                "response_action": response_action,
             }
         )
 
@@ -446,6 +450,8 @@ def _generate_port_scan_alerts_core(cur, conn, source=None, source_type=None):
             {
                 "source_ip": source_ip,
                 "attempts": attempts,
+                "alert_id": alert_id,
+                "response_action": response_action,
             }
         )
 
@@ -607,6 +613,8 @@ def _generate_password_spraying_alerts_core(cur, conn, source=None, source_type=
             {
                 "source_ip": source_ip,
                 "distinct_username_count": distinct_username_count,
+                "alert_id": alert_id,
+                "response_action": response_action,
             }
         )
 
@@ -784,6 +792,8 @@ def _generate_successful_login_after_spray_alerts_core(cur, conn, source=None, s
             {
                 "source_ip": source_ip,
                 "success_at": str(success_at),
+                "alert_id": alert_id,
+                "response_action": response_action,
             }
         )
 
@@ -924,6 +934,8 @@ def _generate_application_exception_alerts_core(cur, conn, source=None, source_t
             {
                 "source_ip": source_ip,
                 "attempts": attempts,
+                "alert_id": alert_id,
+                "response_action": response_action,
             }
         )
 
@@ -1066,6 +1078,8 @@ def _generate_high_request_rate_alerts_core(cur, conn, source=None, source_type=
             {
                 "source_ip": source_ip,
                 "attempts": attempts,
+                "alert_id": alert_id,
+                "response_action": response_action,
             }
         )
 

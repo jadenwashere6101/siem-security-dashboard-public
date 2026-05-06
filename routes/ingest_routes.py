@@ -12,6 +12,7 @@ from helpers.api_guards import require_api_key, require_azure_api_key, require_o
 from core.db import get_db_connection
 from core.extensions import limiter
 from engines.ingest_engine import ingest_normalized_event
+from engines.soar_enqueue_orchestrator import enqueue_committed_alerts
 from helpers.ingest_normalizers import (
     _get_azure_app_name,
     _get_azure_identity_app_name,
@@ -97,6 +98,15 @@ def add_event():
         )
 
         conn.commit()
+
+        try:
+            enqueue_committed_alerts(alerts_created, conn)
+            conn.commit()
+        except Exception as enqueue_error:
+            current_app.logger.error(
+                "[SOAR ENQUEUE ERROR] Post-commit enqueue failed — ingest was committed: %s",
+                enqueue_error,
+            )
 
         return jsonify({
             "message": "Event added successfully",
@@ -189,6 +199,15 @@ def add_web_log_event():
 
         conn.commit()
 
+        try:
+            enqueue_committed_alerts(alerts_created, conn)
+            conn.commit()
+        except Exception as enqueue_error:
+            current_app.logger.error(
+                "[SOAR ENQUEUE ERROR] Post-commit enqueue failed — ingest was committed: %s",
+                enqueue_error,
+            )
+
         return jsonify({
             "message": "Event added successfully",
             "alerts_created": alerts_created
@@ -275,6 +294,15 @@ def add_azure_event():
 
         conn.commit()
 
+        try:
+            enqueue_committed_alerts(alerts_created, conn)
+            conn.commit()
+        except Exception as enqueue_error:
+            current_app.logger.error(
+                "[SOAR ENQUEUE ERROR] Post-commit enqueue failed — ingest was committed: %s",
+                enqueue_error,
+            )
+
         success_message = "Events added successfully" if len(normalized_events) > 1 else "Event added successfully"
         return jsonify({
             "message": success_message,
@@ -347,6 +375,15 @@ def add_otel_event():
             alerts_created.extend(ingest_normalized_event(event_dict, conn, cur))
 
         conn.commit()
+
+        try:
+            enqueue_committed_alerts(alerts_created, conn)
+            conn.commit()
+        except Exception as enqueue_error:
+            current_app.logger.error(
+                "[SOAR ENQUEUE ERROR] Post-commit enqueue failed — ingest was committed: %s",
+                enqueue_error,
+            )
 
         success_message = "Events added successfully" if len(normalized_events) > 1 else "Event added successfully"
         return jsonify({
