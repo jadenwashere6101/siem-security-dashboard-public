@@ -11,9 +11,11 @@ from core.response_action_queue_store import (
     recover_stale_running_actions,
 )
 from core.ip_helpers import _compute_idempotency_key, enqueue_response_action
+from core.ip_helpers import execute_response_action
 from engines.soar_action_worker import process_next_action
 from engines.soar_errors import RetryableActionError, SkippedAction
 from engines.soar_executor import SimulationExecutor
+import siem_backend
 
 
 # ---------------------------------------------------------------------------
@@ -49,6 +51,28 @@ def fetch_queue_row(cur, row_id):
 def count_queue_rows(cur):
     cur.execute("SELECT COUNT(*) FROM response_actions_queue")
     return cur.fetchone()[0]
+
+
+def fetch_action_logs(cur, alert_id=None):
+    if alert_id is None:
+        cur.execute(
+            """
+            SELECT alert_id, source_ip::text, action, status, details
+            FROM response_actions_log
+            ORDER BY id
+            """
+        )
+    else:
+        cur.execute(
+            """
+            SELECT alert_id, source_ip::text, action, status, details
+            FROM response_actions_log
+            WHERE alert_id = %s
+            ORDER BY id
+            """,
+            (alert_id,),
+        )
+    return cur.fetchall()
 
 
 # ---------------------------------------------------------------------------
@@ -384,7 +408,7 @@ def test_retryable_failure_stays_failed_when_retries_exhausted(postgres_db):
     assert updated["retry_count"] == 1
 
 
-def test_process_next_action_default_simulation_executor_without_response_log(postgres_db):
+def test_process_next_action_default_simulation_executor_logs_executed(postgres_db):
     conn, cur = postgres_db
     alert_id = insert_minimal_alert(cur)
     row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "block_ip")
@@ -396,8 +420,10 @@ def test_process_next_action_default_simulation_executor_without_response_log(po
     assert result["outcome"] == "success"
     assert result["new_status"] == "success"
     assert result["message"] == "Simulated IP block for 8.8.8.8"
-    cur.execute("SELECT COUNT(*) FROM response_actions_log")
-    assert cur.fetchone()[0] == 0
+    logs = fetch_action_logs(cur, alert_id)
+    assert len(logs) == 1
+    assert logs[0][3] == "executed"
+    assert logs[0][4] == "Simulated IP block for 8.8.8.8"
 
 
 def test_process_next_action_retryable_executor_requeues(postgres_db):
@@ -416,6 +442,7 @@ def test_process_next_action_retryable_executor_requeues(postgres_db):
     assert result["new_status"] == "pending"
     assert result["retryable"] is True
     assert result["retry_count"] == 1
+    assert fetch_action_logs(cur, alert_id) == []
 
 
 def test_process_next_action_skip_executor_marks_skipped(postgres_db):
@@ -433,6 +460,105 @@ def test_process_next_action_skip_executor_marks_skipped(postgres_db):
     assert result["outcome"] == "skipped"
     assert result["new_status"] == "skipped"
     assert result["error_code"] == "policy_disabled"
+    logs = fetch_action_logs(cur, alert_id)
+    assert len(logs) == 1
+    assert logs[0][3] == "skipped"
+    assert logs[0][4] == "policy disabled"
+
+
+def test_process_next_action_non_retryable_failure_logs_failed(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "monitor")
+    conn.commit()
+
+    def fail(_row):
+        raise Exception("unexpected failure")
+
+    result = process_next_action(conn, executor=fail)
+
+    assert result["queue_id"] == row_id
+    assert result["outcome"] == "failed"
+    assert result["new_status"] == "failed"
+    logs = fetch_action_logs(cur, alert_id)
+    assert len(logs) == 1
+    assert logs[0][3] == "failed"
+    assert logs[0][4] == "unexpected failure"
+
+
+def test_process_next_action_retryable_failure_exhausted_logs_failed(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "monitor", max_retries=1)
+    conn.commit()
+
+    def fail_retryable(_row):
+        raise RetryableActionError("adapter timeout", code="adapter_timeout")
+
+    result = process_next_action(conn, executor=fail_retryable)
+
+    assert result["queue_id"] == row_id
+    assert result["outcome"] == "failed"
+    assert result["new_status"] == "failed"
+    assert result["retryable"] is False
+    logs = fetch_action_logs(cur, alert_id)
+    assert len(logs) == 1
+    assert logs[0][3] == "failed"
+    assert logs[0][4] == "adapter timeout"
+
+
+def test_process_next_action_single_terminal_execution_writes_one_log_row(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "monitor")
+    conn.commit()
+
+    result = process_next_action(conn, executor=SimulationExecutor())
+    second_result = process_next_action(conn, executor=SimulationExecutor())
+
+    assert result["queue_id"] == row_id
+    assert result["outcome"] == "success"
+    assert second_result is None
+    assert len(fetch_action_logs(cur, alert_id)) == 1
+
+
+def test_manual_execute_response_action_logging_unaffected_by_worker_logging(postgres_db):
+    conn, cur = postgres_db
+    manual_alert_id = insert_minimal_alert(cur, source_ip="8.8.8.8")
+    worker_alert_id = insert_minimal_alert(cur, source_ip="8.8.4.4")
+
+    with siem_backend.app.app_context():
+        execute_response_action(cur, manual_alert_id, "8.8.8.8", "monitor")
+    conn.commit()
+
+    row_id = enqueue_response_action(cur, worker_alert_id, "8.8.4.4", "monitor")
+    conn.commit()
+
+    result = process_next_action(conn, executor=SimulationExecutor())
+
+    assert result["queue_id"] == row_id
+    assert len(fetch_action_logs(cur, manual_alert_id)) == 1
+    assert len(fetch_action_logs(cur, worker_alert_id)) == 1
+    assert fetch_action_logs(cur, manual_alert_id)[0][3] == "executed"
+    assert fetch_action_logs(cur, worker_alert_id)[0][3] == "executed"
+
+
+def test_process_next_action_deleted_alert_logs_null_alert_id(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur, source_ip="8.8.8.8")
+    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "monitor")
+    conn.commit()
+    cur.execute("DELETE FROM alerts WHERE id = %s", (alert_id,))
+    conn.commit()
+
+    result = process_next_action(conn, executor=SimulationExecutor())
+
+    assert result["queue_id"] == row_id
+    assert result["outcome"] == "success"
+    logs = fetch_action_logs(cur)
+    assert len(logs) == 1
+    assert logs[0][0] is None
+    assert logs[0][3] == "executed"
 
 
 def test_process_next_action_simulation_executor_block_ip_success(postgres_db):

@@ -6,6 +6,7 @@ from core.response_action_queue_store import (
 )
 from engines.soar_errors import RetryableActionError, SkippedAction
 from engines.soar_executor import SimulationExecutor
+from engines.soar_log_writer import log_response_action
 
 
 def process_next_action(conn, now=None, executor=None):
@@ -20,6 +21,12 @@ def process_next_action(conn, now=None, executor=None):
         execution_result = executor(row)
         _validate_executor_result(execution_result)
         updated = mark_action_success(conn, row["id"], now=now)
+        log_response_action(
+            conn,
+            row,
+            log_status="executed",
+            details=execution_result["message"],
+        )
         conn.commit()
         return _worker_result(
             row,
@@ -31,6 +38,12 @@ def process_next_action(conn, now=None, executor=None):
         )
     except SkippedAction as error:
         updated = mark_action_skipped(conn, row["id"], str(error), now=now)
+        log_response_action(
+            conn,
+            row,
+            log_status="skipped",
+            details=str(error),
+        )
         conn.commit()
         return _worker_result(
             row,
@@ -49,6 +62,13 @@ def process_next_action(conn, now=None, executor=None):
             retryable=True,
             now=now,
         )
+        if updated["status"] == "failed":
+            log_response_action(
+                conn,
+                row,
+                log_status="failed",
+                details=str(error),
+            )
         conn.commit()
         outcome = "requeued" if updated["status"] == "pending" else "failed"
         return _worker_result(
@@ -67,6 +87,12 @@ def process_next_action(conn, now=None, executor=None):
             str(error),
             retryable=False,
             now=now,
+        )
+        log_response_action(
+            conn,
+            row,
+            log_status="failed",
+            details=str(error),
         )
         conn.commit()
         return _worker_result(

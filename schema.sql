@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS alerts (
 );
 CREATE TABLE IF NOT EXISTS response_actions_log (
     id SERIAL PRIMARY KEY,
-    alert_id INTEGER NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+    alert_id INTEGER REFERENCES alerts(id) ON DELETE SET NULL,
     source_ip INET,
     action TEXT NOT NULL,
     status TEXT NOT NULL,
