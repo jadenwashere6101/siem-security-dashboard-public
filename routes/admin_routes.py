@@ -1,4 +1,5 @@
 import psycopg2
+from datetime import datetime, timezone
 from flask import Blueprint, current_app, jsonify, request
 from flask_login import current_user, login_required
 from psycopg2.extras import Json
@@ -7,6 +8,11 @@ from werkzeug.security import generate_password_hash
 from core.audit_helpers import log_audit_event
 from core.auth import super_admin_required
 from core.db import get_db_connection
+from core.response_action_queue_store import (
+    get_queue_status_counts,
+    get_queue_action,
+    list_recent_queue_actions,
+)
 from engines.detection_config import (
     get_all_effective_detection_rules,
     get_detection_rule_defaults,
@@ -468,5 +474,143 @@ def update_detection_rule(rule_id):
     finally:
         if cur:
             cur.close()
+        if conn:
+            conn.close()
+
+
+# ============================================================================
+# SOAR Queue Visibility Endpoints (read-only)
+# ============================================================================
+
+
+def _serialize_queue_item_for_list(queue_row):
+    """Serialize queue row for list responses. Excludes idempotency_key."""
+    if queue_row is None:
+        return None
+    
+    alert_ref_status = "linked" if queue_row["alert_id"] is not None else "deleted_or_missing"
+    alert_ref_label = f"Alert {queue_row['alert_id']}" if queue_row["alert_id"] is not None else "Deleted alert"
+    
+    return {
+        "id": queue_row["id"],
+        "alert_id": queue_row["alert_id"],
+        "alert_reference": {
+            "status": alert_ref_status,
+            "label": alert_ref_label,
+        },
+        "source_ip": queue_row["source_ip"],
+        "action": queue_row["action"],
+        "status": queue_row["status"],
+        "retry_count": queue_row["retry_count"],
+        "max_retries": queue_row["max_retries"],
+        "last_error": queue_row["last_error"],
+        "created_at": str(queue_row["created_at"]),
+        "updated_at": str(queue_row["updated_at"]),
+    }
+
+
+def _serialize_queue_item_for_detail(queue_row):
+    """Serialize queue row for detail responses. Includes idempotency_key."""
+    if queue_row is None:
+        return None
+    
+    item = _serialize_queue_item_for_list(queue_row)
+    item["idempotency_key"] = queue_row["idempotency_key"]
+    return item
+
+
+@admin_bp.route("/admin/soar/queue/status", methods=["GET"])
+@limiter.limit("30 per minute")
+@login_required
+@super_admin_required
+def get_queue_status():
+    """Get SOAR queue status counts summary."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        status_counts = get_queue_status_counts(conn)
+        
+        # Ensure all known statuses are present with zero defaults
+        all_statuses = {"pending", "running", "success", "failed", "skipped"}
+        counts = {status: status_counts.get(status, 0) for status in all_statuses}
+        total = sum(counts.values())
+        
+        return jsonify({
+            "counts": counts,
+            "total": total,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }), 200
+    except Exception:
+        current_app.logger.exception("Error reading SOAR queue status")
+        return jsonify({"error": "Unable to read SOAR queue"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@admin_bp.route("/admin/soar/queue/recent", methods=["GET"])
+@limiter.limit("30 per minute")
+@login_required
+@super_admin_required
+def get_queue_recent():
+    """Get recent SOAR queue items."""
+    limit = request.args.get("limit", "50")
+    status_filter = request.args.get("status", None)
+    
+    # Validate limit is numeric
+    try:
+        limit = int(limit)
+        if limit < 1:
+            return jsonify({"error": "limit must be >= 1"}), 400
+    except (ValueError, TypeError):
+        return jsonify({"error": "limit must be an integer"}), 400
+    
+    # Validate status filter if provided
+    if status_filter is not None:
+        valid_statuses = {"pending", "running", "success", "failed", "skipped"}
+        if status_filter not in valid_statuses:
+            return jsonify({"error": f"status must be one of {sorted(valid_statuses)}"}), 400
+    
+    conn = None
+    try:
+        conn = get_db_connection()
+        # Helper function clamps limit to 100 max
+        queue_rows = list_recent_queue_actions(conn, limit=limit, status=status_filter)
+        
+        items = [_serialize_queue_item_for_list(row) for row in queue_rows]
+        
+        return jsonify({
+            "items": items,
+            "limit": limit,
+            "status": status_filter,
+        }), 200
+    except Exception:
+        current_app.logger.exception("Error reading SOAR queue recent items")
+        return jsonify({"error": "Unable to read SOAR queue"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@admin_bp.route("/admin/soar/queue/<int:queue_id>", methods=["GET"])
+@limiter.limit("30 per minute")
+@login_required
+@super_admin_required
+def get_queue_item_detail(queue_id):
+    """Get a specific SOAR queue item detail."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        queue_row = get_queue_action(conn, queue_id)
+        
+        if queue_row is None:
+            return jsonify({"error": "Queue item not found"}), 404
+        
+        item = _serialize_queue_item_for_detail(queue_row)
+        return jsonify(item), 200
+    except Exception:
+        current_app.logger.exception("Error reading SOAR queue item detail queue_id=%s", queue_id)
+        return jsonify({"error": "Unable to read SOAR queue"}), 500
+    finally:
         if conn:
             conn.close()

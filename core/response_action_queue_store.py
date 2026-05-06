@@ -75,6 +75,50 @@ def get_queue_status_counts(conn):
         return {row[0]: row[1] for row in cur.fetchall()}
 
 
+def list_recent_queue_actions(conn, limit=50, status=None):
+    """
+    Retrieve recent queue actions in read-only mode.
+    
+    Args:
+        conn: database connection
+        limit: maximum number of rows to return (clamped to 100)
+        status: optional status filter (pending/running/success/failed/skipped)
+    
+    Returns:
+        list of queue row dicts, newest first
+    """
+    # Clamp limit to safe max
+    limit = min(int(limit) if limit else 50, 100)
+    
+    with conn.cursor() as cur:
+        if status is None:
+            cur.execute(
+                """
+                SELECT id, alert_id, host(source_ip), action, status,
+                       retry_count, max_retries, last_error,
+                       idempotency_key, created_at, updated_at
+                FROM response_actions_queue
+                ORDER BY id DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT id, alert_id, host(source_ip), action, status,
+                       retry_count, max_retries, last_error,
+                       idempotency_key, created_at, updated_at
+                FROM response_actions_queue
+                WHERE status = %s
+                ORDER BY id DESC
+                LIMIT %s
+                """,
+                (status, limit),
+            )
+        return [_queue_row_from_record(row) for row in cur.fetchall()]
+
+
 def claim_next_pending_action(conn, now=None):
     with conn.cursor() as cur:
         cur.execute(
