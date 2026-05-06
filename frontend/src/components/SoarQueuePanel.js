@@ -8,6 +8,8 @@ import {
 import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
 
 const QUEUE_STATUSES = ["pending", "running", "success", "failed", "skipped"];
+const QUEUE_STATUS_FILTERS = ["all", ...QUEUE_STATUSES];
+const QUEUE_RECENT_LIMITS = [10, 25, 50, 100];
 
 function SoarQueuePanel({
   cardStyle,
@@ -20,6 +22,7 @@ function SoarQueuePanel({
   const [statusSummary, setStatusSummary] = useState(null);
   const [queueItems, setQueueItems] = useState([]);
   const [statusFilter, setStatusFilter] = useState("all");
+  const [recentLimit, setRecentLimit] = useState(50);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -44,7 +47,7 @@ function SoarQueuePanel({
       const [statusData, recentData] = await Promise.all([
         loadSoarQueueStatus(),
         loadRecentSoarQueueItems({
-          limit: 50,
+          limit: recentLimit,
           status: statusFilter,
         }),
       ]);
@@ -61,7 +64,7 @@ function SoarQueuePanel({
       setLoading(false);
       setRefreshing(false);
     }
-  }, [statusFilter]);
+  }, [recentLimit, statusFilter]);
 
   const handleRunBatch = useCallback(async () => {
     try {
@@ -136,10 +139,23 @@ function SoarQueuePanel({
               onChange={(event) => setStatusFilter(event.target.value)}
               style={selectStyle}
             >
-              <option value="all">All</option>
-              {QUEUE_STATUSES.map((status) => (
+              {QUEUE_STATUS_FILTERS.map((status) => (
                 <option key={status} value={status}>
                   {formatQueueLabel(status)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label style={filterWrapperStyle}>
+            <span style={filterLabelStyle}>Rows</span>
+            <select
+              value={recentLimit}
+              onChange={(event) => setRecentLimit(Number(event.target.value))}
+              style={selectStyle}
+            >
+              {QUEUE_RECENT_LIMITS.map((limit) => (
+                <option key={limit} value={limit}>
+                  {limit}
                 </option>
               ))}
             </select>
@@ -257,7 +273,11 @@ function SoarQueuePanel({
         {loading ? (
           <p style={emptyTextStyle}>Loading SOAR queue...</p>
         ) : queueItems.length === 0 ? (
-          <p style={emptyTextStyle}>No queued SOAR actions found.</p>
+          <p style={emptyTextStyle}>
+            {statusFilter === "all"
+              ? "No queued SOAR actions found."
+              : "No queued SOAR actions found for this filter."}
+          </p>
         ) : (
           <div style={tableSectionStyle}>
             <div style={tableMetaStyle}>
@@ -330,61 +350,64 @@ function SoarQueuePanel({
                 </tbody>
               </table>
             </div>
-            <div style={detailPanelStyle}>
-              <div style={detailHeaderStyle}>
-                <h3 style={detailTitleStyle}>Queue Item Detail</h3>
-                {selectedQueueId !== null ? (
-                  <button type="button" style={detailCloseButtonStyle} onClick={handleCloseDetail}>
-                    Close
-                  </button>
-                ) : null}
-              </div>
-              {detailLoading ? (
-                <p style={emptyTextStyle}>Loading queue item details...</p>
-              ) : detailError ? (
-                <div style={errorStateStyle}>{detailError}</div>
-              ) : selectedQueueItem ? (
-                <div style={detailGridStyle}>
-                  <DetailField label="Queue ID" value={selectedQueueItem.id} mono />
-                  <DetailField
-                    label="Alert"
-                    value={formatDetailAlertReference(selectedQueueItem)}
-                  />
-                  <DetailField label="Action" value={formatQueueLabel(selectedQueueItem.action)} />
-                  <DetailField label="Status" value={formatQueueLabel(selectedQueueItem.status)} />
-                  <DetailField label="Source IP" value={selectedQueueItem.source_ip || "N/A"} mono />
-                  <DetailField
-                    label="Retries"
-                    value={`${selectedQueueItem.retry_count ?? 0} / ${selectedQueueItem.max_retries ?? 0}`}
-                    mono
-                  />
-                  <DetailField
-                    label="Created"
-                    value={formatQueueTimestamp(selectedQueueItem.created_at)}
-                  />
-                  <DetailField
-                    label="Updated"
-                    value={formatQueueTimestamp(selectedQueueItem.updated_at)}
-                  />
-                  <DetailField
-                    label="Last Error"
-                    value={selectedQueueItem.last_error || "N/A"}
-                    mono
-                    wrap
-                  />
-                  <DetailField
-                    label="Idempotency Key"
-                    value={selectedQueueItem.idempotency_key || "N/A"}
-                    mono
-                    wrap
-                  />
-                </div>
-              ) : (
-                <p style={emptyTextStyle}>Select a queue item to view details.</p>
-              )}
-            </div>
           </div>
         )}
+
+        {!loading && !error ? (
+          <div style={detailPanelStyle}>
+            <div style={detailHeaderStyle}>
+              <h3 style={detailTitleStyle}>Queue Item Detail</h3>
+              {selectedQueueId !== null ? (
+                <button type="button" style={detailCloseButtonStyle} onClick={handleCloseDetail}>
+                  Close
+                </button>
+              ) : null}
+            </div>
+            {detailLoading ? (
+              <p style={emptyTextStyle}>Loading queue item details...</p>
+            ) : detailError ? (
+              <div style={errorStateStyle}>{detailError}</div>
+            ) : selectedQueueItem ? (
+              <div style={detailGridStyle}>
+                <DetailField label="Queue ID" value={selectedQueueItem.id} mono />
+                <DetailField
+                  label="Alert"
+                  value={formatDetailAlertReference(selectedQueueItem)}
+                />
+                <DetailField label="Action" value={formatQueueLabel(selectedQueueItem.action)} />
+                <DetailField label="Status" value={formatQueueLabel(selectedQueueItem.status)} />
+                <DetailField label="Source IP" value={selectedQueueItem.source_ip || "N/A"} mono />
+                <DetailField
+                  label="Retries"
+                  value={`${selectedQueueItem.retry_count ?? 0} / ${selectedQueueItem.max_retries ?? 0}`}
+                  mono
+                />
+                <DetailField
+                  label="Created"
+                  value={formatQueueTimestamp(selectedQueueItem.created_at)}
+                />
+                <DetailField
+                  label="Updated"
+                  value={formatQueueTimestamp(selectedQueueItem.updated_at)}
+                />
+                <DetailField
+                  label="Last Error"
+                  value={selectedQueueItem.last_error || "N/A"}
+                  mono
+                  wrap
+                />
+                <DetailField
+                  label="Idempotency Key"
+                  value={selectedQueueItem.idempotency_key || "N/A"}
+                  mono
+                  wrap
+                />
+              </div>
+            ) : (
+              <p style={emptyTextStyle}>Select a queue item to view details.</p>
+            )}
+          </div>
+        ) : null}
       </div>
     </section>
   );

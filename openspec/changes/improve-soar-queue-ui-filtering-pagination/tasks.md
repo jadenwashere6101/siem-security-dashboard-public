@@ -4,7 +4,7 @@ Implement later as a frontend-only usability improvement.
 
 ---
 
-## Task 1 — Inspect current queue filter behavior
+## Task 1 — Inspect current queue filter behavior [x]
 
 Inspect:
 
@@ -23,7 +23,7 @@ Confirm:
 
 ---
 
-## Task 2 — Add or normalize status filter options
+## Task 2 — Add or normalize status filter options [x]
 
 Ensure the status filter supports exactly:
 
@@ -43,7 +43,7 @@ Requirements:
 
 ---
 
-## Task 3 — Add limit/page-size selector
+## Task 3 — Add limit/page-size selector [x]
 
 Add a compact selector for:
 
@@ -62,7 +62,7 @@ Requirements:
 
 ---
 
-## Task 4 — Preserve selected detail safely
+## Task 4 — Preserve selected detail safely [x]
 
 Confirm or implement behavior:
 
@@ -77,7 +77,7 @@ current implementation has a simple and safe path.
 
 ---
 
-## Task 5 — Improve empty filtered state if needed
+## Task 5 — Improve empty filtered state if needed [x]
 
 When the filtered recent list is empty, render a normal empty state.
 
@@ -93,7 +93,7 @@ Do not hide status counts when filtered rows are empty.
 
 ---
 
-## Task 6 — Update component tests
+## Task 6 — Update component tests [x]
 
 Add or adjust `SoarQueuePanel` component tests for:
 

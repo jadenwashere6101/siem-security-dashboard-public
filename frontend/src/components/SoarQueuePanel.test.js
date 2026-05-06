@@ -95,6 +95,12 @@ describe("SoarQueuePanel", () => {
     renderPanel();
 
     expect(await screen.findByText("No queued SOAR actions found.")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(loadRecentSoarQueueItems).toHaveBeenCalledWith({
+        limit: 50,
+        status: "all",
+      })
+    );
   });
 
   test("renders queue counts and recent queue rows", async () => {
@@ -119,6 +125,90 @@ describe("SoarQueuePanel", () => {
     expect(await screen.findByText("Deleted alert")).toBeInTheDocument();
   });
 
+  test("refreshes recent queue rows when status filter changes", async () => {
+    loadSoarQueueStatus.mockResolvedValue(statusFixture);
+    loadRecentSoarQueueItems.mockResolvedValue({ items: [queueRowFixture] });
+
+    renderPanel();
+    await screen.findByText("Recent Queue Items");
+
+    await userEvent.selectOptions(screen.getByLabelText("Status"), "failed");
+
+    await waitFor(() =>
+      expect(loadRecentSoarQueueItems).toHaveBeenCalledWith({
+        limit: 50,
+        status: "failed",
+      })
+    );
+  });
+
+  test("refreshes recent queue rows when page size changes", async () => {
+    loadSoarQueueStatus.mockResolvedValue(statusFixture);
+    loadRecentSoarQueueItems.mockResolvedValue({ items: [queueRowFixture] });
+
+    renderPanel();
+    await screen.findByText("Recent Queue Items");
+
+    await userEvent.selectOptions(screen.getByLabelText("Rows"), "10");
+
+    await waitFor(() =>
+      expect(loadRecentSoarQueueItems).toHaveBeenCalledWith({
+        limit: 10,
+        status: "all",
+      })
+    );
+  });
+
+  test("manual refresh preserves current status filter and page size", async () => {
+    loadSoarQueueStatus.mockResolvedValue(statusFixture);
+    loadRecentSoarQueueItems.mockResolvedValue({ items: [queueRowFixture] });
+
+    renderPanel();
+    await screen.findByText("Recent Queue Items");
+
+    await userEvent.selectOptions(screen.getByLabelText("Status"), "failed");
+    await userEvent.selectOptions(screen.getByLabelText("Rows"), "25");
+    await waitFor(() =>
+      expect(loadRecentSoarQueueItems).toHaveBeenCalledWith({
+        limit: 25,
+        status: "failed",
+      })
+    );
+
+    const refreshButton = screen.getByRole("button", { name: "Refresh" });
+    await waitFor(() => expect(refreshButton).not.toBeDisabled());
+    const callCountBeforeRefresh = loadRecentSoarQueueItems.mock.calls.length;
+
+    await userEvent.click(refreshButton);
+
+    await waitFor(() =>
+      expect(loadRecentSoarQueueItems.mock.calls.length).toBeGreaterThan(
+        callCountBeforeRefresh
+      )
+    );
+    expect(loadRecentSoarQueueItems).toHaveBeenLastCalledWith({
+      limit: 25,
+      status: "failed",
+    });
+  });
+
+  test("shows filtered empty state while keeping counts visible", async () => {
+    loadSoarQueueStatus.mockResolvedValue(statusFixture);
+    loadRecentSoarQueueItems
+      .mockResolvedValueOnce({ items: [queueRowFixture] })
+      .mockResolvedValueOnce({ items: [] });
+
+    renderPanel();
+    await screen.findByText("Recent Queue Items");
+
+    await userEvent.selectOptions(screen.getByLabelText("Status"), "failed");
+
+    expect(
+      await screen.findByText("No queued SOAR actions found for this filter.")
+    ).toBeInTheDocument();
+    expect(screen.getByText("Total")).toBeInTheDocument();
+  });
+
   test("loads and renders queue item detail from view action", async () => {
     loadSoarQueueStatus.mockResolvedValue(statusFixture);
     loadRecentSoarQueueItems.mockResolvedValue({ items: [queueRowFixture] });
@@ -134,6 +224,26 @@ describe("SoarQueuePanel", () => {
       expect(loadSoarQueueItem).toHaveBeenCalledWith(queueRowFixture.id)
     );
     expect(await screen.findByText("queue-idempotency-key-101")).toBeInTheDocument();
+  });
+
+  test("preserves selected detail when filter changes to empty results", async () => {
+    loadSoarQueueStatus.mockResolvedValue(statusFixture);
+    loadRecentSoarQueueItems
+      .mockResolvedValueOnce({ items: [queueRowFixture] })
+      .mockResolvedValueOnce({ items: [] });
+    loadSoarQueueItem.mockResolvedValue(queueDetailFixture);
+
+    renderPanel();
+    await screen.findByText("Recent Queue Items");
+    await userEvent.click(screen.getByRole("button", { name: "View" }));
+    expect(await screen.findByText("queue-idempotency-key-101")).toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByLabelText("Status"), "failed");
+
+    expect(
+      await screen.findByText("No queued SOAR actions found for this filter.")
+    ).toBeInTheDocument();
+    expect(screen.getByText("queue-idempotency-key-101")).toBeInTheDocument();
   });
 
   test("shows detail loading state while queue item detail is in flight", async () => {
@@ -206,6 +316,45 @@ describe("SoarQueuePanel", () => {
     await waitFor(() => expect(loadRecentSoarQueueItems).toHaveBeenCalledTimes(2));
   });
 
+  test("successful run refresh preserves current filter and page size", async () => {
+    loadSoarQueueStatus.mockResolvedValue(statusFixture);
+    loadRecentSoarQueueItems.mockResolvedValue({ items: [queueRowFixture] });
+    runSoarWorkerOnce.mockResolvedValue({
+      mode: "simulation",
+      batch_size: 10,
+      summary: { processed: 1, success: 1, failed: 0, skipped: 0, requeued: 0 },
+      results: [],
+    });
+
+    renderPanel();
+    await screen.findByText("Recent Queue Items");
+
+    await userEvent.selectOptions(screen.getByLabelText("Status"), "failed");
+    await userEvent.selectOptions(screen.getByLabelText("Rows"), "25");
+    await waitFor(() =>
+      expect(loadRecentSoarQueueItems).toHaveBeenCalledWith({
+        limit: 25,
+        status: "failed",
+      })
+    );
+
+    const runButton = screen.getByRole("button", { name: "Run simulation batch" });
+    await waitFor(() => expect(runButton).not.toBeDisabled());
+    const callCountBeforeRun = loadRecentSoarQueueItems.mock.calls.length;
+
+    await userEvent.click(runButton);
+
+    await waitFor(() =>
+      expect(loadRecentSoarQueueItems.mock.calls.length).toBeGreaterThan(
+        callCountBeforeRun
+      )
+    );
+    expect(loadRecentSoarQueueItems).toHaveBeenLastCalledWith({
+      limit: 25,
+      status: "failed",
+    });
+  });
+
   test("does not render retry/replay/cancel mutation controls", async () => {
     loadSoarQueueStatus.mockResolvedValue(statusFixture);
     loadRecentSoarQueueItems.mockResolvedValue({ items: [queueRowFixture] });
@@ -218,4 +367,3 @@ describe("SoarQueuePanel", () => {
     expect(screen.queryByRole("button", { name: /cancel/i })).not.toBeInTheDocument();
   });
 });
-
