@@ -4,6 +4,16 @@ Implement later as a focused frontend-only enhancement.
 
 ---
 
+## Completion Checklist
+
+- [x] Task 1 — Inspect current queue UI/service
+- [x] Task 2 — Wire detail service usage
+- [x] Task 3 — Add selected-item detail state
+- [x] Task 4 — Add row view affordance
+- [x] Task 5 — Render read-only detail panel
+- [x] Task 6 — Preserve existing controls and safety boundaries
+- [x] Task 7 — Add tests where current setup supports them
+
 ## Task 1 — Inspect current queue UI/service
 
 Inspect:

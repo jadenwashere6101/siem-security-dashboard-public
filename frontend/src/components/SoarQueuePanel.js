@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
+  loadSoarQueueItem,
   loadRecentSoarQueueItems,
   loadSoarQueueStatus,
   runSoarWorkerOnce,
@@ -26,6 +27,10 @@ function SoarQueuePanel({
   const [isRunningBatch, setIsRunningBatch] = useState(false);
   const [runError, setRunError] = useState("");
   const [lastRunResult, setLastRunResult] = useState(null);
+  const [selectedQueueId, setSelectedQueueId] = useState(null);
+  const [selectedQueueItem, setSelectedQueueItem] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState("");
 
   const loadQueueVisibility = useCallback(async ({ quiet = false } = {}) => {
     try {
@@ -80,6 +85,28 @@ function SoarQueuePanel({
       setIsRunningBatch(false);
     }
   }, [loadQueueVisibility, runBatchSize]);
+
+  const handleViewQueueItem = useCallback(async (queueId) => {
+    setSelectedQueueId(queueId);
+    setDetailError("");
+    setDetailLoading(true);
+    try {
+      const detail = await loadSoarQueueItem(queueId);
+      setSelectedQueueItem(detail || null);
+    } catch (err) {
+      setSelectedQueueItem(null);
+      setDetailError(err.message || "Unable to load SOAR queue item.");
+    } finally {
+      setDetailLoading(false);
+    }
+  }, []);
+
+  const handleCloseDetail = useCallback(() => {
+    setSelectedQueueId(null);
+    setSelectedQueueItem(null);
+    setDetailError("");
+    setDetailLoading(false);
+  }, []);
 
   useEffect(() => {
     loadQueueVisibility();
@@ -250,11 +277,18 @@ function SoarQueuePanel({
                     <th style={{ ...headerCellStyle, width: "16%" }}>Last Error</th>
                     <th style={{ ...headerCellStyle, width: "11%" }}>Created</th>
                     <th style={{ ...headerCellStyle, width: "11%" }}>Updated</th>
+                    <th style={{ ...headerCellStyle, width: "9%" }}>View</th>
                   </tr>
                 </thead>
                 <tbody>
                   {queueItems.map((item) => (
-                    <tr key={item.id} style={rowStyle}>
+                    <tr
+                      key={item.id}
+                      style={{
+                        ...rowStyle,
+                        ...(selectedQueueId === item.id ? selectedRowStyle : null),
+                      }}
+                    >
                       <td style={{ ...bodyCellStyle, ...monoCellStyle }}>{item.id}</td>
                       <td style={bodyCellStyle}>{formatQueueLabel(item.action)}</td>
                       <td style={bodyCellStyle}>
@@ -270,7 +304,7 @@ function SoarQueuePanel({
                         {formatRetryCount(item)}
                       </td>
                       <td style={{ ...bodyCellStyle, ...errorCellStyle }} title={item.last_error || ""}>
-                        {item.last_error || <span style={mutedTextStyle}>N/A</span>}
+                        {item.last_error ? truncateText(item.last_error, 140) : <span style={mutedTextStyle}>N/A</span>}
                       </td>
                       <td style={{ ...bodyCellStyle, ...timeCellStyle }} title={item.created_at || ""}>
                         {formatQueueTimestamp(item.created_at)}
@@ -278,10 +312,76 @@ function SoarQueuePanel({
                       <td style={{ ...bodyCellStyle, ...timeCellStyle }} title={item.updated_at || ""}>
                         {formatQueueTimestamp(item.updated_at)}
                       </td>
+                      <td style={bodyCellStyle}>
+                        <button
+                          type="button"
+                          style={{
+                            ...viewButtonStyle,
+                            ...(selectedQueueId === item.id ? selectedViewButtonStyle : null),
+                          }}
+                          onClick={() => handleViewQueueItem(item.id)}
+                          title={`View queue item ${item.id}`}
+                        >
+                          View
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+            </div>
+            <div style={detailPanelStyle}>
+              <div style={detailHeaderStyle}>
+                <h3 style={detailTitleStyle}>Queue Item Detail</h3>
+                {selectedQueueId !== null ? (
+                  <button type="button" style={detailCloseButtonStyle} onClick={handleCloseDetail}>
+                    Close
+                  </button>
+                ) : null}
+              </div>
+              {detailLoading ? (
+                <p style={emptyTextStyle}>Loading queue item details...</p>
+              ) : detailError ? (
+                <div style={errorStateStyle}>{detailError}</div>
+              ) : selectedQueueItem ? (
+                <div style={detailGridStyle}>
+                  <DetailField label="Queue ID" value={selectedQueueItem.id} mono />
+                  <DetailField
+                    label="Alert"
+                    value={formatDetailAlertReference(selectedQueueItem)}
+                  />
+                  <DetailField label="Action" value={formatQueueLabel(selectedQueueItem.action)} />
+                  <DetailField label="Status" value={formatQueueLabel(selectedQueueItem.status)} />
+                  <DetailField label="Source IP" value={selectedQueueItem.source_ip || "N/A"} mono />
+                  <DetailField
+                    label="Retries"
+                    value={`${selectedQueueItem.retry_count ?? 0} / ${selectedQueueItem.max_retries ?? 0}`}
+                    mono
+                  />
+                  <DetailField
+                    label="Created"
+                    value={formatQueueTimestamp(selectedQueueItem.created_at)}
+                  />
+                  <DetailField
+                    label="Updated"
+                    value={formatQueueTimestamp(selectedQueueItem.updated_at)}
+                  />
+                  <DetailField
+                    label="Last Error"
+                    value={selectedQueueItem.last_error || "N/A"}
+                    mono
+                    wrap
+                  />
+                  <DetailField
+                    label="Idempotency Key"
+                    value={selectedQueueItem.idempotency_key || "N/A"}
+                    mono
+                    wrap
+                  />
+                </div>
+              ) : (
+                <p style={emptyTextStyle}>Select a queue item to view details.</p>
+              )}
             </div>
           </div>
         )}
@@ -302,6 +402,18 @@ const formatAlertReference = (item) => {
 const formatRetryCount = (item) => `${item?.retry_count ?? 0} / ${item?.max_retries ?? 0}`;
 
 const formatQueueTimestamp = (value) => formatAdminTimestamp(value, "N/A");
+
+const formatDetailAlertReference = (item) => {
+  if (item?.alert_reference?.label) return item.alert_reference.label;
+  if (item?.alert_id !== null && item?.alert_id !== undefined) return `Alert ${item.alert_id}`;
+  return "Deleted alert";
+};
+
+const truncateText = (value, maxLength) => {
+  const text = String(value || "");
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength)}...`;
+};
 
 const getStatusBadgeStyle = (status) => {
   if (status === "pending") return pendingBadgeStyle;
@@ -538,6 +650,10 @@ const rowStyle = {
   backgroundColor: "#161b22",
 };
 
+const selectedRowStyle = {
+  backgroundColor: "rgba(31, 111, 235, 0.14)",
+};
+
 const monoCellStyle = {
   fontFamily: "'Courier New', monospace",
   fontSize: "12px",
@@ -628,5 +744,109 @@ const neutralBadgeStyle = {
   backgroundColor: "#161b22",
   border: "1px solid #30363d",
 };
+
+const viewButtonStyle = {
+  minHeight: "30px",
+  padding: "6px 10px",
+  borderRadius: "8px",
+  border: "1px solid rgba(88, 166, 255, 0.35)",
+  backgroundColor: "rgba(31, 111, 235, 0.14)",
+  color: "#93c5fd",
+  fontSize: "12px",
+  fontWeight: "700",
+  cursor: "pointer",
+};
+
+const selectedViewButtonStyle = {
+  borderColor: "rgba(147, 197, 253, 0.75)",
+  backgroundColor: "rgba(31, 111, 235, 0.24)",
+};
+
+const detailPanelStyle = {
+  marginTop: "16px",
+  border: "1px solid #30363d",
+  borderRadius: "10px",
+  backgroundColor: "#0d1117",
+  padding: "14px",
+};
+
+const detailHeaderStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  marginBottom: "12px",
+};
+
+const detailTitleStyle = {
+  margin: 0,
+  color: "#e6edf3",
+  fontSize: "14px",
+  fontWeight: "700",
+};
+
+const detailCloseButtonStyle = {
+  minHeight: "30px",
+  padding: "6px 10px",
+  borderRadius: "8px",
+  border: "1px solid #30363d",
+  backgroundColor: "#161b22",
+  color: "#c9d1d9",
+  fontSize: "12px",
+  fontWeight: "700",
+  cursor: "pointer",
+};
+
+const detailGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+  gap: "12px",
+};
+
+const detailFieldStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "6px",
+};
+
+const detailLabelStyle = {
+  color: "#8b949e",
+  fontSize: "11px",
+  fontWeight: "700",
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+};
+
+const detailValueStyle = {
+  color: "#e6edf3",
+  fontSize: "13px",
+};
+
+const detailMonoValueStyle = {
+  fontFamily: "'Courier New', monospace",
+  color: "#d29922",
+  fontSize: "12px",
+};
+
+const detailWrappedValueStyle = {
+  whiteSpace: "pre-wrap",
+  overflowWrap: "anywhere",
+};
+
+function DetailField({ label, value, mono = false, wrap = false }) {
+  return (
+    <div style={detailFieldStyle}>
+      <span style={detailLabelStyle}>{label}</span>
+      <span
+        style={{
+          ...detailValueStyle,
+          ...(mono ? detailMonoValueStyle : null),
+          ...(wrap ? detailWrappedValueStyle : null),
+        }}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
 
 export default SoarQueuePanel;
