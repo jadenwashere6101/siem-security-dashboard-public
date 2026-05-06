@@ -4,6 +4,18 @@ Implement later as test-only frontend coverage.
 
 ---
 
+## Completion Checklist
+
+- [x] Task 1 — Inspect component and current test setup
+- [x] Task 2 — Add component test file and mocks
+- [x] Task 3 — Cover initial queue states
+- [x] Task 4 — Cover nullable alert rendering
+- [x] Task 5 — Cover detail flow
+- [x] Task 6 — Cover simulation run control
+- [x] Task 7 — Assert mutation controls are absent
+
+---
+
 ## Task 1 — Inspect component and current test setup
 
 Inspect:
