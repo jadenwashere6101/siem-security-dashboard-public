@@ -4,7 +4,7 @@ Implement later as a frontend-only follow-up to the backend run-once endpoint.
 
 ---
 
-## Task 1 — Inspect existing queue UI and service
+## Task 1 — Inspect existing queue UI and service [x]
 
 Inspect:
 
@@ -21,7 +21,7 @@ Confirm:
 
 ---
 
-## Task 2 — Add run-once service method
+## Task 2 — Add run-once service method [x]
 
 In:
 
@@ -46,7 +46,7 @@ Requirements:
 
 ---
 
-## Task 3 — Add simulation run control to queue panel
+## Task 3 — Add simulation run control to queue panel [x]
 
 In:
 
@@ -68,7 +68,7 @@ should not dominate the queue visibility view.
 
 ---
 
-## Task 4 — Refresh queue data after success
+## Task 4 — Refresh queue data after success [x]
 
 After a successful run:
 
@@ -81,7 +81,7 @@ Do not add polling or background refresh loops.
 
 ---
 
-## Task 5 — Enforce UI safety boundaries
+## Task 5 — Enforce UI safety boundaries [x]
 
 Confirm the implementation does not add:
 
@@ -98,7 +98,7 @@ request is active.
 
 ---
 
-## Task 6 — Add tests where current setup supports them
+## Task 6 — Add tests where current setup supports them [x]
 
 If service tests exist, cover:
 

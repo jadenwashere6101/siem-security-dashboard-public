@@ -53,3 +53,28 @@ export const loadSoarQueueItem = async (queueId) => {
 
   return data;
 };
+
+export const runSoarWorkerOnce = async ({ batchSize } = {}) => {
+  const body = {};
+  if (batchSize !== undefined && batchSize !== null) {
+    body.batch_size = batchSize;
+  }
+
+  const res = await fetch(buildSiemPath("/admin/soar/worker/run-once"), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  const data = await parseJsonResponse(res, {});
+
+  if (!res.ok) {
+    throw new Error(
+      getApiErrorMessage(data, "Unable to run SOAR simulation batch", ["error"])
+    );
+  }
+
+  return data;
+};

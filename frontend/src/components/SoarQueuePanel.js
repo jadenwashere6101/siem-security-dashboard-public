@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import {
   loadRecentSoarQueueItems,
   loadSoarQueueStatus,
+  runSoarWorkerOnce,
 } from "../services/soarQueueService";
 import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
 
@@ -21,6 +22,10 @@ function SoarQueuePanel({
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const [runBatchSize, setRunBatchSize] = useState(10);
+  const [isRunningBatch, setIsRunningBatch] = useState(false);
+  const [runError, setRunError] = useState("");
+  const [lastRunResult, setLastRunResult] = useState(null);
 
   const loadQueueVisibility = useCallback(async ({ quiet = false } = {}) => {
     try {
@@ -52,6 +57,29 @@ function SoarQueuePanel({
       setRefreshing(false);
     }
   }, [statusFilter]);
+
+  const handleRunBatch = useCallback(async () => {
+    try {
+      setRunError("");
+      setIsRunningBatch(true);
+      setLastRunResult(null);
+
+      let batchSize = parseInt(runBatchSize, 10);
+      if (Number.isNaN(batchSize) || batchSize < 1) {
+        batchSize = 10;
+      }
+      batchSize = Math.min(batchSize, 25);
+
+      const result = await runSoarWorkerOnce({ batchSize });
+      setLastRunResult(result);
+
+      await loadQueueVisibility({ quiet: true });
+    } catch (err) {
+      setRunError(err.message || "Unable to run SOAR simulation batch.");
+    } finally {
+      setIsRunningBatch(false);
+    }
+  }, [loadQueueVisibility, runBatchSize]);
 
   useEffect(() => {
     loadQueueVisibility();
@@ -89,6 +117,33 @@ function SoarQueuePanel({
               ))}
             </select>
           </label>
+          <div style={batchControlWrapperStyle}>
+            <label style={filterWrapperStyle}>
+              <span style={filterLabelStyle}>Batch Size</span>
+              <input
+                type="number"
+                min="1"
+                max="25"
+                value={runBatchSize}
+                onChange={(event) => setRunBatchSize(event.target.value)}
+                disabled={isRunningBatch}
+                style={{ ...batchInputStyle, opacity: isRunningBatch ? 0.65 : 1 }}
+              />
+            </label>
+            <button
+              type="button"
+              onClick={handleRunBatch}
+              disabled={loading || isRunningBatch}
+              title="Run one manual simulation batch. This processes pending queue items in simulation mode only."
+              style={{
+                ...runBatchButtonStyle,
+                opacity: loading || isRunningBatch ? 0.65 : 1,
+                cursor: loading || isRunningBatch ? "default" : "pointer",
+              }}
+            >
+              {isRunningBatch ? "Running..." : "Run simulation batch"}
+            </button>
+          </div>
           <button
             type="button"
             onClick={() => loadQueueVisibility({ quiet: true })}
@@ -105,6 +160,56 @@ function SoarQueuePanel({
       </div>
 
       <div style={panelContentStyle}>
+        {runError ? <div style={errorStateStyle}>{runError}</div> : null}
+
+        {lastRunResult && lastRunResult.summary ? (
+          <div style={resultSummaryStyle}>
+            <div style={resultHeaderStyle}>
+              <p style={resultLabelStyle}>Last manual simulation batch</p>
+              <span style={resultMetaStyle}>
+                Batch size used: {lastRunResult.batch_size ?? "N/A"}
+              </span>
+            </div>
+            <div style={resultGridStyle}>
+              <div style={resultItemStyle}>
+                <span style={resultCountLabelStyle}>Processed</span>
+                <strong style={resultCountValueStyle}>{lastRunResult.summary.processed || 0}</strong>
+              </div>
+              <div style={resultItemStyle}>
+                <span style={resultCountLabelStyle}>Success</span>
+                <strong style={{ ...resultCountValueStyle, color: "#7ee787" }}>
+                  {lastRunResult.summary.success || 0}
+                </strong>
+              </div>
+              <div style={resultItemStyle}>
+                <span style={resultCountLabelStyle}>Failed</span>
+                <strong style={{ ...resultCountValueStyle, color: "#fca5a5" }}>
+                  {lastRunResult.summary.failed || 0}
+                </strong>
+              </div>
+              <div style={resultItemStyle}>
+                <span style={resultCountLabelStyle}>Skipped</span>
+                <strong style={{ ...resultCountValueStyle, color: "#c9d1d9" }}>
+                  {lastRunResult.summary.skipped || 0}
+                </strong>
+              </div>
+              <div style={resultItemStyle}>
+                <span style={resultCountLabelStyle}>Requeued</span>
+                <strong style={{ ...resultCountValueStyle, color: "#f5d487" }}>
+                  {lastRunResult.summary.requeued || 0}
+                </strong>
+              </div>
+            </div>
+            {lastRunResult.requested_batch_size !== undefined &&
+            lastRunResult.batch_size !== undefined &&
+            lastRunResult.requested_batch_size !== lastRunResult.batch_size ? (
+              <p style={resultNoteStyle}>
+                Requested batch size was capped by the backend.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
         <div style={countsGridStyle}>
           {QUEUE_STATUSES.map((status) => (
             <div key={status} style={countCardStyle}>
@@ -242,6 +347,101 @@ const refreshButtonStyle = {
   color: "#93c5fd",
   fontSize: "13px",
   fontWeight: "700",
+};
+
+const batchControlWrapperStyle = {
+  display: "flex",
+  alignItems: "flex-end",
+  gap: "8px",
+  flexWrap: "wrap",
+};
+
+const batchInputStyle = {
+  width: "96px",
+  minHeight: "40px",
+  padding: "9px 10px",
+  borderRadius: "8px",
+  border: "1px solid #30363d",
+  backgroundColor: "#0d1117",
+  color: "#e6edf3",
+  fontSize: "13px",
+  fontWeight: "700",
+};
+
+const runBatchButtonStyle = {
+  minHeight: "40px",
+  padding: "10px 14px",
+  borderRadius: "8px",
+  border: "1px solid rgba(245, 212, 135, 0.38)",
+  backgroundColor: "rgba(217, 164, 65, 0.14)",
+  color: "#f5d487",
+  fontSize: "13px",
+  fontWeight: "700",
+};
+
+const resultSummaryStyle = {
+  marginBottom: "18px",
+  padding: "14px",
+  borderRadius: "8px",
+  border: "1px solid rgba(88, 166, 255, 0.24)",
+  backgroundColor: "rgba(88, 166, 255, 0.08)",
+};
+
+const resultHeaderStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: "12px",
+  flexWrap: "wrap",
+  marginBottom: "12px",
+};
+
+const resultLabelStyle = {
+  margin: 0,
+  color: "#93c5fd",
+  fontSize: "12px",
+  fontWeight: "700",
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+};
+
+const resultMetaStyle = {
+  color: "#8b949e",
+  fontSize: "12px",
+  fontWeight: "700",
+};
+
+const resultGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(96px, 1fr))",
+  gap: "10px",
+};
+
+const resultItemStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "4px",
+  minHeight: "52px",
+  justifyContent: "center",
+};
+
+const resultCountLabelStyle = {
+  color: "#8b949e",
+  fontSize: "11px",
+  fontWeight: "700",
+  textTransform: "uppercase",
+};
+
+const resultCountValueStyle = {
+  color: "#e6edf3",
+  fontSize: "20px",
+  lineHeight: 1,
+};
+
+const resultNoteStyle = {
+  margin: "10px 0 0",
+  color: "#8b949e",
+  fontSize: "12px",
 };
 
 const countsGridStyle = {
