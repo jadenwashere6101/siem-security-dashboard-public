@@ -1,3 +1,4 @@
+import hashlib
 import os
 
 import requests
@@ -349,3 +350,27 @@ def execute_response_action(
     )
 
     return status
+
+
+def _compute_idempotency_key(alert_id, source_ip, action):
+    raw = f"{alert_id}:{source_ip}:{action}"
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def enqueue_response_action(cur, alert_id, source_ip, action, *, max_retries=3):
+    # Must be called after the ingest transaction commits — this helper must not
+    # rely on uncommitted ingest state and must be safe to call on a separate
+    # DB connection or committed session.
+    idempotency_key = _compute_idempotency_key(alert_id, source_ip, action)
+    cur.execute(
+        """
+        INSERT INTO response_actions_queue
+            (alert_id, source_ip, action, status, idempotency_key, max_retries)
+        VALUES (%s, %s, %s, 'pending', %s, %s)
+        ON CONFLICT (idempotency_key) DO NOTHING
+        RETURNING id
+        """,
+        (alert_id, source_ip, action, idempotency_key, max_retries),
+    )
+    row = cur.fetchone()
+    return row[0] if row else None

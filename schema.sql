@@ -44,6 +44,25 @@ CREATE TABLE IF NOT EXISTS response_actions_log (
     executed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- response_actions_queue holds pending actions for future async execution.
+-- response_actions_log (above) remains the audit trail of what was executed;
+-- this table tracks what is intended to be executed. A queue row may reference
+-- a log row once execution completes, but the log schema is not modified here.
+CREATE TABLE IF NOT EXISTS response_actions_queue (
+    id SERIAL PRIMARY KEY,
+    idempotency_key TEXT UNIQUE NOT NULL,
+    alert_id INTEGER REFERENCES alerts(id) ON DELETE SET NULL,
+    source_ip INET,
+    action TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'running', 'success', 'failed', 'skipped')),
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    max_retries INTEGER NOT NULL DEFAULT 3,
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
     username TEXT UNIQUE NOT NULL,
@@ -108,6 +127,12 @@ ON response_actions_log (alert_id);
 
 CREATE INDEX IF NOT EXISTS idx_response_actions_log_executed_at
 ON response_actions_log (executed_at);
+
+CREATE INDEX IF NOT EXISTS idx_response_actions_queue_status
+ON response_actions_queue (status);
+
+CREATE INDEX IF NOT EXISTS idx_response_actions_queue_alert_id
+ON response_actions_queue (alert_id);
 
 CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);
 
