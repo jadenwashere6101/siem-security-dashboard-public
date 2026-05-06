@@ -1,7 +1,7 @@
 from unittest.mock import patch
 
 import siem_backend
-import backend_correlation_engine
+import engines.correlation_engine as backend_correlation_engine
 from helpers import enrichment_helpers
 
 
@@ -133,7 +133,7 @@ def test_correlated_activity_fires_with_two_qualifying_open_alerts(postgres_db):
         city="New York",
     )
 
-    with siem_backend.app.app_context(), patch("backend_correlation_engine.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("engines.correlation_engine.lookup_ip_reputation", return_value=REPUTATION):
         assert backend_correlation_engine.generate_correlated_activity_alerts(cur, conn, source_ip) is True
 
     alert = fetch_correlated_alert(cur, source_ip)
@@ -192,7 +192,7 @@ def test_correlated_activity_requires_different_alert_types(postgres_db):
     insert_open_alert(cur, source_ip=source_ip, alert_type="failed_login_threshold", source="bank_app", seconds_ago=2)
     insert_open_alert(cur, source_ip=source_ip, alert_type="failed_login_threshold", source="nginx", seconds_ago=1)
 
-    with siem_backend.app.app_context(), patch("backend_correlation_engine.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("engines.correlation_engine.lookup_ip_reputation", return_value=REPUTATION):
         assert backend_correlation_engine.generate_correlated_activity_alerts(cur, conn, source_ip) is False
 
     assert fetch_correlated_alert(cur, source_ip) is None
@@ -205,7 +205,7 @@ def test_correlated_activity_requires_distinct_non_unknown_sources(postgres_db):
     insert_open_alert(cur, source_ip=source_ip, alert_type="failed_login_threshold", source="bank_app", seconds_ago=2)
     insert_open_alert(cur, source_ip=source_ip, alert_type="port_scan_threshold", source="unknown", seconds_ago=1)
 
-    with siem_backend.app.app_context(), patch("backend_correlation_engine.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("engines.correlation_engine.lookup_ip_reputation", return_value=REPUTATION):
         assert backend_correlation_engine.generate_correlated_activity_alerts(cur, conn, source_ip) is False
 
     assert fetch_correlated_alert(cur, source_ip) is None
@@ -218,7 +218,7 @@ def test_correlated_activity_duplicate_suppression_keeps_single_open_alert(postg
     insert_open_alert(cur, source_ip=source_ip, alert_type="failed_login_threshold", source="bank_app", seconds_ago=2)
     insert_open_alert(cur, source_ip=source_ip, alert_type="port_scan_threshold", source="nginx", seconds_ago=1)
 
-    with siem_backend.app.app_context(), patch("backend_correlation_engine.lookup_ip_reputation", return_value=REPUTATION):
+    with siem_backend.app.app_context(), patch("engines.correlation_engine.lookup_ip_reputation", return_value=REPUTATION):
         assert backend_correlation_engine.generate_correlated_activity_alerts(cur, conn, source_ip) is True
         assert backend_correlation_engine.generate_correlated_activity_alerts(cur, conn, source_ip) is False
 

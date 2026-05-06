@@ -1,6 +1,6 @@
 from psycopg2.extras import Json
 
-from backend_correlation_engine import generate_correlated_activity_alerts, generate_targeted_correlation_alerts
+from engines.correlation_engine import generate_correlated_activity_alerts, generate_targeted_correlation_alerts
 from engines.detection_engine import (
     _generate_application_exception_alerts_core,
     _generate_failed_login_alerts_core,
