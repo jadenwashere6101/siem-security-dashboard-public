@@ -168,8 +168,10 @@ def test_success_after_spray_does_not_require_existing_spray_alert(postgres_db):
         )
 
     assert len(alerts_created) == 1
+    assert alerts_created[0]["alert_id"] is not None
     assert str(alerts_created[0]["source_ip"]) == source_ip
     assert alerts_created[0]["success_at"]
+    assert alerts_created[0]["response_action"] == "flag_high_priority"
 
 
 def test_success_after_spray_successful_login_trigger_and_alert_field_fidelity(postgres_db):
@@ -218,7 +220,7 @@ def test_success_after_spray_successful_login_trigger_and_alert_field_fidelity(p
     assert alert[6] == f"Successful login after password spraying detected from {source_ip}"
     assert alert[7] == "open"
     assert alert[8] == "flag_high_priority"
-    assert alert[9] == "executed"
+    assert alert[9] == "pending"
     assert alert[10] == "United States"
     assert alert[11] == "New York"
     assert float(alert[12]) == 40.7128
@@ -268,7 +270,7 @@ def test_success_after_spray_duplicate_suppression_keeps_single_open_alert(postg
     assert cur.fetchone()[0] == 1
 
 
-def test_success_after_spray_currval_links_response_action_to_inserted_alert(postgres_db):
+def test_success_after_spray_currval_sets_alert_metadata_without_sync_response_log(postgres_db):
     conn, cur = postgres_db
     source_ip = "198.51.100.75"
 
@@ -289,14 +291,8 @@ def test_success_after_spray_currval_links_response_action_to_inserted_alert(pos
         SELECT
             a.id,
             a.response_action,
-            a.response_status,
-            r.alert_id,
-            host(r.source_ip),
-            r.action,
-            r.status,
-            r.details
+            a.response_status
         FROM alerts a
-        JOIN response_actions_log r ON r.alert_id = a.id
         WHERE a.source_ip = %s
           AND a.alert_type = 'successful_login_after_spray'
         """,
@@ -305,10 +301,7 @@ def test_success_after_spray_currval_links_response_action_to_inserted_alert(pos
     row = cur.fetchone()
 
     assert row is not None
-    assert row[0] == row[3]
     assert row[1] == "flag_high_priority"
-    assert row[2] == "executed"
-    assert row[4] == source_ip
-    assert row[5] == "flag_high_priority"
-    assert row[6] == "executed"
-    assert row[7] == "Simulated escalation to SOC"
+    assert row[2] == "pending"
+    cur.execute("SELECT COUNT(*) FROM response_actions_log WHERE alert_id = %s", (row[0],))
+    assert cur.fetchone()[0] == 0

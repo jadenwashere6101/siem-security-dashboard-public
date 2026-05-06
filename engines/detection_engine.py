@@ -9,7 +9,7 @@ from engines.detection_config import (
     HTTP_ERROR_WINDOW_MINUTES,
     get_effective_detection_rule,
 )
-from core.ip_helpers import determine_response_action, execute_response_action, lookup_ip_reputation
+from core.ip_helpers import determine_response_action, lookup_ip_reputation
 
 
 def _generate_failed_login_alerts_core(cur, conn, source=None, source_type=None):
@@ -136,22 +136,6 @@ def _generate_failed_login_alerts_core(cur, conn, source=None, source_type=None)
         cur.execute("SELECT currval(pg_get_serial_sequence('alerts', 'id'))")
         alert_id = cur.fetchone()[0]
 
-        execution_status = execute_response_action(
-            cur,
-            alert_id,
-            str(source_ip),
-            response_action
-        )
-
-        cur.execute(
-            """
-            UPDATE alerts
-            SET response_status = %s
-            WHERE id = %s
-            """,
-            (execution_status, alert_id)
-        )
-
         alerts_created.append(
             {
                 "source_ip": source_ip,
@@ -277,22 +261,6 @@ def _generate_http_error_alerts_core(cur, conn, source=None, source_type=None):
 
         cur.execute("SELECT currval(pg_get_serial_sequence('alerts', 'id'))")
         alert_id = cur.fetchone()[0]
-
-        execution_status = execute_response_action(
-            cur,
-            alert_id,
-            str(source_ip),
-            response_action
-        )
-
-        cur.execute(
-            """
-            UPDATE alerts
-            SET response_status = %s
-            WHERE id = %s
-            """,
-            (execution_status, alert_id)
-        )
 
         alerts_created.append(
             {
@@ -429,22 +397,6 @@ def _generate_port_scan_alerts_core(cur, conn, source=None, source_type=None):
 
         cur.execute("SELECT currval(pg_get_serial_sequence('alerts', 'id'))")
         alert_id = cur.fetchone()[0]
-
-        execution_status = execute_response_action(
-            cur,
-            alert_id,
-            str(source_ip),
-            response_action
-        )
-
-        cur.execute(
-            """
-            UPDATE alerts
-            SET response_status = %s
-            WHERE id = %s
-            """,
-            (execution_status, alert_id)
-        )
 
         alerts_created.append(
             {
@@ -592,22 +544,6 @@ def _generate_password_spraying_alerts_core(cur, conn, source=None, source_type=
 
         cur.execute("SELECT currval(pg_get_serial_sequence('alerts', 'id'))")
         alert_id = cur.fetchone()[0]
-
-        execution_status = execute_response_action(
-            cur,
-            alert_id,
-            str(source_ip),
-            response_action
-        )
-
-        cur.execute(
-            """
-            UPDATE alerts
-            SET response_status = %s
-            WHERE id = %s
-            """,
-            (execution_status, alert_id)
-        )
 
         alerts_created.append(
             {
@@ -772,22 +708,6 @@ def _generate_successful_login_after_spray_alerts_core(cur, conn, source=None, s
         cur.execute("SELECT currval(pg_get_serial_sequence('alerts', 'id'))")
         alert_id = cur.fetchone()[0]
 
-        execution_status = execute_response_action(
-            cur,
-            alert_id,
-            str(source_ip),
-            response_action
-        )
-
-        cur.execute(
-            """
-            UPDATE alerts
-            SET response_status = %s
-            WHERE id = %s
-            """,
-            (execution_status, alert_id)
-        )
-
         alerts_created.append(
             {
                 "source_ip": source_ip,
@@ -913,22 +833,6 @@ def _generate_application_exception_alerts_core(cur, conn, source=None, source_t
 
         cur.execute("SELECT currval(pg_get_serial_sequence('alerts', 'id'))")
         alert_id = cur.fetchone()[0]
-
-        execution_status = execute_response_action(
-            cur,
-            alert_id,
-            str(source_ip),
-            response_action
-        )
-
-        cur.execute(
-            """
-            UPDATE alerts
-            SET response_status = %s
-            WHERE id = %s
-            """,
-            (execution_status, alert_id)
-        )
 
         alerts_created.append(
             {
@@ -1057,22 +961,6 @@ def _generate_high_request_rate_alerts_core(cur, conn, source=None, source_type=
 
         cur.execute("SELECT currval(pg_get_serial_sequence('alerts', 'id'))")
         alert_id = cur.fetchone()[0]
-
-        execution_status = execute_response_action(
-            cur,
-            alert_id,
-            str(source_ip),
-            response_action
-        )
-
-        cur.execute(
-            """
-            UPDATE alerts
-            SET response_status = %s
-            WHERE id = %s
-            """,
-            (execution_status, alert_id)
-        )
 
         alerts_created.append(
             {
