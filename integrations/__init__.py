@@ -1,0 +1,2 @@
+"""SOAR integration adapter package."""
+

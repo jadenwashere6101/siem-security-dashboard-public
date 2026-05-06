@@ -9,6 +9,17 @@ logger = logging.getLogger(__name__)
 SUPPORTED_ACTIONS = {"block_ip", "flag_high_priority", "monitor"}
 
 
+class AdapterBackedExecutor:
+    def __init__(self, registry, context=None):
+        self.registry = registry
+        self.context = context or {}
+
+    def __call__(self, row):
+        action = row.get("action")
+        adapter = self.registry.get_adapter_for_action(action)
+        return adapter.execute(row, context=self.context)
+
+
 class SimulationExecutor:
     def __call__(self, row):
         _validate_action(row)

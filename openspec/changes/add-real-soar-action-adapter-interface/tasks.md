@@ -5,6 +5,17 @@ side effects disabled until a separate real-adapter change.
 
 ---
 
+## Completion Checklist
+
+- [x] Task 1 — Add adapter package scaffold
+- [x] Task 2 — Define base adapter contract
+- [x] Task 3 — Define registry/factory
+- [x] Task 4 — Define configuration loader
+- [x] Task 5 — Add adapter-backed executor shell
+- [x] Task 6 — Add fake adapters for tests only
+- [x] Task 7 — Add tests
+- [x] Task 8 — Document first real adapter candidate
+
 ## Task 1 — Add adapter package scaffold
 
 Create:
