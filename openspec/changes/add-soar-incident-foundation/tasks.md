@@ -15,16 +15,16 @@ pytest tests/test_alert_mutation_api_contracts.py
 
 ## Step 1: Schema additions
 
-- [ ] Read `schema.sql` — confirm no `incidents` or `incident_alerts` tables exist.
-- [ ] Add `incidents` table with columns: `id`, `title`, `severity`, `priority` (CHECK P1-P4,
+- [x] Read `schema.sql` — confirm no `incidents` or `incident_alerts` tables exist.
+- [x] Add `incidents` table with columns: `id`, `title`, `severity`, `priority` (CHECK P1-P4,
   default P2), `status` (CHECK open/investigating/resolved/closed, default open), `source_ip`,
   `assigned_to` (FK to users ON DELETE SET NULL), `created_at`, `resolved_at`.
-- [ ] Add `incident_alerts` table with columns: `incident_id` (FK to incidents ON DELETE CASCADE),
+- [x] Add `incident_alerts` table with columns: `incident_id` (FK to incidents ON DELETE CASCADE),
   `alert_id` (FK to alerts ON DELETE CASCADE), `linked_at`, PRIMARY KEY `(incident_id, alert_id)`.
-- [ ] Add indexes: `idx_incidents_status`, `idx_incidents_source_ip`, `idx_incidents_created_at`,
+- [x] Add indexes: `idx_incidents_status`, `idx_incidents_source_ip`, `idx_incidents_created_at`,
   `idx_incidents_severity`, `idx_incident_alerts_alert_id`, `idx_incident_alerts_incident_id`.
-- [ ] Apply `schema.sql` to a fresh test database — confirm it completes with no errors.
-- [ ] Run full regression suite — all six tests green.
+- [x] Apply `schema.sql` to a fresh test database — confirm it completes with no errors.
+- [x] Run full regression suite — all six tests green.
 
 ---
 
@@ -42,45 +42,45 @@ pytest tests/test_alert_mutation_api_contracts.py
 
 ## Step 3: Implement `core/incident_store.py`
 
-- [ ] Create `core/incident_store.py`.
+- [x] Create `core/incident_store.py`.
   - Import `logging` — use `logging.getLogger(__name__)`. No Flask dependency.
   - No imports from route modules, detection engines, or correlation engines.
 
-- [ ] Implement `create_incident(conn, title, severity, source_ip) -> dict`.
+- [x] Implement `create_incident(conn, title, severity, source_ip) -> dict`.
   - Derive priority: `CRITICAL → P1`, `HIGH → P2`, anything else → `P2`.
   - INSERT into `incidents`. Return full row as dict with ISO 8601 `created_at`.
   - Does not commit.
 
-- [ ] Implement `link_alert_to_incident(conn, incident_id, alert_id) -> None`.
+- [x] Implement `link_alert_to_incident(conn, incident_id, alert_id) -> None`.
   - INSERT into `incident_alerts` with `ON CONFLICT DO NOTHING`.
   - Log `[INCIDENT LINK]` on insert, `[INCIDENT LINK] already linked` on conflict.
   - Does not commit.
 
-- [ ] Implement `find_open_incident_by_source_ip(conn, source_ip, dedup_window_minutes=60) -> dict | None`.
+- [x] Implement `find_open_incident_by_source_ip(conn, source_ip, dedup_window_minutes=60) -> dict | None`.
   - Query `incidents WHERE source_ip = %s AND status IN ('open', 'investigating')
     AND created_at >= NOW() - INTERVAL '%s minutes' ORDER BY created_at DESC LIMIT 1`.
   - Use parameterized interval: `NOW() - (%(window)s * INTERVAL '1 minute')` or equivalent.
   - Return incident dict or `None`.
 
-- [ ] Implement `maybe_create_or_link_incident(conn, alert_id, severity, source_ip) -> dict | None`.
+- [x] Implement `maybe_create_or_link_incident(conn, alert_id, severity, source_ip) -> dict | None`.
   - Severity gate: return `None` immediately if severity not in `{'HIGH', 'CRITICAL'}`.
   - Call `find_open_incident_by_source_ip`. If found: link and return existing.
   - If not found: create new incident, link alert, return new incident.
   - Does not commit.
 
-- [ ] Implement `list_incidents(conn, status=None, severity=None, limit=50, offset=0) -> list`.
+- [x] Implement `list_incidents(conn, status=None, severity=None, limit=50, offset=0) -> list`.
   - Hard cap limit at 100.
   - Build query dynamically based on provided filters.
   - ORDER BY `created_at DESC`.
   - Return list of incident dicts.
 
-- [ ] Implement `get_incident_detail(conn, incident_id) -> dict | None`.
+- [x] Implement `get_incident_detail(conn, incident_id) -> dict | None`.
   - Return `None` for unknown ID.
   - JOIN `incident_alerts` and `alerts` to build `alerts` list in the response.
   - Each alert entry includes: `alert_id`, `alert_type`, `severity`, `source_ip`, `status`,
     `created_at`, `linked_at`.
 
-- [ ] Implement `update_incident_status(conn, incident_id, new_status, actor_username) -> dict`.
+- [x] Implement `update_incident_status(conn, incident_id, new_status, actor_username) -> dict`.
   - Fetch current incident. Raise `ValueError("incident not found")` if absent.
   - Enforce transition table from design.md. Raise `ValueError(f"invalid status transition: ...")`.
   - Set `resolved_at = NOW()` when transitioning to `resolved`.
@@ -93,22 +93,22 @@ pytest tests/test_alert_mutation_api_contracts.py
 
 All tests use a real test database connection. No Flask test client needed.
 
-- [ ] Schema tests:
+- [x] Schema tests:
   - `incidents` and `incident_alerts` tables exist after schema apply.
   - `status` CHECK rejects `'unknown'`.
   - `priority` CHECK rejects `'P5'`.
   - Duplicate `(incident_id, alert_id)` in `incident_alerts` raises IntegrityError.
 
-- [ ] `create_incident` tests:
+- [x] `create_incident` tests:
   - Returns dict with `id`, `title`, `severity`, `priority`, `status='open'`.
   - `CRITICAL` → `priority='P1'`.
   - `HIGH` → `priority='P2'`.
 
-- [ ] `link_alert_to_incident` tests:
+- [x] `link_alert_to_incident` tests:
   - Row appears in `incident_alerts` after call.
   - Calling twice: no exception, exactly one row.
 
-- [ ] `find_open_incident_by_source_ip` tests:
+- [x] `find_open_incident_by_source_ip` tests:
   - Returns `None` when no incidents exist.
   - Returns `None` for `resolved` incidents even within window.
   - Returns `None` for `closed` incidents even within window.
@@ -117,7 +117,7 @@ All tests use a real test database connection. No Flask test client needed.
   - Returns `None` for `open` incident outside window.
   - Returns most recent when multiple `open` incidents exist for same IP.
 
-- [ ] `maybe_create_or_link_incident` tests:
+- [x] `maybe_create_or_link_incident` tests:
   - `MEDIUM` → `None`, no incidents table rows.
   - `LOW` → `None`, no incidents table rows.
   - `HIGH`, no existing incident → new incident created, alert linked, incident returned.
@@ -126,19 +126,19 @@ All tests use a real test database connection. No Flask test client needed.
   - `HIGH`, existing incident is `resolved` → new incident created.
   - `CRITICAL` → same dedup behavior as HIGH.
 
-- [ ] `list_incidents` tests:
+- [x] `list_incidents` tests:
   - Returns all incidents ordered by `created_at DESC`.
   - `status='open'` filter returns only open incidents.
   - `severity='CRITICAL'` filter returns only CRITICAL incidents.
   - Limit of 200 is capped at 100.
   - Empty table returns `[]`.
 
-- [ ] `get_incident_detail` tests:
+- [x] `get_incident_detail` tests:
   - Unknown ID returns `None`.
   - No linked alerts → `"alerts": []`.
   - After linking, returns correct alert summaries with `linked_at`.
 
-- [ ] `update_incident_status` tests:
+- [x] `update_incident_status` tests:
   - `open → investigating` succeeds, returns updated dict.
   - `open → resolved` succeeds, `resolved_at` is set.
   - `resolved → open` succeeds, `resolved_at` unchanged.
@@ -146,7 +146,7 @@ All tests use a real test database connection. No Flask test client needed.
   - Unknown `new_status` raises `ValueError`.
   - Unknown `incident_id` raises `ValueError("incident not found")`.
 
-- [ ] Run full regression suite — all six tests green.
+- [x] Run full regression suite — all six tests green.
 
 ---
 
