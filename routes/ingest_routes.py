@@ -1,4 +1,5 @@
 import ipaddress
+import logging
 
 from flask import Blueprint, current_app, jsonify, request
 
@@ -11,6 +12,7 @@ from adapters.otel_adapter import normalize_otel_telemetry
 from helpers.api_guards import require_api_key, require_azure_api_key, require_otel_api_key
 from core.db import get_db_connection
 from core.extensions import limiter
+from core.incident_store import maybe_create_or_link_incident
 from engines.ingest_engine import ingest_normalized_event
 from engines.soar_enqueue_orchestrator import enqueue_committed_alerts
 from helpers.ingest_normalizers import (
@@ -24,9 +26,41 @@ from core.ip_helpers import lookup_ip_location
 
 
 ingest_bp = Blueprint("ingest", __name__)
+logger = logging.getLogger(__name__)
 
 VALID_SEVERITIES = {"low", "medium", "high", "critical"}
 VALID_EVENT_TYPES = {"failed_login", "login_failure", "successful_login", "port_scan", "normal_activity"}
+INCIDENT_SEVERITIES = {"HIGH", "CRITICAL"}
+
+
+def _create_incidents_for_alerts(alerts_created, conn):
+    for alert in alerts_created or []:
+        alert_id = alert.get("alert_id")
+        severity = alert.get("severity")
+        source_ip = alert.get("source_ip")
+
+        if not alert_id or not severity or not source_ip:
+            logger.warning(
+                "[SOAR INCIDENT SKIP] Missing incident fields alert_id=%s source_ip=%s severity=%s",
+                alert_id,
+                source_ip,
+                severity,
+            )
+            continue
+
+        if str(severity).upper() not in INCIDENT_SEVERITIES:
+            continue
+
+        try:
+            maybe_create_or_link_incident(conn, alert_id, severity, str(source_ip))
+        except Exception as incident_error:
+            logger.error(
+                "[SOAR INCIDENT FAILED] %s | alert_id=%s source_ip=%s severity=%s",
+                incident_error,
+                alert_id,
+                source_ip,
+                severity,
+            )
 
 
 @ingest_bp.route("/ingest", methods=["POST"])
@@ -106,6 +140,16 @@ def add_event():
             current_app.logger.error(
                 "[SOAR ENQUEUE ERROR] Post-commit enqueue failed — ingest was committed: %s",
                 enqueue_error,
+            )
+
+        try:
+            _create_incidents_for_alerts(alerts_created, conn)
+            conn.commit()
+        except Exception as incident_error:
+            current_app.logger.error(
+                "[SOAR INCIDENT FAILED] Post-commit incident creation failed — ingest was committed: %s | alerts=%s",
+                incident_error,
+                [(a.get("alert_id"), a.get("source_ip"), a.get("severity")) for a in alerts_created],
             )
 
         return jsonify({
@@ -208,6 +252,16 @@ def add_web_log_event():
                 enqueue_error,
             )
 
+        try:
+            _create_incidents_for_alerts(alerts_created, conn)
+            conn.commit()
+        except Exception as incident_error:
+            current_app.logger.error(
+                "[SOAR INCIDENT FAILED] Post-commit incident creation failed — ingest was committed: %s | alerts=%s",
+                incident_error,
+                [(a.get("alert_id"), a.get("source_ip"), a.get("severity")) for a in alerts_created],
+            )
+
         return jsonify({
             "message": "Event added successfully",
             "alerts_created": alerts_created
@@ -303,6 +357,16 @@ def add_azure_event():
                 enqueue_error,
             )
 
+        try:
+            _create_incidents_for_alerts(alerts_created, conn)
+            conn.commit()
+        except Exception as incident_error:
+            current_app.logger.error(
+                "[SOAR INCIDENT FAILED] Post-commit incident creation failed — ingest was committed: %s | alerts=%s",
+                incident_error,
+                [(a.get("alert_id"), a.get("source_ip"), a.get("severity")) for a in alerts_created],
+            )
+
         success_message = "Events added successfully" if len(normalized_events) > 1 else "Event added successfully"
         return jsonify({
             "message": success_message,
@@ -383,6 +447,16 @@ def add_otel_event():
             current_app.logger.error(
                 "[SOAR ENQUEUE ERROR] Post-commit enqueue failed — ingest was committed: %s",
                 enqueue_error,
+            )
+
+        try:
+            _create_incidents_for_alerts(alerts_created, conn)
+            conn.commit()
+        except Exception as incident_error:
+            current_app.logger.error(
+                "[SOAR INCIDENT FAILED] Post-commit incident creation failed — ingest was committed: %s | alerts=%s",
+                incident_error,
+                [(a.get("alert_id"), a.get("source_ip"), a.get("severity")) for a in alerts_created],
             )
 
         success_message = "Events added successfully" if len(normalized_events) > 1 else "Event added successfully"

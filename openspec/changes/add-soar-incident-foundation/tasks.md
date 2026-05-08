@@ -42,16 +42,16 @@ pytest tests/test_alert_mutation_api_contracts.py
 
 Read `engines/detection_engine.py` before making any changes.
 
-- [ ] Read `_generate_failed_login_alerts_core` — locate `alerts_created.append({...})`.
+- [x] Read `_generate_failed_login_alerts_core` — locate `alerts_created.append({...})`.
   Add `"severity": "high"` to the dict. Confirm the value matches the INSERT VALUES literal.
-- [ ] Read `_generate_password_spraying_alerts_core` — same. Add `"severity": "high"`.
-- [ ] Read `_generate_successful_login_after_spray_alerts_core` — same. Add `"severity": "critical"`.
-- [ ] Read `_generate_application_exception_alerts_core` — same. Add `"severity": "high"`.
-- [ ] Read `_generate_http_error_alerts_core` — same. Add `"severity": "medium"`.
-- [ ] Read `_generate_port_scan_alerts_core` — same. Add `"severity": "medium"`.
-- [ ] Read `_generate_high_request_rate_alerts_core` — same. Add `"severity": "medium"`.
-- [ ] Confirm no other code in the file was modified.
-- [ ] Run regression suite — all six green. **If any fail, stop. Do not proceed.**
+- [x] Read `_generate_password_spraying_alerts_core` — same. Add `"severity": "high"`.
+- [x] Read `_generate_successful_login_after_spray_alerts_core` — same. Add `"severity": "critical"`.
+- [x] Read `_generate_application_exception_alerts_core` — same. Add `"severity": "high"`.
+- [x] Read `_generate_http_error_alerts_core` — same. Add `"severity": "medium"`.
+- [x] Read `_generate_port_scan_alerts_core` — same. Add `"severity": "medium"`.
+- [x] Read `_generate_high_request_rate_alerts_core` — same. Add `"severity": "medium"`.
+- [x] Confirm no other code in the file was modified.
+- [x] Run regression suite — all six green. **If any fail, stop. Do not proceed.**
 
 > Severity values are confirmed by reading the INSERT VALUES tuple in each function.
 > Existing test assertions check named fields (`alert_id`, `source_ip`, `attempts`,
@@ -63,11 +63,11 @@ Read `engines/detection_engine.py` before making any changes.
 
 Read `routes/ingest_routes.py` before making any changes.
 
-- [ ] Add import at the top of the file:
+- [x] Add import at the top of the file:
   ```python
   from core.incident_store import maybe_create_or_link_incident
   ```
-- [ ] Add private module-level helper (after imports, before the blueprint definition or
+- [x] Add private module-level helper (after imports, before the blueprint definition or
   alongside other module-level helpers if any exist):
   ```python
   def _create_incidents_for_alerts(alerts_created, conn):
@@ -79,16 +79,16 @@ Read `routes/ingest_routes.py` before making any changes.
               continue
           maybe_create_or_link_incident(conn, alert_id, severity, str(source_ip))
   ```
-- [ ] Confirm the function does not commit, does not raise, and uses `str(source_ip)`.
-- [ ] Run regression suite — all six green.
+- [x] Confirm the function does not commit, does not raise, and uses `str(source_ip)`.
+- [x] Run regression suite — all six green.
 
 ---
 
 ### Step 3: Wire incident block into `add_event` handler
 
-- [ ] Locate the existing enqueue `try/except` block in `add_event`. Confirm it ends with
+- [x] Locate the existing enqueue `try/except` block in `add_event`. Confirm it ends with
   `conn.commit()` on success.
-- [ ] Add the incident block immediately after the enqueue block, before `return jsonify(...)`:
+- [x] Add the incident block immediately after the enqueue block, before `return jsonify(...)`:
   ```python
   try:
       _create_incidents_for_alerts(alerts_created, conn)
@@ -100,38 +100,38 @@ Read `routes/ingest_routes.py` before making any changes.
           [(a.get("alert_id"), a.get("source_ip"), a.get("severity")) for a in alerts_created],
       )
   ```
-- [ ] Confirm no other logic in `add_event` was changed.
-- [ ] Run regression suite — all six green. **If `test_ingest_api_contracts.py` fails, revert
+- [x] Confirm no other logic in `add_event` was changed.
+- [x] Run regression suite — all six green. **If `test_ingest_api_contracts.py` fails, revert
   and stop.**
 
 ---
 
 ### Step 4: Wire incident block into `add_web_log_event` handler
 
-- [ ] Read `add_web_log_event` — confirm the enqueue block location.
-- [ ] Add incident block after enqueue block, same pattern as Step 3.
-- [ ] Confirm no other logic changed.
-- [ ] Run regression suite — all six green.
+- [x] Read `add_web_log_event` — confirm the enqueue block location.
+- [x] Add incident block after enqueue block, same pattern as Step 3.
+- [x] Confirm no other logic changed.
+- [x] Run regression suite — all six green.
 
 ---
 
 ### Step 5: Wire incident block into `add_azure_event` handler
 
-- [ ] Read `add_azure_event` — confirm it uses `extend()` to accumulate `alerts_created`
+- [x] Read `add_azure_event` — confirm it uses `extend()` to accumulate `alerts_created`
   across multiple events. Confirm the enqueue block fires once after the loop.
-- [ ] Add incident block after enqueue block, same pattern. The block fires once per handler
+- [x] Add incident block after enqueue block, same pattern. The block fires once per handler
   call over the full `alerts_created` list — do not add it inside the event loop.
-- [ ] Confirm no other logic changed.
-- [ ] Run regression suite — all six green.
+- [x] Confirm no other logic changed.
+- [x] Run regression suite — all six green.
 
 ---
 
 ### Step 6: Wire incident block into `add_otel_event` handler
 
-- [ ] Read `add_otel_event` — same `extend()` pattern as Azure.
-- [ ] Add incident block after enqueue block, same pattern.
-- [ ] Confirm no other logic changed.
-- [ ] Run regression suite — all six green.
+- [x] Read `add_otel_event` — same `extend()` pattern as Azure.
+- [x] Add incident block after enqueue block, same pattern.
+- [x] Confirm no other logic changed.
+- [x] Run regression suite — all six green.
 
 ---
 
@@ -140,44 +140,44 @@ Read `routes/ingest_routes.py` before making any changes.
 Write new integration tests. Use the ingest route test pattern from
 `tests/test_ingest_api_contracts.py` — real test database, Flask test client.
 
-- [ ] Test: HIGH alert creates incident.
+- [x] Test: HIGH alert creates incident.
   - Trigger a detection alert with `"high"` severity via ingest route.
   - Assert one row in `incidents`.
   - Assert one row in `incident_alerts` linking that alert to that incident.
   - Assert incident `severity = 'HIGH'` and `status = 'open'`.
 
-- [ ] Test: Second HIGH alert from same IP deduplicates.
+- [x] Test: Second HIGH alert from same IP deduplicates.
   - Trigger a second alert from the same source IP within 1 hour.
   - Assert `incidents` still has one row.
   - Assert `incident_alerts` has two rows (both alerts linked to same incident).
 
-- [ ] Test: MEDIUM alert does not create incident.
+- [x] Test: MEDIUM alert does not create incident.
   - Trigger an alert with `"medium"` severity via ingest route.
   - Assert `incidents` has zero rows.
   - Assert ingest returns 201.
 
-- [ ] Test: Incident failure does not mask committed ingest.
+- [x] Test: Incident failure does not mask committed ingest.
   - Monkeypatch `maybe_create_or_link_incident` to raise `RuntimeError`.
   - Trigger a HIGH-severity alert via ingest route.
   - Assert ingest returns 201.
   - Assert alert row exists in `alerts`.
   - Assert `incidents` has zero rows.
 
-- [ ] Test: Missing severity skipped cleanly.
+- [x] Test: Missing severity skipped cleanly.
   - Call `_create_incidents_for_alerts([{"alert_id": 1, "source_ip": "1.2.3.4"}], conn)` directly.
   - Assert no exception propagates.
   - Assert no incident row created.
 
-- [ ] Run full pytest suite — all existing tests green, all new integration tests green.
+- [x] Run full pytest suite — all existing tests green, all new integration tests green.
 
 ---
 
 ### Step 8: Final file audit
 
-- [ ] Confirm only these files were modified in Phase 2C:
+- [x] Confirm only these files were modified in Phase 2C:
   - `engines/detection_engine.py` — `"severity"` added to 7 `alerts_created.append({...})` dicts.
   - `routes/ingest_routes.py` — import added, `_create_incidents_for_alerts` added, incident
     block added to 4 handlers.
-- [ ] Confirm no schema changes.
-- [ ] Confirm no changes to `core/incident_store.py`, `engines/soar_*.py`, or any test file
+- [x] Confirm no schema changes.
+- [x] Confirm no changes to `core/incident_store.py`, `engines/soar_*.py`, or any test file
   outside the new integration test file.

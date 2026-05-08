@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock, patch
 
+from routes.ingest_routes import _create_incidents_for_alerts
+
 
 VALID_INGEST_API_KEY = "test-ingest-api-key"
 VALID_AZURE_API_KEY = "test-azure-api-key"
@@ -25,6 +27,18 @@ def _build_mock_connection(commit_side_effect=None):
     return conn
 
 
+def _insert_alert(cur, *, source_ip):
+    cur.execute(
+        """
+        INSERT INTO alerts (alert_type, severity, source_ip, message, status)
+        VALUES ('incident_wire_test', 'HIGH', %s::inet, 'incident wire test', 'open')
+        RETURNING id
+        """,
+        (source_ip,),
+    )
+    return cur.fetchone()[0]
+
+
 def test_enqueue_called_after_first_commit(client, monkeypatch):
     monkeypatch.setenv("SIEM_INGEST_API_KEY", VALID_INGEST_API_KEY)
     mock_conn = _build_mock_connection()
@@ -36,7 +50,7 @@ def test_enqueue_called_after_first_commit(client, monkeypatch):
 
     with patch("routes.ingest_routes.get_db_connection", return_value=mock_conn), patch(
         "routes.ingest_routes.ingest_normalized_event",
-        return_value=[{"alert_id": 11, "source_ip": "8.8.8.8", "response_action": "monitor"}],
+        return_value=[{"alert_id": 11, "source_ip": "8.8.8.8", "response_action": "monitor", "severity": "high"}],
     ), patch(
         "routes.ingest_routes.enqueue_committed_alerts",
         side_effect=enqueue_side_effect,
@@ -58,7 +72,7 @@ def test_enqueue_failure_after_commit_still_returns_201(client, monkeypatch):
 
     with patch("routes.ingest_routes.get_db_connection", return_value=mock_conn), patch(
         "routes.ingest_routes.ingest_normalized_event",
-        return_value=[{"alert_id": 12, "source_ip": "1.1.1.1", "response_action": "monitor"}],
+        return_value=[{"alert_id": 12, "source_ip": "1.1.1.1", "response_action": "monitor", "severity": "high"}],
     ), patch(
         "routes.ingest_routes.enqueue_committed_alerts",
         side_effect=RuntimeError("queue unavailable"),
@@ -133,7 +147,7 @@ def test_azure_batch_enqueue_called_once_with_full_alert_list(client, monkeypatc
         return_value="azure-test-app",
     ), patch(
         "routes.ingest_routes.ingest_normalized_event",
-        return_value=[{"alert_id": 21, "source_ip": "5.6.7.8", "response_action": "block_ip"}],
+        return_value=[{"alert_id": 21, "source_ip": "5.6.7.8", "response_action": "block_ip", "severity": "high"}],
     ), patch("routes.ingest_routes.enqueue_committed_alerts", return_value=[]) as enqueue_mock:
         resp = client.post(
             "/ingest/azure",
@@ -152,7 +166,7 @@ def test_second_commit_called_after_enqueue_success(client, monkeypatch):
 
     with patch("routes.ingest_routes.get_db_connection", return_value=mock_conn), patch(
         "routes.ingest_routes.ingest_normalized_event",
-        return_value=[{"alert_id": 31, "source_ip": "9.9.9.9", "response_action": "monitor"}],
+        return_value=[{"alert_id": 31, "source_ip": "9.9.9.9", "response_action": "monitor", "severity": "high"}],
     ), patch("routes.ingest_routes.enqueue_committed_alerts", return_value=[]):
         resp = client.post(
             "/ingest",
@@ -170,7 +184,7 @@ def test_second_commit_failure_still_returns_201(client, monkeypatch):
 
     with patch("routes.ingest_routes.get_db_connection", return_value=mock_conn), patch(
         "routes.ingest_routes.ingest_normalized_event",
-        return_value=[{"alert_id": 41, "source_ip": "4.4.4.4", "response_action": "monitor"}],
+        return_value=[{"alert_id": 41, "source_ip": "4.4.4.4", "response_action": "monitor", "severity": "high"}],
     ), patch("routes.ingest_routes.enqueue_committed_alerts", return_value=[]):
         resp = client.post(
             "/ingest",
@@ -179,3 +193,171 @@ def test_second_commit_failure_still_returns_201(client, monkeypatch):
         )
 
     assert resp.status_code == 201
+
+
+def test_incident_creation_runs_after_enqueue_commit_for_high_alert(client, monkeypatch):
+    monkeypatch.setenv("SIEM_INGEST_API_KEY", VALID_INGEST_API_KEY)
+    mock_conn = _build_mock_connection()
+    commit_count_at_incident = {"value": 0}
+
+    def incident_side_effect(conn, alert_id, severity, source_ip):
+        commit_count_at_incident["value"] = conn.commit.call_count
+        return {"id": 99}
+
+    with patch("routes.ingest_routes.get_db_connection", return_value=mock_conn), patch(
+        "routes.ingest_routes.ingest_normalized_event",
+        return_value=[{"alert_id": 51, "source_ip": "8.8.8.8", "response_action": "monitor", "severity": "high"}],
+    ), patch("routes.ingest_routes.enqueue_committed_alerts", return_value=[]), patch(
+        "routes.ingest_routes.maybe_create_or_link_incident",
+        side_effect=incident_side_effect,
+    ) as incident_mock:
+        resp = client.post(
+            "/ingest",
+            json=_build_ingest_payload(),
+            headers={"X-API-Key": VALID_INGEST_API_KEY},
+        )
+
+    assert resp.status_code == 201
+    incident_mock.assert_called_once_with(mock_conn, 51, "high", "8.8.8.8")
+    assert commit_count_at_incident["value"] >= 2
+
+
+def test_incident_creation_skips_medium_alert(client, monkeypatch):
+    monkeypatch.setenv("SIEM_INGEST_API_KEY", VALID_INGEST_API_KEY)
+    mock_conn = _build_mock_connection()
+
+    with patch("routes.ingest_routes.get_db_connection", return_value=mock_conn), patch(
+        "routes.ingest_routes.ingest_normalized_event",
+        return_value=[{"alert_id": 52, "source_ip": "8.8.4.4", "response_action": "monitor", "severity": "medium"}],
+    ), patch("routes.ingest_routes.enqueue_committed_alerts", return_value=[]), patch(
+        "routes.ingest_routes.maybe_create_or_link_incident",
+    ) as incident_mock:
+        resp = client.post(
+            "/ingest",
+            json=_build_ingest_payload(),
+            headers={"X-API-Key": VALID_INGEST_API_KEY},
+        )
+
+    assert resp.status_code == 201
+    incident_mock.assert_not_called()
+
+
+def test_incident_failure_after_commit_still_returns_201(client, monkeypatch):
+    monkeypatch.setenv("SIEM_INGEST_API_KEY", VALID_INGEST_API_KEY)
+    mock_conn = _build_mock_connection()
+
+    with patch("routes.ingest_routes.get_db_connection", return_value=mock_conn), patch(
+        "routes.ingest_routes.ingest_normalized_event",
+        return_value=[{"alert_id": 53, "source_ip": "1.1.1.1", "response_action": "monitor", "severity": "critical"}],
+    ), patch("routes.ingest_routes.enqueue_committed_alerts", return_value=[]), patch(
+        "routes.ingest_routes.maybe_create_or_link_incident",
+        side_effect=RuntimeError("incident unavailable"),
+    ) as incident_mock:
+        resp = client.post(
+            "/ingest",
+            json=_build_ingest_payload(),
+            headers={"X-API-Key": VALID_INGEST_API_KEY},
+        )
+
+    assert resp.status_code == 201
+    assert incident_mock.called
+    body = resp.get_json()
+    assert body["message"] == "Event added successfully"
+    assert "error" not in body
+
+
+def test_incident_creation_runs_even_when_enqueue_fails_after_alert_commit(client, monkeypatch):
+    monkeypatch.setenv("SIEM_INGEST_API_KEY", VALID_INGEST_API_KEY)
+    mock_conn = _build_mock_connection()
+
+    with patch("routes.ingest_routes.get_db_connection", return_value=mock_conn), patch(
+        "routes.ingest_routes.ingest_normalized_event",
+        return_value=[{"alert_id": 54, "source_ip": "1.0.0.1", "response_action": "monitor", "severity": "high"}],
+    ), patch(
+        "routes.ingest_routes.enqueue_committed_alerts",
+        side_effect=RuntimeError("queue unavailable"),
+    ), patch("routes.ingest_routes.maybe_create_or_link_incident", return_value={"id": 100}) as incident_mock:
+        resp = client.post(
+            "/ingest",
+            json=_build_ingest_payload(),
+            headers={"X-API-Key": VALID_INGEST_API_KEY},
+        )
+
+    assert resp.status_code == 201
+    incident_mock.assert_called_once_with(mock_conn, 54, "high", "1.0.0.1")
+
+
+def test_create_incidents_for_alerts_creates_high_incident_and_link(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur, source_ip="203.0.113.201")
+    conn.commit()
+
+    _create_incidents_for_alerts(
+        [{"alert_id": alert_id, "source_ip": "203.0.113.201", "severity": "high"}],
+        conn,
+    )
+    conn.commit()
+
+    cur.execute("SELECT id, severity, host(source_ip) FROM incidents")
+    incident_id, severity, source_ip = cur.fetchone()
+    assert severity == "high"
+    assert source_ip == "203.0.113.201"
+
+    cur.execute(
+        "SELECT COUNT(*) FROM incident_alerts WHERE incident_id = %s AND alert_id = %s",
+        (incident_id, alert_id),
+    )
+    assert cur.fetchone()[0] == 1
+
+
+def test_create_incidents_for_alerts_links_second_high_alert_to_existing_incident(postgres_db):
+    conn, cur = postgres_db
+    first_alert_id = _insert_alert(cur, source_ip="203.0.113.202")
+    second_alert_id = _insert_alert(cur, source_ip="203.0.113.202")
+    conn.commit()
+
+    _create_incidents_for_alerts(
+        [{"alert_id": first_alert_id, "source_ip": "203.0.113.202", "severity": "high"}],
+        conn,
+    )
+    conn.commit()
+    _create_incidents_for_alerts(
+        [{"alert_id": second_alert_id, "source_ip": "203.0.113.202", "severity": "high"}],
+        conn,
+    )
+    conn.commit()
+
+    cur.execute("SELECT COUNT(*) FROM incidents")
+    assert cur.fetchone()[0] == 1
+    cur.execute("SELECT COUNT(*) FROM incident_alerts")
+    assert cur.fetchone()[0] == 2
+
+
+def test_create_incidents_for_alerts_skips_medium_alert(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur, source_ip="203.0.113.203")
+    conn.commit()
+
+    _create_incidents_for_alerts(
+        [{"alert_id": alert_id, "source_ip": "203.0.113.203", "severity": "medium"}],
+        conn,
+    )
+    conn.commit()
+
+    cur.execute("SELECT COUNT(*) FROM incidents")
+    assert cur.fetchone()[0] == 0
+
+
+def test_create_incidents_for_alerts_skips_missing_severity(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur, source_ip="203.0.113.204")
+    conn.commit()
+
+    _create_incidents_for_alerts(
+        [{"alert_id": alert_id, "source_ip": "203.0.113.204"}],
+        conn,
+    )
+    conn.commit()
+
+    cur.execute("SELECT COUNT(*) FROM incidents")
+    assert cur.fetchone()[0] == 0

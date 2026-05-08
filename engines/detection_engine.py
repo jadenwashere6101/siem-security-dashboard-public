@@ -142,6 +142,7 @@ def _generate_failed_login_alerts_core(cur, conn, source=None, source_type=None)
                 "attempts": attempts,
                 "alert_id": alert_id,
                 "response_action": response_action,
+                "severity": "high",
             }
         )
 
@@ -268,6 +269,7 @@ def _generate_http_error_alerts_core(cur, conn, source=None, source_type=None):
                 "attempts": attempts,
                 "alert_id": alert_id,
                 "response_action": response_action,
+                "severity": "medium",
             }
         )
 
@@ -404,6 +406,7 @@ def _generate_port_scan_alerts_core(cur, conn, source=None, source_type=None):
                 "attempts": attempts,
                 "alert_id": alert_id,
                 "response_action": response_action,
+                "severity": "medium",
             }
         )
 
@@ -551,6 +554,7 @@ def _generate_password_spraying_alerts_core(cur, conn, source=None, source_type=
                 "distinct_username_count": distinct_username_count,
                 "alert_id": alert_id,
                 "response_action": response_action,
+                "severity": "high",
             }
         )
 
@@ -714,6 +718,7 @@ def _generate_successful_login_after_spray_alerts_core(cur, conn, source=None, s
                 "success_at": str(success_at),
                 "alert_id": alert_id,
                 "response_action": response_action,
+                "severity": "critical",
             }
         )
 
@@ -840,6 +845,7 @@ def _generate_application_exception_alerts_core(cur, conn, source=None, source_t
                 "attempts": attempts,
                 "alert_id": alert_id,
                 "response_action": response_action,
+                "severity": "high",
             }
         )
 
@@ -968,6 +974,7 @@ def _generate_high_request_rate_alerts_core(cur, conn, source=None, source_type=
                 "attempts": attempts,
                 "alert_id": alert_id,
                 "response_action": response_action,
+                "severity": "medium",
             }
         )
 
