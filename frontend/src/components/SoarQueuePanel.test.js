@@ -47,6 +47,7 @@ const queueDetailFixture = {
   ...queueRowFixture,
   idempotency_key: "queue-idempotency-key-101",
   latest_approval: null,
+  approval_events: [],
 };
 
 const awaitingApprovalRowFixture = {
@@ -67,6 +68,7 @@ const awaitingApprovalDetailFixture = {
   ...awaitingApprovalRowFixture,
   idempotency_key: "awaiting-idempotency-key-202",
   latest_approval: null,
+  approval_events: [],
 };
 
 const queueDetailWithApprovalFixture = {
@@ -86,15 +88,80 @@ const queueDetailWithApprovalFixture = {
     id: 7,
     status: "pending",
     risk_level: "high",
+    created_at: "2026-05-08T09:01:00Z",
     expires_at: "2026-05-08T10:00:00Z",
     decided_at: null,
   },
+  approval_events: [],
 };
 
 const queueDetailWithoutApprovalFixture = {
   ...queueDetailWithApprovalFixture,
   status: "pending",
   latest_approval: null,
+  approval_events: [],
+};
+
+const queueDetailWithEventsFixture = {
+  id: 42,
+  alert_id: 10,
+  alert_reference: { status: "linked", label: "Alert 10" },
+  action: "block_ip",
+  status: "skipped",
+  source_ip: "10.0.0.1",
+  retry_count: 0,
+  max_retries: 3,
+  last_error: "approval denied",
+  created_at: "2026-05-08T09:00:00Z",
+  updated_at: "2026-05-08T09:30:05Z",
+  idempotency_key: "idem-key-42",
+  latest_approval: {
+    id: 7,
+    status: "denied",
+    risk_level: "high",
+    created_at: "2026-05-08T09:01:00Z",
+    expires_at: "2026-05-08T10:00:00Z",
+    decided_at: "2026-05-08T09:30:00Z",
+  },
+  approval_events: [
+    {
+      id: 1,
+      approval_request_id: 7,
+      event_type: "created",
+      actor_user_id: null,
+      previous_status: null,
+      new_status: "pending",
+      comment: null,
+      created_at: "2026-05-08T09:01:00Z",
+    },
+    {
+      id: 2,
+      approval_request_id: 7,
+      event_type: "denied",
+      actor_user_id: 3,
+      previous_status: "pending",
+      new_status: "denied",
+      comment: "Too broad",
+      created_at: "2026-05-08T09:30:00Z",
+    },
+  ],
+};
+
+const queueDetailNoEventsFixture = {
+  id: 43,
+  alert_id: 11,
+  alert_reference: { status: "linked", label: "Alert 11" },
+  action: "block_ip",
+  status: "pending",
+  source_ip: "10.0.0.2",
+  retry_count: 0,
+  max_retries: 3,
+  last_error: null,
+  created_at: "2026-05-08T08:00:00Z",
+  updated_at: "2026-05-08T08:00:00Z",
+  idempotency_key: "idem-key-43",
+  latest_approval: null,
+  approval_events: [],
 };
 
 const renderPanel = () =>
@@ -438,6 +505,102 @@ describe("SoarQueuePanel", () => {
 
     expect(screen.queryByRole("button", { name: /approve/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /deny/i })).not.toBeInTheDocument();
+  });
+
+  test("execution timeline section always renders", async () => {
+    loadSoarQueueStatus.mockResolvedValue(statusFixture);
+    loadRecentSoarQueueItems.mockResolvedValue({
+      items: [{ ...queueRowFixture, id: 43 }],
+    });
+    loadSoarQueueItem.mockResolvedValue(queueDetailNoEventsFixture);
+
+    renderPanel();
+    await screen.findByText("Recent Queue Items");
+    await userEvent.click(screen.getByRole("button", { name: "View" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("Execution Timeline")).toBeInTheDocument()
+    );
+  });
+
+  test("action queued event always renders", async () => {
+    loadSoarQueueStatus.mockResolvedValue(statusFixture);
+    loadRecentSoarQueueItems.mockResolvedValue({
+      items: [{ ...queueRowFixture, id: 43 }],
+    });
+    loadSoarQueueItem.mockResolvedValue(queueDetailNoEventsFixture);
+
+    renderPanel();
+    await screen.findByText("Recent Queue Items");
+    await userEvent.click(screen.getByRole("button", { name: "View" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("Action queued")).toBeInTheDocument()
+    );
+  });
+
+  test("approval events render in timeline", async () => {
+    loadSoarQueueStatus.mockResolvedValue(statusFixture);
+    loadRecentSoarQueueItems.mockResolvedValue({
+      items: [{ ...queueRowFixture, id: 42 }],
+    });
+    loadSoarQueueItem.mockResolvedValue(queueDetailWithEventsFixture);
+
+    renderPanel();
+    await screen.findByText("Recent Queue Items");
+    await userEvent.click(screen.getByRole("button", { name: "View" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Approval requested")).toBeInTheDocument();
+      expect(screen.getByText("Approval denied")).toBeInTheDocument();
+    });
+  });
+
+  test("decision comment renders as detail text", async () => {
+    loadSoarQueueStatus.mockResolvedValue(statusFixture);
+    loadRecentSoarQueueItems.mockResolvedValue({
+      items: [{ ...queueRowFixture, id: 42 }],
+    });
+    loadSoarQueueItem.mockResolvedValue(queueDetailWithEventsFixture);
+
+    renderPanel();
+    await screen.findByText("Recent Queue Items");
+    await userEvent.click(screen.getByRole("button", { name: "View" }));
+
+    await waitFor(() => expect(screen.getByText("Too broad")).toBeInTheDocument());
+  });
+
+  test("terminal event renders for skipped item", async () => {
+    loadSoarQueueStatus.mockResolvedValue(statusFixture);
+    loadRecentSoarQueueItems.mockResolvedValue({
+      items: [{ ...queueRowFixture, id: 42 }],
+    });
+    loadSoarQueueItem.mockResolvedValue(queueDetailWithEventsFixture);
+
+    renderPanel();
+    await screen.findByText("Recent Queue Items");
+    await userEvent.click(screen.getByRole("button", { name: "View" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Action skipped")).toBeInTheDocument();
+      expect(screen.getAllByText("approval denied").length).toBeGreaterThan(0);
+    });
+  });
+
+  test("no approve or deny button in timeline section", async () => {
+    loadSoarQueueStatus.mockResolvedValue(statusFixture);
+    loadRecentSoarQueueItems.mockResolvedValue({
+      items: [{ ...queueRowFixture, id: 42 }],
+    });
+    loadSoarQueueItem.mockResolvedValue(queueDetailWithEventsFixture);
+
+    renderPanel();
+    await screen.findByText("Recent Queue Items");
+    await userEvent.click(screen.getByRole("button", { name: "View" }));
+    await screen.findByText("Execution Timeline");
+
+    expect(screen.queryByRole("button", { name: /approve/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /deny/i })).toBeNull();
   });
 
   test("preserves selected detail when filter changes to empty results", async () => {

@@ -9,6 +9,7 @@ from core.audit_helpers import log_audit_event
 from core.approval_store import (
     expire_pending_requests,
     get_latest_approval_for_queue_action,
+    list_approval_events,
 )
 from core.auth import super_admin_required
 from core.db import get_db_connection
@@ -535,6 +536,7 @@ def _serialize_approval_summary(approval):
         "id": approval["id"],
         "status": approval["status"],
         "risk_level": approval["risk_level"],
+        "created_at": approval["created_at"],
         "expires_at": approval["expires_at"],
         "decided_at": approval["decided_at"],
     }
@@ -658,6 +660,9 @@ def get_queue_item_detail(queue_id):
             conn, queue_id=queue_id, action=queue_row["action"]
         )
         item["latest_approval"] = _serialize_approval_summary(approval)
+        item["approval_events"] = (
+            list_approval_events(conn, approval["id"]) if approval is not None else []
+        )
         return jsonify(item), 200
     except Exception:
         current_app.logger.exception("Error reading SOAR queue item detail queue_id=%s", queue_id)

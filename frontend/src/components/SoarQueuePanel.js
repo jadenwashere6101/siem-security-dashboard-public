@@ -438,6 +438,30 @@ function SoarQueuePanel({
                     </div>
                   </div>
                 ) : null}
+                <div style={timelineSectionStyle}>
+                  <div style={timelineHeaderStyle}>Execution Timeline</div>
+                  <ul style={timelineListStyle}>
+                    {buildTimeline(selectedQueueItem).map((evt, idx) => (
+                      <li key={idx} style={timelineItemStyle}>
+                        <span
+                          style={{
+                            ...timelineDotStyle,
+                            backgroundColor: getTimelineDotColor(evt.type),
+                          }}
+                        />
+                        <div style={timelineContentStyle}>
+                          <div style={timelineLabelStyle}>{evt.label}</div>
+                          {evt.detail ? (
+                            <div style={timelineDetailStyle}>{evt.detail}</div>
+                          ) : null}
+                        </div>
+                        <div style={timelineTimeStyle}>
+                          {formatQueueTimestamp(evt.time)}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               </>
             ) : (
               <p style={emptyTextStyle}>Select a queue item to view details.</p>
@@ -461,6 +485,70 @@ const formatAlertReference = (item) => {
 const formatRetryCount = (item) => `${item?.retry_count ?? 0} / ${item?.max_retries ?? 0}`;
 
 const formatQueueTimestamp = (value) => formatAdminTimestamp(value, "N/A");
+
+function buildTimeline(queueItem) {
+  const events = [];
+
+  events.push({
+    time: queueItem.created_at,
+    type: "queued",
+    label: "Action queued",
+    detail: null,
+  });
+
+  const approvalTypeMap = {
+    created: { label: "Approval requested", type: "approval_created" },
+    approved: { label: "Approval approved", type: "approval_approved" },
+    denied: { label: "Approval denied", type: "approval_denied" },
+    expired: { label: "Approval expired", type: "approval_expired" },
+  };
+
+  for (const evt of queueItem.approval_events || []) {
+    const mapped = approvalTypeMap[evt.event_type];
+    if (mapped) {
+      events.push({
+        time: evt.created_at,
+        type: mapped.type,
+        label: mapped.label,
+        detail: evt.comment || null,
+      });
+    }
+  }
+
+  if (queueItem.status === "success") {
+    events.push({
+      time: queueItem.updated_at,
+      type: "success",
+      label: "Action executed",
+      detail: null,
+    });
+  } else if (queueItem.status === "failed") {
+    events.push({
+      time: queueItem.updated_at,
+      type: "failed",
+      label: "Action failed",
+      detail: queueItem.last_error || null,
+    });
+  } else if (queueItem.status === "skipped") {
+    events.push({
+      time: queueItem.updated_at,
+      type: "skipped",
+      label: "Action skipped",
+      detail: queueItem.last_error || null,
+    });
+  }
+
+  return events;
+}
+
+function getTimelineDotColor(type) {
+  if (type === "queued") return "#93c5fd";
+  if (type === "approval_created") return "#fb923c";
+  if (type === "approval_approved" || type === "success") return "#7ee787";
+  if (type === "approval_denied" || type === "failed") return "#fca5a5";
+  if (type === "approval_expired" || type === "skipped") return "#8b949e";
+  return "#8b949e";
+}
 
 const formatDetailAlertReference = (item) => {
   if (item?.alert_reference?.label) return item.alert_reference.label;
@@ -898,6 +986,69 @@ const approvalContextGridStyle = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
   gap: "10px",
+};
+
+const timelineSectionStyle = {
+  marginTop: "14px",
+  paddingTop: "14px",
+  borderTop: "1px solid #30363d",
+};
+
+const timelineHeaderStyle = {
+  marginBottom: "10px",
+  color: "#8b949e",
+  fontSize: "12px",
+  fontWeight: "700",
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+};
+
+const timelineListStyle = {
+  listStyle: "none",
+  margin: 0,
+  padding: 0,
+  display: "flex",
+  flexDirection: "column",
+  gap: "10px",
+};
+
+const timelineItemStyle = {
+  display: "flex",
+  alignItems: "flex-start",
+  gap: "10px",
+};
+
+const timelineDotStyle = {
+  flexShrink: 0,
+  marginTop: "4px",
+  width: "8px",
+  height: "8px",
+  borderRadius: "50%",
+};
+
+const timelineContentStyle = {
+  flex: 1,
+  minWidth: 0,
+};
+
+const timelineLabelStyle = {
+  fontSize: "13px",
+  fontWeight: "600",
+  color: "#e6edf3",
+};
+
+const timelineDetailStyle = {
+  marginTop: "2px",
+  fontSize: "12px",
+  color: "#8b949e",
+  overflowWrap: "break-word",
+};
+
+const timelineTimeStyle = {
+  flexShrink: 0,
+  fontSize: "12px",
+  color: "#8b949e",
+  whiteSpace: "nowrap",
 };
 
 const detailFieldStyle = {

@@ -280,6 +280,20 @@ def get_approval_request(conn, approval_request_id: int) -> dict[str, Any] | Non
         return approval_request
 
 
+def list_approval_events(conn, approval_request_id: int) -> list[dict[str, Any]]:
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT {EVENT_COLUMNS}
+            FROM approval_request_events
+            WHERE approval_request_id = %s
+            ORDER BY created_at ASC, id ASC
+            """,
+            (approval_request_id,),
+        )
+        return [_event_row_to_dict(row) for row in cur.fetchall()]
+
+
 def list_approval_requests(
     conn,
     *,

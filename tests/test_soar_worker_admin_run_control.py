@@ -6,6 +6,7 @@ import pytest
 from werkzeug.security import generate_password_hash
 
 import siem_backend
+from core.approval_store import create_approval_request, deny_request
 
 
 ADMIN_USER = "testadmin"
@@ -505,3 +506,101 @@ def test_expire_pending_approvals_does_not_increment_retry_count(client, postgre
     assert resp.get_json()["skipped_queue_rows"] == 1
     assert queue_row[1] == "skipped"
     assert queue_row[2] == 1
+
+
+def test_queue_detail_includes_empty_approval_events_when_no_approval_exists(client, postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur, "8.8.8.14")
+    queue_id = _insert_queue_row(cur, alert_id, "8.8.8.14", action="monitor")
+    conn.commit()
+    _login_super_admin(client)
+
+    with _patched_app_db(conn):
+        resp = client.get(f"/admin/soar/queue/{queue_id}")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["approval_events"] == []
+
+
+def test_queue_detail_populates_approval_events_when_linked_approval_exists(client, postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur, "8.8.8.15")
+    queue_id = _insert_queue_row(
+        cur,
+        alert_id,
+        "8.8.8.15",
+        action="block_ip",
+        status="awaiting_approval",
+    )
+    approval = create_approval_request(conn, queue_id=queue_id, action="block_ip")
+    conn.commit()
+    _login_super_admin(client)
+
+    with _patched_app_db(conn):
+        resp = client.get(f"/admin/soar/queue/{queue_id}")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["latest_approval"]["id"] == approval["id"]
+    assert len(data["approval_events"]) == 1
+    assert data["approval_events"][0]["event_type"] == "created"
+    assert data["approval_events"][0]["new_status"] == "pending"
+
+
+def test_queue_detail_approval_events_include_lifecycle_history(client, postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur, "8.8.8.16")
+    queue_id = _insert_queue_row(
+        cur,
+        alert_id,
+        "8.8.8.16",
+        action="block_ip",
+        status="awaiting_approval",
+    )
+    approver_id = 7
+    cur.execute(
+        """
+        INSERT INTO users (id, username, password_hash, role, is_active)
+        VALUES (%s, 'approval_admin', %s, 'super_admin', TRUE)
+        ON CONFLICT (id) DO NOTHING
+        """,
+        (approver_id, generate_password_hash("approvalpass", method="pbkdf2:sha256")),
+    )
+    approval = create_approval_request(conn, queue_id=queue_id, action="block_ip")
+    deny_request(conn, approval["id"], actor_user_id=approver_id, decision_comment="Too broad")
+    conn.commit()
+    _login_super_admin(client)
+
+    with _patched_app_db(conn):
+        resp = client.get(f"/admin/soar/queue/{queue_id}")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert len(data["approval_events"]) == 2
+    assert data["approval_events"][0]["event_type"] == "created"
+    assert data["approval_events"][1]["event_type"] == "denied"
+
+
+def test_queue_detail_latest_approval_includes_created_at(client, postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur, "8.8.8.17")
+    queue_id = _insert_queue_row(
+        cur,
+        alert_id,
+        "8.8.8.17",
+        action="block_ip",
+        status="awaiting_approval",
+    )
+    create_approval_request(conn, queue_id=queue_id, action="block_ip")
+    conn.commit()
+    _login_super_admin(client)
+
+    with _patched_app_db(conn):
+        resp = client.get(f"/admin/soar/queue/{queue_id}")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert "created_at" in data["latest_approval"]
+    assert isinstance(data["latest_approval"]["created_at"], str)
+    assert data["latest_approval"]["created_at"]

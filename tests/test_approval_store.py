@@ -10,6 +10,7 @@ from core.approval_store import (
     deny_request,
     expire_pending_requests,
     get_approval_request,
+    list_approval_events,
     list_approval_requests,
 )
 
@@ -303,6 +304,63 @@ def test_get_approval_request_returns_detail_with_events(postgres_db, audit_mock
 def test_get_approval_request_unknown_returns_none(postgres_db):
     conn, _cur = postgres_db
     assert get_approval_request(conn, 999999) is None
+
+
+def test_list_approval_events_returns_events_ordered_by_created_at(postgres_db, audit_mock):
+    conn, cur = postgres_db
+    incident_id = _insert_incident(cur)
+    user_id = _insert_user(cur)
+    req = create_approval_request(conn, incident_id=incident_id, action="block_ip")
+    conn.commit()
+
+    deny_request(conn, req["id"], actor_user_id=user_id, decision_comment="too risky")
+    conn.commit()
+
+    events = list_approval_events(conn, req["id"])
+
+    assert len(events) == 2
+    assert events[0]["event_type"] == "created"
+    assert events[1]["event_type"] == "denied"
+
+
+def test_list_approval_events_returns_all_event_columns(postgres_db, audit_mock):
+    conn, cur = postgres_db
+    incident_id = _insert_incident(cur)
+    req = create_approval_request(conn, incident_id=incident_id, action="block_ip")
+    conn.commit()
+
+    events = list_approval_events(conn, req["id"])
+
+    assert len(events) == 1
+    assert set(events[0].keys()) == {
+        "id",
+        "approval_request_id",
+        "event_type",
+        "actor_user_id",
+        "previous_status",
+        "new_status",
+        "comment",
+        "created_at",
+    }
+
+
+def test_list_approval_events_filters_by_approval_request_id(postgres_db, audit_mock):
+    conn, cur = postgres_db
+    incident_id = _insert_incident(cur)
+    req_one = create_approval_request(conn, incident_id=incident_id, action="block_ip")
+    req_two = create_approval_request(conn, incident_id=incident_id, action="monitor")
+    conn.commit()
+
+    events = list_approval_events(conn, req_one["id"])
+
+    assert len(events) == 1
+    assert all(event["approval_request_id"] == req_one["id"] for event in events)
+    assert all(event["approval_request_id"] != req_two["id"] for event in events)
+
+
+def test_list_approval_events_returns_empty_list_for_unknown_approval_id(postgres_db):
+    conn, _cur = postgres_db
+    assert list_approval_events(conn, 999999) == []
 
 
 def test_list_approval_requests_filters_and_caps_limit(postgres_db, audit_mock):

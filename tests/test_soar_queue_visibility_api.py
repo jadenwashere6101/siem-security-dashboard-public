@@ -533,6 +533,7 @@ def test_queue_detail_endpoint_returns_stable_shape(client, postgres_db):
         "updated_at",
         "idempotency_key",
         "latest_approval",
+        "approval_events",
     ):
         assert key in item
 
@@ -548,7 +549,9 @@ def test_queue_detail_latest_approval_null_when_no_approval(client, postgres_db)
         resp = client.get(f"/admin/soar/queue/{queue_id}")
 
     assert resp.status_code == 200
-    assert resp.get_json()["latest_approval"] is None
+    payload = resp.get_json()
+    assert payload["latest_approval"] is None
+    assert payload["approval_events"] == []
 
 
 def test_queue_detail_latest_approval_populated_when_approval_exists(client, postgres_db):
@@ -569,6 +572,7 @@ def test_queue_detail_latest_approval_populated_when_approval_exists(client, pos
     assert latest_approval["id"] == approval_id
     assert latest_approval["status"] == "pending"
     assert "risk_level" in latest_approval
+    assert "created_at" in latest_approval
     assert "expires_at" in latest_approval
     assert "decided_at" in latest_approval
 
@@ -612,6 +616,7 @@ def test_queue_detail_latest_approval_excludes_sensitive_fields(client, postgres
         "id",
         "status",
         "risk_level",
+        "created_at",
         "expires_at",
         "decided_at",
     }
@@ -623,6 +628,58 @@ def test_queue_detail_latest_approval_excludes_sensitive_fields(client, postgres
         "decision_comment",
     ):
         assert field not in latest_approval
+
+
+def test_queue_detail_approval_events_populated_and_ordered(client, postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    queue_id = _insert_queue_row(
+        cur, alert_id, "192.0.2.15", "block_ip", "awaiting_approval"
+    )
+    approval_id = _insert_approval_request(cur, queue_id, status="pending")
+    cur.execute(
+        """
+        INSERT INTO approval_request_events (
+            approval_request_id, event_type, previous_status, new_status, comment
+        )
+        VALUES (%s, 'created', NULL, 'pending', 'approval visibility test')
+        """,
+        (approval_id,),
+    )
+    cur.execute(
+        """
+        INSERT INTO approval_request_events (
+            approval_request_id, event_type, previous_status, new_status, comment
+        )
+        VALUES (%s, 'denied', 'pending', 'denied', 'Too broad')
+        """,
+        (approval_id,),
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get(f"/admin/soar/queue/{queue_id}")
+
+    assert resp.status_code == 200
+    approval_events = resp.get_json()["approval_events"]
+    assert len(approval_events) == 2
+    assert approval_events[0]["event_type"] == "created"
+    assert approval_events[1]["event_type"] == "denied"
+
+
+def test_queue_detail_approval_events_empty_when_no_approval(client, postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    queue_id = _insert_queue_row(cur, alert_id, "192.0.2.16", "monitor", "pending")
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get(f"/admin/soar/queue/{queue_id}")
+
+    assert resp.status_code == 200
+    assert resp.get_json()["approval_events"] == []
 
 
 def test_queue_detail_includes_idempotency_key(client, postgres_db):
