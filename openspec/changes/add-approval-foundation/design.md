@@ -10,10 +10,10 @@ The system has:
 - Adapter abstraction and dry-run firewall adapter.
 - Incident schema, store, APIs, auto-linking, and UI.
 
-The approval request schema, immutable event table, and `core/approval_store.py` now exist.
-The worker does not pause for approvals, queue rows do not carry approval state, and incidents
-do not have approval workflows. Phase 2.5B adds backend API route design for approval visibility
-and manual decisions without wiring approvals into execution.
+The approval request schema, immutable event table, `core/approval_store.py`, and approval API
+routes now exist. The worker does not pause for approvals, queue rows do not carry approval
+state, and incidents do not have approval workflows. Phase 2.5C adds frontend approval
+visibility and decision UI without wiring approvals into execution.
 
 ---
 
@@ -522,3 +522,132 @@ Regression tests:
 - Existing incident route/store tests remain green.
 - Existing SOAR queue tests remain green.
 - Full backend suite remains green.
+
+---
+
+## Phase 2.5C: Approval visibility and decision UI
+
+Phase 2.5C adds frontend UI only. It consumes the existing approval API routes:
+- `GET /approvals`
+- `GET /approvals/<id>`
+- `POST /approvals/<id>/decision`
+
+The UI must not call queue mutation routes, alert mutation routes, SOAR action execution routes,
+worker controls, ingest endpoints, detection endpoints, correlation endpoints, or any new backend
+endpoint. Backend/schema changes are out of scope unless implementation proves they are
+absolutely required.
+
+### Service module
+
+Add `frontend/src/services/approvalService.js` following existing frontend service patterns.
+
+Responsibilities:
+- `listApprovals(filters)` calls `GET /approvals`.
+- `getApproval(id)` calls `GET /approvals/<id>`.
+- `submitApprovalDecision(id, { decision, reason })` calls
+  `POST /approvals/<id>/decision`.
+- Serialize only supported list filters:
+  - `status`
+  - `risk_level` or local severity/risk filter only if supported by the route contract; otherwise
+    filter client-side.
+  - `incident_id`
+  - `queue_id`
+  - `limit`
+  - `offset`
+- Normalize optional decision reason by sending an empty or omitted string safely.
+- Surface API errors in the same shape/pattern as existing frontend services.
+
+The service must not include helpers for queue mutation, alert mutation, SOAR action execution,
+worker execution, playbooks, Slack/email notifications, or firewall execution.
+
+### `ApprovalsPanel`
+
+Add `frontend/src/components/ApprovalsPanel.js`.
+
+Primary behavior:
+- Fetch and render approval list on mount.
+- Provide filters for status and risk/severity.
+  - Status filter values: `all`, `pending`, `approved`, `denied`, `expired`.
+  - Risk/severity filter values should match stored approval risk values where available:
+    `medium`, `high`, `critical`.
+- Select an approval to show detail.
+- Detail view shows:
+  - approval ID
+  - status
+  - action
+  - risk level
+  - incident ID when present
+  - queue ID when present
+  - request reason when present
+  - decision comment when present
+  - created/decided/expires timestamps
+  - immutable event history from `events`
+- Handle `null` or missing decision fields safely.
+- Show loading, error, and empty states for list and detail workflows.
+
+Decision behavior:
+- Show approve/deny controls only when:
+  - current user role is `super_admin`
+  - selected approval status is `pending`
+- Hide or disable decision controls for analysts.
+- Hide or disable decision controls for approved, denied, and expired approvals.
+- Decision reason is optional.
+- Sending a decision calls only `POST /approvals/<id>/decision`.
+- After a successful decision, refresh the selected detail and list.
+- Failed decisions should show an error without mutating local state as if the decision succeeded.
+
+Safety controls:
+- No queue mutation buttons.
+- No alert mutation buttons.
+- No SOAR action execution buttons.
+- No worker run/pause/resume controls.
+- No playbook execution controls.
+- No Slack/email/firewall action controls.
+
+### Navigation
+
+Add a `SOAR Approvals` or `Approvals` nav tab for users with role `analyst` or `super_admin`.
+Do not expose the tab to viewer users.
+
+The tab should render `ApprovalsPanel` inside the existing authenticated application shell and
+follow the same state/role propagation pattern used by existing incident/SOAR visibility UI.
+
+### Frontend testing strategy
+
+Service tests:
+- `listApprovals` calls `GET /approvals` with supported filters.
+- `getApproval` calls `GET /approvals/<id>`.
+- `submitApprovalDecision` calls `POST /approvals/<id>/decision` with decision and optional
+  reason.
+- Service surfaces API failures.
+
+Component tests, if current setup supports them:
+- Loading state renders before data is available.
+- Empty state renders when list is empty.
+- Error state renders on service failure.
+- Analyst can see approval list/detail but cannot see approve/deny controls.
+- Super admin can see approve/deny controls for pending approvals.
+- Super admin cannot see approve/deny controls for terminal approvals.
+- Approve click submits `{ decision: "approved", reason }`.
+- Deny click submits `{ decision: "denied", reason }`.
+- Event history renders in detail.
+- Filters update the list request or client-side filtered list according to implementation.
+
+Build verification:
+- Targeted frontend service/component tests pass.
+- `npm run build` passes.
+
+### Phase 2.5C non-integration guarantees
+
+This UI slice does not:
+- Add or change backend routes.
+- Add or change schema.
+- Add worker pause/resume.
+- Gate queued execution.
+- Mutate queue rows.
+- Mutate alerts.
+- Execute SOAR actions.
+- Add playbook behavior.
+- Add Slack/email behavior.
+- Add real firewall execution.
+- Touch ingest, detection, or correlation code.

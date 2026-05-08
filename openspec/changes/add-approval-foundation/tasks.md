@@ -242,3 +242,69 @@ python3 -m pytest tests/ -x --tb=short -v
 - [x] Confirm no queue execution behavior changed.
 - [x] Confirm no ingest, detection, or correlation files changed.
 - [x] Confirm no schema changes were made unless explicitly required by implementation.
+
+---
+
+## Step 9: Phase 2.5C approval frontend service
+
+- [ ] Read existing frontend service patterns.
+- [ ] Add `frontend/src/services/approvalService.js`.
+- [ ] Implement `listApprovals(filters)`.
+  - Calls only `GET /approvals`.
+  - Sends supported query parameters safely.
+  - Does not call queue, alert, worker, playbook, ingest, detection, or correlation endpoints.
+- [ ] Implement `getApproval(id)`.
+  - Calls only `GET /approvals/<id>`.
+- [ ] Implement `submitApprovalDecision(id, { decision, reason })`.
+  - Calls only `POST /approvals/<id>/decision`.
+  - Sends `decision` as `approved` or `denied`.
+  - Handles optional `reason` safely.
+- [ ] Add service tests for list, detail, approve, deny, optional reason, and API error handling.
+
+## Step 10: Phase 2.5C approval UI component and navigation
+
+- [ ] Read existing frontend role/nav/component patterns.
+- [ ] Add `frontend/src/components/ApprovalsPanel.js`.
+- [ ] Add approval nav tab for `analyst` and `super_admin` users.
+- [ ] Do not expose the approval nav tab to viewer users.
+- [ ] Render approval list.
+- [ ] Add status filter.
+  - Supports `all`, `pending`, `approved`, `denied`, `expired`.
+- [ ] Add risk/severity filter.
+  - Supports `all`, `medium`, `high`, `critical`.
+  - Use API-supported filtering when available; otherwise filter safely client-side.
+- [ ] Add approval detail view.
+  - Shows core approval fields.
+  - Shows incident ID and queue ID when present.
+  - Shows request reason and decision comment when present.
+  - Shows immutable event history.
+  - Handles null/missing `decided_at`, `decision_comment`, `incident_id`, and `queue_id`.
+- [ ] Add loading state.
+- [ ] Add error state.
+- [ ] Add empty state.
+- [ ] Show approve/deny controls only for `super_admin` users viewing pending approvals.
+- [ ] Hide approve/deny controls for analysts.
+- [ ] Hide approve/deny controls for approved, denied, and expired approvals.
+- [ ] Add optional reason input for decisions.
+- [ ] On approve, call `submitApprovalDecision(id, { decision: "approved", reason })`.
+- [ ] On deny, call `submitApprovalDecision(id, { decision: "denied", reason })`.
+- [ ] After a successful decision, refresh the selected approval detail and list.
+- [ ] On failed decision, show an error and do not locally mark the approval as decided.
+- [ ] Confirm no queue mutation controls were added.
+- [ ] Confirm no SOAR action execution controls were added.
+- [ ] Confirm no worker pause/resume or playbook controls were added.
+
+## Step 11: Phase 2.5C frontend tests and verification
+
+- [ ] Add component tests for loading, empty, error, analyst read-only view, super admin pending
+  decision controls, terminal approval no-controls behavior, approve submit, deny submit, and
+  event history rendering if the current setup supports component tests.
+- [ ] Run targeted service/component tests, for example:
+  `CI=true npm test -- --watchAll=false --runTestsByPath src/services/approvalService.test.js src/components/ApprovalsPanel.test.js`.
+- [ ] Run `npm run build`.
+- [ ] Run backend approval route/store tests if backend imports or route contracts were touched.
+- [ ] Confirm no backend files changed unless absolutely required.
+- [ ] Confirm no schema files changed.
+- [ ] Confirm no worker pause/resume was added.
+- [ ] Confirm no queue execution behavior changed.
+- [ ] Confirm no ingest, detection, or correlation files changed.

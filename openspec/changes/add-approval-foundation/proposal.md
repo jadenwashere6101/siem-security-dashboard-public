@@ -24,6 +24,12 @@ The route slice exposes approval visibility and manual approve/deny decisions th
 auth and role patterns, backed by `core/approval_store.py`. It still does not wire approvals into
 workers, queues, ingest, detection, correlation, playbooks, or frontend UI.
 
+Phase 2.5C adds frontend approval visibility and decision UI on top of the existing approval
+routes. It gives analysts read-only approval visibility and gives super admins a controlled
+approve/deny interface for pending approvals. It still does not add worker gating, queue
+mutation controls, SOAR action execution controls, playbook integration, or backend/schema
+changes unless implementation proves they are absolutely required.
+
 ## In scope
 
 ### Phase 2.5A: Schema and store foundation
@@ -58,6 +64,21 @@ workers, queues, ingest, detection, correlation, playbooks, or frontend UI.
 - Route tests for auth, RBAC, list/detail access, approve/deny decisions, invalid decisions,
   missing approvals, invalid transitions, and event creation.
 
+### Phase 2.5C: Approval visibility and decision UI
+
+- `frontend/src/services/approvalService.js`.
+- `frontend/src/components/ApprovalsPanel.js`.
+- Navigation tab for `analyst` and `super_admin` users.
+- Approval list with status/risk/target filters as supported by the approval API.
+- Approval detail view showing immutable event history.
+- Super admin-only approve/deny controls for pending approvals.
+- Analyst read-only approval visibility.
+- Optional approve/deny reason handling.
+- Loading, error, and empty states.
+- Service tests.
+- Component tests if the current frontend test setup supports them.
+- Frontend build verification.
+
 ## Out of scope
 
 - No frontend/UI.
@@ -72,6 +93,12 @@ workers, queues, ingest, detection, correlation, playbooks, or frontend UI.
 - No worker pause/resume in Phase 2.5B.
 - No queue execution behavior changes in Phase 2.5B.
 - No schema changes in Phase 2.5B unless implementation proves they are absolutely required.
+- No worker pause/resume in Phase 2.5C.
+- No queue execution changes in Phase 2.5C.
+- No playbook integration in Phase 2.5C.
+- No Slack/email notification UI in Phase 2.5C.
+- No real firewall execution UI in Phase 2.5C.
+- No backend/schema changes in Phase 2.5C unless absolutely required.
 - No ingest, detection, or correlation changes.
 - No SOAR queue execution behavior changes.
 
@@ -88,5 +115,8 @@ workers, queues, ingest, detection, correlation, playbooks, or frontend UI.
   execution.
 - Invalid decisions and invalid lifecycle transitions return client errors without partial
   commits.
+- Approval UI can list and inspect approvals through approval routes only.
+- Approval UI exposes decision controls only for `super_admin` users and pending approvals.
+- Analyst users can view approvals but cannot approve or deny them from the UI.
 - Existing SOAR queue execution, ingest transactions, detection, and correlation behavior remain
   unchanged.
