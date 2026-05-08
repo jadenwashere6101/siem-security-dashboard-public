@@ -7,7 +7,7 @@ import {
 } from "../services/soarQueueService";
 import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
 
-const QUEUE_STATUSES = ["pending", "running", "success", "failed", "skipped"];
+const QUEUE_STATUSES = ["pending", "running", "awaiting_approval", "success", "failed", "skipped"];
 const QUEUE_STATUS_FILTERS = ["all", ...QUEUE_STATUSES];
 const QUEUE_RECENT_LIMITS = [10, 25, 50, 100];
 
@@ -402,6 +402,12 @@ function SoarQueuePanel({
                   mono
                   wrap
                 />
+                {selectedQueueItem.status === "awaiting_approval" ? (
+                  <div style={approvalWaitingNoteStyle}>
+                    This action is paused and waiting for approval before it can execute. To review
+                    and decide, open the Approvals panel.
+                  </div>
+                ) : null}
               </div>
             ) : (
               <p style={emptyTextStyle}>Select a queue item to view details.</p>
@@ -441,6 +447,7 @@ const truncateText = (value, maxLength) => {
 const getStatusBadgeStyle = (status) => {
   if (status === "pending") return pendingBadgeStyle;
   if (status === "running") return runningBadgeStyle;
+  if (status === "awaiting_approval") return awaitingApprovalBadgeStyle;
   if (status === "success") return successBadgeStyle;
   if (status === "failed") return failedBadgeStyle;
   if (status === "skipped") return skippedBadgeStyle;
@@ -762,6 +769,12 @@ const skippedBadgeStyle = {
   border: "1px solid rgba(139, 148, 158, 0.26)",
 };
 
+const awaitingApprovalBadgeStyle = {
+  color: "#fb923c",
+  backgroundColor: "rgba(251, 146, 60, 0.12)",
+  border: "1px solid rgba(251, 146, 60, 0.3)",
+};
+
 const neutralBadgeStyle = {
   color: "#c9d1d9",
   backgroundColor: "#161b22",
@@ -823,6 +836,17 @@ const detailGridStyle = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
   gap: "12px",
+};
+
+const approvalWaitingNoteStyle = {
+  gridColumn: "1 / -1",
+  padding: "10px 12px",
+  borderRadius: "8px",
+  border: "1px solid rgba(251, 146, 60, 0.3)",
+  backgroundColor: "rgba(251, 146, 60, 0.08)",
+  color: "#fb923c",
+  fontSize: "13px",
+  lineHeight: "1.5",
 };
 
 const detailFieldStyle = {

@@ -18,8 +18,15 @@ jest.mock("../services/soarQueueService", () => ({
 }));
 
 const statusFixture = {
-  counts: { pending: 2, running: 1, success: 3, failed: 1, skipped: 4 },
-  total: 11,
+  counts: {
+    pending: 2,
+    running: 1,
+    awaiting_approval: 1,
+    success: 3,
+    failed: 1,
+    skipped: 4,
+  },
+  total: 12,
 };
 
 const queueRowFixture = {
@@ -39,6 +46,25 @@ const queueRowFixture = {
 const queueDetailFixture = {
   ...queueRowFixture,
   idempotency_key: "queue-idempotency-key-101",
+};
+
+const awaitingApprovalRowFixture = {
+  id: 202,
+  alert_id: 55,
+  alert_reference: { status: "linked", label: "Alert 55" },
+  action: "block_ip",
+  status: "awaiting_approval",
+  source_ip: "203.0.113.5",
+  retry_count: 0,
+  max_retries: 3,
+  last_error: null,
+  created_at: "2026-05-08T10:00:00Z",
+  updated_at: "2026-05-08T10:01:00Z",
+};
+
+const awaitingApprovalDetailFixture = {
+  ...awaitingApprovalRowFixture,
+  idempotency_key: "awaiting-idempotency-key-202",
 };
 
 const renderPanel = () =>
@@ -114,6 +140,40 @@ describe("SoarQueuePanel", () => {
     expect(screen.getByText("8.8.8.8")).toBeInTheDocument();
     expect(screen.getByText("1 / 3")).toBeInTheDocument();
     expect(screen.getAllByText("Pending").length).toBeGreaterThan(0);
+  });
+
+  test("shows awaiting approval count tile", async () => {
+    loadSoarQueueStatus.mockResolvedValue(statusFixture);
+    loadRecentSoarQueueItems.mockResolvedValue({ items: [] });
+
+    renderPanel();
+
+    await screen.findByText("No queued SOAR actions found.");
+    expect(screen.getAllByText("Awaiting Approval").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("1").length).toBeGreaterThan(0);
+  });
+
+  test("includes awaiting approval status filter option", async () => {
+    loadSoarQueueStatus.mockResolvedValue(statusFixture);
+    loadRecentSoarQueueItems.mockResolvedValue({ items: [] });
+
+    renderPanel();
+
+    await screen.findByText("No queued SOAR actions found.");
+    expect(
+      screen.getByRole("option", { name: "Awaiting Approval" })
+    ).toBeInTheDocument();
+  });
+
+  test("renders awaiting approval badge in queue list", async () => {
+    loadSoarQueueStatus.mockResolvedValue(statusFixture);
+    loadRecentSoarQueueItems.mockResolvedValue({ items: [awaitingApprovalRowFixture] });
+
+    renderPanel();
+
+    expect(await screen.findByText("Recent Queue Items")).toBeInTheDocument();
+    expect(screen.getAllByText("Awaiting Approval").length).toBeGreaterThan(0);
+    expect(screen.getByText("203.0.113.5")).toBeInTheDocument();
   });
 
   test("renders deleted alert when alert_id is null", async () => {
@@ -209,6 +269,28 @@ describe("SoarQueuePanel", () => {
     expect(screen.getByText("Total")).toBeInTheDocument();
   });
 
+  test("shows filtered empty state for awaiting approval filter", async () => {
+    loadSoarQueueStatus.mockResolvedValue(statusFixture);
+    loadRecentSoarQueueItems
+      .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValueOnce({ items: [] });
+
+    renderPanel();
+    await screen.findByText("No queued SOAR actions found.");
+
+    await userEvent.selectOptions(screen.getByLabelText("Status"), "awaiting_approval");
+
+    expect(
+      await screen.findByText("No queued SOAR actions found for this filter.")
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(loadRecentSoarQueueItems).toHaveBeenLastCalledWith({
+        limit: 50,
+        status: "awaiting_approval",
+      })
+    );
+  });
+
   test("loads and renders queue item detail from view action", async () => {
     loadSoarQueueStatus.mockResolvedValue(statusFixture);
     loadRecentSoarQueueItems.mockResolvedValue({ items: [queueRowFixture] });
@@ -224,6 +306,40 @@ describe("SoarQueuePanel", () => {
       expect(loadSoarQueueItem).toHaveBeenCalledWith(queueRowFixture.id)
     );
     expect(await screen.findByText("queue-idempotency-key-101")).toBeInTheDocument();
+  });
+
+  test("shows approval-waiting note in detail for awaiting approval item", async () => {
+    loadSoarQueueStatus.mockResolvedValue(statusFixture);
+    loadRecentSoarQueueItems.mockResolvedValue({ items: [awaitingApprovalRowFixture] });
+    loadSoarQueueItem.mockResolvedValue(awaitingApprovalDetailFixture);
+
+    renderPanel();
+    await screen.findByText("Recent Queue Items");
+
+    await userEvent.click(screen.getByRole("button", { name: "View" }));
+
+    await waitFor(() =>
+      expect(loadSoarQueueItem).toHaveBeenCalledWith(awaitingApprovalRowFixture.id)
+    );
+    expect(
+      await screen.findByText(/This action is paused and waiting for approval/)
+    ).toBeInTheDocument();
+  });
+
+  test("does not show approval-waiting note in detail for non-awaiting item", async () => {
+    loadSoarQueueStatus.mockResolvedValue(statusFixture);
+    loadRecentSoarQueueItems.mockResolvedValue({ items: [queueRowFixture] });
+    loadSoarQueueItem.mockResolvedValue(queueDetailFixture);
+
+    renderPanel();
+    await screen.findByText("Recent Queue Items");
+
+    await userEvent.click(screen.getByRole("button", { name: "View" }));
+
+    expect(await screen.findByText("queue-idempotency-key-101")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/This action is paused and waiting for approval/)
+    ).not.toBeInTheDocument();
   });
 
   test("preserves selected detail when filter changes to empty results", async () => {
