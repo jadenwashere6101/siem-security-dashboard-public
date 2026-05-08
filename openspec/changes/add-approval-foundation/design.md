@@ -1,0 +1,357 @@
+# Design: Approval Foundation
+
+---
+
+## Current state
+
+The system has:
+- DB-backed SOAR response action queue.
+- Worker runner and simulation executor.
+- Adapter abstraction and dry-run firewall adapter.
+- Incident schema, store, APIs, auto-linking, and UI.
+
+There is no approval request model. The worker does not pause for approvals, queue rows do not
+carry approval state, and incidents do not have approval workflows. This change defines the
+backend data layer for those future capabilities without wiring it into execution.
+
+---
+
+## Schema additions
+
+All schema work is additive and uses `CREATE TABLE IF NOT EXISTS` and
+`CREATE INDEX IF NOT EXISTS`. Existing tables are not modified.
+
+### `approval_requests`
+
+```sql
+CREATE TABLE IF NOT EXISTS approval_requests (
+    id SERIAL PRIMARY KEY,
+    incident_id INTEGER REFERENCES incidents(id) ON DELETE RESTRICT,
+    queue_id INTEGER REFERENCES response_actions_queue(id) ON DELETE RESTRICT,
+    requested_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    decided_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'approved', 'denied', 'expired')),
+    action TEXT NOT NULL,
+    risk_level TEXT NOT NULL DEFAULT 'high'
+        CHECK (risk_level IN ('medium', 'high', 'critical')),
+    request_reason TEXT,
+    decision_comment TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    decided_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ NOT NULL,
+    CHECK (incident_id IS NOT NULL OR queue_id IS NOT NULL),
+    CHECK (
+        (status = 'pending' AND decided_at IS NULL)
+        OR (status IN ('approved', 'denied', 'expired') AND decided_at IS NOT NULL)
+    ),
+    CHECK (
+        (status = 'approved' AND approved_by IS NOT NULL)
+        OR status IN ('pending', 'denied', 'expired')
+    )
+);
+```
+
+Field notes:
+- `incident_id` ties the request to analyst case context.
+- `queue_id` ties the request to a future queued execution target.
+- At least one of `incident_id` or `queue_id` is required. Both may be present.
+- `approved_by` is populated only for approved requests and references `users(id)`.
+- `decided_by` records the actor for approved, denied, or manually expired decisions.
+- `requested_by` is nullable so system-created requests can be represented.
+- `action` stores the requested action name, for example `block_ip` or a future playbook step.
+- `risk_level` supports future policy rules without changing schema.
+- `request_reason` describes why approval is required.
+- `decision_comment` stores analyst decision rationale.
+- `expires_at` is required for every request so expiration semantics are deterministic.
+
+Recommended indexes:
+
+```sql
+CREATE INDEX IF NOT EXISTS idx_approval_requests_status
+ON approval_requests (status);
+
+CREATE INDEX IF NOT EXISTS idx_approval_requests_incident_id
+ON approval_requests (incident_id);
+
+CREATE INDEX IF NOT EXISTS idx_approval_requests_queue_id
+ON approval_requests (queue_id);
+
+CREATE INDEX IF NOT EXISTS idx_approval_requests_expires_at
+ON approval_requests (expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_approval_requests_pending_expiry
+ON approval_requests (expires_at)
+WHERE status = 'pending';
+```
+
+### `approval_request_events`
+
+`approval_requests` is the current-state table. `approval_request_events` is append-only and
+preserves an immutable history of approval lifecycle changes.
+
+```sql
+CREATE TABLE IF NOT EXISTS approval_request_events (
+    id SERIAL PRIMARY KEY,
+    approval_request_id INTEGER NOT NULL
+        REFERENCES approval_requests(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL
+        CHECK (event_type IN ('created', 'approved', 'denied', 'expired')),
+    actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    previous_status TEXT,
+    new_status TEXT NOT NULL,
+    comment TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+Recommended indexes:
+
+```sql
+CREATE INDEX IF NOT EXISTS idx_approval_request_events_request_id
+ON approval_request_events (approval_request_id);
+
+CREATE INDEX IF NOT EXISTS idx_approval_request_events_created_at
+ON approval_request_events (created_at);
+```
+
+No helper should update or delete rows from `approval_request_events`. Every lifecycle change
+adds a new event row.
+
+---
+
+## Store/helper module
+
+Create `core/approval_store.py` in the implementation phase. It must not import Flask route
+modules, detection, correlation, queue worker modules, or frontend code. Use
+`logging.getLogger(__name__)` if logging is needed.
+
+Helpers do not commit and do not close the connection. The caller owns transaction boundaries.
+
+### Constants
+
+```python
+APPROVAL_STATUSES = frozenset({"pending", "approved", "denied", "expired"})
+TERMINAL_APPROVAL_STATUSES = frozenset({"approved", "denied", "expired"})
+DEFAULT_APPROVAL_TTL_MINUTES = 60
+```
+
+### `create_approval_request`
+
+```python
+def create_approval_request(
+    conn,
+    *,
+    incident_id: int | None = None,
+    queue_id: int | None = None,
+    action: str,
+    requested_by: int | None = None,
+    request_reason: str | None = None,
+    risk_level: str = "high",
+    expires_at=None,
+    ttl_minutes: int = DEFAULT_APPROVAL_TTL_MINUTES,
+) -> dict:
+```
+
+Responsibilities:
+- Require at least one of `incident_id` or `queue_id`.
+- Require non-empty `action`.
+- Compute `expires_at = NOW() + ttl_minutes * INTERVAL '1 minute'` when explicit `expires_at`
+  is not supplied.
+- Insert `approval_requests` with `status='pending'`.
+- Insert `approval_request_events` with `event_type='created'`.
+- Call `log_audit_event()` for `approval_request_created`.
+- Return the created request as a dict.
+
+### `get_approval_request`
+
+```python
+def get_approval_request(conn, approval_request_id: int) -> dict | None:
+```
+
+Responsibilities:
+- Return the request row plus related immutable events.
+- Return `None` for unknown ID.
+
+### `list_approval_requests`
+
+```python
+def list_approval_requests(
+    conn,
+    *,
+    status: str | None = None,
+    incident_id: int | None = None,
+    queue_id: int | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict]:
+```
+
+Responsibilities:
+- Filter by status, incident, and queue item.
+- Cap `limit` at 100.
+- Order by `created_at DESC`.
+
+### `approve_request`
+
+```python
+def approve_request(
+    conn,
+    approval_request_id: int,
+    *,
+    actor_user_id: int,
+    decision_comment: str | None = None,
+    now=None,
+) -> dict:
+```
+
+Responsibilities:
+- Lock the row with `FOR UPDATE`.
+- Raise `ValueError("approval request not found")` when missing.
+- Raise `ValueError("approval request is not pending")` for terminal requests.
+- If `expires_at <= now`, expire the request instead of approving it and raise
+  `ValueError("approval request expired")` after writing the expiration event.
+- Set:
+  - `status='approved'`
+  - `approved_by=actor_user_id`
+  - `decided_by=actor_user_id`
+  - `decided_at=now`
+  - `decision_comment=decision_comment`
+- Append `approval_request_events.event_type='approved'`.
+- Call `log_audit_event()` for `approval_request_approved`.
+- Return the updated request dict.
+
+### `deny_request`
+
+```python
+def deny_request(
+    conn,
+    approval_request_id: int,
+    *,
+    actor_user_id: int,
+    decision_comment: str | None = None,
+    now=None,
+) -> dict:
+```
+
+Responsibilities:
+- Lock the row with `FOR UPDATE`.
+- Only pending requests can be denied.
+- If expired at decision time, expire instead of denying and raise
+  `ValueError("approval request expired")`.
+- Set:
+  - `status='denied'`
+  - `approved_by=NULL`
+  - `decided_by=actor_user_id`
+  - `decided_at=now`
+  - `decision_comment=decision_comment`
+- Append `approval_request_events.event_type='denied'`.
+- Call `log_audit_event()` for `approval_request_denied`.
+- Return the updated request dict.
+
+### `expire_pending_requests`
+
+```python
+def expire_pending_requests(conn, *, now=None, limit: int = 100) -> list[dict]:
+```
+
+Responsibilities:
+- Find pending requests where `expires_at <= now`.
+- Lock rows with `FOR UPDATE SKIP LOCKED`.
+- Update each to `status='expired'`, `decided_at=now`, `decided_by=NULL`.
+- Append `approval_request_events.event_type='expired'` for each request.
+- Call `log_audit_event()` for each expiration or a single batch audit event with request IDs.
+- Return the expired request dicts.
+- Does not schedule itself. Future routes/workers may call it opportunistically.
+
+---
+
+## Timeout semantics
+
+Expiration is explicit and deterministic:
+- Every approval request must have `expires_at`.
+- A pending request whose `expires_at <= now` is no longer approvable or deniable.
+- Expiration is materialized by `expire_pending_requests()` or by a decision helper that sees
+  the request is already expired.
+- This slice does not add a scheduler. There is no background job.
+- Future route or worker code may call `expire_pending_requests()` before listing approvals or
+  before checking whether queued work is allowed to resume.
+
+---
+
+## Audit behavior
+
+Approval history is immutable:
+- `approval_request_events` is append-only.
+- `audit_log` receives append-only entries through existing `log_audit_event()`.
+- `approval_requests` stores current state only.
+- Decision helpers never delete or rewrite event rows.
+
+Suggested audit event types:
+- `approval_request_created`
+- `approval_request_approved`
+- `approval_request_denied`
+- `approval_request_expired`
+
+Suggested audit details:
+```python
+{
+    "approval_request_id": approval_request_id,
+    "incident_id": incident_id,
+    "queue_id": queue_id,
+    "action": action,
+    "previous_status": previous_status,
+    "new_status": new_status,
+    "decision_comment": decision_comment,
+}
+```
+
+---
+
+## Testing strategy
+
+Schema tests:
+- `approval_requests` and `approval_request_events` tables exist.
+- Invalid status is rejected.
+- Invalid risk level is rejected.
+- Missing both `incident_id` and `queue_id` is rejected.
+- `approved` without `approved_by` is rejected.
+- `pending` with `decided_at` is rejected.
+- Event type CHECK rejects unknown event types.
+
+Store tests:
+- `create_approval_request` creates a pending request with computed expiration.
+- Creation requires incident or queue target.
+- Creation writes a `created` event.
+- Creation writes an audit event.
+- List filters by status, incident, and queue item.
+- Detail returns immutable event history.
+- Unknown detail returns `None`.
+- Approving a pending request succeeds and sets `approved_by`, `decided_by`, and `decided_at`.
+- Denying a pending request succeeds and leaves `approved_by` null.
+- Approving/denying terminal requests raises.
+- Approving/denying an already-expired pending request materializes expiration and raises.
+- `expire_pending_requests` expires only pending requests past `expires_at`.
+- `expire_pending_requests` does not touch approved, denied, or future pending requests.
+- Helpers do not commit; caller rollback should undo request and event writes.
+
+Regression tests:
+- Existing incident route/store tests remain green.
+- Existing SOAR queue tests remain green.
+- Existing ingest/detection/correlation tests remain green, because no execution flow is wired
+  to approvals in this slice.
+
+---
+
+## Non-integration guarantees
+
+This slice does not:
+- Change `response_actions_queue.status` values.
+- Change queue claim/worker behavior.
+- Add worker pause/resume.
+- Gate any queued action.
+- Add approval API routes.
+- Add frontend UI.
+- Touch ingest, detection, or correlation code.
+- Add background schedulers.
