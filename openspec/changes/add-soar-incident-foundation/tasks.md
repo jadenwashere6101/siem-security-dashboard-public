@@ -13,211 +13,82 @@ pytest tests/test_alert_mutation_api_contracts.py
 
 ---
 
-## Step 1: Schema additions
+## Phase 2A — Schema and store ✓ COMPLETE
 
-- [x] Read `schema.sql` — confirm no `incidents` or `incident_alerts` tables exist.
-- [x] Add `incidents` table with columns: `id`, `title`, `severity`, `priority` (CHECK P1-P4,
-  default P2), `status` (CHECK open/investigating/resolved/closed, default open), `source_ip`,
-  `assigned_to` (FK to users ON DELETE SET NULL), `created_at`, `resolved_at`.
-- [x] Add `incident_alerts` table with columns: `incident_id` (FK to incidents ON DELETE CASCADE),
-  `alert_id` (FK to alerts ON DELETE CASCADE), `linked_at`, PRIMARY KEY `(incident_id, alert_id)`.
-- [x] Add indexes: `idx_incidents_status`, `idx_incidents_source_ip`, `idx_incidents_created_at`,
-  `idx_incidents_severity`, `idx_incident_alerts_alert_id`, `idx_incident_alerts_incident_id`.
-- [x] Apply `schema.sql` to a fresh test database — confirm it completes with no errors.
-- [x] Run full regression suite — all six tests green.
+- [x] Add `incidents` table and `incident_alerts` join table to `schema.sql`.
+- [x] Add indexes for status, source_ip, created_at, severity, and join table FKs.
+- [x] Implement `core/incident_store.py` with all 7 store helper functions.
+- [x] Tests: schema constraints, create/link/list/detail/status/dedup behaviors.
+- [x] Regression suite green.
 
 ---
 
-## Step 2: Verify `alerts_created` dict shape includes `severity`
+## Phase 2B — Incident API routes ✓ COMPLETE
 
-- [ ] Read `engines/detection_engine.py` — inspect the dicts appended to `alerts_created` in
-  all `_generate_*_core()` functions.
-- [ ] Confirm each dict includes `alert_id`, `source_ip`, `response_action`, and `severity`.
-- [ ] If `severity` is absent from any function: add it (one line per function, value already
-  exists as a local variable). Update any test assertions that check exact `alerts_created`
-  dict shapes.
-- [ ] Run full regression suite — all six tests green.
-
----
-
-## Step 3: Implement `core/incident_store.py`
-
-- [x] Create `core/incident_store.py`.
-  - Import `logging` — use `logging.getLogger(__name__)`. No Flask dependency.
-  - No imports from route modules, detection engines, or correlation engines.
-
-- [x] Implement `create_incident(conn, title, severity, source_ip) -> dict`.
-  - Derive priority: `CRITICAL → P1`, `HIGH → P2`, anything else → `P2`.
-  - INSERT into `incidents`. Return full row as dict with ISO 8601 `created_at`.
-  - Does not commit.
-
-- [x] Implement `link_alert_to_incident(conn, incident_id, alert_id) -> None`.
-  - INSERT into `incident_alerts` with `ON CONFLICT DO NOTHING`.
-  - Log `[INCIDENT LINK]` on insert, `[INCIDENT LINK] already linked` on conflict.
-  - Does not commit.
-
-- [x] Implement `find_open_incident_by_source_ip(conn, source_ip, dedup_window_minutes=60) -> dict | None`.
-  - Query `incidents WHERE source_ip = %s AND status IN ('open', 'investigating')
-    AND created_at >= NOW() - INTERVAL '%s minutes' ORDER BY created_at DESC LIMIT 1`.
-  - Use parameterized interval: `NOW() - (%(window)s * INTERVAL '1 minute')` or equivalent.
-  - Return incident dict or `None`.
-
-- [x] Implement `maybe_create_or_link_incident(conn, alert_id, severity, source_ip) -> dict | None`.
-  - Severity gate: return `None` immediately if severity not in `{'HIGH', 'CRITICAL'}`.
-  - Call `find_open_incident_by_source_ip`. If found: link and return existing.
-  - If not found: create new incident, link alert, return new incident.
-  - Does not commit.
-
-- [x] Implement `list_incidents(conn, status=None, severity=None, limit=50, offset=0) -> list`.
-  - Hard cap limit at 100.
-  - Build query dynamically based on provided filters.
-  - ORDER BY `created_at DESC`.
-  - Return list of incident dicts.
-
-- [x] Implement `get_incident_detail(conn, incident_id) -> dict | None`.
-  - Return `None` for unknown ID.
-  - JOIN `incident_alerts` and `alerts` to build `alerts` list in the response.
-  - Each alert entry includes: `alert_id`, `alert_type`, `severity`, `source_ip`, `status`,
-    `created_at`, `linked_at`.
-
-- [x] Implement `update_incident_status(conn, incident_id, new_status, actor_username) -> dict`.
-  - Fetch current incident. Raise `ValueError("incident not found")` if absent.
-  - Enforce transition table from design.md. Raise `ValueError(f"invalid status transition: ...")`.
-  - Set `resolved_at = NOW()` when transitioning to `resolved`.
-  - UPDATE `incidents`. Return updated incident dict.
-  - Does not commit.
+- [x] Implement `routes/incident_routes.py` with `incident_bp`.
+- [x] `GET /incidents`, `GET /incidents/<id>`, `POST /incidents/<id>/status`.
+- [x] Auth, filter validation, status transition error handling.
+- [x] Route tests: 401/403, response shapes, invalid filters, unknown IDs.
+- [x] Register `incident_bp` in `siem_backend.py`.
+- [x] Regression suite green.
 
 ---
 
-## Step 4: Test `core/incident_store.py`
-
-All tests use a real test database connection. No Flask test client needed.
-
-- [x] Schema tests:
-  - `incidents` and `incident_alerts` tables exist after schema apply.
-  - `status` CHECK rejects `'unknown'`.
-  - `priority` CHECK rejects `'P5'`.
-  - Duplicate `(incident_id, alert_id)` in `incident_alerts` raises IntegrityError.
-
-- [x] `create_incident` tests:
-  - Returns dict with `id`, `title`, `severity`, `priority`, `status='open'`.
-  - `CRITICAL` → `priority='P1'`.
-  - `HIGH` → `priority='P2'`.
-
-- [x] `link_alert_to_incident` tests:
-  - Row appears in `incident_alerts` after call.
-  - Calling twice: no exception, exactly one row.
-
-- [x] `find_open_incident_by_source_ip` tests:
-  - Returns `None` when no incidents exist.
-  - Returns `None` for `resolved` incidents even within window.
-  - Returns `None` for `closed` incidents even within window.
-  - Returns incident for `open` incident within window.
-  - Returns incident for `investigating` incident within window.
-  - Returns `None` for `open` incident outside window.
-  - Returns most recent when multiple `open` incidents exist for same IP.
-
-- [x] `maybe_create_or_link_incident` tests:
-  - `MEDIUM` → `None`, no incidents table rows.
-  - `LOW` → `None`, no incidents table rows.
-  - `HIGH`, no existing incident → new incident created, alert linked, incident returned.
-  - `HIGH`, existing `open` incident in window → alert linked to existing, no new incident.
-  - `HIGH`, existing incident outside window → new incident created.
-  - `HIGH`, existing incident is `resolved` → new incident created.
-  - `CRITICAL` → same dedup behavior as HIGH.
-
-- [x] `list_incidents` tests:
-  - Returns all incidents ordered by `created_at DESC`.
-  - `status='open'` filter returns only open incidents.
-  - `severity='CRITICAL'` filter returns only CRITICAL incidents.
-  - Limit of 200 is capped at 100.
-  - Empty table returns `[]`.
-
-- [x] `get_incident_detail` tests:
-  - Unknown ID returns `None`.
-  - No linked alerts → `"alerts": []`.
-  - After linking, returns correct alert summaries with `linked_at`.
-
-- [x] `update_incident_status` tests:
-  - `open → investigating` succeeds, returns updated dict.
-  - `open → resolved` succeeds, `resolved_at` is set.
-  - `resolved → open` succeeds, `resolved_at` unchanged.
-  - `closed → open` raises `ValueError`.
-  - Unknown `new_status` raises `ValueError`.
-  - Unknown `incident_id` raises `ValueError("incident not found")`.
-
-- [x] Run full regression suite — all six tests green.
+## Phase 2C — Post-commit incident creation (current scope)
 
 ---
 
-## Step 5: Implement `routes/incident_routes.py`
+### Step 1: Add `severity` to `alerts_created` dicts in all 7 detection functions
 
-- [x] Create `routes/incident_routes.py`.
-  - Import `login_required` from `flask_login`.
-  - Import `analyst_or_super_admin_required` from `core.auth`.
-  - Import store functions from `core.incident_store`.
-  - Blueprint: `incident_bp = Blueprint("incidents", __name__)`.
+Read `engines/detection_engine.py` before making any changes.
 
-- [x] Implement `GET /incidents`.
-  - Auth: `@login_required @analyst_or_super_admin_required`.
-  - Parse and validate `status`, `severity`, `limit`, `offset` from query string.
-  - Invalid `status`: return `400 {"error": "invalid status filter"}`.
-  - Invalid `severity`: return `400 {"error": "invalid severity filter"}`.
-  - Clamp `limit` to max 100.
-  - Call `list_incidents(conn, ...)`.
-  - Response: `200 {"incidents": [...], "count": len(results)}`.
+- [ ] Read `_generate_failed_login_alerts_core` — locate `alerts_created.append({...})`.
+  Add `"severity": "high"` to the dict. Confirm the value matches the INSERT VALUES literal.
+- [ ] Read `_generate_password_spraying_alerts_core` — same. Add `"severity": "high"`.
+- [ ] Read `_generate_successful_login_after_spray_alerts_core` — same. Add `"severity": "critical"`.
+- [ ] Read `_generate_application_exception_alerts_core` — same. Add `"severity": "high"`.
+- [ ] Read `_generate_http_error_alerts_core` — same. Add `"severity": "medium"`.
+- [ ] Read `_generate_port_scan_alerts_core` — same. Add `"severity": "medium"`.
+- [ ] Read `_generate_high_request_rate_alerts_core` — same. Add `"severity": "medium"`.
+- [ ] Confirm no other code in the file was modified.
+- [ ] Run regression suite — all six green. **If any fail, stop. Do not proceed.**
 
-- [x] Implement `GET /incidents/<int:incident_id>`.
-  - Auth: `@login_required @analyst_or_super_admin_required`.
-  - Call `get_incident_detail(conn, incident_id)`.
-  - `None` → `404 {"error": "incident not found"}`.
-  - Response: `200 {"incident": {...}}`.
-
-- [x] Implement `POST /incidents/<int:incident_id>/status`.
-  - Auth: `@login_required @analyst_or_super_admin_required`.
-  - Parse JSON body. `status` field required → `400` if missing.
-  - Validate `status` is a recognized value → `400` if unknown.
-  - Call `update_incident_status(conn, incident_id, new_status, current_user.username)`.
-  - Catch `ValueError("incident not found")` → `404 {"error": "incident not found"}`.
-  - Catch `ValueError("invalid status transition: ...")` → `400 {"error": ...}`.
-  - On success: `conn.commit()`. Write to `audit_log` using `log_audit_event()`.
-  - Response: `200 {"incident": {...}}`.
+> Severity values are confirmed by reading the INSERT VALUES tuple in each function.
+> Existing test assertions check named fields (`alert_id`, `source_ip`, `attempts`,
+> `response_action`) — not the complete key set. Adding `"severity"` is purely additive.
 
 ---
 
-## Step 6: Test `routes/incident_routes.py`
+### Step 2: Add import and private helper to `routes/ingest_routes.py`
 
-Use Flask test client consistent with existing route test patterns.
+Read `routes/ingest_routes.py` before making any changes.
 
-- [x] `GET /incidents` — unauthenticated → 401.
-- [x] `GET /incidents` — viewer role → 403.
-- [x] `GET /incidents` — analyst → 200, correct response shape.
-- [x] `GET /incidents?status=open` — returns only open incidents.
-- [x] `GET /incidents?status=invalid` — 400.
-- [x] `GET /incidents?limit=200` — clamped to 100 results.
-- [x] `GET /incidents/<id>` — unauthenticated → 401.
-- [x] `GET /incidents/<id>` — viewer → 403.
-- [x] `GET /incidents/<id>` — analyst, valid ID → 200 with `alerts` list.
-- [x] `GET /incidents/<id>` — analyst, unknown ID → 404.
-- [x] `POST /incidents/<id>/status` — unauthenticated → 401.
-- [x] `POST /incidents/<id>/status` — viewer → 403.
-- [x] `POST /incidents/<id>/status` — analyst, valid transition → 200.
-- [x] `POST /incidents/<id>/status` — missing `status` field → 400.
-- [x] `POST /incidents/<id>/status` — invalid transition → 400 with message.
-- [x] `POST /incidents/<id>/status` — unknown incident ID → 404.
-- [x] Run full regression suite — all six tests green.
+- [ ] Add import at the top of the file:
+  ```python
+  from core.incident_store import maybe_create_or_link_incident
+  ```
+- [ ] Add private module-level helper (after imports, before the blueprint definition or
+  alongside other module-level helpers if any exist):
+  ```python
+  def _create_incidents_for_alerts(alerts_created, conn):
+      for alert in alerts_created:
+          alert_id = alert.get("alert_id")
+          severity = alert.get("severity")
+          source_ip = alert.get("source_ip")
+          if not alert_id or not severity or not source_ip:
+              continue
+          maybe_create_or_link_incident(conn, alert_id, severity, str(source_ip))
+  ```
+- [ ] Confirm the function does not commit, does not raise, and uses `str(source_ip)`.
+- [ ] Run regression suite — all six green.
 
 ---
 
-## Step 7: Wire post-commit incident creation into `routes/ingest_routes.py`
+### Step 3: Wire incident block into `add_event` handler
 
-- [ ] Read `routes/ingest_routes.py` — locate the post-commit enqueue block in all 4 handlers
-  (`add_event`, `add_web_log_event`, `add_azure_event`, `add_otel_event`).
-- [ ] Add `_create_incidents_for_alerts(alerts_created, conn)` as a private module-level helper.
-  - Iterates `alerts_created`. Skips dicts missing `alert_id`, `severity`, or `source_ip`.
-  - Calls `maybe_create_or_link_incident(conn, alert_id, severity, source_ip)` for each.
-  - Does not commit. Does not raise.
-- [ ] In each of the 4 handlers, after the existing enqueue `try/except` block, add:
+- [ ] Locate the existing enqueue `try/except` block in `add_event`. Confirm it ends with
+  `conn.commit()` on success.
+- [ ] Add the incident block immediately after the enqueue block, before `return jsonify(...)`:
   ```python
   try:
       _create_incidents_for_alerts(alerts_created, conn)
@@ -229,35 +100,84 @@ Use Flask test client consistent with existing route test patterns.
           [(a.get("alert_id"), a.get("source_ip"), a.get("severity")) for a in alerts_created],
       )
   ```
-- [ ] Confirm no existing handler logic is modified except the addition of this block.
+- [ ] Confirm no other logic in `add_event` was changed.
+- [ ] Run regression suite — all six green. **If `test_ingest_api_contracts.py` fails, revert
+  and stop.**
 
 ---
 
-## Step 8: Integration tests for ingest → incident
+### Step 4: Wire incident block into `add_web_log_event` handler
 
-- [ ] Ingest HIGH-severity event that triggers detection. Confirm incident row created and
-  alert linked in `incident_alerts`.
-- [ ] Ingest second HIGH-severity event from same IP within 1 hour. Confirm no new incident,
-  second alert linked to existing incident.
-- [ ] Ingest MEDIUM-severity event. Confirm no incident created.
-- [ ] Monkeypatch `maybe_create_or_link_incident` to raise. Confirm ingest returns 201 and
-  alert row exists in DB.
-- [ ] Run full regression suite — all six tests green.
+- [ ] Read `add_web_log_event` — confirm the enqueue block location.
+- [ ] Add incident block after enqueue block, same pattern as Step 3.
+- [ ] Confirm no other logic changed.
+- [ ] Run regression suite — all six green.
 
 ---
 
-## Step 9: Register blueprint and final regression
+### Step 5: Wire incident block into `add_azure_event` handler
 
-- [x] In `siem_backend.py`, import `incident_bp` from `routes.incident_routes`.
-- [x] Add `app.register_blueprint(incident_bp)` after the existing blueprint registrations.
-- [x] Run full pytest suite (not just the six regression tests — all tests).
-  - All existing tests green.
-  - All new incident tests green.
-- [ ] Confirm no production file outside the explicitly listed files was modified:
-  - `schema.sql` — only additions.
-  - `core/incident_store.py` — new file.
-  - `routes/incident_routes.py` — new file.
-  - `routes/ingest_routes.py` — post-commit block addition only.
-  - `siem_backend.py` — blueprint registration only.
-  - `engines/detection_engine.py` — `severity` field addition to `alerts_created` dicts only
-    (if required by Step 2). No logic changes.
+- [ ] Read `add_azure_event` — confirm it uses `extend()` to accumulate `alerts_created`
+  across multiple events. Confirm the enqueue block fires once after the loop.
+- [ ] Add incident block after enqueue block, same pattern. The block fires once per handler
+  call over the full `alerts_created` list — do not add it inside the event loop.
+- [ ] Confirm no other logic changed.
+- [ ] Run regression suite — all six green.
+
+---
+
+### Step 6: Wire incident block into `add_otel_event` handler
+
+- [ ] Read `add_otel_event` — same `extend()` pattern as Azure.
+- [ ] Add incident block after enqueue block, same pattern.
+- [ ] Confirm no other logic changed.
+- [ ] Run regression suite — all six green.
+
+---
+
+### Step 7: Integration tests
+
+Write new integration tests. Use the ingest route test pattern from
+`tests/test_ingest_api_contracts.py` — real test database, Flask test client.
+
+- [ ] Test: HIGH alert creates incident.
+  - Trigger a detection alert with `"high"` severity via ingest route.
+  - Assert one row in `incidents`.
+  - Assert one row in `incident_alerts` linking that alert to that incident.
+  - Assert incident `severity = 'HIGH'` and `status = 'open'`.
+
+- [ ] Test: Second HIGH alert from same IP deduplicates.
+  - Trigger a second alert from the same source IP within 1 hour.
+  - Assert `incidents` still has one row.
+  - Assert `incident_alerts` has two rows (both alerts linked to same incident).
+
+- [ ] Test: MEDIUM alert does not create incident.
+  - Trigger an alert with `"medium"` severity via ingest route.
+  - Assert `incidents` has zero rows.
+  - Assert ingest returns 201.
+
+- [ ] Test: Incident failure does not mask committed ingest.
+  - Monkeypatch `maybe_create_or_link_incident` to raise `RuntimeError`.
+  - Trigger a HIGH-severity alert via ingest route.
+  - Assert ingest returns 201.
+  - Assert alert row exists in `alerts`.
+  - Assert `incidents` has zero rows.
+
+- [ ] Test: Missing severity skipped cleanly.
+  - Call `_create_incidents_for_alerts([{"alert_id": 1, "source_ip": "1.2.3.4"}], conn)` directly.
+  - Assert no exception propagates.
+  - Assert no incident row created.
+
+- [ ] Run full pytest suite — all existing tests green, all new integration tests green.
+
+---
+
+### Step 8: Final file audit
+
+- [ ] Confirm only these files were modified in Phase 2C:
+  - `engines/detection_engine.py` — `"severity"` added to 7 `alerts_created.append({...})` dicts.
+  - `routes/ingest_routes.py` — import added, `_create_incidents_for_alerts` added, incident
+    block added to 4 handlers.
+- [ ] Confirm no schema changes.
+- [ ] Confirm no changes to `core/incident_store.py`, `engines/soar_*.py`, or any test file
+  outside the new integration test file.
