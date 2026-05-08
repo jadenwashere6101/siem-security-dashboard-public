@@ -4,6 +4,7 @@ import DashboardSection from "./components/DashboardSection";
 import AdminUsersPanel from "./components/AdminUsersPanel";
 import AuditLogPanel from "./components/AuditLogPanel";
 import DetectionRulesPanel from "./components/DetectionRulesPanel";
+import IncidentsPanel from "./components/IncidentsPanel";
 import SoarQueuePanel from "./components/SoarQueuePanel";
 import ThreatHuntPanel from "./components/ThreatHuntPanel";
 import BlocklistManagerPanel from "./components/BlocklistManagerPanel";
@@ -502,6 +503,18 @@ function App() {
               SOAR Queue
             </button>
           )}
+          {canTakeAlertActions && (
+            <button
+              type="button"
+              onClick={() => setActiveSection("soar-incidents")}
+              style={{
+                ...sectionTabStyle,
+                ...(activeSection === "soar-incidents" ? activeSectionTabStyle : inactiveSectionTabStyle),
+              }}
+            >
+              SOAR Incidents
+            </button>
+          )}
         </div>
 
         {activeSection === "dashboard" && (
@@ -613,6 +626,18 @@ function App() {
             cardSubtitleStyle={cardSubtitleStyle}
             filterLabelStyle={filterLabelStyle}
             selectStyle={selectStyle}
+          />
+        )}
+
+        {canTakeAlertActions && activeSection === "soar-incidents" && (
+          <IncidentsPanel
+            cardStyle={cardStyle}
+            cardHeaderStyle={cardHeaderStyle}
+            cardTitleStyle={cardTitleStyle}
+            cardSubtitleStyle={cardSubtitleStyle}
+            filterLabelStyle={filterLabelStyle}
+            selectStyle={selectStyle}
+            canTakeAlertActions={canTakeAlertActions}
           />
         )}
 

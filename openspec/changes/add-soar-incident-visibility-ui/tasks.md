@@ -7,11 +7,11 @@ Run frontend tests after Steps 2, 3, and 5: `cd frontend && npm test -- --watchA
 
 ## Step 1: Implement `frontend/src/services/incidentService.js`
 
-- [ ] Create `frontend/src/services/incidentService.js`.
+- [x] Create `frontend/src/services/incidentService.js`.
   - Import `getApiErrorMessage`, `parseJsonResponse` from `../utils/apiResponse`.
   - Import `buildSiemPath` from `../utils/siemPath`.
 
-- [ ] Implement `loadIncidents({ status, severity, limit = 50, offset = 0 } = {})`.
+- [x] Implement `loadIncidents({ status, severity, limit = 50, offset = 0 } = {})`.
   - Build query params: include `status` only if not `"all"` and not falsy.
   - Include `severity` only if not `"all"` and not falsy.
   - Include `limit`, `offset`.
@@ -20,30 +20,30 @@ Run frontend tests after Steps 2, 3, and 5: `cd frontend && npm test -- --watchA
   - Throw on `!res.ok` using `getApiErrorMessage(data, "Unable to load incidents", ["error"])`.
   - Return `data`.
 
-- [ ] Implement `loadIncidentDetail(incidentId)`.
+- [x] Implement `loadIncidentDetail(incidentId)`.
   - Fetch `buildSiemPath("/incidents/" + incidentId)` with `credentials: "include"`.
   - `parseJsonResponse(res, {})`.
   - Throw on `!res.ok`.
   - Return `data`.
 
-- [ ] Implement `updateIncidentStatus(incidentId, status)`.
+- [x] Implement `updateIncidentStatus(incidentId, status)`.
   - POST to `buildSiemPath("/incidents/" + incidentId + "/status")`.
   - `credentials: "include"`, `Content-Type: application/json`, body `JSON.stringify({ status })`.
   - `parseJsonResponse(res, {})`.
   - Throw on `!res.ok` using `getApiErrorMessage(data, "Unable to update incident status", ["error"])`.
   - Return `data`.
 
-- [ ] Run build — passes with no errors.
+- [x] Run build — passes with no errors.
 
 ---
 
 ## Step 2: Test `frontend/src/services/incidentService.test.js`
 
-- [ ] Create `frontend/src/services/incidentService.test.js`.
+- [x] Create `frontend/src/services/incidentService.test.js`.
   - Mock `fetch` globally (consistent with existing service test patterns).
   - Import all three functions from `incidentService`.
 
-- [ ] `loadIncidents` tests:
+- [x] `loadIncidents` tests:
   - No filters: fetches `/incidents` — no extra query params.
   - `status: "open"` → `?status=open` in URL.
   - `status: "all"` → no `status` param in URL.
@@ -52,19 +52,19 @@ Run frontend tests after Steps 2, 3, and 5: `cd frontend && npm test -- --watchA
   - Success: returns the parsed data object.
   - `!res.ok`: throws with message from response `error` field.
 
-- [ ] `loadIncidentDetail` tests:
+- [x] `loadIncidentDetail` tests:
   - Fetches `/incidents/42` for `id=42`.
   - Success: returns parsed data.
   - `!res.ok`: throws.
 
-- [ ] `updateIncidentStatus` tests:
+- [x] `updateIncidentStatus` tests:
   - POSTs to `/incidents/42/status`.
   - Request body contains `{ "status": "investigating" }`.
   - `Content-Type: application/json` header is set.
   - Success: returns parsed data.
   - `!res.ok` (400 invalid transition): throws with backend error message.
 
-- [ ] Run `npm test -- --watchAll=false` — all service tests green.
+- [x] Run `npm test -- --watchAll=false` — all service tests green.
 
 ---
 
@@ -72,31 +72,31 @@ Run frontend tests after Steps 2, 3, and 5: `cd frontend && npm test -- --watchA
 
 Read `SoarQueuePanel.js` before implementing — match the structural and styling conventions.
 
-- [ ] Create `frontend/src/components/IncidentsPanel.js`.
+- [x] Create `frontend/src/components/IncidentsPanel.js`.
   - Imports: `React`, `{ useCallback, useEffect, useState }`, service functions, `formatAdminTimestamp`.
 
-- [ ] Define constants at module level:
+- [x] Define constants at module level:
   ```javascript
   const INCIDENT_STATUS_FILTERS = ["all", "open", "investigating", "resolved", "closed"];
   const INCIDENT_SEVERITY_FILTERS = ["all", "LOW", "MEDIUM", "HIGH", "CRITICAL"];
   const INCIDENT_STATUSES = ["open", "investigating", "resolved", "closed"];
   ```
 
-- [ ] Implement component state (as listed in design.md).
+- [x] Implement component state (as listed in design.md).
 
-- [ ] Implement `loadIncidentList` (useCallback):
+- [x] Implement `loadIncidentList` (useCallback):
   - Quiet vs. initial load flag.
   - Calls `loadIncidents({ status: statusFilter, severity: severityFilter })`.
   - Sets `incidents` from `data.incidents` (guard with `Array.isArray`).
   - Sets `error` on failure.
 
-- [ ] Implement `loadDetail` (useCallback):
+- [x] Implement `loadDetail` (useCallback):
   - Calls `loadIncidentDetail(selectedIncidentId)`.
   - Sets `selectedIncident` from `data.incident`.
   - Pre-populates `pendingStatus` with `data.incident.status`.
   - Sets `detailError` on failure.
 
-- [ ] Implement `handleStatusUpdate`:
+- [x] Implement `handleStatusUpdate`:
   - Guard: no-op if `pendingStatus === selectedIncident?.status`.
   - Sets `updatingStatus(true)`, clears `statusUpdateError`.
   - Calls `updateIncidentStatus(selectedIncidentId, pendingStatus)`.
@@ -104,11 +104,11 @@ Read `SoarQueuePanel.js` before implementing — match the structural and stylin
   - On error: sets `statusUpdateError`.
   - `finally`: sets `updatingStatus(false)`.
 
-- [ ] Implement `useEffect` for initial load on mount and filter changes.
+- [x] Implement `useEffect` for initial load on mount and filter changes.
 
-- [ ] Implement `useEffect` for detail load when `selectedIncidentId` changes.
+- [x] Implement `useEffect` for detail load when `selectedIncidentId` changes.
 
-- [ ] Implement JSX:
+- [x] Implement JSX:
   - Header: title + Refresh button.
   - Filter row: status filter `<select>`, severity filter `<select>`.
   - Loading state: "Loading incidents..."
@@ -133,7 +133,7 @@ Read `SoarQueuePanel.js` before implementing — match the structural and stylin
   - Detail loading state: "Loading incident..."
   - Detail error state: error message.
 
-- [ ] Run build — passes.
+- [x] Run build — passes.
 
 ---
 
@@ -141,76 +141,76 @@ Read `SoarQueuePanel.js` before implementing — match the structural and stylin
 
 Read `SoarQueuePanel.test.js` before implementing — match the test structure and fixture conventions.
 
-- [ ] Create `frontend/src/components/IncidentsPanel.test.js`.
+- [x] Create `frontend/src/components/IncidentsPanel.test.js`.
   - `jest.mock("../services/incidentService", ...)`.
   - Define `incidentFixture` and `incidentDetailFixture` (as specified in design.md).
   - Define `renderPanel` helper with required props.
 
-- [ ] Loading state test:
+- [x] Loading state test:
   - `loadIncidents` returns a never-resolving promise.
   - `"Loading incidents..."` is in the document.
 
-- [ ] Error state test:
+- [x] Error state test:
   - `loadIncidents` rejects with `new Error("load failed")`.
   - Error message is in the document after `waitFor`.
 
-- [ ] Empty state test:
+- [x] Empty state test:
   - `loadIncidents` resolves with `{ incidents: [], count: 0 }`.
   - `"No incidents found."` is in the document.
 
-- [ ] List render test:
+- [x] List render test:
   - `loadIncidents` resolves with one `incidentFixture`.
   - Incident title is visible. Severity, status, source_ip visible.
 
-- [ ] Filter change re-fetches test:
+- [x] Filter change re-fetches test:
   - Change status filter dropdown. Confirm `loadIncidents` is called again with the new status.
 
-- [ ] Row click loads detail test:
+- [x] Row click loads detail test:
   - `loadIncidents` resolves with one fixture.
   - `loadIncidentDetail` set up to return `incidentDetailFixture`.
   - Click the row. Confirm `loadIncidentDetail` called with correct ID.
 
-- [ ] Detail loading state test:
+- [x] Detail loading state test:
   - After row click, `loadIncidentDetail` pending → "Loading incident..." visible.
 
-- [ ] Detail error state test:
+- [x] Detail error state test:
   - `loadIncidentDetail` rejects → detail error message visible.
 
-- [ ] Detail render test:
+- [x] Detail render test:
   - `loadIncidentDetail` resolves → title, severity, priority, source_ip, created_at visible.
 
-- [ ] Detail `resolved_at` null test:
+- [x] Detail `resolved_at` null test:
   - Fixture has `resolved_at: null` → `"—"` visible, no crash.
 
-- [ ] Detail linked alerts test:
+- [x] Detail linked alerts test:
   - `incidentDetailFixture` has one alert → `alert_type` and alert status visible in sub-table.
 
-- [ ] Detail no linked alerts test:
+- [x] Detail no linked alerts test:
   - Detail fixture with `alerts: []` → `"No linked alerts."` visible.
 
-- [ ] Status update control visible test:
+- [x] Status update control visible test:
   - Rendered with `canTakeAlertActions={true}` and detail loaded.
   - Status select and "Update Status" button are in the document.
 
-- [ ] Status update control hidden test:
+- [x] Status update control hidden test:
   - Rendered with `canTakeAlertActions={false}`.
   - "Update Status" button is NOT in the document.
 
-- [ ] Status update success test:
+- [x] Status update success test:
   - `updateIncidentStatus` resolves.
   - Change select to a different status, click "Update Status".
   - `updateIncidentStatus` called with correct ID and status.
   - `loadIncidentDetail` called again (detail refreshed).
 
-- [ ] Status update error test:
+- [x] Status update error test:
   - `updateIncidentStatus` rejects with `new Error("invalid status transition")`.
   - Error message visible after submit.
 
-- [ ] Close detail test:
+- [x] Close detail test:
   - Click the close button in detail panel.
   - Detail panel is no longer in the document.
 
-- [ ] Run `npm test -- --watchAll=false` — all tests green.
+- [x] Run `npm test -- --watchAll=false` — all tests green.
 
 ---
 
@@ -218,12 +218,12 @@ Read `SoarQueuePanel.test.js` before implementing — match the test structure a
 
 Read `App.js` before making any changes.
 
-- [ ] Add import at the top of `App.js`:
+- [x] Add import at the top of `App.js`:
   ```javascript
   import IncidentsPanel from "./components/IncidentsPanel";
   ```
 
-- [ ] Add nav tab after the `soar-queue` tab block:
+- [x] Add nav tab after the `soar-queue` tab block:
   ```javascript
   {canTakeAlertActions && (
     <div
@@ -241,7 +241,7 @@ Read `App.js` before making any changes.
   ```
   Confirm `baseTabStyle` (or equivalent) variable name by reading the existing tab blocks.
 
-- [ ] Add conditional render after the `soar-queue` render block:
+- [x] Add conditional render after the `soar-queue` render block:
   ```javascript
   {canTakeAlertActions && activeSection === "soar-incidents" && (
     <IncidentsPanel
@@ -257,22 +257,22 @@ Read `App.js` before making any changes.
   ```
   Confirm exact style variable names by reading the `SoarQueuePanel` render call in App.js.
 
-- [ ] Confirm no other App.js logic was changed.
-- [ ] Run build — passes.
-- [ ] Run `npm test -- --watchAll=false` — all tests still green.
+- [x] Confirm no other App.js logic was changed.
+- [x] Run build — passes.
+- [x] Run `npm test -- --watchAll=false` — all tests still green.
 
 ---
 
 ## Step 6: Final audit
 
-- [ ] Confirm only these files were created or modified:
+- [x] Confirm only these files were created or modified:
   - `frontend/src/services/incidentService.js` — new file.
   - `frontend/src/services/incidentService.test.js` — new file.
   - `frontend/src/components/IncidentsPanel.js` — new file.
   - `frontend/src/components/IncidentsPanel.test.js` — new file.
   - `frontend/src/App.js` — import + nav tab + conditional render only.
-- [ ] Confirm `IncidentsPanel.js` imports nothing from `soarQueueService`, `alertsService`,
+- [x] Confirm `IncidentsPanel.js` imports nothing from `soarQueueService`, `alertsService`,
   `alertStatusService`, or any other mutation service.
-- [ ] Confirm `updateIncidentStatus` is the only POST call made from the panel.
-- [ ] Confirm `resolved_at` null is handled before every `formatAdminTimestamp` call.
-- [ ] Run full build and test suite — clean.
+- [x] Confirm `updateIncidentStatus` is the only POST call made from the panel.
+- [x] Confirm `resolved_at` null is handled before every `formatAdminTimestamp` call.
+- [x] Run full build and test suite — clean.
