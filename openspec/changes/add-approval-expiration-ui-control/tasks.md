@@ -17,7 +17,7 @@ Only these files are modified in this change:
 Read `frontend/src/services/approvalService.js` in full before editing. Confirm the
 `buildSiemPath`, `parseJsonResponse`, and `getApiErrorMessage` helpers are already imported.
 
-- [ ] Add after `submitApprovalDecision`:
+- [x] Add after `submitApprovalDecision`:
 
   ```javascript
   export const expireOverdueApprovals = async () => {
@@ -37,7 +37,7 @@ Read `frontend/src/services/approvalService.js` in full before editing. Confirm 
   };
   ```
 
-- [ ] Run `cd frontend && npm run build` — passes with no errors.
+- [x] Run `cd frontend && npm run build` — passes with no errors.
 
 ---
 
@@ -47,7 +47,7 @@ Read `frontend/src/components/ApprovalsPanel.js` in full before editing.
 
 ### 2a. Update import
 
-- [ ] Add `expireOverdueApprovals` to the named import from `../services/approvalService`:
+- [x] Add `expireOverdueApprovals` to the named import from `../services/approvalService`:
 
   ```javascript
   import {
@@ -60,7 +60,7 @@ Read `frontend/src/components/ApprovalsPanel.js` in full before editing.
 
 ### 2b. Add state vars
 
-- [ ] Add after the `submittingDecision` state line:
+- [x] Add after the `submittingDecision` state line:
 
   ```javascript
   const [isExpiring, setIsExpiring] = useState(false);
@@ -70,7 +70,7 @@ Read `frontend/src/components/ApprovalsPanel.js` in full before editing.
 
 ### 2c. Add state clears to `loadApprovalList`
 
-- [ ] Inside the `try` block of `loadApprovalList`, after `setError("")`, add:
+- [x] Inside the `try` block of `loadApprovalList`, after `setError("")`, add:
 
   ```javascript
   setExpireResult(null);
@@ -79,7 +79,7 @@ Read `frontend/src/components/ApprovalsPanel.js` in full before editing.
 
 ### 2d. Add `handleExpireOverdue`
 
-- [ ] Add after `handleCloseDetail`:
+- [x] Add after `handleCloseDetail`:
 
   ```javascript
   const handleExpireOverdue = useCallback(async () => {
@@ -101,7 +101,7 @@ Read `frontend/src/components/ApprovalsPanel.js` in full before editing.
 
 ### 2e. Add "Expire overdue" button to controls
 
-- [ ] Inside `<div style={controlsStyle}>`, after the Refresh button:
+- [x] Inside `<div style={controlsStyle}>`, after the Refresh button:
 
   ```javascript
   {isSuperAdmin ? (
@@ -122,7 +122,7 @@ Read `frontend/src/components/ApprovalsPanel.js` in full before editing.
 
 ### 2f. Add feedback blocks below controls
 
-- [ ] After the closing `</div>` of `controlsStyle`, still inside the card header `<div>`,
+- [x] After the closing `</div>` of `controlsStyle`, still inside the card header `<div>`,
   add:
 
   ```javascript
@@ -141,7 +141,7 @@ Read `frontend/src/components/ApprovalsPanel.js` in full before editing.
 
 ### 2g. Add style constants
 
-- [ ] Add alongside existing style constants:
+- [x] Add alongside existing style constants:
 
   ```javascript
   const expireButtonStyle = {
@@ -178,7 +178,7 @@ Read `frontend/src/components/ApprovalsPanel.js` in full before editing.
   };
   ```
 
-- [ ] Run `cd frontend && npm run build` — passes with no errors.
+- [x] Run `cd frontend && npm run build` — passes with no errors.
 
 ---
 
@@ -188,7 +188,7 @@ Read `frontend/src/services/approvalService.test.js` in full before editing. Mat
 mock/assertion pattern of the existing `submitApprovalDecision` tests. Import
 `expireOverdueApprovals`.
 
-- [ ] **Test: calls correct endpoint with correct method and headers**
+- [x] **Test: calls correct endpoint with correct method and headers**
   - `global.fetch` resolves `ok: true` with `{ expired_approvals: 2, skipped_queue_rows: 1, ... }`.
   - Call `expireOverdueApprovals()`.
   - Assert: `fetch` called once. URL contains `"/admin/soar/approvals/expire-pending"`.
@@ -196,15 +196,15 @@ mock/assertion pattern of the existing `submitApprovalDecision` tests. Import
     `options.headers["Content-Type"] === "application/json"`.
   - Assert: returned object has `expired_approvals: 2` and `skipped_queue_rows: 1`.
 
-- [ ] **Test: throws with backend error message on non-OK response**
+- [x] **Test: throws with backend error message on non-OK response**
   - `global.fetch` resolves `ok: false`, `json: async () => ({ error: "Forbidden" })`.
   - `await expect(expireOverdueApprovals()).rejects.toThrow("Forbidden")`.
 
-- [ ] **Test: throws with fallback message when response has no error field**
+- [x] **Test: throws with fallback message when response has no error field**
   - `global.fetch` resolves `ok: false`, `json: async () => ({})`.
   - `await expect(expireOverdueApprovals()).rejects.toThrow("Unable to expire overdue approvals")`.
 
-- [ ] Run `cd frontend && npm test -- --watchAll=false` — all tests pass.
+- [x] Run `cd frontend && npm test -- --watchAll=false` — all tests pass.
 
 ---
 
@@ -213,27 +213,27 @@ mock/assertion pattern of the existing `submitApprovalDecision` tests. Import
 Read `frontend/src/components/ApprovalsPanel.test.js` in full before editing. Note the
 `renderPanel` helper, the `deferred()` utility, and the existing `jest.mock` block.
 
-- [ ] Add `expireOverdueApprovals: jest.fn()` to the `jest.mock` block for
+- [x] Add `expireOverdueApprovals: jest.fn()` to the `jest.mock` block for
   `"../services/approvalService"`.
 
-- [ ] Import `expireOverdueApprovals` alongside the other service imports in the test file.
+- [x] Import `expireOverdueApprovals` alongside the other service imports in the test file.
 
-- [ ] In `beforeEach` (or wherever the other mocks are reset), add:
+- [x] In `beforeEach` (or wherever the other mocks are reset), add:
   `expireOverdueApprovals.mockReset()`.
 
-- [ ] **Test: "Expire overdue" button not rendered for analyst**
+- [x] **Test: "Expire overdue" button not rendered for analyst**
   - `listApprovals.mockResolvedValue({ approvals: [] })`.
   - `renderPanel({ userRole: "analyst" })`.
   - `await screen.findByText("No approval requests found.")`.
   - `expect(screen.queryByRole("button", { name: /expire overdue/i })).toBeNull()`.
 
-- [ ] **Test: "Expire overdue" button rendered for super_admin**
+- [x] **Test: "Expire overdue" button rendered for super_admin**
   - `listApprovals.mockResolvedValue({ approvals: [] })`.
   - `renderPanel({ userRole: "super_admin" })` (default, can omit the option).
   - `await screen.findByText("No approval requests found.")`.
   - `expect(screen.getByRole("button", { name: /expire overdue/i })).toBeInTheDocument()`.
 
-- [ ] **Test: button shows "Expiring..." while in-flight and re-enables on completion**
+- [x] **Test: button shows "Expiring..." while in-flight and re-enables on completion**
   - `listApprovals.mockResolvedValue({ approvals: [] })`.
   - Use `deferred()` to control `expireOverdueApprovals`.
   - After initial render, click the button.
@@ -242,7 +242,7 @@ Read `frontend/src/components/ApprovalsPanel.test.js` in full before editing. No
   - `await screen.findByRole("button", { name: /expire overdue/i })` — button label restored.
   - Assert button is not disabled.
 
-- [ ] **Test: success shows inline result and calls `listApprovals` a second time**
+- [x] **Test: success shows inline result and calls `listApprovals` a second time**
   - `listApprovals.mockResolvedValue({ approvals: [] })`.
   - `expireOverdueApprovals.mockResolvedValue({ expired_approvals: 3, skipped_queue_rows: 2, ... })`.
   - Click "Expire overdue".
@@ -250,37 +250,37 @@ Read `frontend/src/components/ApprovalsPanel.test.js` in full before editing. No
   - `expect(screen.getByText(/2 queue rows skipped/i)).toBeInTheDocument()`.
   - `expect(listApprovals).toHaveBeenCalledTimes(2)` — once on mount, once on quiet refresh.
 
-- [ ] **Test: error shows inline error, `listApprovals` not called a second time**
+- [x] **Test: error shows inline error, `listApprovals` not called a second time**
   - `listApprovals.mockResolvedValue({ approvals: [] })`.
   - `expireOverdueApprovals.mockRejectedValue(new Error("Unable to expire overdue approvals"))`.
   - Click "Expire overdue".
   - `await screen.findByText(/Unable to expire overdue approvals/i)`.
   - `expect(listApprovals).toHaveBeenCalledTimes(1)`.
 
-- [ ] **Test: feedback cleared on next list load (Refresh click)**
+- [x] **Test: feedback cleared on next list load (Refresh click)**
   - `listApprovals.mockResolvedValue({ approvals: [] })`.
   - `expireOverdueApprovals.mockResolvedValue({ expired_approvals: 1, skipped_queue_rows: 0, ... })`.
   - Click "Expire overdue". Wait for result text to appear.
   - Click Refresh button.
   - `await waitFor(() => expect(screen.queryByText(/expired 1 approval/i)).toBeNull())`.
 
-- [ ] Run `cd frontend && npm test -- --watchAll=false` — all tests pass, including existing ones.
+- [x] Run `cd frontend && npm test -- --watchAll=false` — all tests pass, including existing ones.
 
 ---
 
 ## Step 5: Final audit
 
-- [ ] Confirm only these files were created or modified:
+- [x] Confirm only these files were created or modified:
   - `frontend/src/services/approvalService.js`
   - `frontend/src/components/ApprovalsPanel.js`
   - `frontend/src/services/approvalService.test.js`
   - `frontend/src/components/ApprovalsPanel.test.js`
-- [ ] Confirm `ApprovalsPanel.js` does not call `fetch` directly — all network calls go through
+- [x] Confirm `ApprovalsPanel.js` does not call `fetch` directly — all network calls go through
   `approvalService.js`.
-- [ ] Confirm the "Expire overdue" button is gated to `isSuperAdmin` in the JSX.
-- [ ] Confirm `handleExpireOverdue` checks `isSuperAdmin` defensively.
-- [ ] Confirm `expireOverdueApprovals` does not appear in any Python file.
-- [ ] Confirm no scheduler, cron, polling, or `setInterval` was introduced.
-- [ ] Confirm `soarQueueService.js` was not modified.
-- [ ] Confirm `SoarQueuePanel.js` was not modified.
-- [ ] Run full test suite: `cd frontend && npm test -- --watchAll=false` — clean.
+- [x] Confirm the "Expire overdue" button is gated to `isSuperAdmin` in the JSX.
+- [x] Confirm `handleExpireOverdue` checks `isSuperAdmin` defensively.
+- [x] Confirm `expireOverdueApprovals` does not appear in any Python file.
+- [x] Confirm no scheduler, cron, polling, or `setInterval` was introduced.
+- [x] Confirm `soarQueueService.js` was not modified.
+- [x] Confirm `SoarQueuePanel.js` was not modified.
+- [x] Run full test suite: `cd frontend && npm test -- --watchAll=false` — clean.

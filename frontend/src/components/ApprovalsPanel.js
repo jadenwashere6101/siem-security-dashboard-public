@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  expireOverdueApprovals,
   getApproval,
   listApprovals,
   submitApprovalDecision,
@@ -31,10 +32,13 @@ function ApprovalsPanel({
   const [decisionReason, setDecisionReason] = useState("");
   const [decisionError, setDecisionError] = useState("");
   const [submittingDecision, setSubmittingDecision] = useState("");
+  const [isExpiring, setIsExpiring] = useState(false);
+  const [expireResult, setExpireResult] = useState(null);
+  const [expireError, setExpireError] = useState("");
 
   const isSuperAdmin = userRole === "super_admin";
 
-  const loadApprovalList = useCallback(async ({ quiet = false } = {}) => {
+  const loadApprovalList = useCallback(async ({ quiet = false, clearExpireFeedback = true } = {}) => {
     try {
       if (quiet) {
         setRefreshing(true);
@@ -42,6 +46,10 @@ function ApprovalsPanel({
         setLoading(true);
       }
       setError("");
+      if (clearExpireFeedback) {
+        setExpireResult(null);
+        setExpireError("");
+      }
 
       const data = await listApprovals({ status: statusFilter });
       setApprovals(Array.isArray(data?.approvals) ? data.approvals : []);
@@ -112,6 +120,25 @@ function ApprovalsPanel({
     setSubmittingDecision("");
   }, []);
 
+  const handleExpireOverdue = useCallback(async () => {
+    if (!isSuperAdmin || isExpiring) return;
+    try {
+      setIsExpiring(true);
+      setExpireError("");
+      setExpireResult(null);
+      const result = await expireOverdueApprovals();
+      await loadApprovalList({ quiet: true, clearExpireFeedback: false });
+      if (selectedApprovalId) {
+        await loadDetail(selectedApprovalId);
+      }
+      setExpireResult(result);
+    } catch (err) {
+      setExpireError(err.message || "Unable to expire overdue approvals.");
+    } finally {
+      setIsExpiring(false);
+    }
+  }, [isSuperAdmin, isExpiring, loadApprovalList, loadDetail, selectedApprovalId]);
+
   useEffect(() => {
     loadApprovalList();
   }, [loadApprovalList]);
@@ -174,16 +201,41 @@ function ApprovalsPanel({
           <button
             type="button"
             onClick={() => loadApprovalList({ quiet: true })}
-            disabled={loading || refreshing}
+            disabled={loading || refreshing || isExpiring}
             style={{
               ...refreshButtonStyle,
-              opacity: loading || refreshing ? 0.65 : 1,
-              cursor: loading || refreshing ? "default" : "pointer",
+              opacity: loading || refreshing || isExpiring ? 0.65 : 1,
+              cursor: loading || refreshing || isExpiring ? "default" : "pointer",
             }}
           >
             {refreshing ? "Refreshing..." : "Refresh"}
           </button>
+          {isSuperAdmin ? (
+            <button
+              type="button"
+              onClick={handleExpireOverdue}
+              disabled={isExpiring || loading || refreshing}
+              style={{
+                ...expireButtonStyle,
+                opacity: isExpiring || loading || refreshing ? 0.65 : 1,
+                cursor: isExpiring || loading || refreshing ? "default" : "pointer",
+              }}
+            >
+              {isExpiring ? "Expiring..." : "Expire overdue"}
+            </button>
+          ) : null}
         </div>
+        {isSuperAdmin && expireResult !== null ? (
+          <div style={expireResultStyle}>
+            Expired {expireResult.expired_approvals ?? 0} approval
+            {expireResult.expired_approvals === 1 ? "" : "s"},{" "}
+            {expireResult.skipped_queue_rows ?? 0} queue row
+            {expireResult.skipped_queue_rows === 1 ? "" : "s"} skipped.
+          </div>
+        ) : null}
+        {isSuperAdmin && expireError ? (
+          <div style={expireErrorStyle}>{expireError}</div>
+        ) : null}
       </div>
 
       <div style={panelContentStyle}>
@@ -450,6 +502,39 @@ const refreshButtonStyle = {
   color: "#93c5fd",
   fontSize: "13px",
   fontWeight: "700",
+};
+
+const expireButtonStyle = {
+  minHeight: "40px",
+  padding: "10px 14px",
+  borderRadius: "8px",
+  border: "1px solid rgba(251, 146, 60, 0.35)",
+  backgroundColor: "rgba(251, 146, 60, 0.10)",
+  color: "#fb923c",
+  fontSize: "13px",
+  fontWeight: "700",
+};
+
+const expireResultStyle = {
+  marginTop: "8px",
+  padding: "8px 12px",
+  borderRadius: "8px",
+  border: "1px solid rgba(126, 231, 135, 0.28)",
+  backgroundColor: "rgba(63, 185, 80, 0.08)",
+  color: "#7ee787",
+  fontSize: "13px",
+  fontWeight: "600",
+};
+
+const expireErrorStyle = {
+  marginTop: "8px",
+  padding: "8px 12px",
+  borderRadius: "8px",
+  border: "1px solid rgba(239, 68, 68, 0.28)",
+  backgroundColor: "rgba(239, 68, 68, 0.08)",
+  color: "#fca5a5",
+  fontSize: "13px",
+  fontWeight: "600",
 };
 
 const retryButtonStyle = {

@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 
 import ApprovalsPanel from "./ApprovalsPanel";
 import {
+  expireOverdueApprovals,
   getApproval,
   listApprovals,
   submitApprovalDecision,
@@ -13,6 +14,7 @@ jest.mock("../services/approvalService", () => ({
   listApprovals: jest.fn(),
   getApproval: jest.fn(),
   submitApprovalDecision: jest.fn(),
+  expireOverdueApprovals: jest.fn(),
 }));
 
 const approvalFixture = {
@@ -75,6 +77,7 @@ const deferred = () => {
 describe("ApprovalsPanel", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    expireOverdueApprovals.mockReset();
   });
 
   test("shows loading state while approvals load", () => {
@@ -101,6 +104,28 @@ describe("ApprovalsPanel", () => {
     renderPanel();
 
     expect(await screen.findByText("No approval requests found.")).toBeInTheDocument();
+  });
+
+  test("does not render expire overdue button for analyst", async () => {
+    listApprovals.mockResolvedValue({ approvals: [], count: 0 });
+
+    renderPanel({ userRole: "analyst" });
+
+    expect(await screen.findByText("No approval requests found.")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /expire overdue/i })
+    ).not.toBeInTheDocument();
+  });
+
+  test("renders expire overdue button for super admin", async () => {
+    listApprovals.mockResolvedValue({ approvals: [], count: 0 });
+
+    renderPanel({ userRole: "super_admin" });
+
+    expect(await screen.findByText("No approval requests found.")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /expire overdue/i })
+    ).toBeInTheDocument();
   });
 
   test("renders approval list rows", async () => {
@@ -154,6 +179,89 @@ describe("ApprovalsPanel", () => {
     await userEvent.click(screen.getByText("Block Ip"));
 
     await waitFor(() => expect(getApproval).toHaveBeenCalledWith(11));
+  });
+
+  test("expire overdue button shows in-flight state and re-enables", async () => {
+    listApprovals.mockResolvedValue({ approvals: [], count: 0 });
+    const pendingExpire = deferred();
+    expireOverdueApprovals.mockReturnValue(pendingExpire.promise);
+
+    renderPanel({ userRole: "super_admin" });
+    await screen.findByText("No approval requests found.");
+
+    await userEvent.click(screen.getByRole("button", { name: /expire overdue/i }));
+
+    expect(screen.getByRole("button", { name: /expiring/i })).toBeDisabled();
+
+    pendingExpire.resolve({
+      expired_approvals: 0,
+      skipped_queue_rows: 0,
+      expired_approval_ids: [],
+      skipped_queue_ids: [],
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /expire overdue/i })).not.toBeDisabled()
+    );
+  });
+
+  test("expire overdue success shows result and refreshes list", async () => {
+    listApprovals.mockResolvedValue({ approvals: [], count: 0 });
+    expireOverdueApprovals.mockResolvedValue({
+      expired_approvals: 3,
+      skipped_queue_rows: 2,
+      expired_approval_ids: [1, 2, 3],
+      skipped_queue_ids: [101, 102],
+    });
+
+    renderPanel({ userRole: "super_admin" });
+    await screen.findByText("No approval requests found.");
+
+    await userEvent.click(screen.getByRole("button", { name: /expire overdue/i }));
+
+    expect(
+      await screen.findByText(/Expired 3 approvals, 2 queue rows skipped\./i)
+    ).toBeInTheDocument();
+    expect(listApprovals).toHaveBeenCalledTimes(2);
+  });
+
+  test("expire overdue error shows safe error without refreshing list", async () => {
+    listApprovals.mockResolvedValue({ approvals: [], count: 0 });
+    expireOverdueApprovals.mockRejectedValue(
+      new Error("Unable to expire overdue approvals")
+    );
+
+    renderPanel({ userRole: "super_admin" });
+    await screen.findByText("No approval requests found.");
+
+    await userEvent.click(screen.getByRole("button", { name: /expire overdue/i }));
+
+    expect(
+      await screen.findByText("Unable to expire overdue approvals")
+    ).toBeInTheDocument();
+    expect(listApprovals).toHaveBeenCalledTimes(1);
+  });
+
+  test("expire overdue feedback clears on refresh", async () => {
+    listApprovals.mockResolvedValue({ approvals: [], count: 0 });
+    expireOverdueApprovals.mockResolvedValue({
+      expired_approvals: 1,
+      skipped_queue_rows: 0,
+      expired_approval_ids: [7],
+      skipped_queue_ids: [],
+    });
+
+    renderPanel({ userRole: "super_admin" });
+    await screen.findByText("No approval requests found.");
+
+    await userEvent.click(screen.getByRole("button", { name: /expire overdue/i }));
+    expect(await screen.findByText(/Expired 1 approval/i)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /^refresh$/i }));
+
+    await waitFor(() =>
+      expect(screen.queryByText(/Expired 1 approval/i)).not.toBeInTheDocument()
+    );
   });
 
   test("shows detail loading state", async () => {

@@ -1,4 +1,5 @@
 import {
+  expireOverdueApprovals,
   getApproval,
   listApprovals,
   submitApprovalDecision,
@@ -141,5 +142,50 @@ describe("approvalService", () => {
     await expect(
       submitApprovalDecision(42, { decision: "approved", reason: "" })
     ).rejects.toThrow("approval request is not pending");
+  });
+
+  test("expireOverdueApprovals posts to admin expiration endpoint", async () => {
+    const payload = {
+      expired_approvals: 2,
+      skipped_queue_rows: 1,
+      expired_approval_ids: [4, 5],
+      skipped_queue_ids: [201],
+    };
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(payload),
+    });
+
+    const result = await expireOverdueApprovals();
+    const [url, options] = global.fetch.mock.calls[0];
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(url).toContain("/admin/soar/approvals/expire-pending");
+    expect(options.method).toBe("POST");
+    expect(options.credentials).toBe("include");
+    expect(options.headers["Content-Type"]).toBe("application/json");
+    expect(JSON.parse(options.body)).toEqual({});
+    expect(result.expired_approvals).toBe(2);
+    expect(result.skipped_queue_rows).toBe(1);
+  });
+
+  test("expireOverdueApprovals throws backend error message on non-OK response", async () => {
+    global.fetch.mockResolvedValue({
+      ok: false,
+      json: () => Promise.resolve({ error: "Forbidden" }),
+    });
+
+    await expect(expireOverdueApprovals()).rejects.toThrow("Forbidden");
+  });
+
+  test("expireOverdueApprovals throws fallback message without backend error", async () => {
+    global.fetch.mockResolvedValue({
+      ok: false,
+      json: () => Promise.resolve({}),
+    });
+
+    await expect(expireOverdueApprovals()).rejects.toThrow(
+      "Unable to expire overdue approvals"
+    );
   });
 });

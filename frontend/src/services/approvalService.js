@@ -73,3 +73,21 @@ export const submitApprovalDecision = async (
 
   return data;
 };
+
+export const expireOverdueApprovals = async () => {
+  const res = await fetch(buildSiemPath("/admin/soar/approvals/expire-pending"), {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  const data = await parseJsonResponse(res, {});
+
+  if (!res.ok) {
+    throw new Error(
+      getApiErrorMessage(data, "Unable to expire overdue approvals", ["error"])
+    );
+  }
+
+  return data;
+};
