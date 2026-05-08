@@ -6,12 +6,14 @@ from psycopg2.extras import Json
 from werkzeug.security import generate_password_hash
 
 from core.audit_helpers import log_audit_event
+from core.approval_store import expire_pending_requests
 from core.auth import super_admin_required
 from core.db import get_db_connection
 from core.response_action_queue_store import (
     get_queue_status_counts,
     get_queue_action,
     list_recent_queue_actions,
+    sweep_terminal_approval_queue_rows,
 )
 from engines.soar_action_worker import process_batch
 from engines.detection_config import (
@@ -703,6 +705,34 @@ def run_soar_worker_once():
     except Exception:
         current_app.logger.exception("Error running SOAR worker batch")
         return jsonify({"error": "Unable to run SOAR worker batch"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@admin_bp.route("/admin/soar/approvals/expire-pending", methods=["POST"])
+@limiter.limit("10 per minute")
+@login_required
+@super_admin_required
+def expire_pending_approvals():
+    """Manually expire overdue approvals and sweep linked queue rows."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        expired = expire_pending_requests(conn)
+        swept = sweep_terminal_approval_queue_rows(conn)
+        conn.commit()
+        return jsonify({
+            "expired_approvals": len(expired),
+            "skipped_queue_rows": len(swept),
+            "expired_approval_ids": [row["id"] for row in expired],
+            "skipped_queue_ids": [row["id"] for row in swept],
+        }), 200
+    except Exception:
+        if conn:
+            conn.rollback()
+        current_app.logger.exception("Error in expire_pending_approvals")
+        return jsonify({"error": "Unable to expire approvals"}), 500
     finally:
         if conn:
             conn.close()

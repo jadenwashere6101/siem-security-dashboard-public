@@ -16,6 +16,7 @@ from core.response_action_queue_store import (
     mark_awaiting_approval_skipped,
     record_action_failure,
     recover_stale_running_actions,
+    sweep_terminal_approval_queue_rows,
 )
 from core.ip_helpers import _compute_idempotency_key, enqueue_response_action
 from core.ip_helpers import execute_response_action
@@ -98,6 +99,43 @@ def insert_user(cur, username="approver", role="super_admin"):
         RETURNING id
         """,
         (username, role),
+    )
+    return cur.fetchone()[0]
+
+
+def set_queue_status(cur, row_id, status, retry_count=None):
+    if retry_count is None:
+        cur.execute(
+            "UPDATE response_actions_queue SET status = %s WHERE id = %s",
+            (status, row_id),
+        )
+    else:
+        cur.execute(
+            """
+            UPDATE response_actions_queue
+            SET status = %s, retry_count = %s
+            WHERE id = %s
+            """,
+            (status, retry_count, row_id),
+        )
+
+
+def insert_queue_approval(cur, queue_id, action="block_ip", status="expired"):
+    cur.execute(
+        """
+        INSERT INTO approval_requests (
+            queue_id, action, status, expires_at, decided_at
+        )
+        VALUES (
+            %s,
+            %s,
+            %s,
+            NOW() - INTERVAL '1 minute',
+            CASE WHEN %s = 'pending' THEN NULL ELSE NOW() END
+        )
+        RETURNING id
+        """,
+        (queue_id, action, status, status),
     )
     return cur.fetchone()[0]
 
@@ -486,6 +524,155 @@ def test_claim_next_approved_awaiting_action_only_claims_approved(postgres_db):
     assert claimed["id"] == approved_row_id
     assert claimed["status"] == "running"
     assert fetch_queue_row(cur, pending_row_id)[4] == "awaiting_approval"
+
+
+def test_sweep_terminal_approval_queue_rows_empty_queue_returns_empty_list(postgres_db):
+    conn, _cur = postgres_db
+
+    assert sweep_terminal_approval_queue_rows(conn) == []
+
+
+def test_sweep_terminal_approval_queue_rows_ignores_non_awaiting_row(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "8.8.4.1", "block_ip")
+    insert_queue_approval(cur, row_id, status="expired")
+    conn.commit()
+
+    swept = sweep_terminal_approval_queue_rows(conn)
+    conn.commit()
+
+    assert swept == []
+    assert fetch_queue_row(cur, row_id)[4] == "pending"
+
+
+def test_sweep_terminal_approval_queue_rows_ignores_approved_approval(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "8.8.4.2", "block_ip")
+    set_queue_status(cur, row_id, "awaiting_approval")
+    user_id = insert_user(cur)
+    approval = create_approval_request(conn, queue_id=row_id, action="block_ip")
+    approve_request(conn, approval["id"], actor_user_id=user_id)
+    conn.commit()
+
+    swept = sweep_terminal_approval_queue_rows(conn)
+    conn.commit()
+
+    assert swept == []
+    assert fetch_queue_row(cur, row_id)[4] == "awaiting_approval"
+
+
+def test_sweep_terminal_approval_queue_rows_skips_expired_approval(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "8.8.4.3", "block_ip")
+    set_queue_status(cur, row_id, "awaiting_approval")
+    insert_queue_approval(cur, row_id, status="expired")
+    conn.commit()
+
+    swept = sweep_terminal_approval_queue_rows(conn)
+    conn.commit()
+
+    assert len(swept) == 1
+    assert swept[0]["id"] == row_id
+    assert swept[0]["status"] == "skipped"
+    assert swept[0]["approval_status"] == "expired"
+    assert swept[0]["last_error"] == "approval expired"
+    assert fetch_queue_row(cur, row_id)[4] == "skipped"
+
+
+def test_sweep_terminal_approval_queue_rows_skips_denied_approval(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "8.8.4.4", "block_ip")
+    set_queue_status(cur, row_id, "awaiting_approval")
+    insert_queue_approval(cur, row_id, status="denied")
+    conn.commit()
+
+    swept = sweep_terminal_approval_queue_rows(conn)
+    conn.commit()
+
+    assert len(swept) == 1
+    assert swept[0]["id"] == row_id
+    assert swept[0]["status"] == "skipped"
+    assert swept[0]["approval_status"] == "denied"
+    assert swept[0]["last_error"] == "approval denied"
+    assert fetch_queue_row(cur, row_id)[4] == "skipped"
+
+
+def test_sweep_terminal_approval_queue_rows_does_not_increment_retry_count(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "8.8.4.5", "block_ip")
+    set_queue_status(cur, row_id, "awaiting_approval", retry_count=1)
+    insert_queue_approval(cur, row_id, status="expired")
+    conn.commit()
+
+    swept = sweep_terminal_approval_queue_rows(conn)
+    conn.commit()
+
+    assert swept[0]["retry_count"] == 1
+    assert fetch_queue_row(cur, row_id)[5] == 1
+
+
+def test_sweep_terminal_approval_queue_rows_sweeps_multiple_rows(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_ids = []
+    for index in range(3):
+        row_id = enqueue_response_action(cur, alert_id, f"8.8.5.{index + 1}", "block_ip")
+        set_queue_status(cur, row_id, "awaiting_approval")
+        insert_queue_approval(cur, row_id, status="expired")
+        row_ids.append(row_id)
+    conn.commit()
+
+    swept = sweep_terminal_approval_queue_rows(conn)
+    conn.commit()
+
+    assert [row["id"] for row in swept] == row_ids
+    assert all(row["status"] == "skipped" for row in swept)
+
+
+def test_sweep_terminal_approval_queue_rows_respects_limit(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_ids = []
+    for index in range(5):
+        row_id = enqueue_response_action(cur, alert_id, f"8.8.6.{index + 1}", "block_ip")
+        set_queue_status(cur, row_id, "awaiting_approval")
+        insert_queue_approval(cur, row_id, status="expired")
+        row_ids.append(row_id)
+    conn.commit()
+
+    swept = sweep_terminal_approval_queue_rows(conn, limit=2)
+    conn.commit()
+
+    assert [row["id"] for row in swept] == row_ids[:2]
+    remaining = [fetch_queue_row(cur, row_id)[4] for row_id in row_ids]
+    assert remaining.count("skipped") == 2
+    assert remaining.count("awaiting_approval") == 3
+
+
+def test_sweep_terminal_approval_queue_rows_only_sweeps_terminal_approvals(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    expired_row_id = enqueue_response_action(cur, alert_id, "8.8.7.1", "block_ip")
+    approved_row_id = enqueue_response_action(cur, alert_id, "8.8.7.2", "block_ip")
+    set_queue_status(cur, expired_row_id, "awaiting_approval")
+    set_queue_status(cur, approved_row_id, "awaiting_approval")
+    insert_queue_approval(cur, expired_row_id, status="expired")
+    user_id = insert_user(cur)
+    approval = create_approval_request(conn, queue_id=approved_row_id, action="block_ip")
+    approve_request(conn, approval["id"], actor_user_id=user_id)
+    conn.commit()
+
+    swept = sweep_terminal_approval_queue_rows(conn)
+    conn.commit()
+
+    assert [row["id"] for row in swept] == [expired_row_id]
+    assert fetch_queue_row(cur, expired_row_id)[4] == "skipped"
+    assert fetch_queue_row(cur, approved_row_id)[4] == "awaiting_approval"
 
 
 def test_retryable_failure_requeues_when_attempts_remain(postgres_db):

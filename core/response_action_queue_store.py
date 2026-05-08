@@ -240,6 +240,55 @@ def skip_next_terminal_approval_action(conn, now=None):
         return queue_row
 
 
+def sweep_terminal_approval_queue_rows(conn, *, now=None, limit=100):
+    cap = min(max(int(limit), 0), 100)
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            WITH candidates AS (
+                SELECT q.id,
+                       approval.status AS approval_status
+                FROM response_actions_queue q
+                JOIN LATERAL (
+                    SELECT status
+                    FROM approval_requests
+                    WHERE queue_id = q.id
+                      AND action = q.action
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                ) approval ON TRUE
+                WHERE q.status = 'awaiting_approval'
+                  AND approval.status IN ('denied', 'expired')
+                ORDER BY q.id
+                FOR UPDATE OF q SKIP LOCKED
+                LIMIT %s
+            )
+            UPDATE response_actions_queue AS queue
+            SET status = 'skipped',
+                last_error = CASE
+                    WHEN candidates.approval_status = 'denied' THEN 'approval denied'
+                    ELSE 'approval expired'
+                END,
+                updated_at = COALESCE(%s::timestamptz, NOW())
+            FROM candidates
+            WHERE queue.id = candidates.id
+            RETURNING queue.id, queue.alert_id, host(queue.source_ip), queue.action,
+                      queue.status, queue.retry_count, queue.max_retries,
+                      queue.last_error, queue.idempotency_key,
+                      queue.created_at, queue.updated_at,
+                      candidates.approval_status
+            """,
+            (cap, now),
+        )
+        rows = cur.fetchall()
+        result = []
+        for row in rows:
+            queue_row = _queue_row_from_record(row[:11])
+            queue_row["approval_status"] = row[11]
+            result.append(queue_row)
+        return result
+
+
 def mark_action_success(conn, queue_id, now=None):
     return _transition_running_action(conn, queue_id, "success", None, now)
 
