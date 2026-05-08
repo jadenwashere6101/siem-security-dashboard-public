@@ -6,7 +6,10 @@ from psycopg2.extras import Json
 from werkzeug.security import generate_password_hash
 
 from core.audit_helpers import log_audit_event
-from core.approval_store import expire_pending_requests
+from core.approval_store import (
+    expire_pending_requests,
+    get_latest_approval_for_queue_action,
+)
 from core.auth import super_admin_required
 from core.db import get_db_connection
 from core.response_action_queue_store import (
@@ -525,6 +528,18 @@ def _serialize_queue_item_for_detail(queue_row):
     return item
 
 
+def _serialize_approval_summary(approval):
+    if approval is None:
+        return None
+    return {
+        "id": approval["id"],
+        "status": approval["status"],
+        "risk_level": approval["risk_level"],
+        "expires_at": approval["expires_at"],
+        "decided_at": approval["decided_at"],
+    }
+
+
 def _parse_soar_run_batch_size(data):
     raw_batch_size = (data or {}).get("batch_size", DEFAULT_ADMIN_RUN_BATCH_SIZE)
     if isinstance(raw_batch_size, bool):
@@ -639,6 +654,10 @@ def get_queue_item_detail(queue_id):
             return jsonify({"error": "Queue item not found"}), 404
         
         item = _serialize_queue_item_for_detail(queue_row)
+        approval = get_latest_approval_for_queue_action(
+            conn, queue_id=queue_id, action=queue_row["action"]
+        )
+        item["latest_approval"] = _serialize_approval_summary(approval)
         return jsonify(item), 200
     except Exception:
         current_app.logger.exception("Error reading SOAR queue item detail queue_id=%s", queue_id)

@@ -341,7 +341,7 @@ function ApprovalsPanel({
                   <DetailField label="Status" value={formatLabel(selectedApproval.status)} />
                   <DetailField label="Risk" value={formatLabel(selectedApproval.risk_level)} />
                   <DetailField label="Incident ID" value={selectedApproval.incident_id ?? "N/A"} mono />
-                  <DetailField label="Queue ID" value={selectedApproval.queue_id ?? "N/A"} mono />
+                  <DetailField label="Linked Queue Item" value={selectedApproval.queue_id ?? "N/A"} mono />
                   <DetailField label="Created" value={formatTimestamp(selectedApproval.created_at)} />
                   <DetailField label="Decided" value={formatTimestamp(selectedApproval.decided_at)} />
                   <DetailField label="Expires" value={formatTimestamp(selectedApproval.expires_at)} />
@@ -353,6 +353,12 @@ function ApprovalsPanel({
                     label="Decision Comment"
                     value={selectedApproval.decision_comment || "N/A"}
                   />
+                  {selectedApproval.queue_id !== null && selectedApproval.queue_id !== undefined ? (
+                    <div style={queueLinkNoteStyle}>
+                      This approval is linked to Queue Item #{selectedApproval.queue_id}. Open the SOAR
+                      Queue panel to view its current execution status.
+                    </div>
+                  ) : null}
                 </div>
 
                 <div style={eventsSectionStyle}>
@@ -783,6 +789,17 @@ const detailMonoValueStyle = {
   fontFamily: "'Courier New', monospace",
   color: "#d29922",
   fontSize: "12px",
+};
+
+const queueLinkNoteStyle = {
+  gridColumn: "1 / -1",
+  padding: "10px 12px",
+  borderRadius: "8px",
+  border: "1px solid rgba(139, 148, 158, 0.2)",
+  backgroundColor: "rgba(139, 148, 158, 0.06)",
+  color: "#8b949e",
+  fontSize: "13px",
+  lineHeight: "1.5",
 };
 
 const eventsSectionStyle = {

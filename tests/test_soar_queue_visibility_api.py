@@ -113,6 +113,30 @@ def _fetch_queue_row(cur, queue_id):
     return cur.fetchone()
 
 
+def _insert_approval_request(cur, queue_id, action="block_ip", status="pending"):
+    cur.execute(
+        """
+        INSERT INTO approval_requests (
+            queue_id, action, status, risk_level, request_reason,
+            decision_comment, expires_at, decided_at
+        )
+        VALUES (
+            %s,
+            %s,
+            %s,
+            'high',
+            'approval visibility test',
+            CASE WHEN %s = 'pending' THEN NULL ELSE 'terminal decision' END,
+            NOW() + INTERVAL '1 hour',
+            CASE WHEN %s = 'pending' THEN NULL ELSE NOW() END
+        )
+        RETURNING id
+        """,
+        (queue_id, action, status, status, status),
+    )
+    return cur.fetchone()[0]
+
+
 # ============================================================================
 # Auth Tests
 # ============================================================================
@@ -508,8 +532,97 @@ def test_queue_detail_endpoint_returns_stable_shape(client, postgres_db):
         "created_at",
         "updated_at",
         "idempotency_key",
+        "latest_approval",
     ):
         assert key in item
+
+
+def test_queue_detail_latest_approval_null_when_no_approval(client, postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    queue_id = _insert_queue_row(cur, alert_id, "192.0.2.11", "block_ip", "pending")
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get(f"/admin/soar/queue/{queue_id}")
+
+    assert resp.status_code == 200
+    assert resp.get_json()["latest_approval"] is None
+
+
+def test_queue_detail_latest_approval_populated_when_approval_exists(client, postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    queue_id = _insert_queue_row(
+        cur, alert_id, "192.0.2.12", "block_ip", "awaiting_approval"
+    )
+    approval_id = _insert_approval_request(cur, queue_id, status="pending")
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get(f"/admin/soar/queue/{queue_id}")
+
+    assert resp.status_code == 200
+    latest_approval = resp.get_json()["latest_approval"]
+    assert latest_approval["id"] == approval_id
+    assert latest_approval["status"] == "pending"
+    assert "risk_level" in latest_approval
+    assert "expires_at" in latest_approval
+    assert "decided_at" in latest_approval
+
+
+def test_queue_detail_latest_approval_uses_most_recent_approval(client, postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    queue_id = _insert_queue_row(
+        cur, alert_id, "192.0.2.13", "block_ip", "awaiting_approval"
+    )
+    _insert_approval_request(cur, queue_id, status="expired")
+    latest_id = _insert_approval_request(cur, queue_id, status="pending")
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get(f"/admin/soar/queue/{queue_id}")
+
+    assert resp.status_code == 200
+    latest_approval = resp.get_json()["latest_approval"]
+    assert latest_approval["id"] == latest_id
+    assert latest_approval["status"] == "pending"
+
+
+def test_queue_detail_latest_approval_excludes_sensitive_fields(client, postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    queue_id = _insert_queue_row(
+        cur, alert_id, "192.0.2.14", "block_ip", "awaiting_approval"
+    )
+    _insert_approval_request(cur, queue_id, status="pending")
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get(f"/admin/soar/queue/{queue_id}")
+
+    assert resp.status_code == 200
+    latest_approval = resp.get_json()["latest_approval"]
+    assert set(latest_approval.keys()) == {
+        "id",
+        "status",
+        "risk_level",
+        "expires_at",
+        "decided_at",
+    }
+    for field in (
+        "requested_by",
+        "approved_by",
+        "decided_by",
+        "request_reason",
+        "decision_comment",
+    ):
+        assert field not in latest_approval
 
 
 def test_queue_detail_includes_idempotency_key(client, postgres_db):

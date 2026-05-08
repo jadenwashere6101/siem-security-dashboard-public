@@ -46,6 +46,7 @@ const queueRowFixture = {
 const queueDetailFixture = {
   ...queueRowFixture,
   idempotency_key: "queue-idempotency-key-101",
+  latest_approval: null,
 };
 
 const awaitingApprovalRowFixture = {
@@ -65,6 +66,35 @@ const awaitingApprovalRowFixture = {
 const awaitingApprovalDetailFixture = {
   ...awaitingApprovalRowFixture,
   idempotency_key: "awaiting-idempotency-key-202",
+  latest_approval: null,
+};
+
+const queueDetailWithApprovalFixture = {
+  id: 42,
+  alert_id: 10,
+  alert_reference: { status: "linked", label: "Alert 10" },
+  action: "block_ip",
+  status: "awaiting_approval",
+  source_ip: "10.0.0.1",
+  retry_count: 0,
+  max_retries: 3,
+  last_error: null,
+  created_at: "2026-05-08T09:00:00Z",
+  updated_at: "2026-05-08T09:01:00Z",
+  idempotency_key: "idem-key-42",
+  latest_approval: {
+    id: 7,
+    status: "pending",
+    risk_level: "high",
+    expires_at: "2026-05-08T10:00:00Z",
+    decided_at: null,
+  },
+};
+
+const queueDetailWithoutApprovalFixture = {
+  ...queueDetailWithApprovalFixture,
+  status: "pending",
+  latest_approval: null,
 };
 
 const renderPanel = () =>
@@ -340,6 +370,74 @@ describe("SoarQueuePanel", () => {
     expect(
       screen.queryByText(/This action is paused and waiting for approval/)
     ).not.toBeInTheDocument();
+  });
+
+  test("renders linked approval section when latest approval is present", async () => {
+    loadSoarQueueStatus.mockResolvedValue(statusFixture);
+    loadRecentSoarQueueItems.mockResolvedValue({
+      items: [{ ...awaitingApprovalRowFixture, id: 42 }],
+    });
+    loadSoarQueueItem.mockResolvedValue(queueDetailWithApprovalFixture);
+
+    renderPanel();
+    await screen.findByText("Recent Queue Items");
+
+    await userEvent.click(screen.getByRole("button", { name: "View" }));
+
+    expect(await screen.findByText("Linked Approval")).toBeInTheDocument();
+    expect(screen.getByText("#7")).toBeInTheDocument();
+  });
+
+  test("does not render linked approval section when latest approval is null", async () => {
+    loadSoarQueueStatus.mockResolvedValue(statusFixture);
+    loadRecentSoarQueueItems.mockResolvedValue({
+      items: [{ ...awaitingApprovalRowFixture, id: 42 }],
+    });
+    loadSoarQueueItem.mockResolvedValue(queueDetailWithoutApprovalFixture);
+
+    renderPanel();
+    await screen.findByText("Recent Queue Items");
+
+    await userEvent.click(screen.getByRole("button", { name: "View" }));
+
+    expect(await screen.findByText("idem-key-42")).toBeInTheDocument();
+    expect(screen.queryByText("Linked Approval")).not.toBeInTheDocument();
+  });
+
+  test("renders linked approval summary fields", async () => {
+    loadSoarQueueStatus.mockResolvedValue(statusFixture);
+    loadRecentSoarQueueItems.mockResolvedValue({
+      items: [{ ...awaitingApprovalRowFixture, id: 42 }],
+    });
+    loadSoarQueueItem.mockResolvedValue(queueDetailWithApprovalFixture);
+
+    renderPanel();
+    await screen.findByText("Recent Queue Items");
+
+    await userEvent.click(screen.getByRole("button", { name: "View" }));
+
+    expect(await screen.findByText("Approval ID")).toBeInTheDocument();
+    expect(screen.getByText("Approval Status")).toBeInTheDocument();
+    expect(screen.getByText("Risk")).toBeInTheDocument();
+    expect(screen.getByText("Expires")).toBeInTheDocument();
+    expect(screen.getByText("Decided")).toBeInTheDocument();
+  });
+
+  test("does not render approve or deny controls in queue detail approval context", async () => {
+    loadSoarQueueStatus.mockResolvedValue(statusFixture);
+    loadRecentSoarQueueItems.mockResolvedValue({
+      items: [{ ...awaitingApprovalRowFixture, id: 42 }],
+    });
+    loadSoarQueueItem.mockResolvedValue(queueDetailWithApprovalFixture);
+
+    renderPanel();
+    await screen.findByText("Recent Queue Items");
+
+    await userEvent.click(screen.getByRole("button", { name: "View" }));
+    await screen.findByText("Linked Approval");
+
+    expect(screen.queryByRole("button", { name: /approve/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /deny/i })).not.toBeInTheDocument();
   });
 
   test("preserves selected detail when filter changes to empty results", async () => {

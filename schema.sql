@@ -243,6 +243,9 @@ ON approval_requests (incident_id);
 CREATE INDEX IF NOT EXISTS idx_approval_requests_queue_id
 ON approval_requests (queue_id);
 
+CREATE INDEX IF NOT EXISTS idx_approval_requests_queue_action
+ON approval_requests (queue_id, action, created_at DESC, id DESC);
+
 CREATE INDEX IF NOT EXISTS idx_approval_requests_expires_at
 ON approval_requests (expires_at);
 

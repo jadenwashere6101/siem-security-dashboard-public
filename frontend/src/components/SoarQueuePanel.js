@@ -368,47 +368,77 @@ function SoarQueuePanel({
             ) : detailError ? (
               <div style={errorStateStyle}>{detailError}</div>
             ) : selectedQueueItem ? (
-              <div style={detailGridStyle}>
-                <DetailField label="Queue ID" value={selectedQueueItem.id} mono />
-                <DetailField
-                  label="Alert"
-                  value={formatDetailAlertReference(selectedQueueItem)}
-                />
-                <DetailField label="Action" value={formatQueueLabel(selectedQueueItem.action)} />
-                <DetailField label="Status" value={formatQueueLabel(selectedQueueItem.status)} />
-                <DetailField label="Source IP" value={selectedQueueItem.source_ip || "N/A"} mono />
-                <DetailField
-                  label="Retries"
-                  value={`${selectedQueueItem.retry_count ?? 0} / ${selectedQueueItem.max_retries ?? 0}`}
-                  mono
-                />
-                <DetailField
-                  label="Created"
-                  value={formatQueueTimestamp(selectedQueueItem.created_at)}
-                />
-                <DetailField
-                  label="Updated"
-                  value={formatQueueTimestamp(selectedQueueItem.updated_at)}
-                />
-                <DetailField
-                  label="Last Error"
-                  value={selectedQueueItem.last_error || "N/A"}
-                  mono
-                  wrap
-                />
-                <DetailField
-                  label="Idempotency Key"
-                  value={selectedQueueItem.idempotency_key || "N/A"}
-                  mono
-                  wrap
-                />
-                {selectedQueueItem.status === "awaiting_approval" ? (
-                  <div style={approvalWaitingNoteStyle}>
-                    This action is paused and waiting for approval before it can execute. To review
-                    and decide, open the Approvals panel.
+              <>
+                <div style={detailGridStyle}>
+                  <DetailField label="Queue ID" value={selectedQueueItem.id} mono />
+                  <DetailField
+                    label="Alert"
+                    value={formatDetailAlertReference(selectedQueueItem)}
+                  />
+                  <DetailField label="Action" value={formatQueueLabel(selectedQueueItem.action)} />
+                  <DetailField label="Status" value={formatQueueLabel(selectedQueueItem.status)} />
+                  <DetailField label="Source IP" value={selectedQueueItem.source_ip || "N/A"} mono />
+                  <DetailField
+                    label="Retries"
+                    value={`${selectedQueueItem.retry_count ?? 0} / ${selectedQueueItem.max_retries ?? 0}`}
+                    mono
+                  />
+                  <DetailField
+                    label="Created"
+                    value={formatQueueTimestamp(selectedQueueItem.created_at)}
+                  />
+                  <DetailField
+                    label="Updated"
+                    value={formatQueueTimestamp(selectedQueueItem.updated_at)}
+                  />
+                  <DetailField
+                    label="Last Error"
+                    value={selectedQueueItem.last_error || "N/A"}
+                    mono
+                    wrap
+                  />
+                  <DetailField
+                    label="Idempotency Key"
+                    value={selectedQueueItem.idempotency_key || "N/A"}
+                    mono
+                    wrap
+                  />
+                  {selectedQueueItem.status === "awaiting_approval" ? (
+                    <div style={approvalWaitingNoteStyle}>
+                      This action is paused and waiting for approval before it can execute. To review
+                      and decide, open the Approvals panel.
+                    </div>
+                  ) : null}
+                </div>
+                {selectedQueueItem.latest_approval ? (
+                  <div style={approvalContextSectionStyle}>
+                    <div style={approvalContextHeaderStyle}>Linked Approval</div>
+                    <div style={approvalContextGridStyle}>
+                      <DetailField
+                        label="Approval ID"
+                        value={`#${selectedQueueItem.latest_approval.id}`}
+                        mono
+                      />
+                      <DetailField
+                        label="Approval Status"
+                        value={formatQueueLabel(selectedQueueItem.latest_approval.status)}
+                      />
+                      <DetailField
+                        label="Risk"
+                        value={formatQueueLabel(selectedQueueItem.latest_approval.risk_level)}
+                      />
+                      <DetailField
+                        label="Expires"
+                        value={formatQueueTimestamp(selectedQueueItem.latest_approval.expires_at)}
+                      />
+                      <DetailField
+                        label="Decided"
+                        value={formatQueueTimestamp(selectedQueueItem.latest_approval.decided_at)}
+                      />
+                    </div>
                   </div>
                 ) : null}
-              </div>
+              </>
             ) : (
               <p style={emptyTextStyle}>Select a queue item to view details.</p>
             )}
@@ -847,6 +877,27 @@ const approvalWaitingNoteStyle = {
   color: "#fb923c",
   fontSize: "13px",
   lineHeight: "1.5",
+};
+
+const approvalContextSectionStyle = {
+  marginTop: "14px",
+  paddingTop: "14px",
+  borderTop: "1px solid #30363d",
+};
+
+const approvalContextHeaderStyle = {
+  marginBottom: "10px",
+  color: "#8b949e",
+  fontSize: "12px",
+  fontWeight: "700",
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+};
+
+const approvalContextGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+  gap: "10px",
 };
 
 const detailFieldStyle = {

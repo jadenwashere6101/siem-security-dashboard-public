@@ -301,6 +301,53 @@ describe("ApprovalsPanel", () => {
     expect(screen.getAllByText("high risk containment").length).toBeGreaterThan(0);
   });
 
+  test("renders queue link note when approval has queue id", async () => {
+    listApprovals.mockResolvedValue({ approvals: [approvalFixture], count: 1 });
+    getApproval.mockResolvedValue({
+      approval: { ...approvalDetailFixture, queue_id: 42 },
+    });
+
+    renderPanel();
+    await screen.findByText("Block Ip");
+    await userEvent.click(screen.getByText("Block Ip"));
+
+    expect(
+      await screen.findByText(/This approval is linked to Queue Item #42/i)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Open the SOAR Queue panel/i)).toBeInTheDocument();
+  });
+
+  test("does not render queue link note when approval has no queue id", async () => {
+    listApprovals.mockResolvedValue({
+      approvals: [{ ...approvalFixture, queue_id: null }],
+      count: 1,
+    });
+    getApproval.mockResolvedValue({
+      approval: { ...approvalDetailFixture, queue_id: null },
+    });
+
+    renderPanel();
+    await screen.findByText("Block Ip");
+    await userEvent.click(screen.getByText("Block Ip"));
+
+    expect(await screen.findByText(/Approval #11/)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/This approval is linked to Queue Item/i)
+    ).not.toBeInTheDocument();
+  });
+
+  test("renders linked queue item label instead of queue id label", async () => {
+    listApprovals.mockResolvedValue({ approvals: [approvalFixture], count: 1 });
+    getApproval.mockResolvedValue({ approval: approvalDetailFixture });
+
+    renderPanel();
+    await screen.findByText("Block Ip");
+    await userEvent.click(screen.getByText("Block Ip"));
+
+    expect(await screen.findByText("Linked Queue Item")).toBeInTheDocument();
+    expect(screen.queryByText("Queue ID")).not.toBeInTheDocument();
+  });
+
   test("analyst can view but cannot see decision controls", async () => {
     listApprovals.mockResolvedValue({ approvals: [approvalFixture], count: 1 });
     getApproval.mockResolvedValue({ approval: approvalDetailFixture });
