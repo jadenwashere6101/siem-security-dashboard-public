@@ -743,6 +743,111 @@ def test_process_next_action_block_ip_creates_approval_and_waits(postgres_db):
     assert fetch_action_logs(cur, alert_id) == []
 
 
+def test_process_next_action_protected_exact_block_ip_skips_without_approval(
+    postgres_db, monkeypatch
+):
+    conn, cur = postgres_db
+    monkeypatch.setenv("SOAR_PROTECTED_IPS", "8.8.8.8")
+    alert_id = insert_minimal_alert(cur, source_ip="8.8.8.8")
+    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "block_ip")
+    conn.commit()
+    executor = Mock(return_value={"code": "ok", "message": "should not run"})
+
+    result = process_next_action(conn, executor=executor)
+
+    assert result["queue_id"] == row_id
+    assert result["outcome"] == "skipped"
+    assert result["new_status"] == "skipped"
+    assert result["error_code"] == "protected_target"
+    assert result["retry_count"] == 0
+    assert count_approval_requests(cur, row_id) == 0
+    assert fetch_queue_row(cur, row_id)[4] == "skipped"
+    executor.assert_not_called()
+
+
+def test_process_next_action_protected_cidr_block_ip_skips_without_approval(
+    postgres_db, monkeypatch
+):
+    conn, cur = postgres_db
+    monkeypatch.setenv("SOAR_PROTECTED_IPS", "8.8.8.0/24")
+    alert_id = insert_minimal_alert(cur, source_ip="8.8.8.9")
+    row_id = enqueue_response_action(cur, alert_id, "8.8.8.9", "block_ip")
+    conn.commit()
+    executor = Mock(return_value={"code": "ok", "message": "should not run"})
+
+    result = process_next_action(conn, executor=executor)
+
+    assert result["queue_id"] == row_id
+    assert result["outcome"] == "skipped"
+    assert result["new_status"] == "skipped"
+    assert result["error_code"] == "protected_target"
+    assert result["retry_count"] == 0
+    assert count_approval_requests(cur, row_id) == 0
+    assert fetch_queue_row(cur, row_id)[4] == "skipped"
+    executor.assert_not_called()
+
+
+def test_process_next_action_invalid_protected_config_skips_safely(
+    postgres_db, monkeypatch
+):
+    conn, cur = postgres_db
+    monkeypatch.setenv("SOAR_PROTECTED_IPS", "not-an-ip")
+    alert_id = insert_minimal_alert(cur, source_ip="8.8.8.8")
+    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "block_ip")
+    conn.commit()
+    executor = Mock(return_value={"code": "ok", "message": "should not run"})
+
+    result = process_next_action(conn, executor=executor)
+
+    assert result["queue_id"] == row_id
+    assert result["outcome"] == "skipped"
+    assert result["new_status"] == "skipped"
+    assert result["error_code"] == "protected_target_config_invalid"
+    assert result["retry_count"] == 0
+    assert count_approval_requests(cur, row_id) == 0
+    assert fetch_queue_row(cur, row_id)[4] == "skipped"
+    executor.assert_not_called()
+
+
+def test_process_next_action_non_protected_block_ip_still_creates_approval(
+    postgres_db, monkeypatch
+):
+    conn, cur = postgres_db
+    monkeypatch.setenv("SOAR_PROTECTED_IPS", "1.1.1.1")
+    alert_id = insert_minimal_alert(cur, source_ip="8.8.8.8")
+    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "block_ip")
+    conn.commit()
+    executor = Mock(return_value={"code": "ok", "message": "should not run"})
+
+    result = process_next_action(conn, executor=executor)
+
+    assert result["queue_id"] == row_id
+    assert result["outcome"] == "awaiting_approval"
+    assert result["new_status"] == "awaiting_approval"
+    assert result["retry_count"] == 0
+    assert count_approval_requests(cur, row_id) == 1
+    assert fetch_queue_row(cur, row_id)[4] == "awaiting_approval"
+    executor.assert_not_called()
+
+
+def test_process_next_action_non_block_action_unchanged_with_protected_targets(
+    postgres_db, monkeypatch
+):
+    conn, cur = postgres_db
+    monkeypatch.setenv("SOAR_PROTECTED_IPS", "8.8.8.8,8.8.8.0/24")
+    alert_id = insert_minimal_alert(cur, source_ip="9.9.9.9")
+    row_id = enqueue_response_action(cur, alert_id, "9.9.9.9", "monitor")
+    conn.commit()
+
+    result = process_next_action(conn, executor=SimulationExecutor())
+
+    assert result["queue_id"] == row_id
+    assert result["outcome"] == "success"
+    assert result["new_status"] == "success"
+    assert count_approval_requests(cur, row_id) == 0
+    assert fetch_queue_row(cur, row_id)[4] == "success"
+
+
 def test_process_next_action_awaiting_approval_does_not_duplicate_request(postgres_db):
     conn, cur = postgres_db
     alert_id = insert_minimal_alert(cur)

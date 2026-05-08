@@ -2,6 +2,10 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
+from core.soar_protected_targets import (
+    ProtectedTargetConfigError,
+    require_unprotected_target,
+)
 from engines.soar_errors import SkippedAction
 from integrations.soar_adapters.base import BaseSoarActionAdapter, validate_public_ip_target
 
@@ -36,6 +40,13 @@ class LinuxFirewallDryRunAdapter(BaseSoarActionAdapter):
 
         source_ip = row.get("source_ip")
         validated_ip = str(validate_public_ip_target(source_ip))
+        try:
+            require_unprotected_target(validated_ip)
+        except ProtectedTargetConfigError as error:
+            raise SkippedAction(
+                f"Protected target config invalid: {error}",
+                code="protected_target_config_invalid",
+            ) from error
 
         if self.firewall_tool not in SUPPORTED_FIREWALL_TOOLS:
             raise SkippedAction(

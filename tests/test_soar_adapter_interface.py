@@ -285,6 +285,68 @@ def test_linux_firewall_dry_run_public_ip_plan():
     assert result["details"]["command_plan"] == ["ufw", "deny", "from", "8.8.8.8"]
 
 
+def test_linux_firewall_dry_run_rejects_protected_exact_ip(monkeypatch):
+    monkeypatch.setenv("SOAR_PROTECTED_IPS", "8.8.8.8")
+    adapter = LinuxFirewallDryRunAdapter(config={"enabled": True, "firewall_tool": "ufw"})
+    with pytest.raises(SkippedAction) as exc_info:
+        adapter.execute(
+            {
+                "id": 81,
+                "action": "block_ip",
+                "source_ip": "8.8.8.8",
+                "alert_id": 100,
+            }
+        )
+    assert exc_info.value.code == "protected_target"
+
+
+def test_linux_firewall_dry_run_rejects_protected_cidr_member(monkeypatch):
+    monkeypatch.setenv("SOAR_PROTECTED_IPS", "8.8.8.0/24")
+    adapter = LinuxFirewallDryRunAdapter(config={"enabled": True, "firewall_tool": "ufw"})
+    with pytest.raises(SkippedAction) as exc_info:
+        adapter.execute(
+            {
+                "id": 82,
+                "action": "block_ip",
+                "source_ip": "8.8.8.9",
+                "alert_id": 101,
+            }
+        )
+    assert exc_info.value.code == "protected_target"
+
+
+def test_linux_firewall_dry_run_rejects_invalid_protected_config(monkeypatch):
+    monkeypatch.setenv("SOAR_PROTECTED_IPS", "not-an-ip")
+    adapter = LinuxFirewallDryRunAdapter(config={"enabled": True, "firewall_tool": "ufw"})
+    with pytest.raises(SkippedAction) as exc_info:
+        adapter.execute(
+            {
+                "id": 83,
+                "action": "block_ip",
+                "source_ip": "8.8.8.8",
+                "alert_id": 102,
+            }
+        )
+    assert exc_info.value.code == "protected_target_config_invalid"
+
+
+def test_linux_firewall_dry_run_allows_non_protected_public_ip(monkeypatch):
+    monkeypatch.setenv("SOAR_PROTECTED_IPS", "1.1.1.1,9.9.9.0/24")
+    adapter = LinuxFirewallDryRunAdapter(config={"enabled": True, "firewall_tool": "ufw"})
+
+    result = adapter.execute(
+        {
+            "id": 84,
+            "action": "block_ip",
+            "source_ip": "8.8.8.8",
+            "alert_id": 103,
+        }
+    )
+
+    assert result["code"] == "linux_firewall_dry_run_plan"
+    assert result["details"]["command_plan"] == ["ufw", "deny", "from", "8.8.8.8"]
+
+
 @pytest.mark.parametrize(
     "source_ip, expected_code",
     [

@@ -3,6 +3,10 @@ from core.approval_store import (
     expire_pending_requests,
     get_latest_approval_for_queue_action,
 )
+from core.soar_protected_targets import (
+    ProtectedTargetConfigError,
+    require_unprotected_target,
+)
 from core.response_action_queue_store import (
     claim_next_approved_awaiting_action,
     claim_next_pending_action,
@@ -161,6 +165,50 @@ def action_requires_approval(action):
 def _handle_approval_gate(conn, row, now=None):
     if not action_requires_approval(row["action"]):
         return None
+
+    if row["action"] == "block_ip":
+        try:
+            require_unprotected_target(row.get("source_ip"))
+        except SkippedAction as error:
+            updated = mark_action_skipped(conn, row["id"], str(error), now=now)
+            log_response_action(
+                conn,
+                row,
+                log_status="skipped",
+                details=str(error),
+            )
+            conn.commit()
+            return _worker_result(
+                row,
+                updated,
+                outcome="skipped",
+                retryable=False,
+                code=error.code,
+                reason=str(error),
+                message=str(error),
+            )
+        except ProtectedTargetConfigError as error:
+            message = (
+                "Protected target config invalid; refusing block_ip execution"
+            )
+            detailed_message = f"{message}: {error}"
+            updated = mark_action_skipped(conn, row["id"], detailed_message, now=now)
+            log_response_action(
+                conn,
+                row,
+                log_status="skipped",
+                details=detailed_message,
+            )
+            conn.commit()
+            return _worker_result(
+                row,
+                updated,
+                outcome="skipped",
+                retryable=False,
+                code="protected_target_config_invalid",
+                reason=detailed_message,
+                message=detailed_message,
+            )
 
     expire_pending_requests(conn, now=now)
     approval = get_latest_approval_for_queue_action(
