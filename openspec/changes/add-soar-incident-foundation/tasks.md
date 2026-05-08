@@ -152,13 +152,13 @@ All tests use a real test database connection. No Flask test client needed.
 
 ## Step 5: Implement `routes/incident_routes.py`
 
-- [ ] Create `routes/incident_routes.py`.
+- [x] Create `routes/incident_routes.py`.
   - Import `login_required` from `flask_login`.
   - Import `analyst_or_super_admin_required` from `core.auth`.
   - Import store functions from `core.incident_store`.
   - Blueprint: `incident_bp = Blueprint("incidents", __name__)`.
 
-- [ ] Implement `GET /incidents`.
+- [x] Implement `GET /incidents`.
   - Auth: `@login_required @analyst_or_super_admin_required`.
   - Parse and validate `status`, `severity`, `limit`, `offset` from query string.
   - Invalid `status`: return `400 {"error": "invalid status filter"}`.
@@ -167,13 +167,13 @@ All tests use a real test database connection. No Flask test client needed.
   - Call `list_incidents(conn, ...)`.
   - Response: `200 {"incidents": [...], "count": len(results)}`.
 
-- [ ] Implement `GET /incidents/<int:incident_id>`.
+- [x] Implement `GET /incidents/<int:incident_id>`.
   - Auth: `@login_required @analyst_or_super_admin_required`.
   - Call `get_incident_detail(conn, incident_id)`.
   - `None` → `404 {"error": "incident not found"}`.
   - Response: `200 {"incident": {...}}`.
 
-- [ ] Implement `POST /incidents/<int:incident_id>/status`.
+- [x] Implement `POST /incidents/<int:incident_id>/status`.
   - Auth: `@login_required @analyst_or_super_admin_required`.
   - Parse JSON body. `status` field required → `400` if missing.
   - Validate `status` is a recognized value → `400` if unknown.
@@ -189,23 +189,23 @@ All tests use a real test database connection. No Flask test client needed.
 
 Use Flask test client consistent with existing route test patterns.
 
-- [ ] `GET /incidents` — unauthenticated → 401.
-- [ ] `GET /incidents` — viewer role → 403.
-- [ ] `GET /incidents` — analyst → 200, correct response shape.
-- [ ] `GET /incidents?status=open` — returns only open incidents.
-- [ ] `GET /incidents?status=invalid` — 400.
-- [ ] `GET /incidents?limit=200` — clamped to 100 results.
-- [ ] `GET /incidents/<id>` — unauthenticated → 401.
-- [ ] `GET /incidents/<id>` — viewer → 403.
-- [ ] `GET /incidents/<id>` — analyst, valid ID → 200 with `alerts` list.
-- [ ] `GET /incidents/<id>` — analyst, unknown ID → 404.
-- [ ] `POST /incidents/<id>/status` — unauthenticated → 401.
-- [ ] `POST /incidents/<id>/status` — viewer → 403.
-- [ ] `POST /incidents/<id>/status` — analyst, valid transition → 200.
-- [ ] `POST /incidents/<id>/status` — missing `status` field → 400.
-- [ ] `POST /incidents/<id>/status` — invalid transition → 400 with message.
-- [ ] `POST /incidents/<id>/status` — unknown incident ID → 404.
-- [ ] Run full regression suite — all six tests green.
+- [x] `GET /incidents` — unauthenticated → 401.
+- [x] `GET /incidents` — viewer role → 403.
+- [x] `GET /incidents` — analyst → 200, correct response shape.
+- [x] `GET /incidents?status=open` — returns only open incidents.
+- [x] `GET /incidents?status=invalid` — 400.
+- [x] `GET /incidents?limit=200` — clamped to 100 results.
+- [x] `GET /incidents/<id>` — unauthenticated → 401.
+- [x] `GET /incidents/<id>` — viewer → 403.
+- [x] `GET /incidents/<id>` — analyst, valid ID → 200 with `alerts` list.
+- [x] `GET /incidents/<id>` — analyst, unknown ID → 404.
+- [x] `POST /incidents/<id>/status` — unauthenticated → 401.
+- [x] `POST /incidents/<id>/status` — viewer → 403.
+- [x] `POST /incidents/<id>/status` — analyst, valid transition → 200.
+- [x] `POST /incidents/<id>/status` — missing `status` field → 400.
+- [x] `POST /incidents/<id>/status` — invalid transition → 400 with message.
+- [x] `POST /incidents/<id>/status` — unknown incident ID → 404.
+- [x] Run full regression suite — all six tests green.
 
 ---
 
@@ -248,9 +248,9 @@ Use Flask test client consistent with existing route test patterns.
 
 ## Step 9: Register blueprint and final regression
 
-- [ ] In `siem_backend.py`, import `incident_bp` from `routes.incident_routes`.
-- [ ] Add `app.register_blueprint(incident_bp)` after the existing blueprint registrations.
-- [ ] Run full pytest suite (not just the six regression tests — all tests).
+- [x] In `siem_backend.py`, import `incident_bp` from `routes.incident_routes`.
+- [x] Add `app.register_blueprint(incident_bp)` after the existing blueprint registrations.
+- [x] Run full pytest suite (not just the six regression tests — all tests).
   - All existing tests green.
   - All new incident tests green.
 - [ ] Confirm no production file outside the explicitly listed files was modified:

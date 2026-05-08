@@ -11,6 +11,7 @@ from routes.alert_mutation_routes import alert_mutation_bp
 from routes.alerts_events_routes import alerts_events_bp
 from routes.auth_routes import auth_bp
 from routes.blocklist_routes import blocklist_bp
+from routes.incident_routes import incident_bp
 from engines.ingest_engine import ingest_normalized_event
 from core.extensions import limiter
 from routes.ingest_routes import ingest_bp
@@ -103,6 +104,7 @@ def create_app():
     app.register_blueprint(alerts_events_bp)
     app.register_blueprint(alert_mutation_bp)
     app.register_blueprint(ingest_bp)
+    app.register_blueprint(incident_bp)
 
     return app
 
