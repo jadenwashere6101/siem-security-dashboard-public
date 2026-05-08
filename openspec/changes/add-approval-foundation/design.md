@@ -10,9 +10,10 @@ The system has:
 - Adapter abstraction and dry-run firewall adapter.
 - Incident schema, store, APIs, auto-linking, and UI.
 
-There is no approval request model. The worker does not pause for approvals, queue rows do not
-carry approval state, and incidents do not have approval workflows. This change defines the
-backend data layer for those future capabilities without wiring it into execution.
+The approval request schema, immutable event table, and `core/approval_store.py` now exist.
+The worker does not pause for approvals, queue rows do not carry approval state, and incidents
+do not have approval workflows. Phase 2.5B adds backend API route design for approval visibility
+and manual decisions without wiring approvals into execution.
 
 ---
 
@@ -351,7 +352,173 @@ This slice does not:
 - Change queue claim/worker behavior.
 - Add worker pause/resume.
 - Gate any queued action.
-- Add approval API routes.
 - Add frontend UI.
 - Touch ingest, detection, or correlation code.
 - Add background schedulers.
+
+---
+
+## Phase 2.5B: Approval API routes
+
+Phase 2.5B adds backend routes only. These routes expose approval request visibility and manual
+decision actions through the already-implemented approval store helpers. They do not create
+approval requests, execute SOAR actions, mutate alerts, mutate queue rows, or gate workers.
+
+### Route module
+
+Add a focused approval route module following the existing route style, for example
+`routes/approval_routes.py`, and register its blueprint from the existing backend bootstrap.
+
+The route module should import:
+- `login_required` from `flask_login`.
+- `current_user` for decision actor metadata.
+- `analyst_or_super_admin_required` for read routes.
+- `super_admin_required` for decision routes.
+- `get_db_connection`.
+- Approval store helpers:
+  - `get_approval_request`
+  - `list_approval_requests`
+  - `approve_request`
+  - `deny_request`
+
+It must not import worker modules, ingest modules, detection engines, correlation code, frontend
+assets, or playbook code.
+
+### `GET /approvals`
+
+Purpose: list approval requests for analyst review.
+
+Auth:
+- Requires an authenticated session.
+- Requires `analyst` or `super_admin` via the existing analyst/super-admin decorator.
+
+Supported query parameters:
+- `status`: optional; must be one of `pending`, `approved`, `denied`, `expired`.
+- `incident_id`: optional non-negative integer.
+- `queue_id`: optional non-negative integer.
+- `limit`: optional non-negative integer, default `50`, capped at `100`.
+- `offset`: optional non-negative integer, default `0`.
+
+Response shape:
+
+```json
+{
+  "approvals": [
+    {
+      "id": 1,
+      "incident_id": 10,
+      "queue_id": null,
+      "requested_by": null,
+      "approved_by": null,
+      "decided_by": null,
+      "status": "pending",
+      "action": "block_ip",
+      "risk_level": "high",
+      "request_reason": "high risk containment",
+      "decision_comment": null,
+      "created_at": "2026-05-07T12:00:00+00:00",
+      "decided_at": null,
+      "expires_at": "2026-05-07T13:00:00+00:00"
+    }
+  ],
+  "count": 1
+}
+```
+
+### `GET /approvals/<id>`
+
+Purpose: return one approval request plus immutable lifecycle events.
+
+Auth:
+- Requires an authenticated session.
+- Requires `analyst` or `super_admin`.
+
+Behavior:
+- Return `404` when `get_approval_request()` returns `None`.
+- Return detail including the `events` list from the store helper.
+
+Response shape:
+
+```json
+{
+  "approval": {
+    "id": 1,
+    "status": "pending",
+    "action": "block_ip",
+    "risk_level": "high",
+    "events": [
+      {
+        "id": 1,
+        "approval_request_id": 1,
+        "event_type": "created",
+        "actor_user_id": null,
+        "previous_status": null,
+        "new_status": "pending",
+        "comment": "high risk containment",
+        "created_at": "2026-05-07T12:00:00+00:00"
+      }
+    ]
+  }
+}
+```
+
+### `POST /approvals/<id>/decision`
+
+Purpose: manually approve or deny a pending approval request.
+
+Auth:
+- Requires an authenticated session.
+- Requires `super_admin` for high-risk approval decisions. For Phase 2.5B, use the existing
+  `super_admin_required` decorator for all approve/deny route access unless implementation
+  discovers an established lower-risk decision policy in the current role model.
+
+Request body:
+
+```json
+{
+  "decision": "approved",
+  "reason": "Approved for containment"
+}
+```
+
+Rules:
+- `decision` is required.
+- Valid values are exactly `approved` and `denied`.
+- `reason` is optional but should be normalized to a stripped string or `None`.
+- `approved` calls `approve_request(conn, id, actor_user_id=<current user id>, decision_comment=reason)`.
+- `denied` calls `deny_request(conn, id, actor_user_id=<current user id>, decision_comment=reason)`.
+- Commit only after the store helper succeeds.
+- Roll back on `ValueError` or unexpected exceptions.
+- Return `404` for `"approval request not found"`.
+- Return `400` for invalid decisions and invalid state transitions, including already terminal
+  requests or requests that expired at decision time.
+- Return the updated approval request as `{ "approval": ... }`.
+
+Event behavior:
+- The store helper appends the immutable `approved`, `denied`, or materialized `expired` event.
+- Route tests should assert that the expected event row exists after a valid decision.
+- No route should update or delete `approval_request_events` directly.
+
+### Route testing strategy
+
+Add `tests/test_approval_routes.py`.
+
+Required tests:
+- Unauthenticated `GET /approvals`, `GET /approvals/<id>`, and `POST /approvals/<id>/decision`
+  requests are rejected.
+- Unauthorized roles, including `viewer`, are rejected.
+- `analyst` and `super_admin` can list approvals.
+- `analyst` and `super_admin` can view approval detail.
+- Valid super admin approve request succeeds and creates an `approved` event row.
+- Valid super admin deny request succeeds and creates a `denied` event row.
+- Invalid decision values return `400`.
+- Missing approval IDs return `404`.
+- Invalid terminal-state transitions return `400`.
+- Decision route does not mutate queue rows, alerts, ingest state, detection state, or correlation
+  behavior.
+
+Regression tests:
+- Existing `tests/test_approval_store.py` remains green.
+- Existing incident route/store tests remain green.
+- Existing SOAR queue tests remain green.
+- Full backend suite remains green.

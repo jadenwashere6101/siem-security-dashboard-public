@@ -19,7 +19,14 @@ Add OpenSpec coverage for the first backend-only approval foundation slice. This
 the schema and helper/store contracts for approval requests, decision state, expiration, and
 audit logging. It is intentionally additive and does not wire approvals into execution yet.
 
+Phase 2.5B extends this same approval foundation with backend approval API route coverage only.
+The route slice exposes approval visibility and manual approve/deny decisions through existing
+auth and role patterns, backed by `core/approval_store.py`. It still does not wire approvals into
+workers, queues, ingest, detection, correlation, playbooks, or frontend UI.
+
 ## In scope
+
+### Phase 2.5A: Schema and store foundation
 
 - `approval_requests` schema design.
 - Optional immutable approval event/audit table design.
@@ -36,6 +43,21 @@ audit logging. It is intentionally additive and does not wire approvals into exe
 - PostgreSQL indexes and constraints.
 - Unit and DB-backed testing strategy.
 
+### Phase 2.5B: Approval API routes
+
+- `GET /approvals` for approval request listing.
+- `GET /approvals/<id>` for approval request detail and immutable event history.
+- `POST /approvals/<id>/decision` for manual approval decisions.
+- Decision body:
+  - `{ "decision": "approved" | "denied", "reason": "..." }`
+- Existing authentication and role decorators.
+- Analyst and super admin approval visibility.
+- Super admin-only approval/denial for high-risk approvals unless the existing role model is
+  explicitly expanded before implementation.
+- Route-level transaction handling around store helper calls.
+- Route tests for auth, RBAC, list/detail access, approve/deny decisions, invalid decisions,
+  missing approvals, invalid transitions, and event creation.
+
 ## Out of scope
 
 - No frontend/UI.
@@ -45,7 +67,11 @@ audit logging. It is intentionally additive and does not wire approvals into exe
 - No firewall integrations.
 - No execution gating wiring.
 - No background scheduler.
-- No approval API route implementation in this first slice.
+- No approval API route implementation in Phase 2.5A.
+- No frontend work in Phase 2.5B.
+- No worker pause/resume in Phase 2.5B.
+- No queue execution behavior changes in Phase 2.5B.
+- No schema changes in Phase 2.5B unless implementation proves they are absolutely required.
 - No ingest, detection, or correlation changes.
 - No SOAR queue execution behavior changes.
 
@@ -58,5 +84,9 @@ audit logging. It is intentionally additive and does not wire approvals into exe
   routes/workers; no background scheduler is required in this slice.
 - Approval decisions preserve an immutable audit trail via append-only audit/event records.
 - Store helpers do not commit or close cursors; callers own transaction boundaries.
+- Approval API routes expose list/detail/decision behavior without mutating alerts or queue
+  execution.
+- Invalid decisions and invalid lifecycle transitions return client errors without partial
+  commits.
 - Existing SOAR queue execution, ingest transactions, detection, and correlation behavior remain
   unchanged.

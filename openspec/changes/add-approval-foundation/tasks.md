@@ -171,3 +171,74 @@ python3 -m pytest tests/ -x --tb=short -v
 - [ ] Confirm no queue execution behavior changed.
 - [ ] Confirm no ingest, detection, or correlation files changed.
 - [ ] Confirm no background scheduler was added.
+
+---
+
+## Step 6: Phase 2.5B approval API routes
+
+- [ ] Read existing auth/role patterns in `core/auth.py` and route patterns in `routes/incident_routes.py`.
+- [ ] Add a focused approval route module, for example `routes/approval_routes.py`.
+  - Use `login_required`.
+  - Use `analyst_or_super_admin_required` for read routes.
+  - Use `super_admin_required` for the decision route unless the current role model clearly
+    defines a lower-risk approval policy.
+  - Import only DB/auth/store helpers needed by the approval routes.
+  - Do not import worker, ingest, detection, correlation, playbook, or frontend code.
+- [ ] Register the approval blueprint in the backend bootstrap.
+- [ ] Implement `GET /approvals`.
+  - Supports optional `status`, `incident_id`, `queue_id`, `limit`, and `offset` filters.
+  - Rejects invalid status and non-integer or negative numeric filters with `400`.
+  - Caps `limit` at `100`.
+  - Returns `{ "approvals": [...], "count": <n> }`.
+- [ ] Implement `GET /approvals/<id>`.
+  - Returns `{ "approval": ... }`.
+  - Includes immutable `events` from `get_approval_request`.
+  - Returns `404` for missing approvals.
+- [ ] Implement `POST /approvals/<id>/decision`.
+  - Accepts `{ "decision": "approved" | "denied", "reason": "..." }`.
+  - Rejects missing or invalid `decision` with `400`.
+  - Uses `approve_request` for `approved`.
+  - Uses `deny_request` for `denied`.
+  - Uses the authenticated current user as the decision actor.
+  - Commits only after the store helper succeeds.
+  - Rolls back on validation, missing approval, invalid transition, and unexpected errors.
+  - Returns `404` for missing approvals.
+  - Returns `400` for invalid lifecycle transitions.
+- [ ] Confirm the route implementation does not create approval requests.
+- [ ] Confirm the route implementation does not mutate alerts.
+- [ ] Confirm the route implementation does not mutate SOAR queue rows or queue execution behavior.
+- [ ] Confirm the route implementation does not add worker pause/resume or execution gating.
+- [ ] Confirm the route implementation does not touch ingest, detection, or correlation.
+
+## Step 7: Phase 2.5B route tests
+
+- [ ] Create `tests/test_approval_routes.py`.
+- [ ] Test unauthenticated `GET /approvals` is rejected.
+- [ ] Test unauthenticated `GET /approvals/<id>` is rejected.
+- [ ] Test unauthenticated `POST /approvals/<id>/decision` is rejected.
+- [ ] Test unauthorized role, including `viewer`, is rejected for list/detail.
+- [ ] Test unauthorized role, including `viewer` and `analyst`, is rejected for decisions.
+- [ ] Test `analyst` can list approvals.
+- [ ] Test `super_admin` can list approvals.
+- [ ] Test `analyst` can view approval detail.
+- [ ] Test `super_admin` can view approval detail.
+- [ ] Test valid super admin approve succeeds.
+- [ ] Test valid super admin deny succeeds.
+- [ ] Test invalid decision is rejected with `400`.
+- [ ] Test missing approval returns `404`.
+- [ ] Test invalid terminal-state transition is rejected with `400`.
+- [ ] Test a valid approve creates an immutable `approved` event row.
+- [ ] Test a valid deny creates an immutable `denied` event row.
+
+## Step 8: Phase 2.5B verification
+
+- [ ] Run `python3 -m py_compile siem_backend.py helpers/*.py core/*.py engines/*.py routes/*.py integrations/**/*.py scripts/*.py`.
+- [ ] Run `python3 -m pytest tests/test_approval_store.py tests/test_approval_routes.py -x --tb=short -v`.
+- [ ] Run `python3 -m pytest tests/test_incident_store.py tests/test_incident_routes.py -x --tb=short -v`.
+- [ ] Run `python3 -m pytest tests/test_response_action_queue.py -x --tb=short -v`.
+- [ ] Run `python3 -m pytest tests/ -x --tb=short -v`.
+- [ ] Confirm no frontend files changed.
+- [ ] Confirm no worker pause/resume was added.
+- [ ] Confirm no queue execution behavior changed.
+- [ ] Confirm no ingest, detection, or correlation files changed.
+- [ ] Confirm no schema changes were made unless explicitly required by implementation.
