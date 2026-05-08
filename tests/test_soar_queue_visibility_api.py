@@ -176,6 +176,7 @@ def test_queue_status_endpoint_as_super_admin_returns_200_stable_shape(client, p
     _insert_queue_row(cur, alert_id, "192.0.2.3", "block_ip", "success")
     _insert_queue_row(cur, alert_id, "192.0.2.4", "block_ip", "failed", last_error="timeout")
     _insert_queue_row(cur, alert_id, "192.0.2.5", "block_ip", "skipped")
+    _insert_queue_row(cur, alert_id, "192.0.2.6", "block_ip", "awaiting_approval")
     conn.commit()
     
     _login_super_admin(client)
@@ -192,7 +193,7 @@ def test_queue_status_endpoint_as_super_admin_returns_200_stable_shape(client, p
     
     # Check all statuses present
     counts = data["counts"]
-    for status in ("pending", "running", "success", "failed", "skipped"):
+    for status in ("pending", "running", "awaiting_approval", "success", "failed", "skipped"):
         assert status in counts
     
     # Check counts
@@ -201,7 +202,8 @@ def test_queue_status_endpoint_as_super_admin_returns_200_stable_shape(client, p
     assert counts["success"] == 1
     assert counts["failed"] == 1
     assert counts["skipped"] == 1
-    assert data["total"] == 5
+    assert counts["awaiting_approval"] == 1
+    assert data["total"] == 6
 
 
 def test_queue_status_includes_zero_counts_for_absent_statuses(client, postgres_db):
@@ -225,6 +227,7 @@ def test_queue_status_includes_zero_counts_for_absent_statuses(client, postgres_
     counts = data["counts"]
     assert counts["pending"] == 1
     assert counts["running"] == 0
+    assert counts["awaiting_approval"] == 0
     assert counts["success"] == 0
     assert counts["failed"] == 0
     assert counts["skipped"] == 0
@@ -385,6 +388,7 @@ def test_queue_recent_filters_by_status(client, postgres_db):
     _insert_queue_row(cur, alert_id, "192.0.2.1", "block_ip", "pending")
     _insert_queue_row(cur, alert_id, "192.0.2.2", "block_ip", "running")
     _insert_queue_row(cur, alert_id, "192.0.2.3", "block_ip", "success")
+    _insert_queue_row(cur, alert_id, "192.0.2.4", "block_ip", "awaiting_approval")
     conn.commit()
     
     _login_super_admin(client)
@@ -395,6 +399,14 @@ def test_queue_recent_filters_by_status(client, postgres_db):
     data = resp.get_json()
     assert len(data["items"]) == 1
     assert data["items"][0]["status"] == "success"
+
+    with _patched_app_db(conn):
+        resp = client.get("/admin/soar/queue/recent?status=awaiting_approval")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert len(data["items"]) == 1
+    assert data["items"][0]["status"] == "awaiting_approval"
 
 
 # ============================================================================

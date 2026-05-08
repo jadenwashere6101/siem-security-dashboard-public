@@ -55,13 +55,32 @@ CREATE TABLE IF NOT EXISTS response_actions_queue (
     source_ip INET,
     action TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (status IN ('pending', 'running', 'success', 'failed', 'skipped')),
+        CHECK (status IN ('pending', 'running', 'awaiting_approval', 'success', 'failed', 'skipped')),
     retry_count INTEGER NOT NULL DEFAULT 0,
     max_retries INTEGER NOT NULL DEFAULT 3,
     last_error TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'response_actions_queue_status_check'
+          AND conrelid = 'response_actions_queue'::regclass
+    ) THEN
+        ALTER TABLE response_actions_queue
+        DROP CONSTRAINT response_actions_queue_status_check;
+    END IF;
+
+    ALTER TABLE response_actions_queue
+    ADD CONSTRAINT response_actions_queue_status_check
+    CHECK (status IN ('pending', 'running', 'awaiting_approval', 'success', 'failed', 'skipped'));
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
 
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
@@ -236,3 +255,8 @@ ON approval_request_events (approval_request_id);
 
 CREATE INDEX IF NOT EXISTS idx_approval_request_events_created_at
 ON approval_request_events (created_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_approval_requests_queue_action_active
+ON approval_requests (queue_id, action)
+WHERE queue_id IS NOT NULL
+  AND status IN ('pending', 'approved');

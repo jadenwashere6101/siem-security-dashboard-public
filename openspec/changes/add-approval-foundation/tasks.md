@@ -308,3 +308,69 @@ python3 -m pytest tests/ -x --tb=short -v
 - [x] Confirm no worker pause/resume was added.
 - [x] Confirm no queue execution behavior changed.
 - [x] Confirm no ingest, detection, or correlation files changed.
+
+---
+
+## Step 12: Phase 2.5D approval-gating schema and queue store design
+
+- [x] Read current `response_actions_queue` schema and queue status CHECK constraint.
+- [x] Add safest additive queue waiting state if implementation confirms it is needed.
+  - Recommended status: `awaiting_approval`.
+  - Preserve existing statuses: `pending`, `running`, `success`, `failed`, `skipped`.
+  - Do not use `pending` to mean waiting for approval.
+  - Do not use `running` to mean waiting for approval.
+- [x] Update queue status count/normalization code to include `awaiting_approval`.
+- [x] Add duplicate-active-approval protection if safe for existing data.
+  - Recommended unique partial index on `(queue_id, action)` where status is `pending` or
+    `approved`.
+- [x] Add queue store helper to transition `running` to `awaiting_approval`.
+- [x] Add queue store helper to transition `awaiting_approval` to `skipped` for denied/expired
+  approvals.
+- [x] Add queue store helper to claim approved `awaiting_approval` rows for execution.
+- [x] Confirm stale running recovery does not treat `awaiting_approval` rows as stale running
+  work.
+
+## Step 13: Phase 2.5D approval policy and worker gating
+
+- [x] Add explicit v1 approval-required action policy.
+  - V1 required action: `block_ip`.
+  - `monitor` does not require approval.
+  - `flag_high_priority` does not require approval.
+  - Unknown actions are not approval-gated unless explicitly added to the policy.
+- [x] Before executor invocation, check whether the claimed action requires approval.
+- [x] If approval is not required, keep existing worker execution behavior unchanged.
+- [x] If approval is required and no active request exists, create an approval request tied to
+  `queue_id` and transition the queue row to `awaiting_approval`.
+- [x] If approval is required and a pending request exists, transition or keep the queue row in
+  `awaiting_approval` without creating a duplicate request.
+- [x] If approval is required and an approved request exists, allow executor invocation.
+- [x] If approval is denied, transition queue row to `skipped` without executor invocation.
+- [x] If approval is expired, materialize expiration and transition queue row to `skipped`
+  without executor invocation.
+- [x] Ensure approval pending/denied/expired outcomes do not increment retry count.
+- [x] Ensure `SimulationExecutor` remains the default executor.
+- [x] Do not add worker pause/resume commands or autonomous daemon behavior.
+
+## Step 14: Phase 2.5D tests and verification
+
+- [x] Test `awaiting_approval` is accepted and invalid statuses are still rejected.
+- [x] Test `mark_action_awaiting_approval` transitions only `running` rows.
+- [x] Test approved `awaiting_approval` rows can be claimed for execution.
+- [x] Test pending/denied/expired `awaiting_approval` rows are not claimed as executable.
+- [x] Test duplicate active approval requests for the same queue/action are prevented if the
+  unique index is added.
+- [x] Test `block_ip` without approval creates one approval request and does not call executor.
+- [x] Test `block_ip` without approval transitions queue row to `awaiting_approval`.
+- [x] Test repeated worker run with pending approval does not create duplicate requests.
+- [x] Test approved `block_ip` resumes and executes on a later worker run.
+- [x] Test denied `block_ip` skips safely and does not call executor.
+- [x] Test expired `block_ip` skips safely and does not call executor.
+- [x] Test non-gated actions continue executing unchanged.
+- [x] Test approval-gating outcomes do not increment retry count.
+- [x] Run queue store and worker tests.
+- [x] Run approval store/routes tests.
+- [x] Run full backend suite.
+- [x] Confirm no frontend files changed.
+- [x] Confirm no real firewall execution was added.
+- [x] Confirm no playbook, Slack/email, or autonomous daemon behavior was added.
+- [x] Confirm no ingest, detection, or correlation files changed.

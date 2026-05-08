@@ -25,7 +25,7 @@ from integrations.soar_adapters.registry import SoarAdapterRegistry
 DEFAULT_BATCH_SIZE = 10
 MAX_BATCH_SIZE = 50
 VALID_EXECUTION_MODES = {"simulation", "real"}
-_KNOWN_STATUSES = ["pending", "running", "failed", "skipped", "success"]
+_KNOWN_STATUSES = ["pending", "running", "awaiting_approval", "failed", "skipped", "success"]
 
 
 def _parse_args(argv=None):
@@ -275,6 +275,7 @@ def _run_dry_run_info(args):
             print("=== SOAR Queue Status ===")
             print(f"  Pending:  {counts['pending']}")
             print(f"  Running:  {counts['running']}")
+            print(f"  Awaiting approval: {counts['awaiting_approval']}")
             print(f"  Failed:   {counts['failed']}")
             print(f"  Skipped:  {counts['skipped']}")
             print(f"  Success:  {counts['success']}")
@@ -293,4 +294,3 @@ def _run_dry_run_info(args):
 
 if __name__ == "__main__":
     sys.exit(main())
-

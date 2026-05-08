@@ -30,6 +30,12 @@ approve/deny interface for pending approvals. It still does not add worker gatin
 mutation controls, SOAR action execution controls, playbook integration, or backend/schema
 changes unless implementation proves they are absolutely required.
 
+Phase 2.5D defines approval-gated SOAR queue execution. It specifies how high-risk queued
+actions can pause before execution, create or reuse approval requests, resume after approval,
+and skip safely after denial or expiration. This phase is still simulation-first and does not add
+real firewall execution, playbooks, Slack/email notifications, autonomous daemons, or changes to
+ingest/detection/correlation.
+
 ## In scope
 
 ### Phase 2.5A: Schema and store foundation
@@ -79,6 +85,17 @@ changes unless implementation proves they are absolutely required.
 - Component tests if the current frontend test setup supports them.
 - Frontend build verification.
 
+### Phase 2.5D: Approval-gated SOAR queue execution
+
+- Worker approval-gating design for selected high-risk queue actions.
+- V1 approval-required action policy, starting with `block_ip`.
+- Safe queue waiting state design for actions blocked on approval.
+- Duplicate approval prevention for the same queue action.
+- Worker resume behavior after approval.
+- Denial and expiration behavior.
+- SimulationExecutor remains default.
+- Queue/store/worker tests for approval gating behavior.
+
 ## Out of scope
 
 - No frontend/UI.
@@ -99,8 +116,13 @@ changes unless implementation proves they are absolutely required.
 - No Slack/email notification UI in Phase 2.5C.
 - No real firewall execution UI in Phase 2.5C.
 - No backend/schema changes in Phase 2.5C unless absolutely required.
+- No real firewall execution in Phase 2.5D.
+- No playbook engine in Phase 2.5D.
+- No Slack/email notification in Phase 2.5D.
+- No frontend changes in Phase 2.5D unless handled by a separate follow-up.
+- No autonomous daemon changes in Phase 2.5D.
 - No ingest, detection, or correlation changes.
-- No SOAR queue execution behavior changes.
+- No ingest, detection, or correlation changes for approval gating.
 
 ## Success criteria
 
@@ -118,5 +140,8 @@ changes unless implementation proves they are absolutely required.
 - Approval UI can list and inspect approvals through approval routes only.
 - Approval UI exposes decision controls only for `super_admin` users and pending approvals.
 - Analyst users can view approvals but cannot approve or deny them from the UI.
+- Approval-gated worker behavior does not execute high-risk actions until an approved approval
+  request exists for the queue item.
+- Denied or expired approvals result in safe non-execution outcomes.
 - Existing SOAR queue execution, ingest transactions, detection, and correlation behavior remain
-  unchanged.
+  unchanged outside the explicit Phase 2.5D queue gating path.

@@ -226,7 +226,7 @@ def test_runner_db_backed_simulation_success(postgres_db):
         _insert_alert(cur, "9.9.9.9"),
     ]
     for alert_id, ip in zip(alert_ids, ["8.8.8.8", "1.1.1.1", "9.9.9.9"]):
-        enqueue_response_action(cur, alert_id, ip, "block_ip")
+        enqueue_response_action(cur, alert_id, ip, "monitor")
     conn.commit()
 
     results = soar_worker_run.process_batch(conn, limit=10, executor=soar_worker_run.SimulationExecutor())
@@ -245,9 +245,9 @@ def test_runner_db_backed_simulation_partial_skip(postgres_db):
     ok1 = _insert_alert(cur, "8.8.8.8")
     ok2 = _insert_alert(cur, "1.1.1.1")
     bad = _insert_alert(cur, "10.0.0.1")
-    enqueue_response_action(cur, ok1, "8.8.8.8", "block_ip")
-    enqueue_response_action(cur, ok2, "1.1.1.1", "block_ip")
-    enqueue_response_action(cur, bad, "10.0.0.1", "block_ip")
+    enqueue_response_action(cur, ok1, "8.8.8.8", "monitor")
+    enqueue_response_action(cur, ok2, "1.1.1.1", "monitor")
+    enqueue_response_action(cur, bad, "10.0.0.1", "unknown_action")
     conn.commit()
 
     results = soar_worker_run.process_batch(conn, limit=10, executor=soar_worker_run.SimulationExecutor())
@@ -269,6 +269,7 @@ def test_normalize_queue_counts_defaults_and_filters():
     assert soar_worker_run._normalize_queue_counts({}) == {
         "pending": 0,
         "running": 0,
+        "awaiting_approval": 0,
         "failed": 0,
         "skipped": 0,
         "success": 0,
@@ -279,6 +280,7 @@ def test_normalize_queue_counts_defaults_and_filters():
     assert normalized == {
         "pending": 3,
         "running": 0,
+        "awaiting_approval": 0,
         "failed": 1,
         "skipped": 0,
         "success": 0,
@@ -339,8 +341,8 @@ def test_dry_run_info_json_output(postgres_db, capsys, monkeypatch):
     assert set(payload["queue_counts"].keys()) == {
         "pending",
         "running",
+        "awaiting_approval",
         "failed",
         "skipped",
         "success",
     }
-

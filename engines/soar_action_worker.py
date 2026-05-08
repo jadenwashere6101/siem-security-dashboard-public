@@ -1,22 +1,60 @@
+from core.approval_store import (
+    create_approval_request,
+    expire_pending_requests,
+    get_latest_approval_for_queue_action,
+)
 from core.response_action_queue_store import (
+    claim_next_approved_awaiting_action,
     claim_next_pending_action,
+    mark_action_awaiting_approval,
     mark_action_skipped,
     mark_action_success,
     record_action_failure,
+    skip_next_terminal_approval_action,
 )
 from engines.soar_errors import RetryableActionError, SkippedAction
 from engines.soar_executor import SimulationExecutor
 from engines.soar_log_writer import log_response_action
 
 
+APPROVAL_REQUIRED_ACTIONS = frozenset({"block_ip"})
+
+
 def process_next_action(conn, now=None, executor=None):
     executor = executor or SimulationExecutor()
     row = claim_next_pending_action(conn, now=now)
     if row is None:
-        conn.commit()
-        return None
+        expire_pending_requests(conn, now=now)
+        row = claim_next_approved_awaiting_action(conn, now=now)
+        if row is None:
+            skipped = skip_next_terminal_approval_action(conn, now=now)
+            if skipped is None:
+                conn.commit()
+                return None
+            log_response_action(
+                conn,
+                {**skipped, "status": "awaiting_approval"},
+                log_status="skipped",
+                details=skipped["last_error"],
+            )
+            conn.commit()
+            return _worker_result(
+                {**skipped, "status": "awaiting_approval"},
+                skipped,
+                outcome="skipped",
+                retryable=False,
+                code="approval_denied"
+                if skipped.get("approval_status") == "denied"
+                else "approval_expired",
+                reason=skipped["last_error"],
+                message=skipped["last_error"],
+            )
 
     conn.commit()
+    approval_result = _handle_approval_gate(conn, row, now=now)
+    if approval_result is not None:
+        return approval_result
+
     try:
         execution_result = executor(row)
         _validate_executor_result(execution_result)
@@ -114,6 +152,90 @@ def process_batch(conn, limit=10, now=None, executor=None):
             break
         results.append(result)
     return results
+
+
+def action_requires_approval(action):
+    return action in APPROVAL_REQUIRED_ACTIONS
+
+
+def _handle_approval_gate(conn, row, now=None):
+    if not action_requires_approval(row["action"]):
+        return None
+
+    expire_pending_requests(conn, now=now)
+    approval = get_latest_approval_for_queue_action(
+        conn,
+        queue_id=row["id"],
+        action=row["action"],
+    )
+
+    if approval is None:
+        create_approval_request(
+            conn,
+            queue_id=row["id"],
+            action=row["action"],
+            request_reason="approval required for high-risk SOAR action",
+            risk_level="high",
+        )
+        updated = mark_action_awaiting_approval(
+            conn,
+            row["id"],
+            "approval required",
+            now=now,
+        )
+        conn.commit()
+        return _worker_result(
+            row,
+            updated,
+            outcome="awaiting_approval",
+            retryable=False,
+            code="approval_required",
+            reason="approval required",
+            message="approval required",
+        )
+
+    if approval["status"] == "approved":
+        return None
+
+    if approval["status"] == "pending":
+        if row["status"] == "running":
+            updated = mark_action_awaiting_approval(
+                conn,
+                row["id"],
+                "approval pending",
+                now=now,
+            )
+        else:
+            updated = row
+        conn.commit()
+        return _worker_result(
+            row,
+            updated,
+            outcome="awaiting_approval",
+            retryable=False,
+            code="approval_pending",
+            reason="approval pending",
+            message="approval pending",
+        )
+
+    reason = "approval denied" if approval["status"] == "denied" else "approval expired"
+    updated = mark_action_skipped(conn, row["id"], reason, now=now)
+    log_response_action(
+        conn,
+        row,
+        log_status="skipped",
+        details=reason,
+    )
+    conn.commit()
+    return _worker_result(
+        row,
+        updated,
+        outcome="skipped",
+        retryable=False,
+        code="approval_denied" if approval["status"] == "denied" else "approval_expired",
+        reason=reason,
+        message=reason,
+    )
 
 
 def _worker_result(

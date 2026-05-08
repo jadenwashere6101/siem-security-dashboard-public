@@ -321,6 +321,28 @@ def list_approval_requests(
         return [_request_row_to_dict(row) for row in cur.fetchall()]
 
 
+def get_latest_approval_for_queue_action(
+    conn,
+    *,
+    queue_id: int,
+    action: str,
+) -> dict[str, Any] | None:
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT {REQUEST_COLUMNS}
+            FROM approval_requests
+            WHERE queue_id = %s
+              AND action = %s
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (queue_id, action),
+        )
+        row = cur.fetchone()
+        return _request_row_to_dict(row) if row is not None else None
+
+
 def approve_request(
     conn,
     approval_request_id: int,

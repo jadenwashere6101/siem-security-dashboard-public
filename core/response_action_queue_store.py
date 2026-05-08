@@ -141,6 +141,105 @@ def claim_next_pending_action(conn, now=None):
         return _queue_row_from_record(cur.fetchone())
 
 
+def claim_next_approved_awaiting_action(conn, now=None):
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE response_actions_queue AS queue
+            SET status = 'running',
+                last_error = NULL,
+                updated_at = COALESCE(%s::timestamptz, NOW())
+            WHERE queue.id = (
+                SELECT q.id
+                FROM response_actions_queue q
+                WHERE q.status = 'awaiting_approval'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM approval_requests approval
+                      WHERE approval.queue_id = q.id
+                        AND approval.action = q.action
+                        AND approval.status = 'approved'
+                  )
+                ORDER BY q.id
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1
+            )
+            {_returning_queue_row_sql()}
+            """,
+            (now,),
+        )
+        return _queue_row_from_record(cur.fetchone())
+
+
+def mark_action_awaiting_approval(conn, queue_id, reason, now=None):
+    return _transition_action_status(
+        conn,
+        queue_id,
+        from_status="running",
+        to_status="awaiting_approval",
+        last_error=reason,
+        now=now,
+    )
+
+
+def mark_awaiting_approval_skipped(conn, queue_id, reason, now=None):
+    return _transition_action_status(
+        conn,
+        queue_id,
+        from_status="awaiting_approval",
+        to_status="skipped",
+        last_error=reason,
+        now=now,
+    )
+
+
+def skip_next_terminal_approval_action(conn, now=None):
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            WITH candidate AS (
+                SELECT q.id,
+                       approval.status AS approval_status
+                FROM response_actions_queue q
+                JOIN LATERAL (
+                    SELECT status
+                    FROM approval_requests
+                    WHERE queue_id = q.id
+                      AND action = q.action
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                ) approval ON TRUE
+                WHERE q.status = 'awaiting_approval'
+                  AND approval.status IN ('denied', 'expired')
+                ORDER BY q.id
+                FOR UPDATE OF q SKIP LOCKED
+                LIMIT 1
+            )
+            UPDATE response_actions_queue AS queue
+            SET status = 'skipped',
+                last_error = CASE
+                    WHEN candidate.approval_status = 'denied' THEN 'approval denied'
+                    ELSE 'approval expired'
+                END,
+                updated_at = COALESCE(%s::timestamptz, NOW())
+            FROM candidate
+            WHERE queue.id = candidate.id
+            RETURNING queue.id, queue.alert_id, host(queue.source_ip), queue.action,
+                      queue.status, queue.retry_count, queue.max_retries,
+                      queue.last_error, queue.idempotency_key,
+                      queue.created_at, queue.updated_at,
+                      candidate.approval_status
+            """,
+            (now,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        queue_row = _queue_row_from_record(row[:11])
+        queue_row["approval_status"] = row[11]
+        return queue_row
+
+
 def mark_action_success(conn, queue_id, now=None):
     return _transition_running_action(conn, queue_id, "success", None, now)
 
@@ -241,6 +340,17 @@ def recover_stale_running_actions(conn, now=None, stale_after=STALE_RUNNING_TIME
 
 
 def _transition_running_action(conn, queue_id, new_status, last_error, now=None):
+    return _transition_action_status(
+        conn,
+        queue_id,
+        from_status="running",
+        to_status=new_status,
+        last_error=last_error,
+        now=now,
+    )
+
+
+def _transition_action_status(conn, queue_id, *, from_status, to_status, last_error, now=None):
     with conn.cursor() as cur:
         cur.execute(
             f"""
@@ -249,13 +359,13 @@ def _transition_running_action(conn, queue_id, new_status, last_error, now=None)
                 last_error = %s,
                 updated_at = COALESCE(%s::timestamptz, NOW())
             WHERE id = %s
-              AND status = 'running'
+              AND status = %s
             {_returning_queue_row_sql()}
             """,
-            (new_status, last_error, now, queue_id),
+            (to_status, last_error, now, queue_id, from_status),
         )
         row = _queue_row_from_record(cur.fetchone())
 
     if row is None:
-        raise QueueTransitionError(f"queue action {queue_id} is not running")
+        raise QueueTransitionError(f"queue action {queue_id} is not {from_status}")
     return row

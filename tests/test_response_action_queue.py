@@ -1,13 +1,19 @@
 import pytest
+import psycopg2
 from datetime import datetime, timedelta, timezone
+from unittest.mock import Mock
 
+from core.approval_store import approve_request, create_approval_request, deny_request
 from core.response_action_queue_store import (
     QueueTransitionError,
+    claim_next_approved_awaiting_action,
     claim_next_pending_action,
     get_queue_status_counts,
+    mark_action_awaiting_approval,
     mark_action_failed,
     mark_action_skipped,
     mark_action_success,
+    mark_awaiting_approval_skipped,
     record_action_failure,
     recover_stale_running_actions,
 )
@@ -74,6 +80,26 @@ def fetch_action_logs(cur, alert_id=None):
             (alert_id,),
         )
     return cur.fetchall()
+
+
+def count_approval_requests(cur, queue_id):
+    cur.execute(
+        "SELECT COUNT(*) FROM approval_requests WHERE queue_id = %s",
+        (queue_id,),
+    )
+    return cur.fetchone()[0]
+
+
+def insert_user(cur, username="approver", role="super_admin"):
+    cur.execute(
+        """
+        INSERT INTO users (username, password_hash, role)
+        VALUES (%s, 'hash', %s)
+        RETURNING id
+        """,
+        (username, role),
+    )
+    return cur.fetchone()[0]
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +211,22 @@ def test_status_transition_to_skipped(postgres_db):
 
     row = fetch_queue_row(cur, row_id)
     assert row[4] == "skipped"
+
+
+def test_status_transition_to_awaiting_approval(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "10.0.0.7", "block_ip")
+    conn.commit()
+
+    cur.execute(
+        "UPDATE response_actions_queue SET status = 'awaiting_approval', updated_at = NOW() WHERE id = %s",
+        (row_id,),
+    )
+    conn.commit()
+
+    row = fetch_queue_row(cur, row_id)
+    assert row[4] == "awaiting_approval"
 
 
 def test_invalid_status_rejected(postgres_db):
@@ -378,6 +420,74 @@ def test_running_action_can_transition_to_skipped(postgres_db):
     assert updated["last_error"] == "safety validation skipped action"
 
 
+def test_running_action_can_transition_to_awaiting_approval(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "10.5.0.61", "block_ip")
+    conn.commit()
+    claim_next_pending_action(conn)
+    conn.commit()
+
+    updated = mark_action_awaiting_approval(conn, row_id, "approval required")
+    conn.commit()
+
+    assert updated["status"] == "awaiting_approval"
+    assert updated["retry_count"] == 0
+    assert updated["last_error"] == "approval required"
+
+
+def test_non_running_action_rejects_awaiting_approval_transition(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "10.5.0.62", "block_ip")
+    conn.commit()
+
+    with pytest.raises(QueueTransitionError):
+        mark_action_awaiting_approval(conn, row_id, "approval required")
+
+
+def test_awaiting_approval_can_transition_to_skipped(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "10.5.0.63", "block_ip")
+    conn.commit()
+    claim_next_pending_action(conn)
+    mark_action_awaiting_approval(conn, row_id, "approval required")
+    conn.commit()
+
+    updated = mark_awaiting_approval_skipped(conn, row_id, "approval denied")
+    conn.commit()
+
+    assert updated["status"] == "skipped"
+    assert updated["retry_count"] == 0
+    assert updated["last_error"] == "approval denied"
+
+
+def test_claim_next_approved_awaiting_action_only_claims_approved(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    approved_row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "block_ip")
+    pending_row_id = enqueue_response_action(cur, alert_id, "1.1.1.1", "block_ip")
+    conn.commit()
+    for row_id in (approved_row_id, pending_row_id):
+        claim_next_pending_action(conn)
+        mark_action_awaiting_approval(conn, row_id, "approval required")
+        conn.commit()
+
+    user_id = insert_user(cur)
+    approval = create_approval_request(conn, queue_id=approved_row_id, action="block_ip")
+    approve_request(conn, approval["id"], actor_user_id=user_id)
+    create_approval_request(conn, queue_id=pending_row_id, action="block_ip")
+    conn.commit()
+
+    claimed = claim_next_approved_awaiting_action(conn)
+    conn.commit()
+
+    assert claimed["id"] == approved_row_id
+    assert claimed["status"] == "running"
+    assert fetch_queue_row(cur, pending_row_id)[4] == "awaiting_approval"
+
+
 def test_retryable_failure_requeues_when_attempts_remain(postgres_db):
     conn, cur = postgres_db
     alert_id = insert_minimal_alert(cur)
@@ -412,7 +522,7 @@ def test_retryable_failure_stays_failed_when_retries_exhausted(postgres_db):
 def test_process_next_action_default_simulation_executor_logs_executed(postgres_db):
     conn, cur = postgres_db
     alert_id = insert_minimal_alert(cur)
-    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "block_ip")
+    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "monitor")
     conn.commit()
 
     result = process_next_action(conn)
@@ -420,17 +530,124 @@ def test_process_next_action_default_simulation_executor_logs_executed(postgres_
     assert result["queue_id"] == row_id
     assert result["outcome"] == "success"
     assert result["new_status"] == "success"
-    assert result["message"] == "Simulated IP block for 8.8.8.8"
+    assert result["message"] == f"Monitoring only - no action taken for queue_id={row_id}"
     logs = fetch_action_logs(cur, alert_id)
     assert len(logs) == 1
     assert logs[0][3] == "executed"
-    assert logs[0][4] == "Simulated IP block for 8.8.8.8"
+    assert logs[0][4] == f"Monitoring only - no action taken for queue_id={row_id}"
+
+
+def test_process_next_action_block_ip_creates_approval_and_waits(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "block_ip")
+    conn.commit()
+    executor = Mock(return_value={"code": "ok", "message": "should not run"})
+
+    result = process_next_action(conn, executor=executor)
+
+    assert result["queue_id"] == row_id
+    assert result["outcome"] == "awaiting_approval"
+    assert result["new_status"] == "awaiting_approval"
+    assert result["retry_count"] == 0
+    assert fetch_queue_row(cur, row_id)[4] == "awaiting_approval"
+    assert count_approval_requests(cur, row_id) == 1
+    executor.assert_not_called()
+    assert fetch_action_logs(cur, alert_id) == []
+
+
+def test_process_next_action_awaiting_approval_does_not_duplicate_request(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "block_ip")
+    conn.commit()
+
+    first = process_next_action(conn, executor=Mock())
+    second = process_next_action(conn, executor=Mock())
+
+    assert first["outcome"] == "awaiting_approval"
+    assert second is None
+    assert count_approval_requests(cur, row_id) == 1
+    assert fetch_queue_row(cur, row_id)[4] == "awaiting_approval"
+
+
+def test_active_queue_action_approval_requests_are_unique(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "block_ip")
+    conn.commit()
+
+    create_approval_request(conn, queue_id=row_id, action="block_ip")
+    with pytest.raises(psycopg2.errors.UniqueViolation):
+        create_approval_request(conn, queue_id=row_id, action="block_ip")
+    conn.rollback()
+
+
+def test_process_next_action_approved_block_ip_executes(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "block_ip")
+    user_id = insert_user(cur)
+    approval = create_approval_request(conn, queue_id=row_id, action="block_ip")
+    approve_request(conn, approval["id"], actor_user_id=user_id)
+    conn.commit()
+
+    result = process_next_action(conn, executor=SimulationExecutor())
+
+    assert result["queue_id"] == row_id
+    assert result["outcome"] == "success"
+    assert result["new_status"] == "success"
+    assert fetch_queue_row(cur, row_id)[4] == "success"
+    assert fetch_action_logs(cur, alert_id)[0][3] == "executed"
+
+
+def test_process_next_action_denied_block_ip_skips_without_executor(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "block_ip")
+    user_id = insert_user(cur)
+    approval = create_approval_request(conn, queue_id=row_id, action="block_ip")
+    deny_request(conn, approval["id"], actor_user_id=user_id, decision_comment="too risky")
+    conn.commit()
+    executor = Mock(return_value={"code": "ok", "message": "should not run"})
+
+    result = process_next_action(conn, executor=executor)
+
+    assert result["outcome"] == "skipped"
+    assert result["new_status"] == "skipped"
+    assert result["error_code"] == "approval_denied"
+    assert result["retry_count"] == 0
+    assert fetch_queue_row(cur, row_id)[4] == "skipped"
+    executor.assert_not_called()
+
+
+def test_process_next_action_expired_block_ip_skips_without_executor(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "block_ip")
+    create_approval_request(
+        conn,
+        queue_id=row_id,
+        action="block_ip",
+        expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+    )
+    conn.commit()
+    executor = Mock(return_value={"code": "ok", "message": "should not run"})
+
+    result = process_next_action(conn, executor=executor)
+
+    assert result["outcome"] == "skipped"
+    assert result["new_status"] == "skipped"
+    assert result["error_code"] == "approval_expired"
+    assert result["retry_count"] == 0
+    assert fetch_queue_row(cur, row_id)[4] == "skipped"
+    executor.assert_not_called()
 
 
 def test_process_next_action_retryable_executor_requeues(postgres_db):
     conn, cur = postgres_db
     alert_id = insert_minimal_alert(cur)
-    row_id = enqueue_response_action(cur, alert_id, "10.5.0.10", "block_ip", max_retries=2)
+    row_id = enqueue_response_action(cur, alert_id, "10.5.0.10", "monitor", max_retries=2)
     conn.commit()
 
     def fail_retryable(_row):
@@ -449,7 +666,7 @@ def test_process_next_action_retryable_executor_requeues(postgres_db):
 def test_process_next_action_skip_executor_marks_skipped(postgres_db):
     conn, cur = postgres_db
     alert_id = insert_minimal_alert(cur)
-    row_id = enqueue_response_action(cur, alert_id, "10.5.0.11", "block_ip")
+    row_id = enqueue_response_action(cur, alert_id, "10.5.0.11", "monitor")
     conn.commit()
 
     def skip(_row):
@@ -566,6 +783,9 @@ def test_process_next_action_simulation_executor_block_ip_success(postgres_db):
     conn, cur = postgres_db
     alert_id = insert_minimal_alert(cur)
     row_id = enqueue_response_action(cur, alert_id, "1.1.1.1", "block_ip")
+    user_id = insert_user(cur, "block-approver")
+    approval = create_approval_request(conn, queue_id=row_id, action="block_ip")
+    approve_request(conn, approval["id"], actor_user_id=user_id)
     conn.commit()
 
     result = process_next_action(conn, executor=SimulationExecutor())
@@ -605,6 +825,9 @@ def test_process_next_action_simulation_executor_private_block_ip_skipped(postgr
     conn, cur = postgres_db
     alert_id = insert_minimal_alert(cur)
     row_id = enqueue_response_action(cur, alert_id, "10.5.0.14", "block_ip")
+    user_id = insert_user(cur, "private-block-approver")
+    approval = create_approval_request(conn, queue_id=row_id, action="block_ip")
+    approve_request(conn, approval["id"], actor_user_id=user_id)
     conn.commit()
 
     result = process_next_action(conn, executor=SimulationExecutor())
@@ -746,10 +969,8 @@ def test_get_queue_status_counts_mixed_statuses_without_mutation(postgres_db):
         "UPDATE response_actions_queue SET status = 'success' WHERE id = %s",
         (q2,),
     )
-    cur.execute(
-        "UPDATE response_actions_queue SET status = 'failed' WHERE id = %s",
-        (q3,),
-    )
+    cur.execute("UPDATE response_actions_queue SET status = 'failed' WHERE id = %s", (q3,))
+    cur.execute("UPDATE response_actions_queue SET status = 'awaiting_approval' WHERE id = %s", (q1,))
     conn.commit()
     cur.execute("SELECT id, status FROM response_actions_queue ORDER BY id")
     before = cur.fetchall()
@@ -758,5 +979,5 @@ def test_get_queue_status_counts_mixed_statuses_without_mutation(postgres_db):
     cur.execute("SELECT id, status FROM response_actions_queue ORDER BY id")
     after = cur.fetchall()
 
-    assert counts == {"pending": 1, "success": 1, "failed": 1}
+    assert counts == {"awaiting_approval": 1, "success": 1, "failed": 1}
     assert before == after

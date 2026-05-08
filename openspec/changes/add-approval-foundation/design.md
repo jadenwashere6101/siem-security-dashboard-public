@@ -651,3 +651,227 @@ This UI slice does not:
 - Add Slack/email behavior.
 - Add real firewall execution.
 - Touch ingest, detection, or correlation code.
+
+---
+
+## Phase 2.5D: Approval-gated SOAR queue execution
+
+Phase 2.5D introduces worker-side approval gating for selected high-risk queued SOAR actions.
+It does not change the default executor mode: `SimulationExecutor` remains the default executor.
+The goal is to prevent high-risk queued actions from reaching the executor until a matching
+approval request has been approved by a super admin.
+
+This phase should be implemented as a narrow queue/store/worker change. It must not add real
+firewall execution, playbooks, Slack/email notifications, autonomous daemons, frontend changes,
+or ingest/detection/correlation changes.
+
+### 1. Does the queue need a new status?
+
+Yes. The current queue status model cannot represent “safe waiting for approval” cleanly.
+Existing statuses are operational execution states:
+- `pending`: eligible to be claimed by the worker.
+- `running`: claimed and actively being processed.
+- `success`: executed successfully.
+- `failed`: execution failed.
+- `skipped`: intentionally not executed.
+
+Leaving an approval-blocked row as `pending` would cause later worker runs to repeatedly reclaim
+the same row and recreate or re-check approval state. Holding it in `running` would make stale
+recovery treat the row like an abandoned execution. Reusing `failed` or `skipped` before a human
+decision would make the action look terminal even though it may resume after approval.
+
+Recommended additive status:
+
+```sql
+awaiting_approval
+```
+
+Required schema/status update:
+- Extend `response_actions_queue.status` CHECK constraint to include `awaiting_approval`.
+- Update queue status normalization/visibility code to include `awaiting_approval`.
+- Update queue visibility UI only in a separate frontend follow-up if needed.
+
+Recommended helper additions:
+- `mark_action_awaiting_approval(conn, queue_id, reason, now=None)`
+  - Transitions only from `running` to `awaiting_approval`.
+  - Writes `last_error` or equivalent details such as `approval required`.
+  - Does not increment retry count.
+- `mark_awaiting_approval_skipped(conn, queue_id, reason, now=None)`
+  - Transitions only from `awaiting_approval` to `skipped`.
+  - Used when approval is denied or expired.
+- `claim_next_approved_action(conn, now=None)`
+  - Claims an `awaiting_approval` row with a matching approved approval request by transitioning
+    it back to `running`.
+  - Should use `FOR UPDATE SKIP LOCKED`.
+
+Alternative considered:
+- Keep queue rows `pending` while waiting. Rejected because it creates noisy repeated worker
+  attempts and makes duplicate-approval prevention harder.
+
+### 2. Which actions require approval in v1?
+
+V1 should use a small explicit allowlist of approval-required high-risk actions:
+
+```python
+APPROVAL_REQUIRED_ACTIONS = frozenset({"block_ip"})
+```
+
+Non-v1 actions:
+- `monitor` should not require approval.
+- `flag_high_priority` should not require approval unless a later policy expands the set.
+- Unknown actions should continue through existing executor validation behavior and must not gain
+  approval-specific behavior.
+
+The policy should be local and deterministic, for example in a small helper module or queue
+worker helper:
+
+```python
+def action_requires_approval(action: str) -> bool:
+    return action in APPROVAL_REQUIRED_ACTIONS
+```
+
+### 3. How does the worker avoid duplicate approval requests?
+
+The worker should use queue row locking plus approval lookup before creating a request.
+
+Recommended flow for a pending high-risk action:
+1. Claim the queue row using the existing pending-claim behavior, transitioning it to `running`.
+2. Before executor invocation, check whether the action requires approval.
+3. If approval is required, look for an existing approval request for the same `queue_id` and
+   action where status is `pending`, `approved`, `denied`, or `expired`, ordered newest first.
+4. If an approved request exists, continue to executor invocation.
+5. If a pending request exists, transition the queue row to `awaiting_approval` and return a
+   worker result such as `outcome="awaiting_approval"`.
+6. If no request exists, create one using `create_approval_request(queue_id=..., action=...)`,
+   transition the queue row to `awaiting_approval`, commit, and return `outcome="awaiting_approval"`.
+7. If the latest request is denied or expired, transition the queue row to `skipped` and return a
+   safe non-execution outcome.
+
+Recommended DB guard:
+
+```sql
+CREATE UNIQUE INDEX IF NOT EXISTS idx_approval_requests_queue_action_active
+ON approval_requests (queue_id, action)
+WHERE queue_id IS NOT NULL
+  AND status IN ('pending', 'approved');
+```
+
+This index is additive and protects against duplicate active approval requests if future code
+paths create requests concurrently. If implementation finds existing duplicate active data, pause
+and resolve before applying this constraint.
+
+### 4. How does the worker resume after approval?
+
+Approval does not directly execute anything. A later worker run resumes safely.
+
+Recommended resume flow:
+1. Worker first claims normal `pending` rows as it does today.
+2. If no eligible pending row exists, worker checks for `awaiting_approval` rows with a matching
+   approved approval request.
+3. The claim helper transitions the approved `awaiting_approval` row to `running` under row lock.
+4. The worker re-runs the approval check.
+5. Because the matching approval is approved, the worker invokes the executor.
+6. Existing success/failure/skipped handling applies from `running`.
+
+This keeps approval decisions decoupled from execution. The approval API and UI only update
+approval state; the worker remains responsible for later execution.
+
+### 5. What happens on denial?
+
+Denied approvals should result in safe non-execution.
+
+Recommended behavior:
+- A worker run that sees an `awaiting_approval` queue row with a matching denied approval should
+  transition the queue row to `skipped`.
+- `last_error` should be set to a clear reason such as `approval denied`.
+- The worker result should use `outcome="skipped"` or `outcome="approval_denied"` depending on
+  current worker result conventions. Prefer preserving `new_status="skipped"` so existing queue
+  visibility remains understandable.
+- The executor must not be called.
+- Retry count should not increment; denial is not an execution failure.
+- A response action log row may be written with status `skipped` and details `approval denied`
+  if consistent with current skipped-action logging.
+
+### 6. What happens on expiration?
+
+Expired approvals should also result in safe non-execution unless a later human creates a new
+approval request through a future explicit workflow.
+
+Recommended behavior:
+- Before evaluating approval state, opportunistically materialize expired pending requests using
+  `expire_pending_requests(conn, limit=...)` or a focused queue-specific expiration check.
+- A worker run that sees an `awaiting_approval` queue row whose matching request is expired should
+  transition the queue row to `skipped`.
+- `last_error` should be set to `approval expired`.
+- The executor must not be called.
+- Retry count should not increment.
+- Do not automatically create a fresh approval request for the same queue row after expiration in
+  v1; that could create repeated approval churn. A future route or analyst workflow can requeue or
+  recreate approval explicitly if needed.
+
+### 7. Worker processing order
+
+Recommended `process_next_action()` order:
+1. Recover or handle stale `running` rows as existing code already does outside this function.
+2. Claim the next `pending` queue row.
+3. If no pending row exists, claim the next `awaiting_approval` row with approved approval.
+4. If no executable row exists, inspect a small batch of `awaiting_approval` rows for denied or
+   expired approvals and skip them safely.
+5. Return `None` only when there is no executable or terminal approval cleanup work.
+
+This lets approval cleanup happen during normal worker runs without adding an autonomous daemon.
+
+### 8. Transaction boundaries
+
+The worker must preserve the current post-claim safety model:
+- Claim or waiting-state transitions happen in explicit transactions.
+- Approval request creation and queue transition to `awaiting_approval` should commit together.
+- Executor invocation should happen only after the worker has committed the claim and confirmed
+  approval is approved or not required.
+- If approval creation fails, roll back and fail or requeue according to the safest current queue
+  error-handling behavior. Prefer not executing when approval gating cannot be established.
+
+### 9. Required tests
+
+Schema/store tests:
+- `awaiting_approval` is an accepted queue status.
+- Invalid queue statuses are still rejected.
+- `mark_action_awaiting_approval` transitions `running` to `awaiting_approval`.
+- `mark_action_awaiting_approval` rejects non-running rows.
+- Approved `awaiting_approval` rows can be claimed for execution.
+- Pending/denied/expired `awaiting_approval` rows are not claimed as executable.
+- Duplicate active approval requests for the same `queue_id` and `action` are prevented if the
+  unique index is added.
+
+Worker tests:
+- `block_ip` without approval creates one approval request and does not call executor.
+- `block_ip` without approval transitions queue row to `awaiting_approval`.
+- Re-running worker while approval is still pending does not create duplicate approval requests.
+- Approved `block_ip` resumes on a later worker run and executes through `SimulationExecutor`.
+- Denied `block_ip` transitions to `skipped` and does not call executor.
+- Expired `block_ip` materializes expiration, transitions to `skipped`, and does not call
+  executor.
+- Non-gated actions such as `monitor` and `flag_high_priority` continue executing unchanged.
+- Unknown actions keep existing skipped/failure behavior and are not approval-gated unless added
+  to the explicit policy.
+- Retry counts do not increment for approval pending, denied, or expired outcomes.
+- Response action logs are written consistently for skipped denial/expiration outcomes if current
+  logging conventions require them.
+
+Regression tests:
+- Existing approval store and route tests remain green.
+- Existing queue visibility tests account for `awaiting_approval` counts.
+- Existing worker runner tests remain green with `SimulationExecutor` as default.
+- Existing ingest/detection/correlation tests remain green.
+
+### Phase 2.5D non-integration guarantees
+
+This gating slice does not:
+- Add real firewall execution.
+- Add playbook behavior.
+- Add Slack/email behavior.
+- Add frontend changes.
+- Add autonomous daemon behavior.
+- Change ingest transaction behavior.
+- Touch detection internals.
+- Touch correlation internals.

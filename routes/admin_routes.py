@@ -561,7 +561,7 @@ def get_queue_status():
         status_counts = get_queue_status_counts(conn)
         
         # Ensure all known statuses are present with zero defaults
-        all_statuses = {"pending", "running", "success", "failed", "skipped"}
+        all_statuses = {"pending", "running", "awaiting_approval", "success", "failed", "skipped"}
         counts = {status: status_counts.get(status, 0) for status in all_statuses}
         total = sum(counts.values())
         
@@ -597,7 +597,7 @@ def get_queue_recent():
     
     # Validate status filter if provided
     if status_filter is not None:
-        valid_statuses = {"pending", "running", "success", "failed", "skipped"}
+        valid_statuses = {"pending", "running", "awaiting_approval", "success", "failed", "skipped"}
         if status_filter not in valid_statuses:
             return jsonify({"error": f"status must be one of {sorted(valid_statuses)}"}), 400
     

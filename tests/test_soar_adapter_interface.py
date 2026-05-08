@@ -2,6 +2,7 @@ import inspect
 
 import pytest
 
+from core.approval_store import approve_request, create_approval_request
 from core.ip_helpers import enqueue_response_action
 from engines.soar_action_worker import process_next_action
 from engines.soar_errors import RetryableActionError, SkippedAction
@@ -32,6 +33,18 @@ def insert_minimal_alert(cur, source_ip="8.8.8.8"):
 
 def fetch_action_log_count(cur, alert_id):
     cur.execute("SELECT COUNT(*) FROM response_actions_log WHERE alert_id = %s", (alert_id,))
+    return cur.fetchone()[0]
+
+
+def insert_user(cur, username="adapter_approver"):
+    cur.execute(
+        """
+        INSERT INTO users (username, password_hash, role)
+        VALUES (%s, 'hash', 'super_admin')
+        RETURNING id
+        """,
+        (username,),
+    )
     return cur.fetchone()[0]
 
 
@@ -166,6 +179,9 @@ def test_adapter_backed_executor_integrates_with_worker(postgres_db):
     conn, cur = postgres_db
     alert_id = insert_minimal_alert(cur)
     queue_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "block_ip")
+    user_id = insert_user(cur, "adapter_success_approver")
+    approval = create_approval_request(conn, queue_id=queue_id, action="block_ip")
+    approve_request(conn, approval["id"], actor_user_id=user_id)
     conn.commit()
 
     registry = SoarAdapterRegistry(
@@ -191,6 +207,9 @@ def test_adapter_backed_executor_invalid_result_fails(postgres_db):
     conn, cur = postgres_db
     alert_id = insert_minimal_alert(cur)
     queue_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "block_ip")
+    user_id = insert_user(cur, "adapter_invalid_approver")
+    approval = create_approval_request(conn, queue_id=queue_id, action="block_ip")
+    approve_request(conn, approval["id"], actor_user_id=user_id)
     conn.commit()
 
     registry = SoarAdapterRegistry(
@@ -340,6 +359,9 @@ def test_worker_processes_linux_dry_run_as_success(postgres_db):
     conn, cur = postgres_db
     alert_id = insert_minimal_alert(cur)
     queue_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "block_ip")
+    user_id = insert_user(cur, "linux_dry_run_approver")
+    approval = create_approval_request(conn, queue_id=queue_id, action="block_ip")
+    approve_request(conn, approval["id"], actor_user_id=user_id)
     conn.commit()
 
     registry = SoarAdapterRegistry(
@@ -365,6 +387,9 @@ def test_worker_processes_linux_dry_run_unsafe_ip_as_skipped(postgres_db):
     conn, cur = postgres_db
     alert_id = insert_minimal_alert(cur, source_ip="10.0.0.5")
     queue_id = enqueue_response_action(cur, alert_id, "10.0.0.5", "block_ip")
+    user_id = insert_user(cur, "linux_dry_run_skip_approver")
+    approval = create_approval_request(conn, queue_id=queue_id, action="block_ip")
+    approve_request(conn, approval["id"], actor_user_id=user_id)
     conn.commit()
 
     registry = SoarAdapterRegistry(
@@ -384,4 +409,3 @@ def test_worker_processes_linux_dry_run_unsafe_ip_as_skipped(postgres_db):
     assert result["queue_id"] == queue_id
     assert result["outcome"] == "skipped"
     assert result["new_status"] == "skipped"
-
