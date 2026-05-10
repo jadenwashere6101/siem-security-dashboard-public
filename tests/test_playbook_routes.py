@@ -1,7 +1,8 @@
 """
-Read-only playbook API contracts (auth, shape, filters, no mutation).
+Playbook API contracts: read access for analysts, super-admin-only definition mutations.
 """
 
+import hashlib
 from contextlib import contextmanager
 from unittest.mock import patch
 
@@ -74,6 +75,43 @@ def _stop_patchers(patchers):
 
 def _valid_steps():
     return [{"action": "monitor", "params": {}}]
+
+
+def _create_body(playbook_id="pb_api_create"):
+    return {
+        "id": playbook_id,
+        "name": "API playbook",
+        "description": "from test",
+        "trigger_config": {"min_severity": "LOW"},
+        "steps": _valid_steps(),
+        "enabled": False,
+    }
+
+
+def _insert_alert(cur, source_ip="10.0.0.50"):
+    cur.execute(
+        """
+        INSERT INTO alerts (alert_type, severity, source_ip, message)
+        VALUES ('test_alert', 'LOW', %s::inet, 'msg')
+        RETURNING id
+        """,
+        (source_ip,),
+    )
+    return cur.fetchone()[0]
+
+
+def _insert_queue_row(cur, alert_id, source_ip, action="block_ip", status="pending"):
+    idem = hashlib.sha256(f"{action}:{source_ip}:{alert_id}".encode()).hexdigest()
+    cur.execute(
+        """
+        INSERT INTO response_actions_queue
+        (idempotency_key, alert_id, source_ip, action, status)
+        VALUES (%s, %s, %s::inet, %s, %s)
+        RETURNING id
+        """,
+        (idem, alert_id, source_ip, action, status),
+    )
+    return cur.fetchone()[0]
 
 
 def _def_keys():
@@ -386,3 +424,263 @@ def test_read_endpoints_do_not_mutate_definitions_executions_or_queue(client, po
     assert def_before == def_after
     assert ex_before == ex_after
     assert q_before == q_after
+
+
+# --- Definition mutations (super_admin only) ---
+
+
+def test_post_playbooks_unauthenticated_returns_401(client):
+    resp = client.post("/playbooks", json=_create_body("pb_unauth"))
+    assert resp.status_code == 401
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_post_playbooks_analyst_forbidden(client, postgres_db):
+    conn, _cur = postgres_db
+    patchers = _login_role(client, username="pbanalyst2", password="ap2", role="analyst")
+    try:
+        with _patched_app_db(conn):
+            resp = client.post("/playbooks", json=_create_body("pb_analyst_denied"))
+    finally:
+        _stop_patchers(patchers)
+    assert resp.status_code == 403
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_post_playbooks_viewer_forbidden(client, postgres_db):
+    conn, _cur = postgres_db
+    fake = _fake_user("pb_view_mut", "v", "viewer")
+    with patch("routes.auth_routes.get_user_by_username", return_value=fake), patch(
+        "core.auth.get_user_by_username", return_value=fake
+    ):
+        assert client.post("/login", json={"username": "pb_view_mut", "password": "v"}).status_code == 200
+        with _patched_app_db(conn):
+            resp = client.post("/playbooks", json=_create_body("pb_view_denied"))
+    assert resp.status_code == 403
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_super_admin_post_playbooks_201(client, postgres_db):
+    conn, _cur = postgres_db
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.post("/playbooks", json=_create_body("pb_post_ok"))
+    assert resp.status_code == 201
+    body = resp.get_json()
+    assert body["id"] == "pb_post_ok"
+    assert body["name"] == "API playbook"
+    assert body["enabled"] is False
+    assert _def_keys().issubset(set(body.keys()))
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_super_admin_post_duplicate_returns_409(client, postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(
+        conn, "pb_dup", "Dup", steps=_valid_steps(), enabled=False
+    )
+    conn.commit()
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.post("/playbooks", json=_create_body("pb_dup"))
+    assert resp.status_code == 409
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_post_playbooks_invalid_id_returns_400(client, postgres_db):
+    conn, _cur = postgres_db
+    _login_super_admin(client)
+    body = _create_body("INVALID_UPPER")
+    with _patched_app_db(conn):
+        resp = client.post("/playbooks", json=body)
+    assert resp.status_code == 400
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_post_playbooks_invalid_steps_returns_400(client, postgres_db):
+    conn, _cur = postgres_db
+    _login_super_admin(client)
+    body = _create_body("pb_bad_steps")
+    body["steps"] = [{"action": "notify_slack"}]
+    with _patched_app_db(conn):
+        resp = client.post("/playbooks", json=body)
+    assert resp.status_code == 400
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_super_admin_put_playbook_200_and_404(client, postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(
+        conn, "pb_put", "Old", steps=_valid_steps(), trigger_config={}, enabled=True
+    )
+    conn.commit()
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        ok = client.put(
+            "/playbooks/pb_put",
+            json={
+                "name": "New name",
+                "description": None,
+                "trigger_config": {"alert_type": "password_spraying"},
+                "steps": [{"action": "flag_high_priority", "params": {}}],
+                "enabled": False,
+            },
+        )
+        missing = client.put(
+            "/playbooks/missing_pb_put",
+            json={
+                "name": "X",
+                "trigger_config": {},
+                "steps": _valid_steps(),
+                "enabled": True,
+            },
+        )
+    assert ok.status_code == 200
+    assert ok.get_json()["name"] == "New name"
+    assert missing.status_code == 404
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_put_playbook_blank_name_returns_400(client, postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_put_blank", "B", steps=_valid_steps())
+    conn.commit()
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.put(
+            "/playbooks/pb_put_blank",
+            json={
+                "name": "   ",
+                "trigger_config": {},
+                "steps": _valid_steps(),
+                "enabled": True,
+            },
+        )
+    assert resp.status_code == 400
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_put_playbook_analyst_forbidden(client, postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_put_an", "A", steps=_valid_steps())
+    conn.commit()
+    patchers = _login_role(client, username="an_put", password="p", role="analyst")
+    try:
+        with _patched_app_db(conn):
+            resp = client.put(
+                "/playbooks/pb_put_an",
+                json={
+                    "name": "Hacked",
+                    "trigger_config": {},
+                    "steps": _valid_steps(),
+                    "enabled": False,
+                },
+            )
+    finally:
+        _stop_patchers(patchers)
+    assert resp.status_code == 403
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_patch_enabled_super_admin_200(client, postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(
+        conn, "pb_patch_en", "P", steps=_valid_steps(), enabled=False
+    )
+    conn.commit()
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.patch("/playbooks/pb_patch_en/enabled", json={"enabled": True})
+    assert resp.status_code == 200
+    assert resp.get_json()["enabled"] is True
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_patch_enabled_missing_body_returns_400(client, postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_patch_bad", "B", steps=_valid_steps())
+    conn.commit()
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.patch("/playbooks/pb_patch_bad/enabled", json={})
+    assert resp.status_code == 400
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_patch_enabled_non_boolean_returns_400(client, postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_patch_nb", "B", steps=_valid_steps())
+    conn.commit()
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.patch("/playbooks/pb_patch_nb/enabled", json={"enabled": "yes"})
+    assert resp.status_code == 400
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_patch_enabled_unknown_returns_404(client, postgres_db):
+    conn, _cur = postgres_db
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.patch("/playbooks/nope_pb/enabled", json={"enabled": True})
+    assert resp.status_code == 404
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_analyst_get_playbooks_still_ok_after_super_create(client, postgres_db):
+    conn, _cur = postgres_db
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        assert client.post("/playbooks", json=_create_body("pb_read_coexist")).status_code == 201
+    patchers = _login_role(client, username="an_read", password="p", role="analyst")
+    try:
+        with _patched_app_db(conn):
+            resp = client.get("/playbooks")
+    finally:
+        _stop_patchers(patchers)
+    assert resp.status_code == 200
+    ids = {item["id"] for item in resp.get_json()["items"]}
+    assert "pb_read_coexist" in ids
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_mutations_do_not_create_executions_or_touch_queue_or_log(client, postgres_db):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    qid = _insert_queue_row(cur, aid, "192.0.2.1")
+    cur.execute("INSERT INTO response_actions_log (alert_id, source_ip, action, status) VALUES (%s, %s::inet, %s, %s)", (aid, "192.0.2.1", "monitor", "ok"))
+    conn.commit()
+
+    cur.execute("SELECT COUNT(*) FROM playbook_executions")
+    ex0 = cur.fetchone()[0]
+    cur.execute("SELECT id, status, updated_at FROM response_actions_queue WHERE id = %s", (qid,))
+    q_before = cur.fetchone()
+    cur.execute("SELECT COUNT(*) FROM response_actions_log")
+    log0 = cur.fetchone()[0]
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        assert client.post("/playbooks", json=_create_body("pb_safe_mut")).status_code == 201
+        assert (
+            client.put(
+                "/playbooks/pb_safe_mut",
+                json={
+                    "name": "Updated",
+                    "trigger_config": {},
+                    "steps": _valid_steps(),
+                    "enabled": True,
+                },
+            ).status_code
+            == 200
+        )
+        assert (
+            client.patch("/playbooks/pb_safe_mut/enabled", json={"enabled": False}).status_code
+            == 200
+        )
+
+    cur.execute("SELECT COUNT(*) FROM playbook_executions")
+    assert cur.fetchone()[0] == ex0
+    cur.execute("SELECT id, status, updated_at FROM response_actions_queue WHERE id = %s", (qid,))
+    assert cur.fetchone() == q_before
+    cur.execute("SELECT COUNT(*) FROM response_actions_log")
+    assert cur.fetchone()[0] == log0

@@ -258,3 +258,117 @@ def test_list_playbook_executions_order_and_filters(postgres_db):
     limited = playbook_store.list_playbook_executions(conn, limit=2)
     assert len(limited) == 2
     assert [r["id"] for r in limited] == [e3, e2]
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_update_playbook_definition_updates_fields(postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(
+        conn,
+        "pb_upd",
+        "Original",
+        steps=_valid_steps(),
+        trigger_config={"alert_type": "failed_login"},
+        description="old",
+        enabled=True,
+    )
+    conn.commit()
+
+    updated = playbook_store.update_playbook_definition(
+        conn,
+        "pb_upd",
+        name="Renamed",
+        description="new desc",
+        trigger_config={"min_severity": "HIGH"},
+        steps=[{"action": "block_ip", "params": {}, "on_failure": "abort"}],
+        enabled=False,
+    )
+    assert updated is not None
+    assert updated["id"] == "pb_upd"
+    assert updated["name"] == "Renamed"
+    assert updated["description"] == "new desc"
+    assert updated["trigger_config"] == {"min_severity": "HIGH"}
+    assert updated["enabled"] is False
+    assert len(updated["steps"]) == 1
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_update_playbook_definition_unknown_returns_none(postgres_db):
+    conn, _cur = postgres_db
+    assert (
+        playbook_store.update_playbook_definition(
+            conn,
+            "missing_pb",
+            name="X",
+            description=None,
+            trigger_config={},
+            steps=_valid_steps(),
+            enabled=True,
+        )
+        is None
+    )
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_update_playbook_definition_invalid_steps_raises(postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_bad_step", "B", steps=_valid_steps())
+    conn.commit()
+    with pytest.raises(ValueError):
+        playbook_store.update_playbook_definition(
+            conn,
+            "pb_bad_step",
+            name="B",
+            description=None,
+            trigger_config={},
+            steps=[{"action": "bad_action"}],
+            enabled=True,
+        )
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_set_playbook_definition_enabled(postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(
+        conn,
+        "pb_en",
+        "E",
+        steps=_valid_steps(),
+        enabled=False,
+    )
+    conn.commit()
+
+    on = playbook_store.set_playbook_definition_enabled(conn, "pb_en", True)
+    assert on is not None and on["enabled"] is True
+
+    off = playbook_store.set_playbook_definition_enabled(conn, "pb_en", False)
+    assert off is not None and off["enabled"] is False
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_set_playbook_definition_enabled_unknown_returns_none(postgres_db):
+    conn, _cur = postgres_db
+    assert playbook_store.set_playbook_definition_enabled(conn, "no_such", True) is None
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_update_and_set_enabled_do_not_create_executions(postgres_db):
+    conn, cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_noex", "N", steps=_valid_steps())
+    conn.commit()
+    cur.execute("SELECT COUNT(*) FROM playbook_executions")
+    before = cur.fetchone()[0]
+
+    playbook_store.update_playbook_definition(
+        conn,
+        "pb_noex",
+        name="N2",
+        description=None,
+        trigger_config={},
+        steps=_valid_steps(),
+        enabled=True,
+    )
+    playbook_store.set_playbook_definition_enabled(conn, "pb_noex", False)
+
+    cur.execute("SELECT COUNT(*) FROM playbook_executions")
+    assert cur.fetchone()[0] == before

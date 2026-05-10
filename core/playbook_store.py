@@ -73,6 +73,80 @@ def _execution_row_to_dict(record: tuple[Any, ...]) -> dict[str, Any]:
     }
 
 
+def update_playbook_definition(
+    conn,
+    playbook_id: str,
+    *,
+    name: str,
+    description: str | None,
+    trigger_config: dict,
+    steps: list[dict],
+    enabled: bool,
+) -> dict[str, Any] | None:
+    """
+    Update editable fields for an existing definition. Returns None if id is unknown.
+
+    Validates steps via the registry. Does not touch playbook_executions. Caller commits.
+    """
+    if not isinstance(trigger_config, dict):
+        raise ValueError("trigger_config must be a dict")
+    step_errors = validate_playbook_steps(steps)
+    if step_errors:
+        raise ValueError("; ".join(step_errors))
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE playbook_definitions
+            SET name = %s,
+                description = %s,
+                trigger_config = %s,
+                steps = %s,
+                enabled = %s,
+                updated_at = NOW()
+            WHERE id = %s
+            RETURNING id, name, description, trigger_config, steps, enabled,
+                      created_at, updated_at
+            """,
+            (
+                name,
+                description,
+                Json(trigger_config),
+                Json(steps),
+                enabled,
+                playbook_id,
+            ),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return _definition_row_to_dict(row)
+
+
+def set_playbook_definition_enabled(
+    conn,
+    playbook_id: str,
+    enabled: bool,
+) -> dict[str, Any] | None:
+    """Set enabled flag only. Returns None if id is unknown. Caller commits."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE playbook_definitions
+            SET enabled = %s,
+                updated_at = NOW()
+            WHERE id = %s
+            RETURNING id, name, description, trigger_config, steps, enabled,
+                      created_at, updated_at
+            """,
+            (enabled, playbook_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return _definition_row_to_dict(row)
+
+
 def create_playbook_definition(
     conn,
     playbook_id: str,
