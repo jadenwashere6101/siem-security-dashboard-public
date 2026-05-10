@@ -1,6 +1,8 @@
 import http.client
+import json
 import smtplib
 import socket
+import urllib.request
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
@@ -93,6 +95,7 @@ def _deny_network(monkeypatch):
     monkeypatch.setattr(smtplib, "SMTP_SSL", fail_network)
     monkeypatch.setattr(http.client.HTTPConnection, "request", fail_network)
     monkeypatch.setattr(http.client.HTTPSConnection, "request", fail_network)
+    monkeypatch.setattr(urllib.request, "urlopen", fail_network)
 
 
 def _assert_status_shape(data):
@@ -100,6 +103,9 @@ def _assert_status_shape(data):
     assert data["simulated"] is True
     assert data["real_mode_enabled"] is False
     assert data["real_mode_status"]
+    assert data["slack_configured"] in {True, False}
+    assert data["real_mode_allowed"] in {True, False}
+    assert data["real_mode_ready"] in {True, False}
     adapters = {adapter["name"]: adapter for adapter in data["adapters"]}
     assert set(adapters) == {"email", "firewall", "slack", "webhook"}
     assert adapters["slack"]["supported_actions"] == ["notify_channel", "send_message"]
@@ -113,6 +119,10 @@ def _assert_status_shape(data):
     assert {adapter["mode"] for adapter in adapters.values()} == {"simulation"}
     assert {adapter["simulated"] for adapter in adapters.values()} == {True}
     assert {adapter["real_client"] for adapter in adapters.values()} == {False}
+    assert "slack_configured" in adapters["slack"]
+    assert "real_mode_allowed" in adapters["slack"]
+    assert "real_mode_ready" in adapters["slack"]
+    assert "webhook_configured" in adapters["slack"]
 
 
 def test_integration_status_without_session_returns_401(client):
@@ -184,7 +194,62 @@ def test_integration_status_reports_real_mode_fail_closed(client, mock_db, monke
     assert data["configured_mode"] == "real"
     assert data["simulated"] is True
     assert data["real_mode_enabled"] is False
-    assert "not implemented" in data["real_mode_status"]
+    assert data["real_mode_allowed"] is False
+    assert data["real_mode_ready"] is False
+    assert "staging allow flag" in data["real_mode_status"]
+
+
+def test_integration_status_slack_real_readiness_uses_safe_booleans(
+    client, mock_db, monkeypatch
+):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_SLACK_ENABLED", "true")
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T000/B000/SECRET")
+    _deny_network(monkeypatch)
+    _login_super_admin(client)
+
+    resp = client.get("/integrations/status")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    rendered = json.dumps(data, sort_keys=True)
+    assert data["mode"] == "real"
+    assert data["configured_mode"] == "real"
+    assert data["real_mode_enabled"] is True
+    assert data["slack_configured"] is True
+    assert data["real_mode_allowed"] is True
+    assert data["real_mode_ready"] is True
+    adapters = {adapter["name"]: adapter for adapter in data["adapters"]}
+    assert adapters["slack"]["mode"] == "real"
+    assert adapters["slack"]["real_client"] is True
+    assert adapters["slack"]["webhook_configured"] is True
+    assert adapters["email"]["mode"] == "simulation"
+    assert adapters["firewall"]["mode"] == "simulation"
+    assert adapters["webhook"]["mode"] == "simulation"
+    assert "hooks.slack.com/services" not in rendered
+    assert "SECRET" not in rendered
+
+
+def test_integration_status_slack_missing_webhook_not_ready(client, mock_db, monkeypatch):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_SLACK_ENABLED", "true")
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    _deny_network(monkeypatch)
+    _login_super_admin(client)
+
+    resp = client.get("/integrations/status")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["mode"] == "simulation"
+    assert data["slack_configured"] is False
+    assert data["real_mode_allowed"] is True
+    assert data["real_mode_ready"] is False
+    adapters = {adapter["name"]: adapter for adapter in data["adapters"]}
+    assert adapters["slack"]["webhook_configured"] is False
+    assert adapters["slack"]["real_mode_ready"] is False
 
 
 def test_circuit_breaker_reset_requires_auth(client):

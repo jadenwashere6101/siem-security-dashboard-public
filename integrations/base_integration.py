@@ -2,18 +2,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import re
 from typing import Any
 
 SIMULATION_MODE = "simulation"
+REAL_MODE = "real"
 SECRET_FIELD_NAMES = {
     "api_key",
     "authorization",
     "auth",
     "password",
     "secret",
+    "slack_webhook_url",
     "token",
     "webhook_url",
 }
+_SLACK_WEBHOOK_RE = re.compile(r"https://hooks\.slack\.com/services/[^\s\"'<>]+")
 
 CIRCUIT_STATE_CLOSED = "closed"
 CIRCUIT_STATE_OPEN = "open"
@@ -439,10 +443,13 @@ def _integrate_circuit_after_simulation(
 class BaseIntegration:
     adapter_name = "base"
     supported_actions: frozenset[str] = frozenset()
+    allow_real_mode = False
 
     def __init__(self, mode: str = SIMULATION_MODE):
         normalized_mode = (mode or SIMULATION_MODE).strip().lower()
-        if normalized_mode != SIMULATION_MODE:
+        if normalized_mode == REAL_MODE and not self.allow_real_mode:
+            raise NotImplementedError("real integration mode is not implemented")
+        if normalized_mode not in {SIMULATION_MODE, REAL_MODE}:
             raise NotImplementedError("real integration mode is not implemented")
         self.mode = normalized_mode
 
@@ -548,7 +555,7 @@ class BaseIntegration:
             return res
 
         try:
-            result = self._simulate(normalized_action, safe_params, safe_context)
+            result = self._execute_supported_action(normalized_action, safe_params, safe_context)
         except Exception as exc:
             if was_half_open:
                 _complete_half_open_failure(
@@ -605,6 +612,14 @@ class BaseIntegration:
             message=f"Simulated {self.adapter_name} action.",
         )
 
+    def _execute_supported_action(
+        self,
+        action: str,
+        params: dict[str, Any],
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self._simulate(action, params, context)
+
     def _result(
         self,
         action: str,
@@ -614,13 +629,18 @@ class BaseIntegration:
         success: bool,
         message: str,
         metadata: dict[str, Any] | None = None,
+        mode: str | None = None,
+        simulated: bool | None = None,
+        executed: bool | None = None,
     ) -> dict[str, Any]:
+        result_mode = mode or self.mode
+        is_simulated = (result_mode == SIMULATION_MODE) if simulated is None else bool(simulated)
         return IntegrationResult(
             adapter=self.adapter_name,
             action=action,
-            mode=SIMULATION_MODE,
-            simulated=True,
-            executed=False,
+            mode=result_mode,
+            simulated=is_simulated,
+            executed=(False if is_simulated else bool(executed)),
             success=success,
             message=message,
             params=params,
@@ -646,4 +666,6 @@ def _sanitize_value(key: str, value: Any) -> Any:
         return sanitize_payload(value)
     if isinstance(value, list):
         return [_sanitize_value("", item) for item in value]
+    if isinstance(value, str):
+        return _SLACK_WEBHOOK_RE.sub("[redacted]", value)
     return value

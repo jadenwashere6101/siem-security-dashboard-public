@@ -1,6 +1,8 @@
 import http.client
+import json
 import smtplib
 import socket
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -65,6 +67,7 @@ def no_network(monkeypatch):
     monkeypatch.setattr(smtplib, "SMTP_SSL", fail_network)
     monkeypatch.setattr(http.client.HTTPConnection, "request", fail_network)
     monkeypatch.setattr(http.client.HTTPSConnection, "request", fail_network)
+    monkeypatch.setattr(urllib.request, "urlopen", fail_network)
 
 
 def test_integration_mode_defaults_to_simulation(monkeypatch):
@@ -76,8 +79,9 @@ def test_integration_mode_defaults_to_simulation(monkeypatch):
 def test_non_simulation_mode_fails_closed(monkeypatch):
     monkeypatch.setenv("INTEGRATION_MODE", "real")
 
+    assert resolve_integration_mode() == "real"
     with pytest.raises(NotImplementedError, match="real integration mode is not implemented"):
-        resolve_integration_mode()
+        get_integration_adapter("slack")
 
 
 def test_registry_returns_simulation_adapters_case_insensitive(monkeypatch):
@@ -130,7 +134,9 @@ def test_integration_status_reports_real_mode_fail_closed(monkeypatch, no_networ
     assert status["configured_mode"] == "real"
     assert status["simulated"] is True
     assert status["real_mode_enabled"] is False
-    assert "not implemented" in status["real_mode_status"]
+    assert status["real_mode_allowed"] is False
+    assert status["real_mode_ready"] is False
+    assert "staging allow flag" in status["real_mode_status"]
 
 
 def test_unknown_adapter_fails_locally():
@@ -396,6 +402,114 @@ def test_integration_status_includes_circuit_breaker(monkeypatch, no_network):
     assert "half_open_probe_available" in cb
     assert "last_manual_action" in cb
     assert cb["state_persisted"] is False
+
+
+def test_slack_real_mode_missing_webhook_fails_closed_without_network(monkeypatch, no_network):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_SLACK_ENABLED", "true")
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+
+    adapter = get_integration_adapter("slack")
+    result = adapter.execute(
+        "send_message",
+        params={"message": "hello"},
+        context={"execution_id": 1, "playbook_id": "pb"},
+    )
+
+    assert result["mode"] == "real"
+    assert result["simulated"] is False
+    assert result["executed"] is False
+    assert result["success"] is False
+    assert result["metadata"]["slack_configured"] is False
+    assert result["metadata"]["real_mode_allowed"] is True
+    assert result["metadata"]["real_mode_ready"] is False
+    assert result["metadata"]["retry_eligible"] is False
+    assert "webhook" in result["message"].lower()
+
+
+def test_slack_real_mode_invalid_webhook_redacts_value(monkeypatch, no_network):
+    secret_url = "https://hooks.slack.com/services/T000/B000/SECRET"
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_SLACK_ENABLED", "true")
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://example.invalid/not-slack")
+
+    adapter = get_integration_adapter("slack")
+    result = adapter.execute(
+        "send_message",
+        params={"message": secret_url, "slack_webhook_url": secret_url},
+    )
+
+    rendered = json.dumps(result, sort_keys=True)
+    assert result["success"] is False
+    assert result["params"]["slack_webhook_url"] == "[redacted]"
+    assert secret_url not in rendered
+    assert "hooks.slack.com/services" not in rendered
+
+
+def test_slack_real_mode_staging_uses_mocked_outbound_call(monkeypatch):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_SLACK_ENABLED", "true")
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T000/B000/SECRET")
+
+    with patch(
+        "integrations.slack_adapter._post_slack_webhook",
+        return_value={"status_code": 200},
+    ) as post_mock:
+        result = get_integration_adapter("slack").execute(
+            "send_message",
+            params={"message": "Staging notification"},
+            context={"execution_id": 44, "playbook_id": "pb_slack", "alert_id": 99},
+        )
+
+    assert result["success"] is True
+    assert result["mode"] == "real"
+    assert result["simulated"] is False
+    assert result["executed"] is True
+    assert result["metadata"]["delivery"] == "sent"
+    post_mock.assert_called_once()
+    rendered = json.dumps(result, sort_keys=True)
+    assert "hooks.slack.com/services" not in rendered
+    assert "SECRET" not in rendered
+
+
+def test_real_mode_does_not_apply_to_non_slack_adapters(monkeypatch, no_network):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_SLACK_ENABLED", "true")
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T000/B000/SECRET")
+
+    for adapter_name, action in [
+        ("email", "send_email"),
+        ("firewall", "block_ip"),
+        ("webhook", "post_event"),
+    ]:
+        adapter = get_integration_adapter(adapter_name)
+        result = adapter.execute(action)
+        assert adapter.mode == "simulation"
+        assert result["mode"] == "simulation"
+        assert result["simulated"] is True
+        assert result["executed"] is False
+
+
+def test_slack_real_mode_open_circuit_blocks_before_network(monkeypatch, no_network):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_SLACK_ENABLED", "true")
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T000/B000/SECRET")
+    configure_simulated_circuit_breaker("slack", state=CIRCUIT_STATE_OPEN, consecutive_failures=3)
+
+    with patch(
+        "integrations.slack_adapter._post_slack_webhook",
+        side_effect=AssertionError("Slack network path must not run when circuit is open"),
+    ):
+        result = get_integration_adapter("slack").execute("send_message")
+
+    assert result["success"] is False
+    assert result["metadata"]["failure_classification"] == FAILURE_CLASSIFICATION_CIRCUIT_OPEN
+    assert result["metadata"]["retry_eligible"] is False
 
 
 def test_normalize_registered_integration_adapter_name(monkeypatch):
