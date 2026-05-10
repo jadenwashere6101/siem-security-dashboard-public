@@ -13,6 +13,7 @@ from routes.auth_routes import auth_bp
 from routes.blocklist_routes import blocklist_bp
 from routes.approval_routes import approval_bp
 from routes.incident_routes import incident_bp
+from routes.playbook_routes import playbook_bp
 from engines.ingest_engine import ingest_normalized_event
 from core.extensions import limiter
 from routes.ingest_routes import ingest_bp
@@ -107,6 +108,7 @@ def create_app():
     app.register_blueprint(ingest_bp)
     app.register_blueprint(incident_bp)
     app.register_blueprint(approval_bp)
+    app.register_blueprint(playbook_bp)
 
     return app
 
