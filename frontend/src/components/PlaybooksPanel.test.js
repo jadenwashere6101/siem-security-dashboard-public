@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import PlaybooksPanel from "./PlaybooksPanel";
@@ -217,6 +217,129 @@ test("view execution calls getPlaybookExecution", async () => {
     expect(getPlaybookExecution).toHaveBeenCalledWith(42);
   });
   expect(screen.getByText(/execution detail/i)).toBeInTheDocument();
+});
+
+test("execution detail shows context fields and pending empty timeline", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [execRow], limit: 50 });
+  getPlaybookExecution.mockResolvedValue({
+    ...execRow,
+    alert_id: 123,
+    incident_id: 456,
+    last_completed_step: null,
+    steps_log: [],
+  });
+
+  render(<PlaybooksPanel {...styleProps} />);
+  await screen.findByText("pb_one");
+  await userEvent.click(screen.getByRole("button", { name: /^executions$/i }));
+  await screen.findByText("42");
+
+  const viewButtons = screen.getAllByRole("button", { name: /^view$/i });
+  await userEvent.click(viewButtons[viewButtons.length - 1]);
+
+  expect(await screen.findByText(/pending simulation; no steps have been consumed yet/i)).toBeInTheDocument();
+  expect(screen.getByText(/no simulated steps have run yet/i)).toBeInTheDocument();
+  expect(screen.getAllByText(/^playbook id$/i).length).toBeGreaterThan(0);
+  expect(screen.getAllByText("pb_one").length).toBeGreaterThan(0);
+  expect(screen.getByText(/^alert id$/i)).toBeInTheDocument();
+  expect(screen.getByText("123")).toBeInTheDocument();
+  expect(screen.getByText(/^incident id$/i)).toBeInTheDocument();
+  expect(screen.getByText("456")).toBeInTheDocument();
+  expect(screen.getByText(/^last completed step$/i)).toBeInTheDocument();
+});
+
+test("execution detail renders simulated steps_log as timeline cards", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [{ ...execRow, status: "success" }], limit: 50 });
+  getPlaybookExecution.mockResolvedValue({
+    ...execRow,
+    status: "success",
+    alert_id: 777,
+    incident_id: null,
+    started_at: "2026-05-09T12:01:00Z",
+    completed_at: "2026-05-09T12:02:00Z",
+    last_completed_step: 1,
+    steps_log: [
+      {
+        step_index: 0,
+        action: "enrich_alert",
+        status: "success",
+        mode: "simulation",
+        simulated: true,
+        executed: false,
+        started_at: "2026-05-09T12:01:01Z",
+        completed_at: "2026-05-09T12:01:02Z",
+        message: "Simulated enrichment completed.",
+      },
+      {
+        step_index: 1,
+        action: "notify_owner",
+        status: "skipped",
+        simulated: true,
+        executed: false,
+        result: { message: "Notification suppressed in simulation." },
+      },
+    ],
+  });
+
+  render(<PlaybooksPanel {...styleProps} />);
+  await screen.findByText("pb_one");
+  await userEvent.click(screen.getByRole("button", { name: /^executions$/i }));
+  await screen.findByText("42");
+
+  const viewButtons = screen.getAllByRole("button", { name: /^view$/i });
+  await userEvent.click(viewButtons[viewButtons.length - 1]);
+
+  expect(await screen.findByText(/simulation completed successfully/i)).toBeInTheDocument();
+  expect(screen.getByText(/step timeline/i)).toBeInTheDocument();
+  expect(screen.getByText("Step 1")).toBeInTheDocument();
+  expect(screen.getByText("enrich_alert")).toBeInTheDocument();
+  expect(screen.getByText("Simulated enrichment completed.")).toBeInTheDocument();
+  expect(screen.getByText("Step 2")).toBeInTheDocument();
+  expect(screen.getByText("notify_owner")).toBeInTheDocument();
+  expect(screen.getAllByText(/notification suppressed in simulation/i).length).toBeGreaterThan(0);
+
+  const firstStep = screen.getByText("enrich_alert").closest("div");
+  expect(firstStep).toBeTruthy();
+  expect(within(firstStep.parentElement).getByText(/^simulated$/i)).toBeInTheDocument();
+  expect(within(firstStep.parentElement).getAllByText(/^yes$/i).length).toBeGreaterThan(0);
+  expect(within(firstStep.parentElement).getByText(/^executed$/i)).toBeInTheDocument();
+  expect(within(firstStep.parentElement).getAllByText(/^no$/i).length).toBeGreaterThan(0);
+});
+
+test("execution detail shows failed step errors without mutation controls", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [{ ...execRow, status: "failed" }], limit: 50 });
+  getPlaybookExecution.mockResolvedValue({
+    ...execRow,
+    status: "failed",
+    steps_log: [
+      {
+        step_index: 0,
+        action: "unsupported_action",
+        status: "failed",
+        simulated: true,
+        executed: false,
+        error_code: "unsupported_action",
+        error: { message: "Unsupported simulated step action." },
+      },
+    ],
+  });
+
+  render(<PlaybooksPanel {...styleProps} />);
+  await screen.findByText("pb_one");
+  await userEvent.click(screen.getByRole("button", { name: /^executions$/i }));
+  await screen.findByText("42");
+
+  const viewButtons = screen.getAllByRole("button", { name: /^view$/i });
+  await userEvent.click(viewButtons[viewButtons.length - 1]);
+
+  expect(await screen.findByText(/simulation failed before completing all steps/i)).toBeInTheDocument();
+  expect(screen.getByText("unsupported_action")).toBeInTheDocument();
+  expect(screen.getByText(/error code: unsupported_action/i)).toBeInTheDocument();
+  expect(screen.getAllByText(/unsupported simulated step action/i).length).toBeGreaterThan(0);
+  expect(screen.queryByRole("button", { name: /run|retry|cancel/i })).not.toBeInTheDocument();
 });
 
 test("refresh triggers additional read-only GET calls", async () => {

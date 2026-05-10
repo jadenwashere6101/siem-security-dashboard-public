@@ -34,6 +34,102 @@ function stepCount(steps) {
   return Array.isArray(steps) ? steps.length : 0;
 }
 
+function formatDetailValue(value, emptyValue = "—") {
+  return value === null || value === undefined || value === "" ? emptyValue : value;
+}
+
+function formatFlagValue(value) {
+  if (value === true) {
+    return "Yes";
+  }
+  if (value === false) {
+    return "No";
+  }
+  return "Unknown";
+}
+
+function normalizeStepsLog(stepsLog) {
+  if (Array.isArray(stepsLog)) {
+    return stepsLog;
+  }
+  if (typeof stepsLog === "string" && stepsLog.trim()) {
+    try {
+      const parsed = JSON.parse(stepsLog);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (err) {
+      return [];
+    }
+  }
+  return [];
+}
+
+function getExecutionStatusSummary(status) {
+  switch (status) {
+    case "pending":
+      return "Pending simulation; no steps have been consumed yet.";
+    case "running":
+      return "Simulation is marked running and may have partial step output.";
+    case "success":
+      return "Simulation completed successfully.";
+    case "failed":
+      return "Simulation failed before completing all steps.";
+    case "abandoned":
+      return "Execution was abandoned and will not continue in this view.";
+    default:
+      return "Execution status is unknown.";
+  }
+}
+
+function getEmptyTimelineText(status) {
+  switch (status) {
+    case "pending":
+      return "No simulated steps have run yet.";
+    case "running":
+      return "No step output has been recorded yet.";
+    case "success":
+      return "Playbook completed with no defined steps.";
+    case "failed":
+      return "Execution failed before step output was recorded.";
+    default:
+      return "No step output is available.";
+  }
+}
+
+function formatStepLabel(step, index) {
+  const rawIndex =
+    step.step_index !== null && step.step_index !== undefined ? step.step_index : index;
+  return `Step ${Number.isFinite(Number(rawIndex)) ? Number(rawIndex) + 1 : index + 1}`;
+}
+
+function getStepAction(step) {
+  return step.action || step.step_action || step.action_type || step.step?.action || "unspecified";
+}
+
+function getStepMessage(step) {
+  return step.message || step.summary || step.result?.message || step.output?.message || "";
+}
+
+function getStepErrorText(step) {
+  if (!step.error) {
+    return "";
+  }
+  if (typeof step.error === "string") {
+    return step.error;
+  }
+  return step.error.message || JSON.stringify(step.error);
+}
+
+function getStepResultText(step) {
+  const result = step.result || step.output;
+  if (!result) {
+    return "";
+  }
+  if (typeof result === "string") {
+    return result;
+  }
+  return JSON.stringify(result, null, 2);
+}
+
 function PlaybooksPanel({
   cardStyle,
   cardHeaderStyle,
@@ -613,29 +709,125 @@ function PlaybooksPanel({
                   </div>
                 </div>
               ) : (
-                <div style={detailGridStyle}>
-                  <div style={detailFieldStyle}>
-                    <span style={detailLabelStyle}>Execution ID</span>
-                    <span style={detailValueStyle}>{detailRecord.id}</span>
+                <>
+                  <div style={detailGridStyle}>
+                    <div style={detailFieldStyle}>
+                      <span style={detailLabelStyle}>Execution ID</span>
+                      <span style={detailValueStyle}>{detailRecord.id}</span>
+                    </div>
+                    <div style={detailFieldStyle}>
+                      <span style={detailLabelStyle}>Playbook ID</span>
+                      <span style={detailValueStyle}>{formatDetailValue(detailRecord.playbook_id)}</span>
+                    </div>
+                    <div style={detailFieldStyle}>
+                      <span style={detailLabelStyle}>Status</span>
+                      <span style={detailValueStyle}>{formatDetailValue(detailRecord.status)}</span>
+                    </div>
+                    <div style={detailFieldStyle}>
+                      <span style={detailLabelStyle}>Alert ID</span>
+                      <span style={detailValueStyle}>{formatDetailValue(detailRecord.alert_id)}</span>
+                    </div>
+                    <div style={detailFieldStyle}>
+                      <span style={detailLabelStyle}>Incident ID</span>
+                      <span style={detailValueStyle}>{formatDetailValue(detailRecord.incident_id)}</span>
+                    </div>
+                    <div style={detailFieldStyle}>
+                      <span style={detailLabelStyle}>Last Completed Step</span>
+                      <span style={detailValueStyle}>
+                        {formatDetailValue(detailRecord.last_completed_step)}
+                      </span>
+                    </div>
+                    <div style={detailFieldStyle}>
+                      <span style={detailLabelStyle}>Created</span>
+                      <span style={detailValueStyle}>
+                        {formatAdminTimestamp(detailRecord.created_at, "—")}
+                      </span>
+                    </div>
+                    <div style={detailFieldStyle}>
+                      <span style={detailLabelStyle}>Started</span>
+                      <span style={detailValueStyle}>
+                        {formatAdminTimestamp(detailRecord.started_at, "—")}
+                      </span>
+                    </div>
+                    <div style={detailFieldStyle}>
+                      <span style={detailLabelStyle}>Completed</span>
+                      <span style={detailValueStyle}>
+                        {formatAdminTimestamp(detailRecord.completed_at, "—")}
+                      </span>
+                    </div>
                   </div>
-                  <div style={detailFieldStyle}>
-                    <span style={detailLabelStyle}>Status</span>
-                    <span style={detailValueStyle}>{detailRecord.status}</span>
+                  <div style={statusSummaryStyle}>
+                    {getExecutionStatusSummary(detailRecord.status)}
                   </div>
-                </div>
-              )}
-              <div style={jsonBlockWrapStyle}>
-                <div style={jsonBlockTitleStyle}>
-                  {detailKind === "definition" ? "trigger_config" : "steps_log"}
-                </div>
-                <pre style={jsonPreStyle}>
-                  {JSON.stringify(
-                    detailKind === "definition" ? detailRecord.trigger_config : detailRecord.steps_log,
-                    null,
-                    2
+                  <div style={timelineHeaderStyle}>Step Timeline</div>
+                  {normalizeStepsLog(detailRecord.steps_log).length === 0 ? (
+                    <p style={emptyTextStyle}>{getEmptyTimelineText(detailRecord.status)}</p>
+                  ) : (
+                    <div style={timelineListStyle}>
+                      {normalizeStepsLog(detailRecord.steps_log).map((step, index) => (
+                        <div key={`${step.step_id || step.step_index || index}`} style={timelineCardStyle}>
+                          <div style={timelineCardHeaderStyle}>
+                            <span style={timelineStepLabelStyle}>{formatStepLabel(step, index)}</span>
+                            <span style={timelineActionStyle}>{getStepAction(step)}</span>
+                            <span style={timelineStatusStyle}>{formatDetailValue(step.status, "unknown")}</span>
+                          </div>
+                          <div style={timelineMetaGridStyle}>
+                            <div style={detailFieldStyle}>
+                              <span style={detailLabelStyle}>Mode</span>
+                              <span style={detailValueStyle}>
+                                {formatDetailValue(step.mode || step.execution_mode || "simulation")}
+                              </span>
+                            </div>
+                            <div style={detailFieldStyle}>
+                              <span style={detailLabelStyle}>Simulated</span>
+                              <span style={detailValueStyle}>{formatFlagValue(step.simulated)}</span>
+                            </div>
+                            <div style={detailFieldStyle}>
+                              <span style={detailLabelStyle}>Executed</span>
+                              <span style={detailValueStyle}>{formatFlagValue(step.executed)}</span>
+                            </div>
+                            <div style={detailFieldStyle}>
+                              <span style={detailLabelStyle}>Started</span>
+                              <span style={detailValueStyle}>
+                                {formatAdminTimestamp(step.started_at, "—")}
+                              </span>
+                            </div>
+                            <div style={detailFieldStyle}>
+                              <span style={detailLabelStyle}>Completed</span>
+                              <span style={detailValueStyle}>
+                                {formatAdminTimestamp(step.completed_at, "—")}
+                              </span>
+                            </div>
+                          </div>
+                          {getStepMessage(step) ? (
+                            <p style={timelineTextStyle}>{getStepMessage(step)}</p>
+                          ) : null}
+                          {step.error_code ? (
+                            <p style={timelineTextStyle}>Error code: {step.error_code}</p>
+                          ) : null}
+                          {getStepErrorText(step) ? (
+                            <p style={timelineErrorTextStyle}>{getStepErrorText(step)}</p>
+                          ) : null}
+                          {getStepResultText(step) ? (
+                            <pre style={timelineResultStyle}>{getStepResultText(step)}</pre>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
                   )}
-                </pre>
-              </div>
+                </>
+              )}
+              {detailKind === "definition" ? (
+                <div style={jsonBlockWrapStyle}>
+                  <div style={jsonBlockTitleStyle}>trigger_config</div>
+                  <pre style={jsonPreStyle}>{JSON.stringify(detailRecord.trigger_config, null, 2)}</pre>
+                </div>
+              ) : (
+                <details style={jsonBlockWrapStyle}>
+                  <summary style={jsonBlockTitleStyle}>Raw steps_log JSON</summary>
+                  <pre style={jsonPreStyle}>{JSON.stringify(detailRecord.steps_log, null, 2)}</pre>
+                </details>
+              )}
               {detailKind === "definition" ? (
                 <div style={jsonBlockWrapStyle}>
                   <div style={jsonBlockTitleStyle}>steps</div>
@@ -962,6 +1154,102 @@ const detailLabelStyle = {
 const detailValueStyle = {
   fontSize: "14px",
   color: "#e6edf3",
+  overflowWrap: "anywhere",
+};
+
+const statusSummaryStyle = {
+  margin: "4px 0 14px",
+  padding: "10px 12px",
+  borderRadius: "8px",
+  border: "1px solid rgba(88, 166, 255, 0.25)",
+  backgroundColor: "rgba(88, 166, 255, 0.08)",
+  color: "#c9d1d9",
+  fontSize: "13px",
+};
+
+const timelineHeaderStyle = {
+  margin: "14px 0 8px",
+  color: "#e6edf3",
+  fontSize: "14px",
+  fontWeight: "700",
+};
+
+const timelineListStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "10px",
+};
+
+const timelineCardStyle = {
+  padding: "12px",
+  borderRadius: "8px",
+  border: "1px solid #30363d",
+  backgroundColor: "#050810",
+};
+
+const timelineCardHeaderStyle = {
+  display: "flex",
+  alignItems: "center",
+  gap: "8px",
+  flexWrap: "wrap",
+  marginBottom: "10px",
+};
+
+const timelineStepLabelStyle = {
+  color: "#93c5fd",
+  fontSize: "13px",
+  fontWeight: "700",
+};
+
+const timelineActionStyle = {
+  color: "#e6edf3",
+  fontSize: "13px",
+  fontWeight: "700",
+  overflowWrap: "anywhere",
+};
+
+const timelineStatusStyle = {
+  padding: "2px 8px",
+  borderRadius: "999px",
+  border: "1px solid rgba(139, 148, 158, 0.35)",
+  color: "#c9d1d9",
+  fontSize: "12px",
+  fontWeight: "700",
+  textTransform: "uppercase",
+};
+
+const timelineMetaGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+  gap: "8px",
+};
+
+const timelineTextStyle = {
+  margin: "10px 0 0",
+  color: "#c9d1d9",
+  fontSize: "13px",
+  lineHeight: 1.45,
+  overflowWrap: "anywhere",
+};
+
+const timelineErrorTextStyle = {
+  ...timelineTextStyle,
+  color: "#fecaca",
+};
+
+const timelineResultStyle = {
+  margin: "10px 0 0",
+  padding: "10px",
+  borderRadius: "6px",
+  border: "1px solid #30363d",
+  backgroundColor: "#0b1020",
+  color: "#c9d1d9",
+  fontSize: "12px",
+  lineHeight: 1.45,
+  maxHeight: "180px",
+  overflow: "auto",
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
 };
 
 const jsonBlockWrapStyle = {
