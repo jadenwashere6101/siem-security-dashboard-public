@@ -2,6 +2,8 @@ import {
   createPlaybookDefinition,
   updatePlaybookDefinition,
   setPlaybookDefinitionEnabled,
+  listPlaybookSchedules,
+  getPlaybookSchedule,
 } from "./playbookService";
 
 // Mock fetch
@@ -189,5 +191,120 @@ describe("setPlaybookDefinitionEnabled", () => {
     await expect(
       setPlaybookDefinitionEnabled("pb_one", true)
     ).rejects.toThrow();
+  });
+});
+
+describe("listPlaybookSchedules", () => {
+  test("calls GET /playbook-schedules with credentials", async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: jest.fn().mockResolvedValueOnce({ items: [], limit: 50 }),
+    });
+
+    await listPlaybookSchedules();
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/playbook-schedules"),
+      expect.objectContaining({
+        credentials: "include",
+      })
+    );
+  });
+
+  test("includes playbook_id query param when provided", async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: jest.fn().mockResolvedValueOnce({ items: [], limit: 50 }),
+    });
+
+    await listPlaybookSchedules({ playbookId: "pb_one" });
+
+    const url = global.fetch.mock.calls[0][0];
+    expect(url).toContain("playbook_id=pb_one");
+  });
+
+  test("includes enabled query param when true", async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: jest.fn().mockResolvedValueOnce({ items: [], limit: 50 }),
+    });
+
+    await listPlaybookSchedules({ enabled: true });
+
+    const url = global.fetch.mock.calls[0][0];
+    expect(url).toContain("enabled=true");
+  });
+
+  test("includes enabled query param when false", async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: jest.fn().mockResolvedValueOnce({ items: [], limit: 50 }),
+    });
+
+    await listPlaybookSchedules({ enabled: false });
+
+    const url = global.fetch.mock.calls[0][0];
+    expect(url).toContain("enabled=false");
+  });
+
+  test("includes limit query param when provided", async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: jest.fn().mockResolvedValueOnce({ items: [], limit: 30 }),
+    });
+
+    await listPlaybookSchedules({ limit: 30 });
+
+    const url = global.fetch.mock.calls[0][0];
+    expect(url).toContain("limit=30");
+  });
+
+  test("does not include optional params when not provided", async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: jest.fn().mockResolvedValueOnce({ items: [], limit: 50 }),
+    });
+
+    await listPlaybookSchedules();
+
+    const url = global.fetch.mock.calls[0][0];
+    expect(url).not.toContain("playbook_id=");
+    expect(url).not.toContain("enabled=");
+  });
+
+  test("throws error on non-OK response", async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: false,
+      json: jest.fn().mockResolvedValueOnce({ error: "Unauthorized" }),
+    });
+
+    await expect(listPlaybookSchedules()).rejects.toThrow();
+  });
+});
+
+describe("getPlaybookSchedule", () => {
+  test("calls GET /playbook-schedules/<id> with credentials", async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: jest.fn().mockResolvedValueOnce({ id: 1 }),
+    });
+
+    await getPlaybookSchedule(1);
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/playbook-schedules/1"),
+      expect.objectContaining({
+        credentials: "include",
+      })
+    );
+  });
+
+  test("throws error on non-OK response", async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: false,
+      json: jest.fn().mockResolvedValueOnce({ error: "Not found" }),
+    });
+
+    await expect(getPlaybookSchedule(1)).rejects.toThrow();
   });
 });

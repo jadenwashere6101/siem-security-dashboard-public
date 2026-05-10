@@ -14,6 +14,8 @@ import {
   retryExecution,
   abandonExecution,
   resumeExecution,
+  listPlaybookSchedules,
+  getPlaybookSchedule,
 } from "../services/playbookService";
 
 jest.mock("../services/playbookService", () => ({
@@ -27,6 +29,8 @@ jest.mock("../services/playbookService", () => ({
   retryExecution: jest.fn(),
   abandonExecution: jest.fn(),
   resumeExecution: jest.fn(),
+  listPlaybookSchedules: jest.fn(),
+  getPlaybookSchedule: jest.fn(),
 }));
 
 const styleProps = {
@@ -64,8 +68,25 @@ const execRow = {
   created_at: "2026-05-09T12:00:00Z",
 };
 
+const scheduleRow = {
+  id: 7,
+  playbook_id: "pb_one",
+  enabled: true,
+  paused: false,
+  schedule_expression: "0 */6 * * *",
+  missed_run_policy: "skip",
+  last_run_at: "2026-05-09T06:00:00Z",
+  next_run_at: "2026-05-09T12:00:00Z",
+  timezone: "UTC",
+  max_catchup_runs: 1,
+  max_concurrent_runs: 1,
+  created_at: "2026-05-08T12:00:00Z",
+  updated_at: "2026-05-09T08:00:00Z",
+};
+
 beforeEach(() => {
   jest.clearAllMocks();
+  listPlaybookSchedules.mockResolvedValue({ items: [], limit: 50 });
 });
 
 test("shows loading then definitions after load", async () => {
@@ -121,6 +142,84 @@ test("execution empty state when no items", async () => {
   expect(
     await screen.findByText(/no playbook execution records found/i)
   ).toBeInTheDocument();
+});
+
+test("renders metadata-only schedules after switching panel", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [], limit: 50 });
+  listPlaybookSchedules.mockResolvedValue({ items: [scheduleRow], limit: 50 });
+
+  render(<PlaybooksPanel {...styleProps} />);
+  await screen.findByText("pb_one");
+  await userEvent.click(screen.getByRole("button", { name: /^schedules$/i }));
+
+  expect(await screen.findByText(/schedules are metadata-only/i)).toBeInTheDocument();
+  expect(screen.getByRole("columnheader", { name: /^missed-run policy$/i })).toBeInTheDocument();
+  expect(screen.getByText("7")).toBeInTheDocument();
+  expect(screen.getByText("0 */6 * * *")).toBeInTheDocument();
+  expect(screen.getByText("skip")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /create|edit|delete|pause|resume|run now/i })).not.toBeInTheDocument();
+});
+
+test("schedule empty state when no metadata exists", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [], limit: 50 });
+  listPlaybookSchedules.mockResolvedValue({ items: [], limit: 50 });
+
+  render(<PlaybooksPanel {...styleProps} />);
+  await screen.findByText("pb_one");
+  await userEvent.click(screen.getByRole("button", { name: /^schedules$/i }));
+
+  expect(await screen.findByText(/no playbook schedules found/i)).toBeInTheDocument();
+});
+
+test("schedule load error does not break definitions", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [], limit: 50 });
+  listPlaybookSchedules.mockRejectedValue(new Error("schedule fail"));
+
+  render(<PlaybooksPanel {...styleProps} />);
+  expect(await screen.findByText("pb_one")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: /^schedules$/i }));
+  expect(await screen.findByText(/schedule fail/i)).toBeInTheDocument();
+});
+
+test("view schedule calls getPlaybookSchedule and shows allowlisted detail", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [], limit: 50 });
+  listPlaybookSchedules.mockResolvedValue({ items: [scheduleRow], limit: 50 });
+  getPlaybookSchedule.mockResolvedValue({
+    ...scheduleRow,
+    last_success_at: "2026-05-09T06:05:00Z",
+    last_failure_at: null,
+    last_scheduled_execution_id: 55,
+    metadata: {
+      owner: "secops",
+      ticket_id: "SOAR-12",
+      secret_token: "do-not-render",
+    },
+  });
+
+  render(<PlaybooksPanel {...styleProps} userRole="super_admin" />);
+  await screen.findByText("pb_one");
+  await userEvent.click(screen.getByRole("button", { name: /^schedules$/i }));
+  await screen.findByText("0 */6 * * *");
+
+  const viewButtons = screen.getAllByRole("button", { name: /^view$/i });
+  await userEvent.click(viewButtons[viewButtons.length - 1]);
+
+  await waitFor(() => {
+    expect(getPlaybookSchedule).toHaveBeenCalledWith(7);
+  });
+  expect(await screen.findByText(/schedule detail/i)).toBeInTheDocument();
+  expect(screen.getByText(/metadata-only schedule visibility/i)).toBeInTheDocument();
+  expect(screen.getByText(/^schedule expression$/i)).toBeInTheDocument();
+  expect(screen.getByText(/^safe metadata$/i)).toBeInTheDocument();
+  expect(screen.getByText("secops")).toBeInTheDocument();
+  expect(screen.getByText("SOAR-12")).toBeInTheDocument();
+  expect(screen.queryByText(/do-not-render/i)).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /create|edit|delete|pause|resume|run now/i })).not.toBeInTheDocument();
 });
 
 test("definition load error", async () => {
