@@ -17,6 +17,59 @@ function formatFlag(value) {
   return "—";
 }
 
+function formatCircuitScalar(value) {
+  if (value === null || value === undefined || value === "") {
+    return "—";
+  }
+  if (typeof value === "boolean") {
+    return formatFlag(value);
+  }
+  return String(value);
+}
+
+function CircuitBreakerPanel({ circuit }) {
+  if (!circuit || typeof circuit !== "object") {
+    return null;
+  }
+
+  const rows = [
+    { label: "State", value: formatCircuitScalar(circuit.state) },
+    { label: "Consecutive failures", value: formatCircuitScalar(circuit.consecutive_failures) },
+    { label: "Failure threshold", value: formatCircuitScalar(circuit.failure_threshold) },
+    { label: "Cooldown (seconds)", value: formatCircuitScalar(circuit.cooldown_seconds) },
+    { label: "Cooldown until", value: formatCircuitScalar(circuit.cooldown_until) },
+    { label: "Last failure reason", value: formatCircuitScalar(circuit.last_failure_reason) },
+    {
+      label: "Last failure classification",
+      value: formatCircuitScalar(circuit.last_failure_classification),
+    },
+    { label: "Timeout (seconds)", value: formatCircuitScalar(circuit.timeout_seconds) },
+    { label: "Retry eligible", value: formatCircuitScalar(circuit.retry_eligible) },
+    { label: "State persisted", value: formatCircuitScalar(circuit.state_persisted) },
+  ];
+
+  return (
+    <div style={circuitBreakerBlockStyle}>
+      <div style={circuitBreakerHeadingRowStyle}>
+        <span style={circuitBreakerTitleStyle}>Circuit breaker</span>
+        <span style={circuitSimulationBadgeStyle}>Simulation</span>
+      </div>
+      <p style={circuitBreakerDisclaimerStyle}>
+        Circuit breaker state is simulation-only and stored in memory on the server. It is not
+        shared across processes and resets when the backend restarts.
+      </p>
+      <dl style={circuitDlStyle}>
+        {rows.map(({ label, value }) => (
+          <div key={label} style={circuitDlRowStyle}>
+            <dt style={circuitDtStyle}>{label}</dt>
+            <dd style={circuitDdStyle}>{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
 function IntegrationStatusPanel({
   cardStyle,
   cardHeaderStyle,
@@ -134,6 +187,7 @@ function IntegrationStatusPanel({
                       <span style={metaMutedStyle}>Simulated:</span>{" "}
                       <span style={metaValueStyle}>{formatFlag(adapter?.simulated)}</span>
                     </div>
+                    <CircuitBreakerPanel circuit={adapter?.circuit_breaker} />
                     <div style={actionsBlockStyle}>
                       <span style={actionsLabelStyle}>Supported actions</span>
                       {actions.length === 0 ? (
@@ -355,6 +409,83 @@ const actionTagStyle = {
   backgroundColor: "#161b22",
   border: "1px solid #30363d",
   color: "#c9d1d9",
+};
+
+const circuitBreakerBlockStyle = {
+  marginTop: "12px",
+  marginBottom: "12px",
+  padding: "12px",
+  borderRadius: "8px",
+  border: "1px solid rgba(139, 148, 158, 0.35)",
+  backgroundColor: "rgba(22, 27, 34, 0.65)",
+};
+
+const circuitBreakerHeadingRowStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: "10px",
+  flexWrap: "wrap",
+  marginBottom: "8px",
+};
+
+const circuitBreakerTitleStyle = {
+  fontSize: "12px",
+  fontWeight: "700",
+  letterSpacing: "0.06em",
+  textTransform: "uppercase",
+  color: "#c9d1d9",
+};
+
+const circuitSimulationBadgeStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  padding: "2px 8px",
+  borderRadius: "999px",
+  fontSize: "10px",
+  fontWeight: "700",
+  letterSpacing: "0.04em",
+  textTransform: "uppercase",
+  backgroundColor: "rgba(210, 153, 34, 0.12)",
+  border: "1px solid rgba(210, 153, 34, 0.35)",
+  color: "#e6c35c",
+};
+
+const circuitBreakerDisclaimerStyle = {
+  margin: "0 0 12px 0",
+  fontSize: "12px",
+  lineHeight: 1.5,
+  color: "#8b949e",
+  fontWeight: "500",
+};
+
+const circuitDlStyle = {
+  margin: 0,
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+  gap: "10px 16px",
+};
+
+const circuitDlRowStyle = {
+  margin: 0,
+};
+
+const circuitDtStyle = {
+  margin: "0 0 4px 0",
+  fontSize: "10px",
+  fontWeight: "700",
+  letterSpacing: "0.06em",
+  textTransform: "uppercase",
+  color: "#8b949e",
+};
+
+const circuitDdStyle = {
+  margin: 0,
+  fontSize: "13px",
+  fontWeight: "600",
+  color: "#e6edf3",
+  fontFamily: "'Courier New', monospace",
+  wordBreak: "break-word",
 };
 
 export default IntegrationStatusPanel;
