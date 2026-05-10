@@ -14,10 +14,12 @@ SECRET_FIELD_NAMES = {
     "password",
     "secret",
     "slack_webhook_url",
+    "teams_webhook_url",
     "token",
     "webhook_url",
 }
 _SLACK_WEBHOOK_RE = re.compile(r"https://hooks\.slack\.com/services/[^\s\"'<>]+")
+_TEAMS_WEBHOOK_RE = re.compile(r"https://[^\s\"'<>]*(?:webhook|office|logic\.azure)[^\s\"'<>]*")
 
 CIRCUIT_STATE_CLOSED = "closed"
 CIRCUIT_STATE_OPEN = "open"
@@ -667,5 +669,5 @@ def _sanitize_value(key: str, value: Any) -> Any:
     if isinstance(value, list):
         return [_sanitize_value("", item) for item in value]
     if isinstance(value, str):
-        return _SLACK_WEBHOOK_RE.sub("[redacted]", value)
+        return _TEAMS_WEBHOOK_RE.sub("[redacted]", _SLACK_WEBHOOK_RE.sub("[redacted]", value))
     return value

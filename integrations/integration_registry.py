@@ -15,10 +15,15 @@ from integrations.slack_adapter import (
     SlackSimulationAdapter,
     get_slack_real_mode_readiness,
 )
+from integrations.teams_adapter import (
+    TeamsSimulationAdapter,
+    get_teams_real_mode_readiness,
+)
 from integrations.webhook_adapter import WebhookSimulationAdapter
 
 _ADAPTERS: dict[str, type[BaseIntegration]] = {
     "slack": SlackSimulationAdapter,
+    "teams": TeamsSimulationAdapter,
     "email": EmailSimulationAdapter,
     "firewall": FirewallSimulationAdapter,
     "webhook": WebhookSimulationAdapter,
@@ -44,9 +49,13 @@ def resolve_integration_mode(mode: str | None = None) -> str:
 def _resolve_adapter_mode(adapter_name: str, configured_mode: str) -> str:
     if configured_mode != REAL_MODE:
         return SIMULATION_MODE
-    if adapter_name != "slack":
+    if adapter_name not in {"slack", "teams"}:
         return SIMULATION_MODE
-    readiness = get_slack_real_mode_readiness(configured_mode)
+    readiness = (
+        get_slack_real_mode_readiness(configured_mode)
+        if adapter_name == "slack"
+        else get_teams_real_mode_readiness(configured_mode)
+    )
     if not readiness["real_mode_allowed"]:
         raise NotImplementedError("real integration mode is not implemented")
     return REAL_MODE
@@ -81,8 +90,14 @@ def list_integration_adapters(mode: str | None = None) -> dict[str, BaseIntegrat
         name: adapter_cls(
             mode=(
                 REAL_MODE
-                if name == "slack"
-                and get_slack_real_mode_readiness(configured_mode)["real_mode_allowed"]
+                if (
+                    name == "slack"
+                    and get_slack_real_mode_readiness(configured_mode)["real_mode_allowed"]
+                )
+                or (
+                    name == "teams"
+                    and get_teams_real_mode_readiness(configured_mode)["real_mode_allowed"]
+                )
                 else SIMULATION_MODE
             )
         )
@@ -96,35 +111,69 @@ def get_integration_status(mode: str | None = None) -> dict:
     if configured_mode not in {SIMULATION_MODE, REAL_MODE}:
         configured_mode = SIMULATION_MODE
     slack_readiness = get_slack_real_mode_readiness(configured_mode)
+    teams_readiness = get_teams_real_mode_readiness(configured_mode)
     real_mode_requested = configured_mode == REAL_MODE
-    real_mode_ready = bool(slack_readiness["real_mode_ready"])
+    real_mode_ready = bool(slack_readiness["real_mode_ready"] or teams_readiness["real_mode_ready"])
+    real_mode_allowed = bool(
+        slack_readiness["real_mode_allowed"] or teams_readiness["real_mode_allowed"]
+    )
+    real_mode_status = "disabled"
+    if real_mode_requested:
+        if real_mode_ready:
+            real_mode_status = "ready"
+        else:
+            real_mode_status = (
+                "disabled: no real notification adapter ready; "
+                f"slack={slack_readiness['real_mode_status']}; "
+                f"teams={teams_readiness['real_mode_status']}"
+            )
     return {
         "mode": REAL_MODE if real_mode_ready else SIMULATION_MODE,
         "configured_mode": configured_mode,
         "simulated": not real_mode_ready,
         "real_mode_enabled": real_mode_ready,
-        "real_mode_status": (
-            slack_readiness["real_mode_status"] if real_mode_requested else "disabled"
-        ),
+        "real_mode_status": real_mode_status,
         "slack_configured": slack_readiness["slack_configured"],
-        "real_mode_allowed": slack_readiness["real_mode_allowed"],
+        "teams_configured": teams_readiness["teams_configured"],
+        "real_mode_allowed": real_mode_allowed,
         "real_mode_ready": real_mode_ready,
         "adapters": [
             {
                 "name": name,
-                "mode": REAL_MODE if name == "slack" and real_mode_ready else SIMULATION_MODE,
-                "simulated": not (name == "slack" and real_mode_ready),
-                "real_client": name == "slack" and real_mode_ready,
+                "mode": REAL_MODE
+                if (
+                    (name == "slack" and slack_readiness["real_mode_ready"])
+                    or (name == "teams" and teams_readiness["real_mode_ready"])
+                )
+                else SIMULATION_MODE,
+                "simulated": not (
+                    (name == "slack" and slack_readiness["real_mode_ready"])
+                    or (name == "teams" and teams_readiness["real_mode_ready"])
+                ),
+                "real_client": (
+                    (name == "slack" and slack_readiness["real_mode_ready"])
+                    or (name == "teams" and teams_readiness["real_mode_ready"])
+                ),
                 "supported_actions": sorted(adapter_cls.supported_actions),
                 "circuit_breaker": get_simulated_circuit_breaker_dict(name),
                 **(
                     {
                         "slack_configured": slack_readiness["slack_configured"],
                         "real_mode_allowed": slack_readiness["real_mode_allowed"],
-                        "real_mode_ready": real_mode_ready,
+                        "real_mode_ready": slack_readiness["real_mode_ready"],
                         "webhook_configured": slack_readiness["webhook_configured"],
                     }
                     if name == "slack"
+                    else {}
+                ),
+                **(
+                    {
+                        "teams_configured": teams_readiness["teams_configured"],
+                        "real_mode_allowed": teams_readiness["real_mode_allowed"],
+                        "real_mode_ready": teams_readiness["real_mode_ready"],
+                        "webhook_configured": teams_readiness["webhook_configured"],
+                    }
+                    if name == "teams"
                     else {}
                 ),
             }

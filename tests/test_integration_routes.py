@@ -104,11 +104,17 @@ def _assert_status_shape(data):
     assert data["real_mode_enabled"] is False
     assert data["real_mode_status"]
     assert data["slack_configured"] in {True, False}
+    assert data["teams_configured"] in {True, False}
     assert data["real_mode_allowed"] in {True, False}
     assert data["real_mode_ready"] in {True, False}
     adapters = {adapter["name"]: adapter for adapter in data["adapters"]}
-    assert set(adapters) == {"email", "firewall", "slack", "webhook"}
+    assert set(adapters) == {"email", "firewall", "slack", "teams", "webhook"}
     assert adapters["slack"]["supported_actions"] == ["notify_channel", "send_message"]
+    assert adapters["teams"]["supported_actions"] == [
+        "notify_channel",
+        "notify_teams",
+        "send_message",
+    ]
     assert adapters["email"]["supported_actions"] == ["notify_owner", "send_email"]
     assert adapters["firewall"]["supported_actions"] == ["block_ip", "tag_ip", "unblock_ip"]
     assert adapters["webhook"]["supported_actions"] == [
@@ -123,6 +129,10 @@ def _assert_status_shape(data):
     assert "real_mode_allowed" in adapters["slack"]
     assert "real_mode_ready" in adapters["slack"]
     assert "webhook_configured" in adapters["slack"]
+    assert "teams_configured" in adapters["teams"]
+    assert "real_mode_allowed" in adapters["teams"]
+    assert "real_mode_ready" in adapters["teams"]
+    assert "webhook_configured" in adapters["teams"]
 
 
 def test_integration_status_without_session_returns_401(client):
@@ -167,6 +177,7 @@ def test_integration_status_super_admin_can_read(client, mock_db, monkeypatch):
 def test_integration_status_does_not_require_secrets(client, mock_db, monkeypatch):
     for env_name in [
         "SLACK_WEBHOOK_URL",
+        "TEAMS_WEBHOOK_URL",
         "SMTP_PASSWORD",
         "SENDGRID_API_KEY",
         "FIREWALL_API_TOKEN",
@@ -226,6 +237,7 @@ def test_integration_status_slack_real_readiness_uses_safe_booleans(
     assert adapters["slack"]["webhook_configured"] is True
     assert adapters["email"]["mode"] == "simulation"
     assert adapters["firewall"]["mode"] == "simulation"
+    assert adapters["teams"]["mode"] == "simulation"
     assert adapters["webhook"]["mode"] == "simulation"
     assert "hooks.slack.com/services" not in rendered
     assert "SECRET" not in rendered
@@ -250,6 +262,85 @@ def test_integration_status_slack_missing_webhook_not_ready(client, mock_db, mon
     adapters = {adapter["name"]: adapter for adapter in data["adapters"]}
     assert adapters["slack"]["webhook_configured"] is False
     assert adapters["slack"]["real_mode_ready"] is False
+
+
+def test_integration_status_teams_real_readiness_uses_safe_booleans(
+    client, mock_db, monkeypatch
+):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_TEAMS_ENABLED", "true")
+    monkeypatch.setenv("TEAMS_WEBHOOK_URL", "https://contoso.webhook.office.com/webhookb2/SECRET")
+    _deny_network(monkeypatch)
+    _login_super_admin(client)
+
+    resp = client.get("/integrations/status")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    rendered = json.dumps(data, sort_keys=True)
+    assert data["mode"] == "real"
+    assert data["configured_mode"] == "real"
+    assert data["real_mode_enabled"] is True
+    assert data["teams_configured"] is True
+    assert data["real_mode_allowed"] is True
+    assert data["real_mode_ready"] is True
+    adapters = {adapter["name"]: adapter for adapter in data["adapters"]}
+    assert adapters["teams"]["mode"] == "real"
+    assert adapters["teams"]["real_client"] is True
+    assert adapters["teams"]["webhook_configured"] is True
+    assert adapters["slack"]["mode"] == "simulation"
+    assert adapters["email"]["mode"] == "simulation"
+    assert adapters["firewall"]["mode"] == "simulation"
+    assert adapters["webhook"]["mode"] == "simulation"
+    assert "webhook.office.com" not in rendered
+    assert "SECRET" not in rendered
+
+
+def test_integration_status_teams_missing_webhook_not_ready(client, mock_db, monkeypatch):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_TEAMS_ENABLED", "true")
+    monkeypatch.delenv("TEAMS_WEBHOOK_URL", raising=False)
+    _deny_network(monkeypatch)
+    _login_super_admin(client)
+
+    resp = client.get("/integrations/status")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["mode"] == "simulation"
+    assert data["teams_configured"] is False
+    assert data["real_mode_allowed"] is True
+    assert data["real_mode_ready"] is False
+    adapters = {adapter["name"]: adapter for adapter in data["adapters"]}
+    assert adapters["teams"]["webhook_configured"] is False
+    assert adapters["teams"]["real_mode_ready"] is False
+
+
+def test_integration_status_slack_and_teams_config_are_independent(
+    client, mock_db, monkeypatch
+):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_TEAMS_ENABLED", "true")
+    monkeypatch.setenv("TEAMS_WEBHOOK_URL", "https://contoso.webhook.office.com/webhookb2/SECRET")
+    monkeypatch.delenv("SOAR_REAL_SLACK_ENABLED", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    _deny_network(monkeypatch)
+    _login_super_admin(client)
+
+    resp = client.get("/integrations/status")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    adapters = {adapter["name"]: adapter for adapter in data["adapters"]}
+    assert adapters["teams"]["real_mode_ready"] is True
+    assert adapters["slack"]["real_mode_ready"] is False
+    assert adapters["slack"]["mode"] == "simulation"
+    rendered = json.dumps(data, sort_keys=True)
+    assert "webhook.office.com" not in rendered
+    assert "SECRET" not in rendered
 
 
 def test_circuit_breaker_reset_requires_auth(client):
