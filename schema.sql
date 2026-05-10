@@ -329,6 +329,35 @@ CREATE TABLE IF NOT EXISTS playbook_definitions (
 CREATE INDEX IF NOT EXISTS idx_playbook_definitions_enabled
     ON playbook_definitions (enabled);
 
+CREATE TABLE IF NOT EXISTS playbook_schedules (
+    id SERIAL PRIMARY KEY,
+    playbook_id VARCHAR(64) NOT NULL REFERENCES playbook_definitions(id) ON DELETE CASCADE,
+    schedule_expression TEXT NOT NULL,
+    timezone TEXT NOT NULL DEFAULT 'UTC',
+    enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    paused BOOLEAN NOT NULL DEFAULT FALSE,
+    next_run_at TIMESTAMPTZ,
+    last_run_at TIMESTAMPTZ,
+    last_success_at TIMESTAMPTZ,
+    last_failure_at TIMESTAMPTZ,
+    last_scheduled_execution_id INTEGER,
+    missed_run_policy VARCHAR(30) NOT NULL DEFAULT 'skip',
+    max_catchup_runs INTEGER NOT NULL DEFAULT 0,
+    max_concurrent_runs INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (missed_run_policy IN ('skip', 'record_only', 'run_once')),
+    CHECK (max_catchup_runs >= 0),
+    CHECK (max_concurrent_runs >= 1)
+);
+
+CREATE INDEX IF NOT EXISTS idx_playbook_schedules_playbook_id
+    ON playbook_schedules (playbook_id);
+CREATE INDEX IF NOT EXISTS idx_playbook_schedules_enabled
+    ON playbook_schedules (enabled);
+CREATE INDEX IF NOT EXISTS idx_playbook_schedules_next_run_at
+    ON playbook_schedules (next_run_at);
+
 CREATE TABLE IF NOT EXISTS playbook_executions (
     id SERIAL PRIMARY KEY,
     playbook_id VARCHAR(64) NOT NULL REFERENCES playbook_definitions(id),
