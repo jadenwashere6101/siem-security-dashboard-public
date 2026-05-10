@@ -10,6 +10,9 @@ def test_validate_supported_actions_ok():
         {"action": "block_ip", "params": {}},
         {"action": "monitor", "on_failure": "continue"},
         {"action": "flag_high_priority"},
+        {"action": "notify_slack", "params": {"message": "hello"}},
+        {"action": "notify_email", "params": {"subject": "alert"}},
+        {"action": "notify_webhook", "params": {"payload": {"event": "alert"}}},
         {
             "action": "require_approval",
             "risk_level": "critical",
@@ -46,7 +49,7 @@ def test_validate_require_approval_options():
 
 
 def test_validate_unknown_action():
-    errors = validate_playbook_steps([{"action": "notify_slack"}])
+    errors = validate_playbook_steps([{"action": "notify_pagerduty"}])
     assert errors
     assert "unsupported action" in errors[0].lower()
 
@@ -67,3 +70,6 @@ def test_supported_actions_is_frozen():
     assert isinstance(SUPPORTED_ACTIONS, frozenset)
     assert "block_ip" in SUPPORTED_ACTIONS
     assert "require_approval" in SUPPORTED_ACTIONS
+    assert "notify_slack" in SUPPORTED_ACTIONS
+    assert "notify_email" in SUPPORTED_ACTIONS
+    assert "notify_webhook" in SUPPORTED_ACTIONS

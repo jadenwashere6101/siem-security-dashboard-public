@@ -13,6 +13,9 @@ SUPPORTED_ACTIONS: frozenset[str] = frozenset(
         "monitor",
         "flag_high_priority",
         "require_approval",
+        "notify_slack",
+        "notify_email",
+        "notify_webhook",
     }
 )
 
