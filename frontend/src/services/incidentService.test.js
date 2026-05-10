@@ -1,5 +1,6 @@
 import {
   loadIncidentDetail,
+  loadIncidentTimeline,
   loadIncidents,
   updateIncidentStatus,
 } from "./incidentService";
@@ -105,6 +106,39 @@ describe("incidentService", () => {
     });
 
     await expect(loadIncidentDetail(999)).rejects.toThrow("incident not found");
+  });
+
+  test("loadIncidentTimeline fetches incident timeline", async () => {
+    const payload = {
+      timeline: [
+        {
+          timestamp: "2026-05-10T18:25:00Z",
+          event_type: "playbook_step_completed",
+          source: "playbook_execution",
+          summary: "Simulated adapter step completed",
+        },
+      ],
+    };
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(payload),
+    });
+
+    const result = await loadIncidentTimeline(42);
+    const [url, options] = global.fetch.mock.calls[0];
+
+    expect(url).toBe("/incidents/42/timeline");
+    expect(options.credentials).toBe("include");
+    expect(result).toBe(payload);
+  });
+
+  test("loadIncidentTimeline surfaces backend errors", async () => {
+    global.fetch.mockResolvedValue({
+      ok: false,
+      json: () => Promise.resolve({ error: "timeline unavailable" }),
+    });
+
+    await expect(loadIncidentTimeline(42)).rejects.toThrow("timeline unavailable");
   });
 
   test("updateIncidentStatus posts status update", async () => {

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
   loadIncidentDetail,
+  loadIncidentTimeline,
   loadIncidents,
   updateIncidentStatus,
 } from "../services/incidentService";
@@ -9,6 +10,23 @@ import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
 const INCIDENT_STATUS_FILTERS = ["all", "open", "investigating", "resolved", "closed"];
 const INCIDENT_SEVERITY_FILTERS = ["all", "LOW", "MEDIUM", "HIGH", "CRITICAL"];
 const INCIDENT_STATUSES = ["open", "investigating", "resolved", "closed"];
+const SAFE_TIMELINE_METADATA_KEYS = [
+  "incident_id",
+  "alert_id",
+  "playbook_id",
+  "execution_id",
+  "step_index",
+  "action",
+  "status",
+  "simulated",
+  "executed",
+  "adapter",
+  "circuit_state",
+  "approval_request_id",
+  "required_role",
+  "source_ip",
+  "severity",
+];
 
 function IncidentsPanel({
   cardStyle,
@@ -32,6 +50,9 @@ function IncidentsPanel({
   const [pendingStatus, setPendingStatus] = useState("");
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [statusUpdateError, setStatusUpdateError] = useState("");
+  const [timeline, setTimeline] = useState([]);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [timelineError, setTimelineError] = useState("");
 
   const loadIncidentList = useCallback(async ({ quiet = false } = {}) => {
     try {
@@ -77,6 +98,22 @@ function IncidentsPanel({
     }
   }, []);
 
+  const loadTimeline = useCallback(async (incidentId) => {
+    if (!incidentId) return;
+    try {
+      setTimelineLoading(true);
+      setTimelineError("");
+
+      const data = await loadIncidentTimeline(incidentId);
+      setTimeline(Array.isArray(data?.timeline) ? data.timeline : []);
+    } catch (err) {
+      setTimeline([]);
+      setTimelineError(err.message || "Unable to load incident timeline.");
+    } finally {
+      setTimelineLoading(false);
+    }
+  }, []);
+
   const handleStatusUpdate = useCallback(async () => {
     if (!selectedIncidentId || !selectedIncident || !pendingStatus) return;
     if (pendingStatus === selectedIncident.status) return;
@@ -86,6 +123,7 @@ function IncidentsPanel({
       setStatusUpdateError("");
       await updateIncidentStatus(selectedIncidentId, pendingStatus);
       await loadDetail(selectedIncidentId);
+      await loadTimeline(selectedIncidentId);
       await loadIncidentList({ quiet: true });
     } catch (err) {
       setStatusUpdateError(err.message || "Unable to update incident status.");
@@ -94,6 +132,7 @@ function IncidentsPanel({
     }
   }, [
     loadDetail,
+    loadTimeline,
     loadIncidentList,
     pendingStatus,
     selectedIncident,
@@ -107,6 +146,9 @@ function IncidentsPanel({
     setDetailLoading(false);
     setStatusUpdateError("");
     setPendingStatus("");
+    setTimeline([]);
+    setTimelineError("");
+    setTimelineLoading(false);
   }, []);
 
   useEffect(() => {
@@ -115,9 +157,12 @@ function IncidentsPanel({
 
   useEffect(() => {
     if (selectedIncidentId) {
+      setTimeline([]);
+      setTimelineError("");
       loadDetail(selectedIncidentId);
+      loadTimeline(selectedIncidentId);
     }
-  }, [loadDetail, selectedIncidentId]);
+  }, [loadDetail, loadTimeline, selectedIncidentId]);
 
   return (
     <section style={cardStyle}>
@@ -319,6 +364,42 @@ function IncidentsPanel({
                   )}
                 </div>
 
+                <div style={timelineSectionStyle}>
+                  <div style={tableMetaStyle}>
+                    <span style={tableMetaLabelStyle}>SOAR Timeline</span>
+                    <span style={tableMetaCountStyle}>{timeline.length}</span>
+                  </div>
+                  <p style={timelineNoticeStyle}>
+                    Timeline is read-only. SOAR playbook and adapter events are
+                    simulation-only unless explicitly marked otherwise by the backend.
+                  </p>
+                  {timelineLoading ? (
+                    <p style={emptyTextStyle}>Loading timeline...</p>
+                  ) : timelineError ? (
+                    <div style={timelineErrorStyle}>
+                      <span>Error loading timeline: {timelineError}</span>
+                      <button
+                        type="button"
+                        onClick={() => loadTimeline(selectedIncidentId)}
+                        style={retryButtonStyle}
+                      >
+                        Retry timeline
+                      </button>
+                    </div>
+                  ) : timeline.length === 0 ? (
+                    <p style={emptyTextStyle}>No SOAR timeline events found for this incident.</p>
+                  ) : (
+                    <ol style={timelineListStyle} aria-label="SOAR timeline events">
+                      {timeline.map((event, index) => (
+                        <TimelineEvent
+                          key={getTimelineEventKey(event, index)}
+                          event={event}
+                        />
+                      ))}
+                    </ol>
+                  )}
+                </div>
+
                 {canTakeAlertActions ? (
                   <div style={statusControlStyle}>
                     <label style={filterWrapperStyle}>
@@ -371,6 +452,52 @@ const formatLabel = (value) =>
 const formatSeverity = (value) => String(value || "N/A").toUpperCase();
 
 const formatTimestamp = (value) => formatAdminTimestamp(value, "N/A");
+
+const formatEventType = (value) => {
+  const labels = {
+    incident_created: "Incident created",
+    alert_linked: "Alert linked",
+    alert_created: "Alert created",
+    playbook_execution_created: "Playbook execution created",
+    playbook_execution_started: "Playbook execution started",
+    playbook_execution_status_changed: "Playbook status changed",
+    playbook_step_started: "Playbook step started",
+    playbook_step_completed: "Playbook step completed",
+    playbook_step_failed: "Playbook step failed",
+    playbook_step_skipped: "Playbook step skipped",
+    playbook_adapter_simulated: "Simulated adapter step",
+    approval_requested: "Approval requested",
+    approval_approved: "Approval approved",
+    approval_denied: "Approval denied",
+    approval_expired: "Approval expired",
+    approval_resumed: "Approval resumed",
+    audit_event: "Audit event",
+  };
+  const normalized = String(value || "timeline_event");
+  return labels[normalized] || formatLabel(normalized);
+};
+
+const formatMetadataValue = (value) => {
+  if (value === true) return "true";
+  if (value === false) return "false";
+  if (value === null || value === undefined || value === "") return "N/A";
+  return String(value);
+};
+
+const getSafeMetadataEntries = (metadata) => {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return [];
+  return SAFE_TIMELINE_METADATA_KEYS
+    .filter((key) => Object.prototype.hasOwnProperty.call(metadata, key))
+    .map((key) => [key, formatMetadataValue(metadata[key])]);
+};
+
+const getTimelineEventKey = (event, index) => {
+  const timestamp = event?.timestamp || "no-time";
+  const type = event?.event_type || "event";
+  const source = event?.source || "source";
+  const sourceId = event?.source_id || index;
+  return `${timestamp}-${type}-${source}-${sourceId}-${index}`;
+};
 
 const truncateText = (value, maxLength) => {
   const text = String(value || "");
@@ -692,6 +819,112 @@ const linkedAlertsSectionStyle = {
   borderTop: "1px solid #21262d",
 };
 
+const timelineSectionStyle = {
+  marginTop: "18px",
+  paddingTop: "16px",
+  borderTop: "1px solid #21262d",
+};
+
+const timelineNoticeStyle = {
+  margin: "0 0 12px 0",
+  color: "#8b949e",
+  fontSize: "13px",
+  lineHeight: 1.5,
+};
+
+const timelineErrorStyle = {
+  ...errorStateStyle,
+  marginBottom: 0,
+};
+
+const timelineListStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "10px",
+  maxHeight: "420px",
+  overflowY: "auto",
+  margin: 0,
+  padding: 0,
+  listStyle: "none",
+};
+
+const timelineItemStyle = {
+  padding: "12px",
+  borderRadius: "8px",
+  border: "1px solid #30363d",
+  backgroundColor: "#161b22",
+};
+
+const timelineItemHeaderStyle = {
+  display: "flex",
+  alignItems: "baseline",
+  justifyContent: "space-between",
+  gap: "12px",
+  flexWrap: "wrap",
+  marginBottom: "6px",
+};
+
+const timelineEventTypeStyle = {
+  color: "#e6edf3",
+  fontSize: "13px",
+  fontWeight: "700",
+};
+
+const timelineTimestampStyle = {
+  color: "#8b949e",
+  fontSize: "12px",
+  fontFamily: "'Courier New', monospace",
+};
+
+const timelineSourceStyle = {
+  margin: "0 0 4px 0",
+  color: "#93c5fd",
+  fontSize: "12px",
+  fontWeight: "700",
+  textTransform: "uppercase",
+  letterSpacing: "0.04em",
+};
+
+const timelineTitleStyle = {
+  margin: "0 0 4px 0",
+  color: "#c9d1d9",
+  fontSize: "13px",
+  fontWeight: "700",
+};
+
+const timelineSummaryStyle = {
+  margin: 0,
+  color: "#c9d1d9",
+  fontSize: "13px",
+  lineHeight: 1.5,
+};
+
+const timelineMetadataStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "6px",
+  marginTop: "10px",
+};
+
+const timelineMetadataChipStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "4px",
+  maxWidth: "100%",
+  padding: "4px 7px",
+  borderRadius: "999px",
+  border: "1px solid #30363d",
+  color: "#c9d1d9",
+  backgroundColor: "#0d1117",
+  fontSize: "11px",
+  fontFamily: "'Courier New', monospace",
+  overflowWrap: "anywhere",
+};
+
+const timelineMetadataKeyStyle = {
+  color: "#8b949e",
+};
+
 const statusControlStyle = {
   display: "flex",
   alignItems: "flex-end",
@@ -721,6 +954,33 @@ function DetailField({ label, value, mono = false }) {
         {value}
       </span>
     </div>
+  );
+}
+
+function TimelineEvent({ event }) {
+  const metadataEntries = getSafeMetadataEntries(event?.metadata);
+  return (
+    <li style={timelineItemStyle}>
+      <div style={timelineItemHeaderStyle}>
+        <span style={timelineEventTypeStyle}>{formatEventType(event?.event_type)}</span>
+        <time style={timelineTimestampStyle} dateTime={event?.timestamp || undefined}>
+          {formatTimestamp(event?.timestamp)}
+        </time>
+      </div>
+      <p style={timelineSourceStyle}>{formatLabel(event?.source || "timeline")}</p>
+      {event?.title ? <p style={timelineTitleStyle}>{event.title}</p> : null}
+      <p style={timelineSummaryStyle}>{event?.summary || "No summary provided."}</p>
+      {metadataEntries.length > 0 ? (
+        <div style={timelineMetadataStyle} aria-label="Timeline metadata">
+          {metadataEntries.map(([key, value]) => (
+            <span key={key} style={timelineMetadataChipStyle}>
+              <span style={timelineMetadataKeyStyle}>{key}:</span>
+              <span>{value}</span>
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </li>
   );
 }
 

@@ -43,6 +43,21 @@ export const loadIncidentDetail = async (incidentId) => {
   return data;
 };
 
+export const loadIncidentTimeline = async (incidentId) => {
+  const res = await fetch(buildSiemPath(`/incidents/${incidentId}/timeline`), {
+    credentials: "include",
+  });
+  const data = await parseJsonResponse(res, { timeline: [] });
+
+  if (!res.ok) {
+    throw new Error(
+      getApiErrorMessage(data, "Unable to load incident timeline", ["error"])
+    );
+  }
+
+  return data;
+};
+
 export const updateIncidentStatus = async (incidentId, status) => {
   const res = await fetch(buildSiemPath(`/incidents/${incidentId}/status`), {
     method: "POST",

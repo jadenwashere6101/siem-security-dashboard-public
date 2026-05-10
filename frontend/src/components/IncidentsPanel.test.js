@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import IncidentsPanel from "./IncidentsPanel";
 import {
   loadIncidentDetail,
+  loadIncidentTimeline,
   loadIncidents,
   updateIncidentStatus,
 } from "../services/incidentService";
@@ -12,6 +13,7 @@ import {
 jest.mock("../services/incidentService", () => ({
   loadIncidents: jest.fn(),
   loadIncidentDetail: jest.fn(),
+  loadIncidentTimeline: jest.fn(),
   updateIncidentStatus: jest.fn(),
 }));
 
@@ -69,6 +71,7 @@ const deferred = () => {
 describe("IncidentsPanel", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    loadIncidentTimeline.mockResolvedValue({ timeline: [] });
   });
 
   test("shows loading state while incidents load", () => {
@@ -133,6 +136,7 @@ describe("IncidentsPanel", () => {
     await userEvent.click(screen.getByText(incidentFixture.title));
 
     await waitFor(() => expect(loadIncidentDetail).toHaveBeenCalledWith(7));
+    await waitFor(() => expect(loadIncidentTimeline).toHaveBeenCalledWith(7));
   });
 
   test("shows detail loading state", async () => {
@@ -169,6 +173,149 @@ describe("IncidentsPanel", () => {
     expect(await screen.findByText(/Incident #7/)).toBeInTheDocument();
     expect(screen.getAllByText("P2").length).toBeGreaterThan(0);
     expect(screen.getAllByText("203.0.113.10").length).toBeGreaterThan(0);
+  });
+
+  test("renders timeline loading state", async () => {
+    const pendingTimeline = deferred();
+    loadIncidents.mockResolvedValue({ incidents: [incidentFixture], count: 1 });
+    loadIncidentDetail.mockResolvedValue({ incident: incidentDetailFixture });
+    loadIncidentTimeline.mockReturnValue(pendingTimeline.promise);
+
+    renderPanel();
+    await screen.findByText(incidentFixture.title);
+    await userEvent.click(screen.getByText(incidentFixture.title));
+
+    expect(await screen.findByText("Loading timeline...")).toBeInTheDocument();
+  });
+
+  test("renders empty timeline state", async () => {
+    loadIncidents.mockResolvedValue({ incidents: [incidentFixture], count: 1 });
+    loadIncidentDetail.mockResolvedValue({ incident: incidentDetailFixture });
+    loadIncidentTimeline.mockResolvedValue({ timeline: [] });
+
+    renderPanel();
+    await screen.findByText(incidentFixture.title);
+    await userEvent.click(screen.getByText(incidentFixture.title));
+
+    expect(
+      await screen.findByText("No SOAR timeline events found for this incident.")
+    ).toBeInTheDocument();
+  });
+
+  test("renders timeline entries with safe metadata only", async () => {
+    loadIncidents.mockResolvedValue({ incidents: [incidentFixture], count: 1 });
+    loadIncidentDetail.mockResolvedValue({ incident: incidentDetailFixture });
+    loadIncidentTimeline.mockResolvedValue({
+      timeline: [
+        {
+          timestamp: "2026-05-10T18:25:00Z",
+          event_type: "playbook_step_completed",
+          source: "playbook_execution",
+          title: "Notify analyst",
+          summary: "Simulated notification completed",
+          metadata: {
+            playbook_id: "pb_notify",
+            execution_id: 123,
+            simulated: true,
+            webhook_url: "https://hooks.example.invalid/secret",
+            raw_params: { token: "secret" },
+            secret: "do-not-render",
+          },
+        },
+        {
+          timestamp: "2026-05-10T18:26:00Z",
+          event_type: "custom_unknown_event",
+          source: "audit_log",
+          summary: "Custom audit event",
+          metadata: {
+            alert_id: 42,
+          },
+        },
+      ],
+    });
+
+    renderPanel();
+    await screen.findByText(incidentFixture.title);
+    await userEvent.click(screen.getByText(incidentFixture.title));
+
+    expect(await screen.findByText("Playbook step completed")).toBeInTheDocument();
+    expect(screen.getByText("Notify analyst")).toBeInTheDocument();
+    expect(screen.getByText("Simulated notification completed")).toBeInTheDocument();
+    expect(screen.getByText("Playbook Execution")).toBeInTheDocument();
+    expect(screen.getByText("playbook_id:")).toBeInTheDocument();
+    expect(screen.getByText("pb_notify")).toBeInTheDocument();
+    expect(screen.getByText("execution_id:")).toBeInTheDocument();
+    expect(screen.getByText("123")).toBeInTheDocument();
+    expect(screen.getByText("simulated:")).toBeInTheDocument();
+    expect(screen.getByText("true")).toBeInTheDocument();
+    expect(screen.getByText("Custom Unknown Event")).toBeInTheDocument();
+    expect(screen.queryByText(/hooks\.example/)).not.toBeInTheDocument();
+    expect(screen.queryByText("raw_params:")).not.toBeInTheDocument();
+    expect(screen.queryByText("do-not-render")).not.toBeInTheDocument();
+  });
+
+  test("timeline errors do not clear incident detail and can retry", async () => {
+    loadIncidents.mockResolvedValue({ incidents: [incidentFixture], count: 1 });
+    loadIncidentDetail.mockResolvedValue({ incident: incidentDetailFixture });
+    loadIncidentTimeline
+      .mockRejectedValueOnce(new Error("timeline failed"))
+      .mockResolvedValueOnce({
+        timeline: [
+          {
+            timestamp: "2026-05-10T18:25:00Z",
+            event_type: "approval_requested",
+            source: "approval_request",
+            summary: "Approval requested for simulated step",
+          },
+        ],
+      });
+
+    renderPanel();
+    await screen.findByText(incidentFixture.title);
+    await userEvent.click(screen.getByText(incidentFixture.title));
+
+    expect(await screen.findByText(/Incident #7/)).toBeInTheDocument();
+    expect(await screen.findByText("Error loading timeline: timeline failed")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Retry timeline" }));
+
+    expect(await screen.findByText("Approval requested")).toBeInTheDocument();
+    expect(screen.getByText("Approval requested for simulated step")).toBeInTheDocument();
+    expect(loadIncidentTimeline).toHaveBeenCalledTimes(2);
+  });
+
+  test("timeline section does not render mutation controls", async () => {
+    loadIncidents.mockResolvedValue({ incidents: [incidentFixture], count: 1 });
+    loadIncidentDetail.mockResolvedValue({ incident: incidentDetailFixture });
+    loadIncidentTimeline.mockResolvedValue({
+      timeline: [
+        {
+          timestamp: "2026-05-10T18:25:00Z",
+          event_type: "playbook_adapter_simulated",
+          source: "playbook_execution",
+          summary: "Simulated adapter event",
+          metadata: { adapter: "slack", simulated: true, executed: false },
+        },
+      ],
+    });
+
+    renderPanel({ canTakeAlertActions: false });
+    await screen.findByText(incidentFixture.title);
+    await userEvent.click(screen.getByText(incidentFixture.title));
+
+    expect(await screen.findByText("Simulated adapter step")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Timeline is read-only. SOAR playbook and adapter events are simulation-only unless explicitly marked otherwise by the backend."
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Deny" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reset to Closed" })).not.toBeInTheDocument();
   });
 
   test("renders dash for null resolved_at", async () => {
