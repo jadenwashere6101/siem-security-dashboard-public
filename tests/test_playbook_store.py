@@ -444,3 +444,83 @@ def test_create_pending_playbook_execution_once_does_not_touch_queue_or_logs(pos
     assert cur.fetchone()[0] == queue_before
     cur.execute("SELECT COUNT(*) FROM response_actions_log")
     assert cur.fetchone()[0] == log_before
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_list_and_claim_pending_playbook_executions(postgres_db):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_store.create_playbook_definition(conn, "pb_claim", "Claim", steps=_valid_steps())
+    e1 = playbook_store.create_playbook_execution(conn, "pb_claim", aid)
+    e2 = playbook_store.create_playbook_execution(conn, "pb_claim", alert_id=None)
+    playbook_store.update_execution_status(conn, e2, "success")
+
+    pending = playbook_store.list_pending_playbook_executions(conn)
+    assert [row["id"] for row in pending] == [e1]
+
+    claimed = playbook_store.claim_next_pending_playbook_execution(conn)
+    assert claimed["id"] == e1
+    assert claimed["status"] == "running"
+    assert claimed["started_at"] is not None
+
+    assert playbook_store.claim_next_pending_playbook_execution(conn) is None
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_playbook_execution_step_log_and_terminal_helpers(postgres_db):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_store.create_playbook_definition(conn, "pb_log", "Log", steps=_valid_steps())
+    eid = playbook_store.create_playbook_execution(conn, "pb_log", aid)
+    running = playbook_store.set_playbook_execution_running(conn, eid)
+    assert running["status"] == "running"
+    assert running["started_at"] is not None
+
+    steps_log = [{"step_index": 0, "status": "success"}]
+    updated = playbook_store.update_playbook_execution_step_log(
+        conn,
+        eid,
+        steps_log,
+        last_completed_step=0,
+    )
+    assert updated["steps_log"] == steps_log
+    assert updated["last_completed_step"] == 0
+
+    success = playbook_store.set_playbook_execution_success(
+        conn,
+        eid,
+        steps_log,
+        last_completed_step=0,
+    )
+    assert success["status"] == "success"
+    assert success["completed_at"] is not None
+
+    cur.execute("SELECT COUNT(*) FROM response_actions_queue")
+    assert cur.fetchone()[0] == 0
+    cur.execute("SELECT COUNT(*) FROM approval_requests")
+    assert cur.fetchone()[0] == 0
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_playbook_execution_failed_helper(postgres_db):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_store.create_playbook_definition(conn, "pb_fail_helper", "Fail", steps=_valid_steps())
+    eid = playbook_store.create_playbook_execution(conn, "pb_fail_helper", aid)
+    playbook_store.set_playbook_execution_running(conn, eid)
+
+    steps_log = [{"step_index": 0, "status": "failed"}]
+    failed = playbook_store.set_playbook_execution_failed(
+        conn,
+        eid,
+        steps_log,
+        last_completed_step=None,
+    )
+
+    assert failed["status"] == "failed"
+    assert failed["completed_at"] is not None
+    assert failed["steps_log"] == steps_log
+    cur.execute("SELECT COUNT(*) FROM response_actions_queue")
+    assert cur.fetchone()[0] == 0
+    cur.execute("SELECT COUNT(*) FROM approval_requests")
+    assert cur.fetchone()[0] == 0

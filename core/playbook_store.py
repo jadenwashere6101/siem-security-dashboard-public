@@ -301,6 +301,170 @@ def get_playbook_execution(conn, execution_id: int) -> dict[str, Any] | None:
         return _execution_row_to_dict(row)
 
 
+def list_pending_playbook_executions(conn, limit: int = 10) -> list[dict[str, Any]]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, playbook_id, alert_id, incident_id, status,
+                   started_at, completed_at, last_completed_step, steps_log, created_at
+            FROM playbook_executions
+            WHERE status = 'pending'
+            ORDER BY created_at ASC, id ASC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        return [_execution_row_to_dict(row) for row in cur.fetchall()]
+
+
+def claim_next_pending_playbook_execution(conn, now: datetime | None = None) -> dict[str, Any] | None:
+    if now is None:
+        now = datetime.utcnow()
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id
+            FROM playbook_executions
+            WHERE status = 'pending'
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+            """
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+
+        execution_id = int(row[0])
+        cur.execute(
+            """
+            UPDATE playbook_executions
+            SET status = 'running',
+                started_at = COALESCE(started_at, %s)
+            WHERE id = %s
+            RETURNING id, playbook_id, alert_id, incident_id, status,
+                      started_at, completed_at, last_completed_step, steps_log, created_at
+            """,
+            (now, execution_id),
+        )
+        updated = cur.fetchone()
+        if updated is None:
+            return None
+        return _execution_row_to_dict(updated)
+
+
+def set_playbook_execution_running(
+    conn,
+    execution_id: int,
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
+    if now is None:
+        now = datetime.utcnow()
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE playbook_executions
+            SET status = 'running',
+                started_at = COALESCE(started_at, %s)
+            WHERE id = %s
+              AND status = 'pending'
+            RETURNING id, playbook_id, alert_id, incident_id, status,
+                      started_at, completed_at, last_completed_step, steps_log, created_at
+            """,
+            (now, execution_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return _execution_row_to_dict(row)
+
+
+def update_playbook_execution_step_log(
+    conn,
+    execution_id: int,
+    steps_log: list[dict],
+    last_completed_step: int | None = None,
+) -> dict[str, Any] | None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE playbook_executions
+            SET steps_log = %s,
+                last_completed_step = %s
+            WHERE id = %s
+            RETURNING id, playbook_id, alert_id, incident_id, status,
+                      started_at, completed_at, last_completed_step, steps_log, created_at
+            """,
+            (Json(steps_log), last_completed_step, execution_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return _execution_row_to_dict(row)
+
+
+def set_playbook_execution_success(
+    conn,
+    execution_id: int,
+    steps_log: list[dict],
+    last_completed_step: int | None,
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
+    if now is None:
+        now = datetime.utcnow()
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE playbook_executions
+            SET status = 'success',
+                completed_at = %s,
+                steps_log = %s,
+                last_completed_step = %s
+            WHERE id = %s
+            RETURNING id, playbook_id, alert_id, incident_id, status,
+                      started_at, completed_at, last_completed_step, steps_log, created_at
+            """,
+            (now, Json(steps_log), last_completed_step, execution_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return _execution_row_to_dict(row)
+
+
+def set_playbook_execution_failed(
+    conn,
+    execution_id: int,
+    steps_log: list[dict],
+    last_completed_step: int | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
+    if now is None:
+        now = datetime.utcnow()
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE playbook_executions
+            SET status = 'failed',
+                completed_at = %s,
+                steps_log = %s,
+                last_completed_step = %s
+            WHERE id = %s
+            RETURNING id, playbook_id, alert_id, incident_id, status,
+                      started_at, completed_at, last_completed_step, steps_log, created_at
+            """,
+            (now, Json(steps_log), last_completed_step, execution_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return _execution_row_to_dict(row)
+
+
 def update_execution_status(
     conn,
     execution_id: int,
