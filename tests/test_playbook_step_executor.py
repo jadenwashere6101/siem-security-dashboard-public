@@ -1,7 +1,8 @@
 import inspect
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from core import playbook_store
+from core import approval_store, playbook_store
 from engines import playbook_step_executor
 
 
@@ -34,6 +35,18 @@ def _create_execution(conn, cur, playbook_id="pb_exec", steps=None):
 
 def _count(cur, table):
     cur.execute(f"SELECT COUNT(*) FROM {table}")
+    return cur.fetchone()[0]
+
+
+def _insert_user(cur, username="playbook-approver"):
+    cur.execute(
+        """
+        INSERT INTO users (username, password_hash, role)
+        VALUES (%s, 'hash', 'analyst')
+        RETURNING id
+        """,
+        (username,),
+    )
     return cur.fetchone()[0]
 
 
@@ -186,7 +199,7 @@ def test_require_approval_pending_rerun_does_not_duplicate_request_or_steps(post
 
     assert first["outcome"] == "awaiting_approval"
     assert second["outcome"] == "skipped"
-    assert second["reason"] == "unsupported_status"
+    assert second["reason"] == "approval_pending"
     assert after["status"] == "awaiting_approval"
     assert after["steps_log"] == before["steps_log"]
 
@@ -199,6 +212,152 @@ def test_require_approval_pending_rerun_does_not_duplicate_request_or_steps(post
         (eid,),
     )
     assert cur.fetchone()[0] == 1
+
+
+def test_approved_approval_resumes_from_next_step(postgres_db):
+    conn, cur = postgres_db
+    user_id = _insert_user(cur)
+    eid = _create_execution(
+        conn,
+        cur,
+        "pb_approval_resume",
+        steps=[
+            {"action": "monitor", "params": {}},
+            {"action": "require_approval", "reason": "Approve next simulated step"},
+            {"action": "block_ip", "params": {}},
+        ],
+    )
+    pause = playbook_step_executor.process_playbook_execution(conn, eid)
+    approval_id = playbook_store.get_playbook_execution(conn, eid)["steps_log"][1][
+        "approval_request_id"
+    ]
+    approval_store.approve_request(conn, approval_id, actor_user_id=user_id)
+
+    result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert pause["outcome"] == "awaiting_approval"
+    assert result["outcome"] == "success"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["status"] == "success"
+    assert row["last_completed_step"] == 2
+    events = [entry.get("event") for entry in row["steps_log"]]
+    assert events == [
+        None,
+        "approval_requested",
+        "approval_approved",
+        "approval_resumed",
+        None,
+    ]
+    assert row["steps_log"][-1]["action"] == "block_ip"
+    assert row["steps_log"][-1]["output"] == {"simulated": True, "executed": False}
+    assert _count(cur, "response_actions_queue") == 0
+    assert _count(cur, "response_actions_log") == 0
+
+    rerun = playbook_step_executor.process_playbook_execution(conn, eid)
+    assert rerun["outcome"] == "skipped"
+    assert rerun["reason"] == "terminal_status"
+
+
+def test_denied_approval_fails_and_skips_later_steps(postgres_db):
+    conn, cur = postgres_db
+    user_id = _insert_user(cur)
+    eid = _create_execution(
+        conn,
+        cur,
+        "pb_approval_denied",
+        steps=[
+            {"action": "require_approval", "reason": "Approve later steps"},
+            {"action": "block_ip", "params": {}},
+            {"action": "monitor", "params": {}},
+        ],
+    )
+    playbook_step_executor.process_playbook_execution(conn, eid)
+    approval_id = playbook_store.get_playbook_execution(conn, eid)["steps_log"][0][
+        "approval_request_id"
+    ]
+    approval_store.deny_request(conn, approval_id, actor_user_id=user_id)
+
+    result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "failed"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["status"] == "failed"
+    assert row["last_completed_step"] is None
+    assert [entry.get("event") for entry in row["steps_log"]] == [
+        "approval_requested",
+        "approval_denied",
+        "skipped_after_approval_gate",
+        "skipped_after_approval_gate",
+    ]
+    skipped = row["steps_log"][2:]
+    assert [entry["action"] for entry in skipped] == ["block_ip", "monitor"]
+    assert all(entry["status"] == "skipped" for entry in skipped)
+    assert all(entry["output"]["executed"] is False for entry in skipped)
+    assert _count(cur, "response_actions_queue") == 0
+
+
+def test_expired_approval_fails_and_skips_later_steps(postgres_db):
+    conn, cur = postgres_db
+    now = datetime.now(timezone.utc)
+    eid = _create_execution(
+        conn,
+        cur,
+        "pb_approval_expired",
+        steps=[
+            {"action": "require_approval", "expires_in_minutes": 5},
+            {"action": "block_ip", "params": {}},
+        ],
+    )
+    playbook_step_executor.process_playbook_execution(conn, eid, now=now)
+
+    result = playbook_step_executor.process_playbook_execution(
+        conn,
+        eid,
+        now=now + timedelta(minutes=10),
+    )
+
+    assert result["outcome"] == "failed"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["status"] == "failed"
+    assert [entry.get("event") for entry in row["steps_log"]] == [
+        "approval_requested",
+        "approval_expired",
+        "skipped_after_approval_gate",
+    ]
+    assert row["steps_log"][2]["action"] == "block_ip"
+    assert row["steps_log"][2]["status"] == "skipped"
+    cur.execute(
+        "SELECT status FROM approval_requests WHERE playbook_execution_id = %s",
+        (eid,),
+    )
+    assert cur.fetchone()[0] == "expired"
+
+
+def test_batch_processes_approved_awaiting_approval_execution(postgres_db):
+    conn, cur = postgres_db
+    user_id = _insert_user(cur)
+    eid = _create_execution(
+        conn,
+        cur,
+        "pb_batch_approval_resume",
+        steps=[
+            {"action": "require_approval", "reason": "Approve batch resume"},
+            {"action": "monitor", "params": {}},
+        ],
+    )
+    playbook_step_executor.process_playbook_execution(conn, eid)
+    approval_id = playbook_store.get_playbook_execution(conn, eid)["steps_log"][0][
+        "approval_request_id"
+    ]
+    approval_store.approve_request(conn, approval_id, actor_user_id=user_id)
+
+    result = playbook_step_executor.process_playbook_execution_batch(conn, limit=5)
+
+    assert result["processed"] == 1
+    assert result["success"] == 1
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["status"] == "success"
+    assert row["steps_log"][-1]["action"] == "monitor"
 
 
 def test_unsupported_step_action_marks_execution_failed(postgres_db):

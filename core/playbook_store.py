@@ -317,6 +317,22 @@ def list_pending_playbook_executions(conn, limit: int = 10) -> list[dict[str, An
         return [_execution_row_to_dict(row) for row in cur.fetchall()]
 
 
+def list_awaiting_approval_playbook_executions(conn, limit: int = 10) -> list[dict[str, Any]]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, playbook_id, alert_id, incident_id, status,
+                   started_at, completed_at, last_completed_step, steps_log, created_at
+            FROM playbook_executions
+            WHERE status = 'awaiting_approval'
+            ORDER BY created_at ASC, id ASC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        return [_execution_row_to_dict(row) for row in cur.fetchall()]
+
+
 def claim_next_pending_playbook_execution(conn, now: datetime | None = None) -> dict[str, Any] | None:
     if now is None:
         now = datetime.utcnow()
@@ -374,6 +390,38 @@ def set_playbook_execution_running(
                       started_at, completed_at, last_completed_step, steps_log, created_at
             """,
             (now, execution_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return _execution_row_to_dict(row)
+
+
+def set_playbook_execution_resumed_running(
+    conn,
+    execution_id: int,
+    steps_log: list[dict],
+    last_completed_step: int | None,
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
+    if now is None:
+        now = datetime.utcnow()
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE playbook_executions
+            SET status = 'running',
+                started_at = COALESCE(started_at, %s),
+                completed_at = NULL,
+                steps_log = %s,
+                last_completed_step = %s
+            WHERE id = %s
+              AND status = 'awaiting_approval'
+            RETURNING id, playbook_id, alert_id, incident_id, status,
+                      started_at, completed_at, last_completed_step, steps_log, created_at
+            """,
+            (now, Json(steps_log), last_completed_step, execution_id),
         )
         row = cur.fetchone()
         if row is None:

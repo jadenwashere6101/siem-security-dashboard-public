@@ -66,6 +66,9 @@ def process_playbook_execution(conn, execution_id: int, now=None) -> dict[str, A
             "message": "Running playbook execution was not re-run.",
         }
 
+    if prior_status == "awaiting_approval":
+        return _process_awaiting_approval_execution(conn, execution, now=_coerce_now(now))
+
     if prior_status != "pending":
         return {
             "execution_id": execution_id,
@@ -106,6 +109,15 @@ def process_playbook_execution_batch(conn, limit=10, now=None) -> dict[str, Any]
         if result is None:
             break
         results.append(result)
+
+    remaining = batch_limit - len(results)
+    if remaining > 0:
+        awaiting_rows = playbook_store.list_awaiting_approval_playbook_executions(
+            conn,
+            limit=remaining,
+        )
+        for row in awaiting_rows:
+            results.append(process_playbook_execution(conn, row["id"], now=now))
 
     return {
         "processed": len(results),
@@ -181,12 +193,203 @@ def _process_running_execution(
             "Playbook definition steps are invalid.",
         )
 
-    steps_log: list[dict[str, Any]] = []
-    last_completed_step = None
+    return _process_steps(
+        conn,
+        execution,
+        steps,
+        timestamp,
+        prior,
+        start_index=0,
+        steps_log=[],
+        last_completed_step=None,
+    )
+
+
+def _process_awaiting_approval_execution(conn, execution: dict[str, Any], now=None) -> dict[str, Any]:
+    timestamp = _coerce_now(now)
+    steps_log = list(execution.get("steps_log") or [])
+    approval_entry = _latest_gate_entry(steps_log)
+    if approval_entry is None:
+        return _fail_awaiting_execution(
+            conn,
+            execution,
+            steps_log,
+            None,
+            "missing_approval_gate",
+            "Awaiting approval execution has no approval gate entry.",
+            timestamp,
+        )
+
+    gate_index = approval_entry["step_index"]
+    approval_request = approval_store.get_latest_playbook_step_approval_request(
+        conn,
+        playbook_execution_id=execution["id"],
+        playbook_step_index=gate_index,
+        materialize_expired=True,
+        now=timestamp,
+    )
+    if approval_request is None:
+        return _fail_awaiting_execution(
+            conn,
+            execution,
+            steps_log,
+            gate_index,
+            "missing_approval_request",
+            "Linked approval request was not found.",
+            timestamp,
+        )
+
+    if approval_request["status"] == "pending":
+        return {
+            "execution_id": execution["id"],
+            "playbook_id": execution["playbook_id"],
+            "prior_status": "awaiting_approval",
+            "new_status": "awaiting_approval",
+            "outcome": "skipped",
+            "reason": "approval_pending",
+            "steps_processed": 0,
+            "message": "Playbook execution is still awaiting approval.",
+        }
+
+    if approval_request["status"] == "approved":
+        if not _has_gate_event(steps_log, gate_index, approval_request["id"], "approval_approved"):
+            steps_log.append(
+                _approval_decision_entry(
+                    step_index=gate_index,
+                    approval_request=approval_request,
+                    status="approved",
+                    event="approval_approved",
+                    message="Approval granted for simulated playbook gate.",
+                    now=timestamp,
+                )
+            )
+        if not _has_gate_event(steps_log, gate_index, approval_request["id"], "approval_resumed"):
+            steps_log.append(
+                _approval_decision_entry(
+                    step_index=gate_index,
+                    approval_request=approval_request,
+                    status="resumed",
+                    event="approval_resumed",
+                    message="Simulation resumed after approval.",
+                    now=timestamp,
+                )
+            )
+
+        resumed = playbook_store.set_playbook_execution_resumed_running(
+            conn,
+            execution["id"],
+            steps_log,
+            last_completed_step=gate_index,
+            now=timestamp,
+        )
+        if resumed is None:
+            latest = playbook_store.get_playbook_execution(conn, execution["id"]) or execution
+            return {
+                "execution_id": execution["id"],
+                "playbook_id": execution["playbook_id"],
+                "prior_status": "awaiting_approval",
+                "new_status": latest.get("status"),
+                "outcome": "skipped",
+                "reason": "resume_claim_failed",
+                "steps_processed": 0,
+                "message": "Playbook execution could not be resumed.",
+            }
+
+        definition = playbook_store.get_playbook_definition(conn, execution["playbook_id"])
+        if definition is None or not isinstance(definition.get("steps"), list):
+            return _fail_awaiting_execution(
+                conn,
+                resumed,
+                steps_log,
+                gate_index,
+                "invalid_resume_definition",
+                "Playbook definition could not be loaded for approval resume.",
+                timestamp,
+                prior_status="awaiting_approval",
+            )
+
+        return _process_steps(
+            conn,
+            resumed,
+            definition["steps"],
+            timestamp,
+            "awaiting_approval",
+            start_index=gate_index + 1,
+            steps_log=steps_log,
+            last_completed_step=gate_index,
+        )
+
+    if approval_request["status"] in {"denied", "expired"}:
+        event = f"approval_{approval_request['status']}"
+        if not _has_gate_event(steps_log, gate_index, approval_request["id"], event):
+            steps_log.append(
+                _approval_decision_entry(
+                    step_index=gate_index,
+                    approval_request=approval_request,
+                    status=approval_request["status"],
+                    event=event,
+                    message=f"Approval {approval_request['status']}; later steps were not run.",
+                    now=timestamp,
+                )
+            )
+
+        definition = playbook_store.get_playbook_definition(conn, execution["playbook_id"])
+        steps = definition.get("steps") if definition else []
+        if isinstance(steps, list):
+            steps_log.extend(
+                _skipped_later_step_entries(
+                    steps,
+                    start_index=gate_index + 1,
+                    reason=f"approval_{approval_request['status']}",
+                    now=timestamp,
+                )
+            )
+
+        playbook_store.set_playbook_execution_failed(
+            conn,
+            execution["id"],
+            steps_log,
+            last_completed_step=execution.get("last_completed_step"),
+            now=timestamp,
+        )
+        return _result(
+            execution,
+            "awaiting_approval",
+            "failed",
+            "failed",
+            0,
+            f"Approval {approval_request['status']}; simulated playbook stopped safely.",
+        )
+
+    return {
+        "execution_id": execution["id"],
+        "playbook_id": execution["playbook_id"],
+        "prior_status": "awaiting_approval",
+        "new_status": "awaiting_approval",
+        "outcome": "skipped",
+        "reason": "unsupported_approval_status",
+        "steps_processed": 0,
+        "message": "Linked approval status is not processable.",
+    }
+
+
+def _process_steps(
+    conn,
+    execution: dict[str, Any],
+    steps: list[dict[str, Any]],
+    timestamp: datetime,
+    prior: str,
+    *,
+    start_index: int,
+    steps_log: list[dict[str, Any]],
+    last_completed_step: int | None,
+) -> dict[str, Any]:
+    execution_id = execution["id"]
+    playbook_id = execution["playbook_id"]
     failed = False
     failure_message = None
 
-    for index, step in enumerate(steps):
+    for index, step in enumerate(steps[start_index:], start=start_index):
         if isinstance(step, dict) and step.get("action") == "require_approval":
             approval_request = approval_store.create_playbook_step_approval_request(
                 conn,
@@ -387,6 +590,127 @@ def _approval_requested_entry(
         },
         "error": None,
     }
+
+
+def _approval_decision_entry(
+    *,
+    step_index: int,
+    approval_request: dict[str, Any],
+    status: str,
+    event: str,
+    message: str,
+    now: datetime,
+) -> dict[str, Any]:
+    return {
+        "step_index": step_index,
+        "action": "require_approval",
+        "status": status,
+        "event": event,
+        "mode": "simulation",
+        "simulated": True,
+        "executed": False,
+        "started_at": _iso(now),
+        "completed_at": _iso(now),
+        "approval_request_id": approval_request["id"],
+        "approval_status": approval_request["status"],
+        "risk_level": approval_request["risk_level"],
+        "message": message,
+        "output": {
+            "simulated": True,
+            "executed": False,
+            "approval_gate": True,
+        },
+        "error": None,
+    }
+
+
+def _skipped_later_step_entries(
+    steps: list[dict[str, Any]],
+    *,
+    start_index: int,
+    reason: str,
+    now: datetime,
+) -> list[dict[str, Any]]:
+    entries = []
+    for index, step in enumerate(steps[start_index:], start=start_index):
+        action = step.get("action") if isinstance(step, dict) else None
+        entries.append(
+            {
+                "step_index": index,
+                "action": action,
+                "status": "skipped",
+                "event": "skipped_after_approval_gate",
+                "mode": "simulation",
+                "simulated": True,
+                "executed": False,
+                "started_at": None,
+                "completed_at": _iso(now),
+                "message": f"Step skipped because {reason} stopped the simulated playbook.",
+                "output": {
+                    "simulated": True,
+                    "executed": False,
+                    "skip_reason": reason,
+                },
+                "error": None,
+            }
+        )
+    return entries
+
+
+def _latest_gate_entry(steps_log: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for entry in reversed(steps_log):
+        if (
+            isinstance(entry, dict)
+            and entry.get("action") == "require_approval"
+            and entry.get("event") == "approval_requested"
+            and isinstance(entry.get("step_index"), int)
+        ):
+            return entry
+    return None
+
+
+def _has_gate_event(
+    steps_log: list[dict[str, Any]],
+    step_index: int,
+    approval_request_id: int,
+    event: str,
+) -> bool:
+    return any(
+        isinstance(entry, dict)
+        and entry.get("step_index") == step_index
+        and entry.get("approval_request_id") == approval_request_id
+        and entry.get("event") == event
+        for entry in steps_log
+    )
+
+
+def _fail_awaiting_execution(
+    conn,
+    execution: dict[str, Any],
+    steps_log: list[dict[str, Any]],
+    step_index: int | None,
+    code: str,
+    message: str,
+    now: datetime,
+    prior_status: str = "awaiting_approval",
+) -> dict[str, Any]:
+    steps_log.append(
+        _failure_entry(
+            step_index=step_index,
+            action="require_approval",
+            message=message,
+            code=code,
+            now=now,
+        )
+    )
+    playbook_store.set_playbook_execution_failed(
+        conn,
+        execution["id"],
+        steps_log,
+        last_completed_step=execution.get("last_completed_step"),
+        now=now,
+    )
+    return _result(execution, prior_status, "failed", "failed", 0, message)
 
 
 def _result(execution, prior_status, new_status, outcome, steps_processed, message):

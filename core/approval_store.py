@@ -267,6 +267,26 @@ def get_active_playbook_step_approval_request(
     playbook_execution_id: int,
     playbook_step_index: int,
 ) -> dict[str, Any] | None:
+    latest = get_latest_playbook_step_approval_request(
+        conn,
+        playbook_execution_id=playbook_execution_id,
+        playbook_step_index=playbook_step_index,
+    )
+    if latest is None or latest["status"] not in {"pending", "approved"}:
+        return None
+    return latest
+
+
+def get_latest_playbook_step_approval_request(
+    conn,
+    *,
+    playbook_execution_id: int,
+    playbook_step_index: int,
+    materialize_expired: bool = False,
+    now=None,
+) -> dict[str, Any] | None:
+    decision_time = now or _utc_now()
+    lock_clause = "FOR UPDATE" if materialize_expired else ""
     with conn.cursor() as cur:
         cur.execute(
             f"""
@@ -274,14 +294,23 @@ def get_active_playbook_step_approval_request(
             FROM approval_requests
             WHERE playbook_execution_id = %s
               AND playbook_step_index = %s
-              AND status IN ('pending', 'approved')
             ORDER BY created_at DESC, id DESC
             LIMIT 1
+            {lock_clause}
             """,
             (playbook_execution_id, playbook_step_index),
         )
         row = cur.fetchone()
-        return _request_row_to_dict(row) if row is not None else None
+        if row is None:
+            return None
+        current = _request_row_to_dict(row)
+        if (
+            materialize_expired
+            and current["status"] == "pending"
+            and row[15] <= decision_time
+        ):
+            return _materialize_expiration(cur, row, now=decision_time)
+        return current
 
 
 def create_playbook_step_approval_request(

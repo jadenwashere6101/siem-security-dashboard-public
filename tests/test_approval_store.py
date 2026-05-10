@@ -11,6 +11,7 @@ from core.approval_store import (
     deny_request,
     expire_pending_requests,
     get_active_playbook_step_approval_request,
+    get_latest_playbook_step_approval_request,
     get_approval_request,
     list_approval_events,
     list_approval_requests,
@@ -350,6 +351,34 @@ def test_create_playbook_step_approval_request_is_linked_and_reused(postgres_db,
         (execution_id,),
     )
     assert cur.fetchone()[0] == 1
+
+
+def test_latest_playbook_step_approval_materializes_expiration(postgres_db, audit_mock):
+    conn, cur = postgres_db
+    execution_id = _insert_playbook_execution(conn, cur)
+    now = datetime.now(timezone.utc)
+    req = create_playbook_step_approval_request(
+        conn,
+        playbook_execution_id=execution_id,
+        playbook_step_index=2,
+        expires_at=now - timedelta(minutes=1),
+    )
+
+    expired = get_latest_playbook_step_approval_request(
+        conn,
+        playbook_execution_id=execution_id,
+        playbook_step_index=2,
+        materialize_expired=True,
+        now=now,
+    )
+
+    assert expired["id"] == req["id"]
+    assert expired["status"] == "expired"
+    assert get_active_playbook_step_approval_request(
+        conn,
+        playbook_execution_id=execution_id,
+        playbook_step_index=2,
+    ) is None
 
 
 def test_create_approval_request_computes_expires_at_from_ttl(postgres_db, audit_mock):

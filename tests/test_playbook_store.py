@@ -547,6 +547,46 @@ def test_playbook_execution_awaiting_approval_helper(postgres_db):
 
 
 @pytest.mark.usefixtures("postgres_db")
+def test_list_awaiting_and_resumed_running_helpers(postgres_db):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_store.create_playbook_definition(conn, "pb_resume", "Resume", steps=_valid_steps())
+    awaiting_id = playbook_store.create_playbook_execution(conn, "pb_resume", aid)
+    pending_id = playbook_store.create_playbook_execution(conn, "pb_resume", alert_id=None)
+    playbook_store.set_playbook_execution_running(conn, awaiting_id)
+    playbook_store.set_playbook_execution_awaiting_approval(
+        conn,
+        awaiting_id,
+        [{"step_index": 0, "status": "awaiting_approval"}],
+        last_completed_step=None,
+    )
+
+    awaiting = playbook_store.list_awaiting_approval_playbook_executions(conn)
+    assert [row["id"] for row in awaiting] == [awaiting_id]
+
+    resumed_log = [
+        {"step_index": 0, "status": "awaiting_approval"},
+        {"step_index": 0, "status": "approved", "event": "approval_approved"},
+    ]
+    resumed = playbook_store.set_playbook_execution_resumed_running(
+        conn,
+        awaiting_id,
+        resumed_log,
+        last_completed_step=0,
+    )
+
+    assert resumed["status"] == "running"
+    assert resumed["steps_log"] == resumed_log
+    assert resumed["last_completed_step"] == 0
+    assert playbook_store.set_playbook_execution_resumed_running(
+        conn,
+        pending_id,
+        [],
+        last_completed_step=None,
+    ) is None
+
+
+@pytest.mark.usefixtures("postgres_db")
 def test_playbook_execution_failed_helper(postgres_db):
     conn, cur = postgres_db
     aid = _insert_alert(cur)
