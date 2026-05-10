@@ -314,6 +314,94 @@ test("execution detail renders simulated steps_log as timeline cards", async () 
   expect(within(firstStep.parentElement).getAllByText(/^no$/i).length).toBeGreaterThan(0);
 });
 
+test("execution detail renders adapter-backed simulated output", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({
+    items: [{ ...execRow, status: "success" }],
+    limit: 50,
+  });
+  getPlaybookExecution.mockResolvedValue({
+    ...execRow,
+    status: "success",
+    steps_log: [
+      {
+        step_index: 0,
+        action: "notify_slack",
+        status: "success",
+        simulated: true,
+        executed: false,
+        message: "Simulated adapter action completed.",
+        output: {
+          simulated: true,
+          executed: false,
+          adapter_result: {
+            adapter: "slack",
+            action: "send_message",
+            mode: "simulation",
+            simulated: true,
+            executed: false,
+            success: true,
+            message: "Simulated slack action.",
+            metadata: { delivery: "not_sent", channel: "#secops" },
+          },
+        },
+      },
+      {
+        step_index: 1,
+        action: "block_ip",
+        status: "success",
+        simulated: true,
+        executed: false,
+        output: {
+          simulated: true,
+          executed: false,
+          adapter_result: {
+            adapter: "firewall",
+            action: "block_ip",
+            mode: "simulation",
+            simulated: true,
+            executed: false,
+            success: true,
+            message: "Simulated firewall action.",
+            metadata: { mutation: "none", target: "203.0.113.10" },
+          },
+        },
+      },
+    ],
+  });
+
+  render(<PlaybooksPanel {...styleProps} />);
+  await screen.findByText("pb_one");
+  await userEvent.click(screen.getByRole("button", { name: /^executions$/i }));
+  await screen.findByText("42");
+
+  const viewButtons = screen.getAllByRole("button", { name: /^view$/i });
+  await userEvent.click(viewButtons[viewButtons.length - 1]);
+
+  expect(await screen.findAllByText(/simulated adapter output/i)).toHaveLength(2);
+  expect(screen.getAllByText(/^adapter$/i).length).toBeGreaterThan(0);
+  expect(screen.getByText("slack")).toBeInTheDocument();
+  expect(screen.getByText("firewall")).toBeInTheDocument();
+  expect(screen.getAllByText(/^adapter action$/i).length).toBeGreaterThan(0);
+  expect(screen.getByText("send_message")).toBeInTheDocument();
+  expect(screen.getAllByText("block_ip").length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/^success$/i).length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/^simulated$/i).length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/^executed$/i).length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/^yes$/i).length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/^no$/i).length).toBeGreaterThan(0);
+  expect(screen.getByText("Simulated slack action.")).toBeInTheDocument();
+  expect(screen.getByText("Simulated firewall action.")).toBeInTheDocument();
+  expect(screen.getAllByText(/^metadata$/i).length).toBeGreaterThan(0);
+  expect(screen.getByText(/^delivery$/i)).toBeInTheDocument();
+  expect(screen.getByText("not_sent")).toBeInTheDocument();
+  expect(screen.getByText(/^mutation$/i)).toBeInTheDocument();
+  expect(screen.getByText("none")).toBeInTheDocument();
+  expect(screen.queryByText(/real firewall/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/real remediation/i)).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /run|retry|cancel|resume|approve|deny/i })).not.toBeInTheDocument();
+});
+
 test("execution detail shows failed step errors without mutation controls", async () => {
   listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
   listPlaybookExecutions.mockResolvedValue({ items: [{ ...execRow, status: "failed" }], limit: 50 });
