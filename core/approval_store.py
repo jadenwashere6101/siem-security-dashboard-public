@@ -29,6 +29,8 @@ def _request_row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
         row_id,
         incident_id,
         queue_id,
+        playbook_execution_id,
+        playbook_step_index,
         requested_by,
         approved_by,
         decided_by,
@@ -45,6 +47,8 @@ def _request_row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
         "id": row_id,
         "incident_id": incident_id,
         "queue_id": queue_id,
+        "playbook_execution_id": playbook_execution_id,
+        "playbook_step_index": playbook_step_index,
         "requested_by": requested_by,
         "approved_by": approved_by,
         "decided_by": decided_by,
@@ -83,9 +87,9 @@ def _event_row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
 
 
 REQUEST_COLUMNS = """
-    id, incident_id, queue_id, requested_by, approved_by, decided_by, status,
-    action, risk_level, request_reason, decision_comment, created_at,
-    decided_at, expires_at
+    id, incident_id, queue_id, playbook_execution_id, playbook_step_index,
+    requested_by, approved_by, decided_by, status, action, risk_level,
+    request_reason, decision_comment, created_at, decided_at, expires_at
 """
 
 EVENT_COLUMNS = """
@@ -196,6 +200,8 @@ def create_approval_request(
     *,
     incident_id: int | None = None,
     queue_id: int | None = None,
+    playbook_execution_id: int | None = None,
+    playbook_step_index: int | None = None,
     action: str,
     requested_by: int | None = None,
     request_reason: str | None = None,
@@ -203,7 +209,7 @@ def create_approval_request(
     expires_at=None,
     ttl_minutes: int = DEFAULT_APPROVAL_TTL_MINUTES,
 ) -> dict[str, Any]:
-    if incident_id is None and queue_id is None:
+    if incident_id is None and queue_id is None and playbook_execution_id is None:
         raise ValueError("approval request target required")
     if not action or not str(action).strip():
         raise ValueError("action is required")
@@ -216,15 +222,17 @@ def create_approval_request(
         cur.execute(
             f"""
             INSERT INTO approval_requests (
-                incident_id, queue_id, requested_by, status, action, risk_level,
-                request_reason, expires_at
+                incident_id, queue_id, playbook_execution_id, playbook_step_index,
+                requested_by, status, action, risk_level, request_reason, expires_at
             )
-            VALUES (%s, %s, %s, 'pending', %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s)
             RETURNING {REQUEST_COLUMNS}
             """,
             (
                 incident_id,
                 queue_id,
+                playbook_execution_id,
+                playbook_step_index,
                 requested_by,
                 str(action).strip(),
                 risk_level,
@@ -251,6 +259,62 @@ def create_approval_request(
             decision_comment=request_reason,
         )
         return approval_request
+
+
+def get_active_playbook_step_approval_request(
+    conn,
+    *,
+    playbook_execution_id: int,
+    playbook_step_index: int,
+) -> dict[str, Any] | None:
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT {REQUEST_COLUMNS}
+            FROM approval_requests
+            WHERE playbook_execution_id = %s
+              AND playbook_step_index = %s
+              AND status IN ('pending', 'approved')
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (playbook_execution_id, playbook_step_index),
+        )
+        row = cur.fetchone()
+        return _request_row_to_dict(row) if row is not None else None
+
+
+def create_playbook_step_approval_request(
+    conn,
+    *,
+    playbook_execution_id: int,
+    playbook_step_index: int,
+    action: str = "playbook.require_approval",
+    requested_by: int | None = None,
+    request_reason: str | None = None,
+    risk_level: str = "high",
+    expires_at=None,
+    ttl_minutes: int = DEFAULT_APPROVAL_TTL_MINUTES,
+) -> dict[str, Any]:
+    existing = get_active_playbook_step_approval_request(
+        conn,
+        playbook_execution_id=playbook_execution_id,
+        playbook_step_index=playbook_step_index,
+    )
+    if existing is not None:
+        return existing
+
+    return create_approval_request(
+        conn,
+        playbook_execution_id=playbook_execution_id,
+        playbook_step_index=playbook_step_index,
+        action=action,
+        requested_by=requested_by,
+        request_reason=request_reason,
+        risk_level=risk_level,
+        expires_at=expires_at,
+        ttl_minutes=ttl_minutes,
+    )
 
 
 def get_approval_request(conn, approval_request_id: int) -> dict[str, Any] | None:
@@ -382,7 +446,7 @@ def approve_request(
         current = _request_row_to_dict(row)
         if current["status"] != "pending":
             raise ValueError("approval request is not pending")
-        if row[13] <= decision_time:
+        if row[15] <= decision_time:
             _materialize_expiration(cur, row, now=decision_time)
             raise ValueError("approval request expired")
 
@@ -451,7 +515,7 @@ def deny_request(
         current = _request_row_to_dict(row)
         if current["status"] != "pending":
             raise ValueError("approval request is not pending")
-        if row[13] <= decision_time:
+        if row[15] <= decision_time:
             _materialize_expiration(cur, row, now=decision_time)
             raise ValueError("approval request expired")
 

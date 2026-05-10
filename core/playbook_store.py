@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 _TERMINAL_EXECUTION_STATUSES = frozenset({"success", "failed", "abandoned"})
 _VALID_EXECUTION_STATUSES = frozenset(
-    {"pending", "running", "success", "failed", "abandoned"}
+    {"pending", "running", "awaiting_approval", "success", "failed", "abandoned"}
 )
 
 
@@ -465,6 +465,32 @@ def set_playbook_execution_failed(
         return _execution_row_to_dict(row)
 
 
+def set_playbook_execution_awaiting_approval(
+    conn,
+    execution_id: int,
+    steps_log: list[dict],
+    last_completed_step: int | None = None,
+) -> dict[str, Any] | None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE playbook_executions
+            SET status = 'awaiting_approval',
+                completed_at = NULL,
+                steps_log = %s,
+                last_completed_step = %s
+            WHERE id = %s
+            RETURNING id, playbook_id, alert_id, incident_id, status,
+                      started_at, completed_at, last_completed_step, steps_log, created_at
+            """,
+            (Json(steps_log), last_completed_step, execution_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return _execution_row_to_dict(row)
+
+
 def update_execution_status(
     conn,
     execution_id: int,
@@ -506,7 +532,7 @@ def update_execution_status(
             )
         return
 
-    # pending — only status column (no automatic timestamp side effects)
+    # pending/awaiting_approval — only status column (no automatic terminal timestamp).
     with conn.cursor() as cur:
         cur.execute(
             """

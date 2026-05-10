@@ -100,6 +100,107 @@ def test_multiple_supported_steps_are_simulated_successfully(postgres_db):
         assert entry["error"] is None
 
 
+def test_require_approval_pauses_execution_and_creates_linked_request(postgres_db):
+    conn, cur = postgres_db
+    eid = _create_execution(
+        conn,
+        cur,
+        "pb_approval_gate",
+        steps=[
+            {"action": "monitor", "params": {}},
+            {
+                "action": "require_approval",
+                "risk_level": "critical",
+                "reason": "Approve simulated block before continuing",
+                "expires_in_minutes": 20,
+            },
+            {"action": "block_ip", "params": {}},
+        ],
+    )
+
+    result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "awaiting_approval"
+    assert result["new_status"] == "awaiting_approval"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["status"] == "awaiting_approval"
+    assert row["completed_at"] is None
+    assert row["last_completed_step"] == 0
+    assert [entry["action"] for entry in row["steps_log"]] == ["monitor", "require_approval"]
+
+    approval_entry = row["steps_log"][1]
+    assert approval_entry["event"] == "approval_requested"
+    assert approval_entry["status"] == "awaiting_approval"
+    assert approval_entry["mode"] == "simulation"
+    assert approval_entry["simulated"] is True
+    assert approval_entry["executed"] is False
+    assert approval_entry["output"] == {
+        "simulated": True,
+        "executed": False,
+        "approval_gate": True,
+    }
+    assert approval_entry["approval_status"] == "pending"
+    assert approval_entry["risk_level"] == "critical"
+    assert "Approve simulated block" in approval_entry["message"]
+
+    cur.execute(
+        """
+        SELECT id, playbook_execution_id, playbook_step_index, status, action, risk_level,
+               request_reason
+        FROM approval_requests
+        WHERE playbook_execution_id = %s
+        """,
+        (eid,),
+    )
+    approvals = cur.fetchall()
+    assert len(approvals) == 1
+    approval = approvals[0]
+    assert approval[0] == approval_entry["approval_request_id"]
+    assert approval[1] == eid
+    assert approval[2] == 1
+    assert approval[3] == "pending"
+    assert approval[4] == "playbook.require_approval"
+    assert approval[5] == "critical"
+    assert approval[6] == "Approve simulated block before continuing"
+
+    assert _count(cur, "response_actions_queue") == 0
+    assert _count(cur, "response_actions_log") == 0
+
+
+def test_require_approval_pending_rerun_does_not_duplicate_request_or_steps(postgres_db):
+    conn, cur = postgres_db
+    eid = _create_execution(
+        conn,
+        cur,
+        "pb_approval_rerun",
+        steps=[
+            {"action": "require_approval", "reason": "Pause here"},
+            {"action": "monitor", "params": {}},
+        ],
+    )
+
+    first = playbook_step_executor.process_playbook_execution(conn, eid)
+    before = playbook_store.get_playbook_execution(conn, eid)
+    second = playbook_step_executor.process_playbook_execution(conn, eid)
+    after = playbook_store.get_playbook_execution(conn, eid)
+
+    assert first["outcome"] == "awaiting_approval"
+    assert second["outcome"] == "skipped"
+    assert second["reason"] == "unsupported_status"
+    assert after["status"] == "awaiting_approval"
+    assert after["steps_log"] == before["steps_log"]
+
+    cur.execute(
+        """
+        SELECT COUNT(*)
+        FROM approval_requests
+        WHERE playbook_execution_id = %s AND playbook_step_index = 0
+        """,
+        (eid,),
+    )
+    assert cur.fetchone()[0] == 1
+
+
 def test_unsupported_step_action_marks_execution_failed(postgres_db):
     conn, cur = postgres_db
     eid = _create_execution(conn, cur, "pb_bad")
@@ -238,7 +339,6 @@ def test_executor_module_has_no_real_execution_imports():
         "SimulationExecutor",
         "enqueue_response_action",
         "enqueue_committed_alerts",
-        "approval_store",
         "requests",
         "subprocess",
         "socket",

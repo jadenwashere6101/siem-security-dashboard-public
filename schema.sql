@@ -197,6 +197,8 @@ CREATE TABLE IF NOT EXISTS approval_requests (
     id SERIAL PRIMARY KEY,
     incident_id INTEGER REFERENCES incidents(id) ON DELETE RESTRICT,
     queue_id INTEGER REFERENCES response_actions_queue(id) ON DELETE RESTRICT,
+    playbook_execution_id INTEGER,
+    playbook_step_index INTEGER,
     requested_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
     approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
     decided_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -210,7 +212,11 @@ CREATE TABLE IF NOT EXISTS approval_requests (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     decided_at TIMESTAMPTZ,
     expires_at TIMESTAMPTZ NOT NULL,
-    CHECK (incident_id IS NOT NULL OR queue_id IS NOT NULL),
+    CHECK (
+        incident_id IS NOT NULL
+        OR queue_id IS NOT NULL
+        OR playbook_execution_id IS NOT NULL
+    ),
     CHECK (
         (status = 'pending' AND decided_at IS NULL)
         OR (status IN ('approved', 'denied', 'expired') AND decided_at IS NOT NULL)
@@ -220,6 +226,49 @@ CREATE TABLE IF NOT EXISTS approval_requests (
         OR status IN ('pending', 'denied', 'expired')
     )
 );
+
+ALTER TABLE approval_requests
+    ADD COLUMN IF NOT EXISTS playbook_execution_id INTEGER;
+
+ALTER TABLE approval_requests
+    ADD COLUMN IF NOT EXISTS playbook_step_index INTEGER;
+
+DO $$
+DECLARE
+    constraint_name TEXT;
+BEGIN
+    SELECT con.conname
+    INTO constraint_name
+    FROM pg_constraint con
+    WHERE con.conrelid = 'approval_requests'::regclass
+      AND con.contype = 'c'
+      AND pg_get_constraintdef(con.oid) LIKE '%incident_id IS NOT NULL%'
+      AND pg_get_constraintdef(con.oid) LIKE '%queue_id IS NOT NULL%'
+      AND pg_get_constraintdef(con.oid) NOT LIKE '%playbook_execution_id IS NOT NULL%'
+    LIMIT 1;
+
+    IF constraint_name IS NOT NULL THEN
+        EXECUTE format('ALTER TABLE approval_requests DROP CONSTRAINT %I', constraint_name);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint con
+        WHERE con.conrelid = 'approval_requests'::regclass
+          AND con.contype = 'c'
+          AND pg_get_constraintdef(con.oid) LIKE '%playbook_execution_id IS NOT NULL%'
+          AND pg_get_constraintdef(con.oid) LIKE '%incident_id IS NOT NULL%'
+          AND pg_get_constraintdef(con.oid) LIKE '%queue_id IS NOT NULL%'
+    ) THEN
+        ALTER TABLE approval_requests
+        ADD CONSTRAINT approval_requests_target_check
+        CHECK (
+            incident_id IS NOT NULL
+            OR queue_id IS NOT NULL
+            OR playbook_execution_id IS NOT NULL
+        );
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS approval_request_events (
     id SERIAL PRIMARY KEY,
@@ -305,3 +354,22 @@ CREATE INDEX IF NOT EXISTS idx_playbook_executions_created_at
 CREATE UNIQUE INDEX IF NOT EXISTS idx_playbook_executions_playbook_alert_unique
     ON playbook_executions (playbook_id, alert_id)
     WHERE alert_id IS NOT NULL;
+
+DO $$
+BEGIN
+    ALTER TABLE approval_requests
+    ADD CONSTRAINT approval_requests_playbook_execution_id_fkey
+    FOREIGN KEY (playbook_execution_id)
+    REFERENCES playbook_executions(id)
+    ON DELETE RESTRICT;
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_approval_requests_playbook_execution_id
+    ON approval_requests (playbook_execution_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_approval_requests_playbook_step_active
+    ON approval_requests (playbook_execution_id, playbook_step_index)
+    WHERE playbook_execution_id IS NOT NULL
+      AND status IN ('pending', 'approved');

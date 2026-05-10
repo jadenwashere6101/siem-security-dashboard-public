@@ -10,8 +10,39 @@ def test_validate_supported_actions_ok():
         {"action": "block_ip", "params": {}},
         {"action": "monitor", "on_failure": "continue"},
         {"action": "flag_high_priority"},
+        {
+            "action": "require_approval",
+            "risk_level": "critical",
+            "reason": "Approve simulated containment",
+            "expires_in_minutes": 30,
+            "on_denied": "fail",
+            "on_expired": "fail",
+        },
     ]
     assert validate_playbook_steps(steps) == []
+
+
+def test_validate_require_approval_options():
+    assert validate_playbook_steps([{"action": "require_approval"}]) == []
+
+    errors = validate_playbook_steps(
+        [
+            {
+                "action": "require_approval",
+                "risk_level": "low",
+                "expires_in_minutes": 0,
+                "reason": {"not": "text"},
+                "on_denied": "continue",
+                "on_expired": "ignore",
+            }
+        ]
+    )
+    assert len(errors) == 5
+    assert any("risk_level" in error for error in errors)
+    assert any("expires_in_minutes" in error for error in errors)
+    assert any("reason" in error for error in errors)
+    assert any("on_denied" in error for error in errors)
+    assert any("on_expired" in error for error in errors)
 
 
 def test_validate_unknown_action():
@@ -35,3 +66,4 @@ def test_validate_invalid_on_failure():
 def test_supported_actions_is_frozen():
     assert isinstance(SUPPORTED_ACTIONS, frozenset)
     assert "block_ip" in SUPPORTED_ACTIONS
+    assert "require_approval" in SUPPORTED_ACTIONS

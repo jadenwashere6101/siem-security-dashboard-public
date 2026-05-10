@@ -11,6 +11,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from core import approval_store
 from core import playbook_store
 from engines.playbook_registry import SUPPORTED_ACTIONS
 
@@ -186,6 +187,40 @@ def _process_running_execution(
     failure_message = None
 
     for index, step in enumerate(steps):
+        if isinstance(step, dict) and step.get("action") == "require_approval":
+            approval_request = approval_store.create_playbook_step_approval_request(
+                conn,
+                playbook_execution_id=execution_id,
+                playbook_step_index=index,
+                request_reason=step.get("reason") or "Approval required before continuing simulated playbook.",
+                risk_level=step.get("risk_level", "high"),
+                ttl_minutes=step.get(
+                    "expires_in_minutes",
+                    approval_store.DEFAULT_APPROVAL_TTL_MINUTES,
+                ),
+            )
+            entry = _approval_requested_entry(
+                step_index=index,
+                approval_request=approval_request,
+                step=step,
+                now=timestamp,
+            )
+            steps_log.append(entry)
+            playbook_store.set_playbook_execution_awaiting_approval(
+                conn,
+                execution_id,
+                steps_log,
+                last_completed_step=last_completed_step,
+            )
+            return _result(
+                execution,
+                prior,
+                "awaiting_approval",
+                "awaiting_approval",
+                len(steps_log),
+                "Approval requested before continuing simulated playbook.",
+            )
+
         try:
             entry = _simulate_step(step, index, timestamp)
         except Exception as error:
@@ -321,6 +356,36 @@ def _failure_entry(step_index, action, message: str, code: str, now: datetime) -
             "code": code,
             "message": message,
         },
+    }
+
+
+def _approval_requested_entry(
+    *,
+    step_index: int,
+    approval_request: dict[str, Any],
+    step: dict[str, Any],
+    now: datetime,
+) -> dict[str, Any]:
+    return {
+        "step_index": step_index,
+        "action": "require_approval",
+        "status": "awaiting_approval",
+        "event": "approval_requested",
+        "mode": "simulation",
+        "simulated": True,
+        "executed": False,
+        "started_at": _iso(now),
+        "completed_at": None,
+        "approval_request_id": approval_request["id"],
+        "approval_status": approval_request["status"],
+        "risk_level": approval_request["risk_level"],
+        "message": step.get("reason") or "Approval requested before continuing simulated playbook.",
+        "output": {
+            "simulated": True,
+            "executed": False,
+            "approval_gate": True,
+        },
+        "error": None,
     }
 
 

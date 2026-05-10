@@ -167,6 +167,23 @@ def test_update_execution_status_running_and_terminal(postgres_db):
 
 
 @pytest.mark.usefixtures("postgres_db")
+def test_update_execution_status_awaiting_approval(postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(
+        conn,
+        "pb_awaiting",
+        "Awaiting",
+        steps=_valid_steps(),
+    )
+    eid = playbook_store.create_playbook_execution(conn, "pb_awaiting", alert_id=None)
+    playbook_store.update_execution_status(conn, eid, "awaiting_approval")
+
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["status"] == "awaiting_approval"
+    assert row["completed_at"] is None
+
+
+@pytest.mark.usefixtures("postgres_db")
 def test_update_execution_status_failed_sets_completed(postgres_db):
     conn, _cur = postgres_db
     playbook_store.create_playbook_definition(
@@ -498,6 +515,34 @@ def test_playbook_execution_step_log_and_terminal_helpers(postgres_db):
     cur.execute("SELECT COUNT(*) FROM response_actions_queue")
     assert cur.fetchone()[0] == 0
     cur.execute("SELECT COUNT(*) FROM approval_requests")
+    assert cur.fetchone()[0] == 0
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_playbook_execution_awaiting_approval_helper(postgres_db):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_store.create_playbook_definition(conn, "pb_gate", "Gate", steps=_valid_steps())
+    eid = playbook_store.create_playbook_execution(conn, "pb_gate", aid)
+    playbook_store.set_playbook_execution_running(conn, eid)
+
+    steps_log = [
+        {"step_index": 0, "status": "success"},
+        {"step_index": 1, "status": "awaiting_approval", "event": "approval_requested"},
+    ]
+    awaiting = playbook_store.set_playbook_execution_awaiting_approval(
+        conn,
+        eid,
+        steps_log,
+        last_completed_step=0,
+    )
+
+    assert awaiting["status"] == "awaiting_approval"
+    assert awaiting["completed_at"] is None
+    assert awaiting["last_completed_step"] == 0
+    assert awaiting["steps_log"] == steps_log
+
+    cur.execute("SELECT COUNT(*) FROM response_actions_queue")
     assert cur.fetchone()[0] == 0
 
 

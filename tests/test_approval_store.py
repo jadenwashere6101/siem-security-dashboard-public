@@ -7,12 +7,15 @@ from psycopg2 import IntegrityError
 from core.approval_store import (
     approve_request,
     create_approval_request,
+    create_playbook_step_approval_request,
     deny_request,
     expire_pending_requests,
+    get_active_playbook_step_approval_request,
     get_approval_request,
     list_approval_events,
     list_approval_requests,
 )
+from core import playbook_store
 
 
 def _insert_user(cur, username="analyst1", role="analyst"):
@@ -66,6 +69,17 @@ def _insert_queue_item(cur, source_ip="203.0.113.10"):
     return cur.fetchone()[0]
 
 
+def _insert_playbook_execution(conn, cur):
+    alert_id = _insert_alert(cur, "203.0.113.77")
+    playbook_store.create_playbook_definition(
+        conn,
+        "pb_approval_store",
+        "Approval store playbook",
+        steps=[{"action": "require_approval"}, {"action": "monitor"}],
+    )
+    return playbook_store.create_playbook_execution(conn, "pb_approval_store", alert_id)
+
+
 def _count_rows(cur, table):
     cur.execute(f"SELECT COUNT(*) FROM {table}")
     return cur.fetchone()[0]
@@ -90,6 +104,24 @@ def test_schema_tables_exist(postgres_db):
     assert [row[0] for row in cur.fetchall()] == [
         "approval_request_events",
         "approval_requests",
+    ]
+
+
+def test_schema_has_playbook_approval_link_columns(postgres_db):
+    _conn, cur = postgres_db
+    cur.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'approval_requests'
+          AND column_name IN ('playbook_execution_id', 'playbook_step_index')
+        ORDER BY column_name
+        """
+    )
+    assert [row[0] for row in cur.fetchall()] == [
+        "playbook_execution_id",
+        "playbook_step_index",
     ]
 
 
@@ -131,6 +163,23 @@ def test_schema_requires_incident_or_queue_target(postgres_db):
             """
         )
     conn.rollback()
+
+
+def test_schema_allows_playbook_execution_target(postgres_db, audit_mock):
+    conn, cur = postgres_db
+    execution_id = _insert_playbook_execution(conn, cur)
+
+    req = create_approval_request(
+        conn,
+        playbook_execution_id=execution_id,
+        playbook_step_index=0,
+        action="playbook.require_approval",
+    )
+
+    assert req["playbook_execution_id"] == execution_id
+    assert req["playbook_step_index"] == 0
+    assert req["incident_id"] is None
+    assert req["queue_id"] is None
 
 
 def test_schema_approved_requires_approved_by(postgres_db):
@@ -255,6 +304,52 @@ def test_create_approval_request_can_include_incident_and_queue(postgres_db, aud
     assert req["incident_id"] == incident_id
     assert req["queue_id"] == queue_id
     assert req["risk_level"] == "critical"
+
+
+def test_create_playbook_step_approval_request_is_linked_and_reused(postgres_db, audit_mock):
+    conn, cur = postgres_db
+    execution_id = _insert_playbook_execution(conn, cur)
+
+    first = create_playbook_step_approval_request(
+        conn,
+        playbook_execution_id=execution_id,
+        playbook_step_index=1,
+        request_reason="Approve simulated block",
+        risk_level="critical",
+        ttl_minutes=15,
+    )
+    second = create_playbook_step_approval_request(
+        conn,
+        playbook_execution_id=execution_id,
+        playbook_step_index=1,
+        request_reason="Approve simulated block",
+        risk_level="critical",
+        ttl_minutes=15,
+    )
+
+    assert second["id"] == first["id"]
+    assert first["playbook_execution_id"] == execution_id
+    assert first["playbook_step_index"] == 1
+    assert first["action"] == "playbook.require_approval"
+    assert first["risk_level"] == "critical"
+    assert first["request_reason"] == "Approve simulated block"
+
+    active = get_active_playbook_step_approval_request(
+        conn,
+        playbook_execution_id=execution_id,
+        playbook_step_index=1,
+    )
+    assert active["id"] == first["id"]
+
+    cur.execute(
+        """
+        SELECT COUNT(*)
+        FROM approval_requests
+        WHERE playbook_execution_id = %s AND playbook_step_index = 1
+        """,
+        (execution_id,),
+    )
+    assert cur.fetchone()[0] == 1
 
 
 def test_create_approval_request_computes_expires_at_from_ttl(postgres_db, audit_mock):
