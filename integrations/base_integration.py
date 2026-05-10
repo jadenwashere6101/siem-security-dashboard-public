@@ -73,6 +73,10 @@ class _SimulatedCircuitBreakerState:
     cooldown_until: datetime | None = None
     last_failure_classification: str | None = None
     half_open_probe_available: bool = False
+    last_manual_action: str | None = None
+    last_manual_action_by: str | None = None
+    last_manual_action_at: datetime | None = None
+    last_manual_reason: str | None = None
 
 
 _circuit_store: dict[str, _SimulatedCircuitBreakerState] = {}
@@ -163,8 +167,110 @@ def get_simulated_circuit_breaker_dict(adapter_name: str, *, now: datetime | Non
         "retry_eligible": _compute_retry_eligible(st, when),
         "cooldown_until": _iso_utc(st.cooldown_until),
         "last_failure_classification": st.last_failure_classification,
+        "half_open_probe_available": st.half_open_probe_available,
+        "last_manual_action": st.last_manual_action,
+        "last_manual_action_by": st.last_manual_action_by,
+        "last_manual_action_at": _iso_utc(st.last_manual_action_at),
+        "last_manual_reason": st.last_manual_reason,
         "state_persisted": False,
     }
+
+
+class SimulatedCircuitBreakerControlError(Exception):
+    """Raised when a manual simulation circuit control cannot be applied."""
+
+    def __init__(self, message: str, *, status_code: int = 400):
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+
+
+def _apply_manual_operator_metadata(
+    st: _SimulatedCircuitBreakerState,
+    action: str,
+    actor_username: str,
+    reason: str,
+    when: datetime,
+) -> None:
+    st.last_manual_action = action
+    st.last_manual_action_by = actor_username
+    st.last_manual_action_at = when
+    trimmed = (reason or "").strip()
+    st.last_manual_reason = trimmed[:2000] if trimmed else None
+
+
+def manual_reset_simulated_circuit_breaker(
+    adapter_name: str,
+    *,
+    actor_username: str,
+    reason: str,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Super-admin manual control: clear breaker to closed (simulation state only)."""
+    when = now if now is not None else _utc_now()
+    st = _get_circuit_state(adapter_name)
+    _reset_to_closed_success(st)
+    _apply_manual_operator_metadata(st, "reset", actor_username, reason, when)
+    return get_simulated_circuit_breaker_dict(adapter_name, now=when)
+
+
+def manual_force_open_simulated_circuit_breaker(
+    adapter_name: str,
+    *,
+    actor_username: str,
+    reason: str,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Super-admin manual containment: force open without executing adapters."""
+    when = now if now is not None else _utc_now()
+    st = _get_circuit_state(adapter_name)
+    st.state = CIRCUIT_STATE_OPEN
+    st.opened_at = when
+    st.cooldown_until = when + timedelta(seconds=st.cooldown_seconds)
+    st.retry_eligible = False
+    st.half_open_probe_available = False
+    note = (reason or "").strip()
+    st.last_failure_reason = f"manual force_open: {note[:500]}"
+    st.last_failure_classification = FAILURE_CLASSIFICATION_CIRCUIT_OPEN
+    _apply_manual_operator_metadata(st, "force_open", actor_username, reason, when)
+    return get_simulated_circuit_breaker_dict(adapter_name, now=when)
+
+
+def manual_enable_half_open_probe_simulated_circuit_breaker(
+    adapter_name: str,
+    *,
+    actor_username: str,
+    reason: str,
+    override_cooldown: bool = False,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """
+    Super-admin: allow one bounded half-open probe on the next simulated execution path.
+    Does not run adapter logic or probes.
+    """
+    when = now if now is not None else _utc_now()
+    st = _get_circuit_state(adapter_name)
+    if st.state not in _VALID_CIRCUIT_STATES:
+        raise SimulatedCircuitBreakerControlError(
+            "Circuit breaker state is invalid; reset the breaker before enabling a half-open probe.",
+            status_code=409,
+        )
+    if st.state != CIRCUIT_STATE_OPEN:
+        raise SimulatedCircuitBreakerControlError(
+            "Half-open probe can only be enabled when the breaker is open.",
+            status_code=400,
+        )
+    if st.cooldown_until is not None and when < st.cooldown_until:
+        if not override_cooldown:
+            raise SimulatedCircuitBreakerControlError(
+                "Cooldown is still active; retry after cooldown or pass override_cooldown=true with reason.",
+                status_code=409,
+            )
+    st.state = CIRCUIT_STATE_HALF_OPEN
+    st.half_open_probe_available = True
+    st.retry_eligible = False
+    _apply_manual_operator_metadata(st, "enable_half_open", actor_username, reason, when)
+    return get_simulated_circuit_breaker_dict(adapter_name, now=when)
 
 
 def _iso_utc(dt: datetime | None) -> str | None:

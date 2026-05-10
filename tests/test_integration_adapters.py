@@ -14,8 +14,12 @@ from integrations.base_integration import (
     FAILURE_CLASSIFICATION_CIRCUIT_STATE_INVALID,
     FAILURE_CLASSIFICATION_NON_TRANSIENT,
     FAILURE_CLASSIFICATION_TRANSIENT,
+    SimulatedCircuitBreakerControlError,
     configure_simulated_circuit_breaker,
     get_simulated_circuit_breaker_dict,
+    manual_enable_half_open_probe_simulated_circuit_breaker,
+    manual_force_open_simulated_circuit_breaker,
+    manual_reset_simulated_circuit_breaker,
     record_simulated_adapter_failure,
     record_simulated_adapter_success,
     request_half_open_probe,
@@ -25,6 +29,7 @@ from integrations.integration_registry import (
     get_integration_adapter,
     get_integration_status,
     list_integration_adapters,
+    normalize_registered_integration_adapter_name,
     resolve_integration_mode,
 )
 
@@ -388,7 +393,116 @@ def test_integration_status_includes_circuit_breaker(monkeypatch, no_network):
     assert "failure_threshold" in cb
     assert "cooldown_seconds" in cb
     assert "retry_eligible" in cb
+    assert "half_open_probe_available" in cb
+    assert "last_manual_action" in cb
     assert cb["state_persisted"] is False
+
+
+def test_normalize_registered_integration_adapter_name(monkeypatch):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+    assert normalize_registered_integration_adapter_name("Slack") == "slack"
+    assert normalize_registered_integration_adapter_name("pagerduty") is None
+
+
+def test_manual_reset_clears_failures_and_records_metadata(monkeypatch, no_network):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+    configure_simulated_circuit_breaker(
+        "email",
+        state=CIRCUIT_STATE_OPEN,
+        consecutive_failures=3,
+    )
+    snap = manual_reset_simulated_circuit_breaker(
+        "email",
+        actor_username="super1",
+        reason="verified healthy",
+    )
+    assert snap["state"] == CIRCUIT_STATE_CLOSED
+    assert snap["consecutive_failures"] == 0
+    assert snap["last_manual_action"] == "reset"
+    assert snap["last_manual_action_by"] == "super1"
+    assert snap["last_manual_reason"] == "verified healthy"
+
+
+def test_manual_force_open_preserves_failure_count(monkeypatch, no_network):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+    configure_simulated_circuit_breaker("webhook", consecutive_failures=2)
+    snap = manual_force_open_simulated_circuit_breaker(
+        "webhook",
+        actor_username="super1",
+        reason="hold traffic",
+    )
+    assert snap["state"] == CIRCUIT_STATE_OPEN
+    assert snap["consecutive_failures"] == 2
+    assert snap["last_manual_action"] == "force_open"
+    assert "hold traffic" in (snap["last_manual_reason"] or "")
+
+
+def test_manual_enable_half_open_sets_probe_flag_without_running_adapter(monkeypatch, no_network):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+    t0 = datetime(2026, 5, 10, 12, 0, 0, tzinfo=timezone.utc)
+    configure_simulated_circuit_breaker(
+        "slack",
+        state=CIRCUIT_STATE_OPEN,
+        consecutive_failures=2,
+        cooldown_until=t0 - timedelta(seconds=1),
+    )
+    snap = manual_enable_half_open_probe_simulated_circuit_breaker(
+        "slack",
+        actor_username="super1",
+        reason="prep probe",
+    )
+    assert snap["state"] == CIRCUIT_STATE_HALF_OPEN
+    assert snap["half_open_probe_available"] is True
+
+
+def test_manual_enable_respects_cooldown_unless_overridden(monkeypatch, no_network):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+    t0 = datetime(2026, 5, 10, 12, 0, 0, tzinfo=timezone.utc)
+    configure_simulated_circuit_breaker(
+        "slack",
+        state=CIRCUIT_STATE_OPEN,
+        cooldown_until=t0 + timedelta(minutes=30),
+    )
+    with pytest.raises(SimulatedCircuitBreakerControlError) as exc:
+        manual_enable_half_open_probe_simulated_circuit_breaker(
+            "slack",
+            actor_username="a",
+            reason="probe later",
+            now=t0,
+            override_cooldown=False,
+        )
+    assert exc.value.status_code == 409
+    snap = manual_enable_half_open_probe_simulated_circuit_breaker(
+        "slack",
+        actor_username="a",
+        reason="override cooldown for drill",
+        now=t0,
+        override_cooldown=True,
+    )
+    assert snap["state"] == CIRCUIT_STATE_HALF_OPEN
+
+
+def test_manual_enable_half_open_rejects_non_open(monkeypatch, no_network):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+    with pytest.raises(SimulatedCircuitBreakerControlError) as exc:
+        manual_enable_half_open_probe_simulated_circuit_breaker(
+            "slack",
+            actor_username="super1",
+            reason="bad",
+        )
+    assert exc.value.status_code == 400
+
+
+def test_manual_enable_half_open_rejects_invalid_state(monkeypatch, no_network):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+    configure_simulated_circuit_breaker("slack", state="not_a_valid_state")
+    with pytest.raises(SimulatedCircuitBreakerControlError) as exc:
+        manual_enable_half_open_probe_simulated_circuit_breaker(
+            "slack",
+            actor_username="super1",
+            reason="bad",
+        )
+    assert exc.value.status_code == 409
 
 
 def test_request_half_open_before_cooldown_fails(monkeypatch, no_network):

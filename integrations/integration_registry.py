@@ -21,6 +21,14 @@ _ADAPTERS: dict[str, type[BaseIntegration]] = {
 }
 
 
+def normalize_registered_integration_adapter_name(name: str) -> str | None:
+    """Return canonical adapter key if registered, else None."""
+    key = str(name or "").strip().lower()
+    if not key or key not in _ADAPTERS:
+        return None
+    return key
+
+
 def resolve_integration_mode(mode: str | None = None) -> str:
     raw_mode = mode if mode is not None else os.getenv("INTEGRATION_MODE", SIMULATION_MODE)
     normalized = str(raw_mode or SIMULATION_MODE).strip().lower()

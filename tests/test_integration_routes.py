@@ -1,9 +1,20 @@
 import http.client
 import smtplib
 import socket
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+import pytest
 from werkzeug.security import generate_password_hash
+
+from integrations.base_integration import (
+    CIRCUIT_STATE_CLOSED,
+    CIRCUIT_STATE_OPEN,
+    configure_simulated_circuit_breaker,
+    get_simulated_circuit_breaker_dict,
+    reset_simulated_circuit_breakers,
+)
 
 
 ADMIN_USER = "testadmin"
@@ -40,6 +51,37 @@ def _login_role(client, *, username, password, role):
 def _stop_patchers(patchers):
     for patcher in reversed(patchers):
         patcher.stop()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_simulated_integration_circuits():
+    reset_simulated_circuit_breakers()
+    yield
+    reset_simulated_circuit_breakers()
+
+
+class _RouteSafeConnection:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def cursor(self):
+        return self._conn.cursor()
+
+    def commit(self):
+        return self._conn.commit()
+
+    def rollback(self):
+        return self._conn.rollback()
+
+    def close(self):
+        return None
+
+
+@contextmanager
+def _patched_audit_db(conn):
+    wrapper = _RouteSafeConnection(conn)
+    with patch("core.audit_helpers.get_db_connection", return_value=wrapper):
+        yield
 
 
 def _deny_network(monkeypatch):
@@ -143,3 +185,184 @@ def test_integration_status_reports_real_mode_fail_closed(client, mock_db, monke
     assert data["simulated"] is True
     assert data["real_mode_enabled"] is False
     assert "not implemented" in data["real_mode_status"]
+
+
+def test_circuit_breaker_reset_requires_auth(client):
+    resp = client.post("/integrations/slack/circuit-breaker/reset", json={"reason": "x"})
+    assert resp.status_code == 401
+
+
+def test_circuit_breaker_reset_forbidden_for_viewer(client, mock_db):
+    patchers = _login_role(client, username="cb_viewer", password="p", role="viewer")
+    try:
+        resp = client.post("/integrations/slack/circuit-breaker/reset", json={"reason": "x"})
+    finally:
+        _stop_patchers(patchers)
+    assert resp.status_code == 403
+
+
+def test_circuit_breaker_reset_forbidden_for_analyst(client, mock_db):
+    patchers = _login_role(client, username="cb_analyst", password="p", role="analyst")
+    try:
+        resp = client.post("/integrations/slack/circuit-breaker/reset", json={"reason": "x"})
+    finally:
+        _stop_patchers(patchers)
+    assert resp.status_code == 403
+
+
+def test_circuit_breaker_unknown_adapter_returns_404(client, mock_db):
+    _login_super_admin(client)
+    resp = client.post(
+        "/integrations/pagerduty/circuit-breaker/reset",
+        json={"reason": "x"},
+    )
+    assert resp.status_code == 404
+    assert resp.get_json()["error"] == "not_found"
+
+
+def test_circuit_breaker_reset_requires_reason(client, mock_db):
+    _login_super_admin(client)
+    resp = client.post("/integrations/slack/circuit-breaker/reset", json={})
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "invalid_body"
+
+
+def test_circuit_breaker_reset_super_admin_returns_updated_state_and_writes_audit(
+    client, postgres_db, monkeypatch
+):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+    conn, cur = postgres_db
+    configure_simulated_circuit_breaker("slack", state=CIRCUIT_STATE_OPEN, consecutive_failures=2)
+    with _patched_audit_db(conn):
+        _login_super_admin(client)
+        resp = client.post(
+            "/integrations/slack/circuit-breaker/reset",
+            json={"reason": "operator cleared simulation breaker"},
+        )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["adapter"] == "slack"
+    assert body["circuit_breaker"]["state"] == CIRCUIT_STATE_CLOSED
+    assert body["circuit_breaker"]["last_manual_action"] == "reset"
+    cur.execute(
+        """
+        SELECT event_type, actor_username, details
+        FROM audit_log
+        WHERE event_type = %s
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        ("SIMULATION_CIRCUIT_BREAKER_RESET",),
+    )
+    row = cur.fetchone()
+    assert row is not None
+    assert row[0] == "SIMULATION_CIRCUIT_BREAKER_RESET"
+    assert row[1] == "admin"
+    details = row[2]
+    assert details["adapter"] == "slack"
+    assert details["previous_state"] == CIRCUIT_STATE_OPEN
+    assert details["new_state"] == CIRCUIT_STATE_CLOSED
+    assert "operator cleared" in details["reason"]
+
+
+def test_circuit_breaker_force_open_super_admin_writes_audit(client, postgres_db, monkeypatch):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+    conn, cur = postgres_db
+    with _patched_audit_db(conn):
+        _login_super_admin(client)
+        resp = client.post(
+            "/integrations/webhook/circuit-breaker/force-open",
+            json={"reason": "containment drill"},
+        )
+    assert resp.status_code == 200
+    assert resp.get_json()["circuit_breaker"]["state"] == CIRCUIT_STATE_OPEN
+    cur.execute(
+        "SELECT COUNT(*) FROM audit_log WHERE event_type = %s",
+        ("SIMULATION_CIRCUIT_BREAKER_FORCE_OPEN",),
+    )
+    assert cur.fetchone()[0] >= 1
+
+
+def test_circuit_breaker_enable_half_open_during_cooldown_requires_override(
+    client, postgres_db, monkeypatch
+):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+    conn, cur = postgres_db
+    t0 = datetime.now(timezone.utc)
+    configure_simulated_circuit_breaker(
+        "email",
+        state=CIRCUIT_STATE_OPEN,
+        cooldown_until=t0 + timedelta(hours=1),
+    )
+    with _patched_audit_db(conn):
+        _login_super_admin(client)
+        denied = client.post(
+            "/integrations/email/circuit-breaker/enable-half-open",
+            json={"reason": "too early"},
+        )
+        assert denied.status_code == 409
+        ok = client.post(
+            "/integrations/email/circuit-breaker/enable-half-open",
+            json={"reason": "super-admin override", "override_cooldown": True},
+        )
+    assert ok.status_code == 200
+    assert ok.get_json()["circuit_breaker"]["state"] == "half_open"
+    assert ok.get_json()["circuit_breaker"]["half_open_probe_available"] is True
+    cur.execute(
+        "SELECT COUNT(*) FROM audit_log WHERE event_type = %s",
+        ("SIMULATION_CIRCUIT_BREAKER_ENABLE_HALF_OPEN",),
+    )
+    assert cur.fetchone()[0] >= 1
+
+
+def test_integration_status_read_is_idempotent_for_breaker_state(client, mock_db, monkeypatch):
+    _deny_network(monkeypatch)
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+    configure_simulated_circuit_breaker("slack", state=CIRCUIT_STATE_OPEN, consecutive_failures=1)
+    patchers = _login_role(client, username="cb_analyst2", password="p", role="analyst")
+    try:
+        before = get_simulated_circuit_breaker_dict("slack")["state"]
+        r1 = client.get("/integrations/status")
+        r2 = client.get("/integrations/status")
+    finally:
+        _stop_patchers(patchers)
+    assert r1.status_code == 200 and r2.status_code == 200
+    assert get_simulated_circuit_breaker_dict("slack")["state"] == before
+
+
+def test_circuit_control_does_not_touch_blocked_ips(client, postgres_db, monkeypatch):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+    conn, cur = postgres_db
+    cur.execute(
+        """
+        INSERT INTO blocked_ips (ip_address, reason, status)
+        VALUES ('192.0.2.10'::inet, 'test', 'active')
+        """
+    )
+    conn.commit()
+    cur.execute("SELECT COUNT(*) FROM blocked_ips")
+    n = cur.fetchone()[0]
+    with _patched_audit_db(conn):
+        _login_super_admin(client)
+        resp = client.post(
+            "/integrations/firewall/circuit-breaker/force-open",
+            json={"reason": "no firewall mutation expected"},
+        )
+    assert resp.status_code == 200
+    cur.execute("SELECT COUNT(*) FROM blocked_ips")
+    assert cur.fetchone()[0] == n
+
+
+def test_circuit_control_does_not_instantiate_adapter(client, postgres_db, monkeypatch):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+    conn, cur = postgres_db
+    with _patched_audit_db(conn), patch(
+        "integrations.integration_registry.get_integration_adapter",
+        side_effect=AssertionError("adapter must not be constructed for breaker controls"),
+    ):
+        _login_super_admin(client)
+        resp = client.post(
+            "/integrations/slack/circuit-breaker/reset",
+            json={"reason": "no adapter"},
+        )
+    assert resp.status_code == 200
