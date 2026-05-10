@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import os
 
-from integrations.base_integration import SIMULATION_MODE, BaseIntegration
+from integrations.base_integration import (
+    SIMULATION_MODE,
+    BaseIntegration,
+    get_simulated_circuit_breaker_dict,
+)
 from integrations.email_adapter import EmailSimulationAdapter
 from integrations.firewall_adapter import FirewallSimulationAdapter
 from integrations.slack_adapter import SlackSimulationAdapter
@@ -64,6 +68,7 @@ def get_integration_status(mode: str | None = None) -> dict:
                 "simulated": True,
                 "real_client": False,
                 "supported_actions": sorted(adapter_cls.supported_actions),
+                "circuit_breaker": get_simulated_circuit_breaker_dict(name),
             }
             for name, adapter_cls in sorted(_ADAPTERS.items())
         ],

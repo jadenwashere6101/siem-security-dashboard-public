@@ -1,12 +1,29 @@
 import http.client
 import smtplib
 import socket
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 
+from integrations.base_integration import (
+    CIRCUIT_STATE_CLOSED,
+    CIRCUIT_STATE_HALF_OPEN,
+    CIRCUIT_STATE_OPEN,
+    FAILURE_CLASSIFICATION_CIRCUIT_OPEN,
+    FAILURE_CLASSIFICATION_CIRCUIT_STATE_INVALID,
+    FAILURE_CLASSIFICATION_NON_TRANSIENT,
+    FAILURE_CLASSIFICATION_TRANSIENT,
+    configure_simulated_circuit_breaker,
+    get_simulated_circuit_breaker_dict,
+    record_simulated_adapter_failure,
+    record_simulated_adapter_success,
+    request_half_open_probe,
+    reset_simulated_circuit_breakers,
+)
 from integrations.integration_registry import (
-    get_integration_status,
     get_integration_adapter,
+    get_integration_status,
     list_integration_adapters,
     resolve_integration_mode,
 )
@@ -24,6 +41,13 @@ EXPECTED_RESULT_KEYS = {
     "context",
     "metadata",
 }
+
+
+@pytest.fixture(autouse=True)
+def _reset_integration_circuits():
+    reset_simulated_circuit_breakers()
+    yield
+    reset_simulated_circuit_breakers()
 
 
 @pytest.fixture
@@ -136,6 +160,7 @@ def test_simulation_adapters_return_stable_result_shape(no_network, adapter_name
     assert result["success"] is True
     assert result["params"]["token"] == "[redacted]"
     assert result["context"]["password"] == "[redacted]"
+    assert result["metadata"].get("circuit_state") == CIRCUIT_STATE_CLOSED
 
 
 @pytest.mark.parametrize("adapter_name", ["slack", "email", "firewall", "webhook"])
@@ -194,3 +219,167 @@ def test_firewall_simulation_does_not_mutate_blocked_ips_or_queue(postgres_db, n
     assert cur.fetchone()[0] == blocked_before
     cur.execute("SELECT COUNT(*) FROM response_actions_queue")
     assert cur.fetchone()[0] == queue_before
+
+
+def test_initial_circuit_state_is_closed(monkeypatch, no_network):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+    snap = get_simulated_circuit_breaker_dict("slack")
+    assert snap["state"] == CIRCUIT_STATE_CLOSED
+    assert snap["consecutive_failures"] == 0
+    assert snap["retry_eligible"] is True
+
+
+def test_consecutive_transient_failures_open_breaker(monkeypatch, no_network):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+    configure_simulated_circuit_breaker("webhook", failure_threshold=3)
+    for i in range(2):
+        record_simulated_adapter_failure(
+            "webhook",
+            reason=f"err {i}",
+            classification=FAILURE_CLASSIFICATION_TRANSIENT,
+        )
+    st = get_simulated_circuit_breaker_dict("webhook")
+    assert st["state"] == CIRCUIT_STATE_CLOSED
+    assert st["consecutive_failures"] == 2
+    record_simulated_adapter_failure(
+        "webhook",
+        reason="err final",
+        classification=FAILURE_CLASSIFICATION_TRANSIENT,
+    )
+    st = get_simulated_circuit_breaker_dict("webhook")
+    assert st["state"] == CIRCUIT_STATE_OPEN
+    assert st["opened_at"] is not None
+    assert st["cooldown_until"] is not None
+
+
+def test_open_breaker_fails_closed_without_calling_simulate(monkeypatch, no_network):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+    configure_simulated_circuit_breaker("slack", state=CIRCUIT_STATE_OPEN, consecutive_failures=3)
+    adapter = get_integration_adapter("slack")
+    with patch.object(adapter, "_simulate", side_effect=AssertionError("_simulate must not run")):
+        result = adapter.execute("send_message", params={})
+    assert result["success"] is False
+    assert result["metadata"]["failure_classification"] == FAILURE_CLASSIFICATION_CIRCUIT_OPEN
+    assert result["metadata"]["retry_eligible"] is False
+
+
+def test_cooldown_expiration_does_not_auto_half_open(monkeypatch, no_network):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+    t0 = datetime(2026, 5, 10, 12, 0, 0, tzinfo=timezone.utc)
+    configure_simulated_circuit_breaker(
+        "email",
+        state=CIRCUIT_STATE_OPEN,
+        consecutive_failures=3,
+        opened_at=t0,
+        cooldown_until=t0 + timedelta(seconds=30),
+    )
+    later = t0 + timedelta(minutes=5)
+    st = get_simulated_circuit_breaker_dict("email", now=later)
+    assert st["state"] == CIRCUIT_STATE_OPEN
+    assert request_half_open_probe("email", now=later) is True
+    assert get_simulated_circuit_breaker_dict("email", now=later)["state"] == CIRCUIT_STATE_HALF_OPEN
+
+
+def test_half_open_probe_success_closes_breaker(monkeypatch, no_network):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+    t0 = datetime(2026, 5, 10, 12, 0, 0, tzinfo=timezone.utc)
+    configure_simulated_circuit_breaker(
+        "firewall",
+        state=CIRCUIT_STATE_HALF_OPEN,
+        consecutive_failures=3,
+        cooldown_until=t0,
+    )
+    adapter = get_integration_adapter("firewall")
+    result = adapter.execute("tag_ip", params={})
+    assert result["success"] is True
+    assert get_simulated_circuit_breaker_dict("firewall")["state"] == CIRCUIT_STATE_CLOSED
+    assert get_simulated_circuit_breaker_dict("firewall")["consecutive_failures"] == 0
+
+
+def test_half_open_probe_failure_reopens_breaker(monkeypatch, no_network):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+    t0 = datetime(2026, 5, 10, 12, 0, 0, tzinfo=timezone.utc)
+    configure_simulated_circuit_breaker(
+        "slack",
+        state=CIRCUIT_STATE_HALF_OPEN,
+        consecutive_failures=3,
+        cooldown_until=t0,
+    )
+    adapter = get_integration_adapter("slack")
+
+    with patch.object(
+        adapter,
+        "_simulate",
+        side_effect=lambda action, params, context: adapter._result(
+            action,
+            params,
+            context,
+            success=False,
+            message="simulated outage",
+            metadata={"failure_classification": FAILURE_CLASSIFICATION_TRANSIENT},
+        ),
+    ):
+        result = adapter.execute("send_message", params={})
+    assert result["success"] is False
+    assert get_simulated_circuit_breaker_dict("slack")["state"] == CIRCUIT_STATE_OPEN
+
+
+def test_timeout_metadata_recorded_without_timers(monkeypatch, no_network):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+    configure_simulated_circuit_breaker("webhook", timeout_seconds=42)
+    adapter = get_integration_adapter("webhook")
+    result = adapter.execute(
+        "post_event",
+        params={},
+        context={},
+    )
+    assert result["metadata"].get("timeout_seconds") == 42
+    assert result["metadata"].get("timed_out") is None
+
+
+def test_non_transient_not_retry_eligible_and_may_open(monkeypatch, no_network):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+    record_simulated_adapter_failure(
+        "firewall",
+        reason="bad config",
+        classification=FAILURE_CLASSIFICATION_NON_TRANSIENT,
+    )
+    st = get_simulated_circuit_breaker_dict("firewall")
+    assert st["state"] == CIRCUIT_STATE_OPEN
+    assert st["retry_eligible"] is False
+
+
+def test_invalid_circuit_state_fails_closed(monkeypatch, no_network):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+    configure_simulated_circuit_breaker("webhook", state="not_a_valid_state")
+    adapter = get_integration_adapter("webhook")
+    result = adapter.execute("post_event", params={})
+    assert result["success"] is False
+    assert result["metadata"]["failure_classification"] == FAILURE_CLASSIFICATION_CIRCUIT_STATE_INVALID
+
+
+def test_integration_status_includes_circuit_breaker(monkeypatch, no_network):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+    record_simulated_adapter_success("slack")
+    status = get_integration_status()
+    by_name = {a["name"]: a for a in status["adapters"]}
+    assert "circuit_breaker" in by_name["slack"]
+    cb = by_name["slack"]["circuit_breaker"]
+    assert cb["state"] == CIRCUIT_STATE_CLOSED
+    assert "consecutive_failures" in cb
+    assert "failure_threshold" in cb
+    assert "cooldown_seconds" in cb
+    assert "retry_eligible" in cb
+    assert cb["state_persisted"] is False
+
+
+def test_request_half_open_before_cooldown_fails(monkeypatch, no_network):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+    t0 = datetime(2026, 5, 10, 12, 0, 0, tzinfo=timezone.utc)
+    configure_simulated_circuit_breaker(
+        "email",
+        state=CIRCUIT_STATE_OPEN,
+        cooldown_until=t0 + timedelta(seconds=120),
+    )
+    assert request_half_open_probe("email", now=t0) is False
+    assert get_simulated_circuit_breaker_dict("email", now=t0)["state"] == CIRCUIT_STATE_OPEN
