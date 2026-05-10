@@ -14,16 +14,22 @@ from typing import Any
 
 import psycopg2
 from flask import Blueprint, current_app, jsonify, request
-from flask_login import login_required
+from flask_login import current_user, login_required
 
 from core.auth import analyst_or_super_admin_required, super_admin_required
+from core.audit_helpers import log_audit_event
+from core.approval_store import get_latest_playbook_step_approval_request
 from core.db import get_db_connection
 from core.playbook_store import (
+    abandon_playbook_execution,
+    active_playbook_execution_exists,
     create_playbook_definition,
+    create_retry_execution,
     get_playbook_definition,
     get_playbook_execution,
     list_playbook_executions,
     set_playbook_definition_enabled,
+    update_execution_status,
     update_playbook_definition,
 )
 from engines.playbook_registry import validate_playbook_steps
@@ -34,7 +40,7 @@ DEFAULT_LIMIT = 50
 MAX_LIMIT = 100
 
 _VALID_EXECUTION_STATUSES = frozenset(
-    {"pending", "running", "success", "failed", "abandoned"}
+    {"pending", "running", "awaiting_approval", "success", "failed", "abandoned"}
 )
 
 PLAYBOOK_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,63}$")
@@ -185,6 +191,34 @@ def _parse_enabled_filter(raw: str | None) -> tuple[bool | None, str | None]:
     if lowered == "false":
         return False, None
     return None, "invalid enabled filter"
+
+
+def _derive_gating_step_index(execution: dict[str, Any]) -> int:
+    steps_log = execution.get("steps_log")
+    if isinstance(steps_log, list):
+        for entry in reversed(steps_log):
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("status") == "awaiting_approval":
+                raw_index = entry.get("step_index")
+                try:
+                    return int(raw_index)
+                except (TypeError, ValueError):
+                    break
+    last_completed = execution.get("last_completed_step")
+    return (int(last_completed) if last_completed is not None else -1) + 1
+
+
+def _write_playbook_execution_audit(event_type: str, details: dict[str, Any]) -> None:
+    log_audit_event(
+        event_type,
+        actor_username=current_user.id,
+        actor_role=getattr(current_user, "role", None),
+        http_method=request.method,
+        request_path=request.path,
+        source_ip=request.remote_addr,
+        details=details,
+    )
 
 
 def _list_definitions(conn, enabled_filter: bool | None, limit: int) -> list[dict[str, Any]]:
@@ -508,6 +542,202 @@ def get_playbook_execution_route(execution_id):
         return jsonify(_serialize_execution_dict(row)), 200
     except Exception as error:
         current_app.logger.error("Error in get_playbook_execution_route: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@playbook_bp.route("/playbook-executions/<int:execution_id>/retry", methods=["POST"])
+@login_required
+@super_admin_required
+def retry_playbook_execution_route(execution_id):
+    conn = None
+    try:
+        conn = get_db_connection()
+        execution = get_playbook_execution(conn, execution_id)
+        if execution is None:
+            return jsonify({"error": "playbook execution not found"}), 404
+
+        if execution["status"] not in {"failed", "abandoned"}:
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "retry requires failed or abandoned execution; "
+                            f"current status: {execution['status']}"
+                        )
+                    }
+                ),
+                409,
+            )
+
+        if get_playbook_definition(conn, execution["playbook_id"]) is None:
+            return jsonify({"error": "playbook definition not found for execution"}), 409
+
+        if active_playbook_execution_exists(
+            conn,
+            execution["playbook_id"],
+            execution["alert_id"],
+        ):
+            return (
+                jsonify({"error": "active execution already exists for playbook and alert"}),
+                409,
+            )
+
+        new_execution_id = create_retry_execution(conn, execution_id)
+        conn.commit()
+        _write_playbook_execution_audit(
+            "PLAYBOOK_EXECUTION_RETRY",
+            {
+                "source_execution_id": execution_id,
+                "new_execution_id": new_execution_id,
+                "playbook_id": execution["playbook_id"],
+            },
+        )
+        return (
+            jsonify(
+                {
+                    "source_execution_id": execution_id,
+                    "new_execution_id": new_execution_id,
+                    "status": "pending",
+                    "message": "New simulation execution created. No steps have run yet.",
+                }
+            ),
+            201,
+        )
+    except ValueError as error:
+        if conn:
+            conn.rollback()
+        status_code = 404 if str(error) == "execution not found" else 409
+        return jsonify({"error": str(error)}), status_code
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        current_app.logger.error("Error in retry_playbook_execution_route: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@playbook_bp.route("/playbook-executions/<int:execution_id>/abandon", methods=["POST"])
+@login_required
+@super_admin_required
+def abandon_playbook_execution_route(execution_id):
+    conn = None
+    try:
+        conn = get_db_connection()
+        execution = get_playbook_execution(conn, execution_id)
+        if execution is None:
+            return jsonify({"error": "playbook execution not found"}), 404
+
+        previous_status = execution["status"]
+        outcome = abandon_playbook_execution(conn, execution_id)
+        conn.commit()
+        if outcome == "no_op":
+            return jsonify({"outcome": "no_op", "execution_id": execution_id}), 200
+
+        _write_playbook_execution_audit(
+            "PLAYBOOK_EXECUTION_ABANDON",
+            {
+                "execution_id": execution_id,
+                "previous_status": previous_status,
+                "playbook_id": execution["playbook_id"],
+            },
+        )
+        return jsonify({"outcome": "abandoned", "execution_id": execution_id}), 200
+    except ValueError as error:
+        if conn:
+            conn.rollback()
+        if "execution not found" in str(error):
+            return jsonify({"error": str(error)}), 404
+        if "cannot abandon terminal" in str(error):
+            return jsonify({"error": str(error)}), 409
+        return jsonify({"error": str(error)}), 409
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        current_app.logger.error("Error in abandon_playbook_execution_route: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@playbook_bp.route("/playbook-executions/<int:execution_id>/resume", methods=["POST"])
+@login_required
+@super_admin_required
+def resume_playbook_execution_route(execution_id):
+    conn = None
+    try:
+        conn = get_db_connection()
+        execution = get_playbook_execution(conn, execution_id)
+        if execution is None:
+            return jsonify({"error": "playbook execution not found"}), 404
+
+        if execution["status"] != "awaiting_approval":
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "resume requires awaiting_approval execution; "
+                            f"current status: {execution['status']}"
+                        )
+                    }
+                ),
+                409,
+            )
+
+        gating_step_index = _derive_gating_step_index(execution)
+        approval = get_latest_playbook_step_approval_request(
+            conn,
+            playbook_execution_id=execution_id,
+            playbook_step_index=gating_step_index,
+        )
+        if approval is None:
+            return (
+                jsonify({"error": f"no approval request found for gating step {gating_step_index}"}),
+                409,
+            )
+        if approval["status"] != "approved":
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            f"approval for step {gating_step_index} is not approved; "
+                            f"current status: {approval['status']}"
+                        )
+                    }
+                ),
+                409,
+            )
+
+        update_execution_status(conn, execution_id, "pending")
+        conn.commit()
+        _write_playbook_execution_audit(
+            "PLAYBOOK_EXECUTION_RESUME",
+            {
+                "execution_id": execution_id,
+                "playbook_id": execution["playbook_id"],
+                "gating_step_index": gating_step_index,
+                "approval_request_id": approval["id"],
+            },
+        )
+        return (
+            jsonify(
+                {
+                    "execution_id": execution_id,
+                    "status": "pending",
+                    "message": "Simulation execution re-queued. Run the executor to continue.",
+                }
+            ),
+            200,
+        )
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        current_app.logger.error("Error in resume_playbook_execution_route: %s", error)
         return jsonify({"error": "Internal server error"}), 500
     finally:
         if conn:

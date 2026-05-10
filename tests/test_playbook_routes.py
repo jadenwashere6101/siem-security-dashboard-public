@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pytest
 from werkzeug.security import generate_password_hash
 
+from core import approval_store
 from core import playbook_store
 
 ADMIN_USER = "testadmin"
@@ -110,6 +111,18 @@ def _insert_queue_row(cur, alert_id, source_ip, action="block_ip", status="pendi
         RETURNING id
         """,
         (idem, alert_id, source_ip, action, status),
+    )
+    return cur.fetchone()[0]
+
+
+def _insert_user(cur, username="approval_user"):
+    cur.execute(
+        """
+        INSERT INTO users (username, password_hash, role)
+        VALUES (%s, 'hash', 'super_admin')
+        RETURNING id
+        """,
+        (username,),
     )
     return cur.fetchone()[0]
 
@@ -342,6 +355,24 @@ def test_list_playbook_executions_invalid_status_returns_400(client, postgres_db
 
 
 @pytest.mark.usefixtures("postgres_db")
+def test_list_playbook_executions_awaiting_approval_filter(client, postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_await_filter", "AF", steps=_valid_steps())
+    eid = playbook_store.create_playbook_execution(conn, "pb_await_filter", alert_id=None)
+    playbook_store.update_execution_status(conn, eid, "awaiting_approval")
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get("/playbook-executions?status=awaiting_approval")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["status"] == "awaiting_approval"
+    assert [item["id"] for item in body["items"]] == [eid]
+
+
+@pytest.mark.usefixtures("postgres_db")
 def test_get_playbook_execution_detail(client, postgres_db):
     conn, _cur = postgres_db
     playbook_store.create_playbook_definition(conn, "pb_ex", "E", steps=_valid_steps())
@@ -375,6 +406,306 @@ def test_analyst_can_read_playbooks(client, postgres_db):
     finally:
         _stop_patchers(patchers)
     assert resp.status_code == 200
+
+
+# --- Execution controls (super_admin only, simulation-only) ---
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_retry_failed_execution_creates_new_pending_and_audit(client, postgres_db):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_store.create_playbook_definition(conn, "pb_retry_route", "Retry", steps=_valid_steps())
+    source_id = playbook_store.create_playbook_execution(conn, "pb_retry_route", aid)
+    playbook_store.set_playbook_execution_failed(
+        conn,
+        source_id,
+        [{"step_index": 0, "status": "failed"}],
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.post(f"/playbook-executions/{source_id}/retry")
+
+    assert resp.status_code == 201
+    body = resp.get_json()
+    new_id = body["new_execution_id"]
+    assert body["source_execution_id"] == source_id
+    assert body["status"] == "pending"
+
+    source = playbook_store.get_playbook_execution(conn, source_id)
+    retry = playbook_store.get_playbook_execution(conn, new_id)
+    assert source["status"] == "failed"
+    assert retry["status"] == "pending"
+    assert retry["playbook_id"] == "pb_retry_route"
+    assert retry["alert_id"] == aid
+    assert retry["steps_log"] == []
+    assert retry["last_completed_step"] is None
+
+    cur.execute("SELECT COUNT(*) FROM audit_log WHERE event_type = 'PLAYBOOK_EXECUTION_RETRY'")
+    assert cur.fetchone()[0] == 1
+    cur.execute("SELECT COUNT(*) FROM response_actions_queue")
+    assert cur.fetchone()[0] == 0
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_retry_abandoned_execution_creates_new_pending(client, postgres_db):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_store.create_playbook_definition(conn, "pb_retry_abandoned", "Retry A", steps=_valid_steps())
+    source_id = playbook_store.create_playbook_execution(conn, "pb_retry_abandoned", aid)
+    playbook_store.update_execution_status(conn, source_id, "abandoned")
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.post(f"/playbook-executions/{source_id}/retry")
+
+    assert resp.status_code == 201
+    retry = playbook_store.get_playbook_execution(conn, resp.get_json()["new_execution_id"])
+    assert retry["status"] == "pending"
+
+
+@pytest.mark.usefixtures("postgres_db")
+@pytest.mark.parametrize("status", ["pending", "running", "awaiting_approval", "success"])
+def test_retry_invalid_source_states_return_409(client, postgres_db, status):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_id = f"pb_retry_{status}"
+    playbook_store.create_playbook_definition(conn, playbook_id, "Retry bad", steps=_valid_steps())
+    source_id = playbook_store.create_playbook_execution(conn, playbook_id, aid)
+    if status != "pending":
+        playbook_store.update_execution_status(conn, source_id, status)
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.post(f"/playbook-executions/{source_id}/retry")
+
+    assert resp.status_code == 409
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_retry_blocked_when_active_execution_exists(client, postgres_db):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_store.create_playbook_definition(conn, "pb_retry_active_route", "RAR", steps=_valid_steps())
+    source_id = playbook_store.create_playbook_execution(conn, "pb_retry_active_route", aid)
+    playbook_store.update_execution_status(conn, source_id, "failed")
+    active_id = playbook_store.create_playbook_execution(conn, "pb_retry_active_route", aid)
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.post(f"/playbook-executions/{source_id}/retry")
+
+    assert resp.status_code == 409
+    assert "active execution already exists" in resp.get_json()["error"]
+    assert playbook_store.get_playbook_execution(conn, active_id)["status"] == "pending"
+
+
+@pytest.mark.usefixtures("postgres_db")
+@pytest.mark.parametrize("status", ["pending", "running", "awaiting_approval"])
+def test_abandon_active_execution_states(client, postgres_db, status):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_id = f"pb_abandon_{status}"
+    playbook_store.create_playbook_definition(conn, playbook_id, "Abandon", steps=_valid_steps())
+    execution_id = playbook_store.create_playbook_execution(conn, playbook_id, aid)
+    if status != "pending":
+        playbook_store.update_execution_status(conn, execution_id, status)
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.post(f"/playbook-executions/{execution_id}/abandon")
+
+    assert resp.status_code == 200
+    assert resp.get_json()["outcome"] == "abandoned"
+    row = playbook_store.get_playbook_execution(conn, execution_id)
+    assert row["status"] == "abandoned"
+    assert row["completed_at"] is not None
+    cur.execute("SELECT COUNT(*) FROM audit_log WHERE event_type = 'PLAYBOOK_EXECUTION_ABANDON'")
+    assert cur.fetchone()[0] == 1
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_abandon_already_abandoned_is_noop_without_audit(client, postgres_db):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_store.create_playbook_definition(conn, "pb_abandon_noop", "AN", steps=_valid_steps())
+    execution_id = playbook_store.create_playbook_execution(conn, "pb_abandon_noop", aid)
+    playbook_store.update_execution_status(conn, execution_id, "abandoned")
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.post(f"/playbook-executions/{execution_id}/abandon")
+
+    assert resp.status_code == 200
+    assert resp.get_json()["outcome"] == "no_op"
+    cur.execute("SELECT COUNT(*) FROM audit_log WHERE event_type = 'PLAYBOOK_EXECUTION_ABANDON'")
+    assert cur.fetchone()[0] == 0
+
+
+@pytest.mark.usefixtures("postgres_db")
+@pytest.mark.parametrize("status", ["success", "failed"])
+def test_abandon_terminal_success_failed_returns_409(client, postgres_db, status):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_id = f"pb_abandon_bad_{status}"
+    playbook_store.create_playbook_definition(conn, playbook_id, "AB", steps=_valid_steps())
+    execution_id = playbook_store.create_playbook_execution(conn, playbook_id, aid)
+    playbook_store.update_execution_status(conn, execution_id, status)
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.post(f"/playbook-executions/{execution_id}/abandon")
+
+    assert resp.status_code == 409
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_resume_awaiting_approval_with_approved_request_requeues(client, postgres_db):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    approver_id = _insert_user(cur, "resume_approver")
+    playbook_store.create_playbook_definition(conn, "pb_resume_route", "Resume", steps=_valid_steps())
+    execution_id = playbook_store.create_playbook_execution(conn, "pb_resume_route", aid)
+    steps_log = [{"step_index": 2, "status": "awaiting_approval", "event": "approval_requested"}]
+    playbook_store.set_playbook_execution_awaiting_approval(conn, execution_id, steps_log)
+    approval = approval_store.create_playbook_step_approval_request(
+        conn,
+        playbook_execution_id=execution_id,
+        playbook_step_index=2,
+        risk_level="high",
+    )
+    approval_store.approve_request(conn, approval["id"], actor_user_id=approver_id)
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.post(f"/playbook-executions/{execution_id}/resume")
+
+    assert resp.status_code == 200
+    assert resp.get_json()["status"] == "pending"
+    assert playbook_store.get_playbook_execution(conn, execution_id)["status"] == "pending"
+    unchanged = approval_store.get_approval_request(conn, approval["id"])
+    assert unchanged["status"] == "approved"
+    cur.execute("SELECT COUNT(*) FROM audit_log WHERE event_type = 'PLAYBOOK_EXECUTION_RESUME'")
+    assert cur.fetchone()[0] == 1
+
+
+@pytest.mark.usefixtures("postgres_db")
+@pytest.mark.parametrize("approval_status", ["pending", "denied", "expired"])
+def test_resume_requires_approved_linked_approval(client, postgres_db, approval_status):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    decider_id = _insert_user(cur, f"resume_{approval_status}")
+    playbook_store.create_playbook_definition(conn, f"pb_resume_{approval_status}", "R", steps=_valid_steps())
+    execution_id = playbook_store.create_playbook_execution(conn, f"pb_resume_{approval_status}", aid)
+    playbook_store.set_playbook_execution_awaiting_approval(
+        conn,
+        execution_id,
+        [{"step_index": 0, "status": "awaiting_approval"}],
+    )
+    approval = approval_store.create_playbook_step_approval_request(
+        conn,
+        playbook_execution_id=execution_id,
+        playbook_step_index=0,
+    )
+    if approval_status == "denied":
+        approval_store.deny_request(conn, approval["id"], actor_user_id=decider_id)
+    elif approval_status == "expired":
+        cur.execute(
+            """
+            UPDATE approval_requests
+            SET status = 'expired', decided_at = NOW()
+            WHERE id = %s
+            """,
+            (approval["id"],),
+        )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.post(f"/playbook-executions/{execution_id}/resume")
+
+    assert resp.status_code == 409
+    assert playbook_store.get_playbook_execution(conn, execution_id)["status"] == "awaiting_approval"
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_resume_without_approval_returns_409(client, postgres_db):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_store.create_playbook_definition(conn, "pb_resume_none", "RN", steps=_valid_steps())
+    execution_id = playbook_store.create_playbook_execution(conn, "pb_resume_none", aid)
+    playbook_store.set_playbook_execution_awaiting_approval(
+        conn,
+        execution_id,
+        [{"step_index": 0, "status": "awaiting_approval"}],
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.post(f"/playbook-executions/{execution_id}/resume")
+
+    assert resp.status_code == 409
+
+
+@pytest.mark.usefixtures("postgres_db")
+@pytest.mark.parametrize("status", ["pending", "running", "success", "failed", "abandoned"])
+def test_resume_non_awaiting_states_return_409(client, postgres_db, status):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_id = f"pb_resume_bad_{status}"
+    playbook_store.create_playbook_definition(conn, playbook_id, "RB", steps=_valid_steps())
+    execution_id = playbook_store.create_playbook_execution(conn, playbook_id, aid)
+    if status != "pending":
+        playbook_store.update_execution_status(conn, execution_id, status)
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.post(f"/playbook-executions/{execution_id}/resume")
+
+    assert resp.status_code == 409
+
+
+@pytest.mark.usefixtures("postgres_db")
+@pytest.mark.parametrize("action", ["retry", "abandon", "resume"])
+def test_execution_control_actions_not_found_return_404(client, postgres_db, action):
+    conn, _cur = postgres_db
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.post(f"/playbook-executions/999999/{action}")
+    assert resp.status_code == 404
+
+
+@pytest.mark.parametrize("action", ["retry", "abandon", "resume"])
+def test_execution_control_actions_without_session_return_401(client, action):
+    assert client.post(f"/playbook-executions/1/{action}").status_code == 401
+
+
+@pytest.mark.usefixtures("postgres_db")
+@pytest.mark.parametrize("action", ["retry", "abandon", "resume"])
+def test_execution_control_actions_analyst_forbidden(client, postgres_db, action):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_store.create_playbook_definition(conn, f"pb_analyst_{action}", "A", steps=_valid_steps())
+    execution_id = playbook_store.create_playbook_execution(conn, f"pb_analyst_{action}", aid)
+    conn.commit()
+    patchers = _login_role(client, username=f"an_{action}", password="p", role="analyst")
+    try:
+        with _patched_app_db(conn):
+            resp = client.post(f"/playbook-executions/{execution_id}/{action}")
+    finally:
+        _stop_patchers(patchers)
+    assert resp.status_code == 403
 
 
 # --- No mutation ---

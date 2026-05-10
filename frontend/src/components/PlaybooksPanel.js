@@ -7,6 +7,9 @@ import {
   createPlaybookDefinition,
   updatePlaybookDefinition,
   setPlaybookDefinitionEnabled,
+  retryExecution,
+  abandonExecution,
+  resumeExecution,
 } from "../services/playbookService";
 import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
 
@@ -174,6 +177,17 @@ function isAwaitingApproval(detailRecord) {
   );
 }
 
+function getExecutionControls(status, isSuperAdmin) {
+  if (!isSuperAdmin) {
+    return { canRetry: false, canAbandon: false, canResume: false };
+  }
+  return {
+    canRetry: status === "failed" || status === "abandoned",
+    canAbandon: status === "pending" || status === "running" || status === "awaiting_approval",
+    canResume: status === "awaiting_approval",
+  };
+}
+
 function getStepErrorText(step) {
   if (!step.error) {
     return "";
@@ -221,6 +235,8 @@ function PlaybooksPanel({
   const [execStatus, setExecStatus] = useState("");
   const [execPlaybookIdDraft, setExecPlaybookIdDraft] = useState("");
   const [execPlaybookIdApplied, setExecPlaybookIdApplied] = useState("");
+  const [executionActionInProgress, setExecutionActionInProgress] = useState({});
+  const [executionActionError, setExecutionActionError] = useState({});
 
   const [detailKind, setDetailKind] = useState(null);
   const [detailRecord, setDetailRecord] = useState(null);
@@ -344,6 +360,49 @@ function PlaybooksPanel({
   const handleApplyExecutionPlaybookFilter = useCallback(() => {
     setExecPlaybookIdApplied(execPlaybookIdDraft.trim());
   }, [execPlaybookIdDraft]);
+
+  const runExecutionAction = useCallback(
+    async (executionId, actionFn) => {
+      setExecutionActionInProgress((current) => ({ ...current, [executionId]: true }));
+      setExecutionActionError((current) => ({ ...current, [executionId]: null }));
+      try {
+        await actionFn(executionId);
+        setExecutionActionError((current) => ({ ...current, [executionId]: null }));
+        await loadExecutions({ quiet: true });
+      } catch (err) {
+        setExecutionActionError((current) => ({
+          ...current,
+          [executionId]: err.message || "Simulation control action failed.",
+        }));
+      } finally {
+        setExecutionActionInProgress((current) => ({ ...current, [executionId]: false }));
+      }
+    },
+    [loadExecutions]
+  );
+
+  const handleRetryExecution = useCallback(
+    (executionId) => runExecutionAction(executionId, retryExecution),
+    [runExecutionAction]
+  );
+
+  const handleAbandonExecution = useCallback(
+    (executionId) => {
+      const confirmed = window.confirm(
+        "Abandon this execution? It will stop and cannot be resumed."
+      );
+      if (!confirmed) {
+        return;
+      }
+      runExecutionAction(executionId, abandonExecution);
+    },
+    [runExecutionAction]
+  );
+
+  const handleResumeExecution = useCallback(
+    (executionId) => runExecutionAction(executionId, resumeExecution),
+    [runExecutionAction]
+  );
 
   // Form handlers
   const validateIdFormat = (id) => {
@@ -501,8 +560,8 @@ function PlaybooksPanel({
           <p style={sectionLabelStyle}>SOAR</p>
           <h2 style={cardTitleStyle}>Playbooks</h2>
           <p style={cardSubtitleStyle}>
-            Playbooks are visible only; execution is not enabled yet. This view loads configured
-            definitions and execution records using read-only APIs.
+            Simulation-only playbook controls. Retry, abandon, and resume actions are available
+            to super_admin users. Analyst users have read-only access.
           </p>
         </div>
         <div style={controlsStyle}>
@@ -694,42 +753,96 @@ function PlaybooksPanel({
                       <th style={headerCellStyle}>Created</th>
                       <th style={headerCellStyle}>Started</th>
                       <th style={headerCellStyle}>Completed</th>
+                      {isSuperAdmin && <th style={headerCellStyle}>Actions</th>}
                       <th style={headerCellStyle}>View</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {executions.map((row) => (
-                      <tr key={row.id} style={rowStyle}>
-                        <td style={{ ...bodyCellStyle, ...mono }}>{row.id}</td>
-                        <td style={{ ...bodyCellStyle, ...mono }}>{row.playbook_id}</td>
-                        <td style={bodyCellStyle}>{row.status}</td>
-                        <td style={bodyCellStyle}>
-                          {row.alert_id === null || row.alert_id === undefined ? "—" : row.alert_id}
-                        </td>
-                        <td style={bodyCellStyle}>
-                          {row.incident_id === null || row.incident_id === undefined
-                            ? "—"
-                            : row.incident_id}
-                        </td>
-                        <td style={bodyCellStyle}>
-                          {row.last_completed_step === null || row.last_completed_step === undefined
-                            ? "—"
-                            : row.last_completed_step}
-                        </td>
-                        <td style={bodyCellStyle}>{formatAdminTimestamp(row.created_at, "—")}</td>
-                        <td style={bodyCellStyle}>{formatAdminTimestamp(row.started_at, "—")}</td>
-                        <td style={bodyCellStyle}>{formatAdminTimestamp(row.completed_at, "—")}</td>
-                        <td style={bodyCellStyle}>
-                          <button
-                            type="button"
-                            style={viewButtonStyle}
-                            onClick={() => handleViewExecution(row.id)}
-                          >
-                            View
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                    {executions.map((row) => {
+                      const controls = getExecutionControls(row.status, isSuperAdmin);
+                      const actionBusy = Boolean(executionActionInProgress[row.id]);
+                      const actionError = executionActionError[row.id];
+                      return (
+                        <tr key={row.id} style={rowStyle}>
+                          <td style={{ ...bodyCellStyle, ...mono }}>{row.id}</td>
+                          <td style={{ ...bodyCellStyle, ...mono }}>{row.playbook_id}</td>
+                          <td style={bodyCellStyle}>{row.status}</td>
+                          <td style={bodyCellStyle}>
+                            {row.alert_id === null || row.alert_id === undefined ? "—" : row.alert_id}
+                          </td>
+                          <td style={bodyCellStyle}>
+                            {row.incident_id === null || row.incident_id === undefined
+                              ? "—"
+                              : row.incident_id}
+                          </td>
+                          <td style={bodyCellStyle}>
+                            {row.last_completed_step === null || row.last_completed_step === undefined
+                              ? "—"
+                              : row.last_completed_step}
+                          </td>
+                          <td style={bodyCellStyle}>{formatAdminTimestamp(row.created_at, "—")}</td>
+                          <td style={bodyCellStyle}>{formatAdminTimestamp(row.started_at, "—")}</td>
+                          <td style={bodyCellStyle}>{formatAdminTimestamp(row.completed_at, "—")}</td>
+                          {isSuperAdmin && (
+                            <td style={bodyCellStyle}>
+                              <div style={actionButtonsWrapperStyle}>
+                                {controls.canRetry ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRetryExecution(row.id)}
+                                    disabled={actionBusy}
+                                    style={{
+                                      ...smallActionButtonStyle,
+                                      opacity: actionBusy ? 0.65 : 1,
+                                    }}
+                                  >
+                                    Retry simulation
+                                  </button>
+                                ) : null}
+                                {controls.canAbandon ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAbandonExecution(row.id)}
+                                    disabled={actionBusy}
+                                    style={{
+                                      ...smallActionButtonStyle,
+                                      opacity: actionBusy ? 0.65 : 1,
+                                    }}
+                                  >
+                                    Abandon
+                                  </button>
+                                ) : null}
+                                {controls.canResume ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleResumeExecution(row.id)}
+                                    disabled={actionBusy}
+                                    style={{
+                                      ...smallActionButtonStyle,
+                                      opacity: actionBusy ? 0.65 : 1,
+                                    }}
+                                  >
+                                    Resume simulation
+                                  </button>
+                                ) : null}
+                              </div>
+                              {actionError ? (
+                                <div style={actionErrorStyle}>{actionError}</div>
+                              ) : null}
+                            </td>
+                          )}
+                          <td style={bodyCellStyle}>
+                            <button
+                              type="button"
+                              style={viewButtonStyle}
+                              onClick={() => handleViewExecution(row.id)}
+                            >
+                              View
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1418,6 +1531,14 @@ const smallActionButtonStyle = {
   fontSize: "11px",
   fontWeight: "600",
   cursor: "pointer",
+};
+
+const actionErrorStyle = {
+  marginTop: "6px",
+  color: "#fecaca",
+  fontSize: "12px",
+  lineHeight: 1.35,
+  overflowWrap: "anywhere",
 };
 
 const formPanelStyle = {

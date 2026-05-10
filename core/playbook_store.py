@@ -11,6 +11,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
+import psycopg2
 from psycopg2.extras import Json
 
 from engines.playbook_registry import validate_playbook_steps
@@ -273,6 +274,7 @@ def create_pending_playbook_execution_once(
             VALUES (%s, %s, %s, 'pending')
             ON CONFLICT (playbook_id, alert_id)
                 WHERE alert_id IS NOT NULL
+                  AND status IN ('pending', 'running', 'awaiting_approval')
                 DO NOTHING
             RETURNING id
             """,
@@ -282,6 +284,116 @@ def create_pending_playbook_execution_once(
         if row is None:
             return None
         return int(row[0])
+
+
+def _active_execution_exists_for_pair(
+    conn,
+    playbook_id: str,
+    alert_id: int | None,
+    *,
+    exclude_execution_id: int | None = None,
+) -> bool:
+    if alert_id is None:
+        return False
+
+    params: list[Any] = [playbook_id, alert_id]
+    exclude_sql = ""
+    if exclude_execution_id is not None:
+        exclude_sql = "AND id <> %s"
+        params.append(exclude_execution_id)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT 1
+            FROM playbook_executions
+            WHERE playbook_id = %s
+              AND alert_id = %s
+              AND status IN ('pending', 'running', 'awaiting_approval')
+              {exclude_sql}
+            LIMIT 1
+            """,
+            tuple(params),
+        )
+        return cur.fetchone() is not None
+
+
+def active_playbook_execution_exists(
+    conn,
+    playbook_id: str,
+    alert_id: int | None,
+) -> bool:
+    return _active_execution_exists_for_pair(conn, playbook_id, alert_id)
+
+
+def create_retry_execution(conn, source_execution_id: int) -> int:
+    source = get_playbook_execution(conn, source_execution_id)
+    if source is None:
+        raise ValueError("execution not found")
+    if source["status"] not in {"failed", "abandoned"}:
+        raise ValueError(
+            "retry requires failed or abandoned execution; "
+            f"current status: {source['status']}"
+        )
+    if _active_execution_exists_for_pair(
+        conn,
+        source["playbook_id"],
+        source["alert_id"],
+        exclude_execution_id=source_execution_id,
+    ):
+        raise ValueError("active execution already exists for playbook and alert")
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO playbook_executions (
+                    playbook_id, alert_id, incident_id, status, steps_log, last_completed_step
+                )
+                VALUES (%s, %s, %s, 'pending', %s, NULL)
+                RETURNING id
+                """,
+                (
+                    source["playbook_id"],
+                    source["alert_id"],
+                    source["incident_id"],
+                    Json([]),
+                ),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise RuntimeError("INSERT retry playbook_executions returned no row")
+            return int(row[0])
+    except psycopg2.IntegrityError as exc:
+        raise ValueError("active execution already exists for playbook and alert") from exc
+
+
+def abandon_playbook_execution(conn, execution_id: int) -> str:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE playbook_executions
+            SET status = 'abandoned',
+                completed_at = NOW()
+            WHERE id = %s
+              AND status IN ('pending', 'running', 'awaiting_approval')
+            RETURNING status
+            """,
+            (execution_id,),
+        )
+        if cur.fetchone() is not None:
+            return "ok"
+
+    current = get_playbook_execution(conn, execution_id)
+    if current is None:
+        raise ValueError("execution not found")
+    if current["status"] == "abandoned":
+        return "no_op"
+    if current["status"] in {"success", "failed"}:
+        raise ValueError(
+            f"cannot abandon terminal execution with status '{current['status']}'"
+        )
+    raise ValueError(f"cannot abandon execution with status '{current['status']}'")
 
 
 def get_playbook_execution(conn, execution_id: int) -> dict[str, Any] | None:

@@ -79,6 +79,42 @@ export async function getPlaybookExecution(executionId) {
   return data;
 }
 
+async function postExecutionControl(executionId, action, fallbackMessage) {
+  const res = await fetch(buildSiemPath(`/playbook-executions/${executionId}/${action}`), {
+    method: "POST",
+    credentials: "include",
+  });
+  const data = await parseJsonResponse(res, {});
+  if (!res.ok) {
+    throw new Error(getApiErrorMessage(data, fallbackMessage, ["error", "message"]));
+  }
+  return data;
+}
+
+export async function retryExecution(executionId) {
+  return postExecutionControl(
+    executionId,
+    "retry",
+    "Unable to retry playbook simulation"
+  );
+}
+
+export async function abandonExecution(executionId) {
+  return postExecutionControl(
+    executionId,
+    "abandon",
+    "Unable to abandon playbook simulation"
+  );
+}
+
+export async function resumeExecution(executionId) {
+  return postExecutionControl(
+    executionId,
+    "resume",
+    "Unable to resume playbook simulation"
+  );
+}
+
 export async function createPlaybookDefinition(payload) {
   const res = await fetch(buildSiemPath("/playbooks"), {
     method: "POST",

@@ -1,4 +1,5 @@
 import pytest
+import psycopg2
 
 from core import playbook_store
 
@@ -413,6 +414,109 @@ def test_create_pending_playbook_execution_once_is_idempotent(postgres_db):
     )
     rows = cur.fetchall()
     assert rows == [(first, "pending", None, None)]
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_active_playbook_execution_uniqueness_blocks_active_duplicates(postgres_db):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_store.create_playbook_definition(conn, "pb_active_unique", "AU", steps=_valid_steps())
+    first = playbook_store.create_pending_playbook_execution_once(conn, "pb_active_unique", aid)
+    conn.commit()
+
+    with pytest.raises(psycopg2.IntegrityError):
+        playbook_store.create_playbook_execution(conn, "pb_active_unique", aid)
+    conn.rollback()
+
+    playbook_store.update_execution_status(conn, first, "running")
+    conn.commit()
+    with pytest.raises(psycopg2.IntegrityError):
+        playbook_store.create_playbook_execution(conn, "pb_active_unique", aid)
+    conn.rollback()
+
+    playbook_store.update_execution_status(conn, first, "awaiting_approval")
+    conn.commit()
+    with pytest.raises(psycopg2.IntegrityError):
+        playbook_store.create_playbook_execution(conn, "pb_active_unique", aid)
+    conn.rollback()
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_active_playbook_execution_uniqueness_allows_history(postgres_db):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_store.create_playbook_definition(conn, "pb_history", "History", steps=_valid_steps())
+
+    failed = playbook_store.create_pending_playbook_execution_once(conn, "pb_history", aid)
+    playbook_store.update_execution_status(conn, failed, "failed")
+    abandoned = playbook_store.create_playbook_execution(conn, "pb_history", aid)
+    playbook_store.update_execution_status(conn, abandoned, "abandoned")
+    success = playbook_store.create_playbook_execution(conn, "pb_history", aid)
+    playbook_store.update_execution_status(conn, success, "success")
+
+    cur.execute(
+        """
+        SELECT status
+        FROM playbook_executions
+        WHERE playbook_id = %s AND alert_id = %s
+        ORDER BY id ASC
+        """,
+        ("pb_history", aid),
+    )
+    assert [row[0] for row in cur.fetchall()] == ["failed", "abandoned", "success"]
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_create_retry_execution_creates_new_pending_history_row(postgres_db):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_store.create_playbook_definition(conn, "pb_retry", "Retry", steps=_valid_steps())
+    failed = playbook_store.create_playbook_execution(conn, "pb_retry", aid)
+    playbook_store.set_playbook_execution_failed(
+        conn,
+        failed,
+        [{"step_index": 0, "status": "failed"}],
+    )
+
+    retry_id = playbook_store.create_retry_execution(conn, failed)
+
+    source = playbook_store.get_playbook_execution(conn, failed)
+    retry = playbook_store.get_playbook_execution(conn, retry_id)
+    assert source["status"] == "failed"
+    assert source["steps_log"] == [{"step_index": 0, "status": "failed"}]
+    assert retry["status"] == "pending"
+    assert retry["playbook_id"] == "pb_retry"
+    assert retry["alert_id"] == aid
+    assert retry["steps_log"] == []
+    assert retry["last_completed_step"] is None
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_create_retry_execution_blocks_when_active_execution_exists(postgres_db):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_store.create_playbook_definition(conn, "pb_retry_active", "RA", steps=_valid_steps())
+    failed = playbook_store.create_playbook_execution(conn, "pb_retry_active", aid)
+    playbook_store.update_execution_status(conn, failed, "failed")
+    active = playbook_store.create_playbook_execution(conn, "pb_retry_active", aid)
+    assert playbook_store.get_playbook_execution(conn, active)["status"] == "pending"
+
+    with pytest.raises(ValueError, match="active execution already exists"):
+        playbook_store.create_retry_execution(conn, failed)
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_abandon_playbook_execution_transitions_and_noops(postgres_db):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_store.create_playbook_definition(conn, "pb_abandon_helper", "A", steps=_valid_steps())
+    eid = playbook_store.create_playbook_execution(conn, "pb_abandon_helper", aid)
+
+    assert playbook_store.abandon_playbook_execution(conn, eid) == "ok"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["status"] == "abandoned"
+    assert row["completed_at"] is not None
+    assert playbook_store.abandon_playbook_execution(conn, eid) == "no_op"
 
 
 @pytest.mark.usefixtures("postgres_db")

@@ -351,9 +351,12 @@ CREATE INDEX IF NOT EXISTS idx_playbook_executions_status
 CREATE INDEX IF NOT EXISTS idx_playbook_executions_created_at
     ON playbook_executions (created_at DESC);
 
+DROP INDEX IF EXISTS idx_playbook_executions_playbook_alert_unique;
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_playbook_executions_playbook_alert_unique
     ON playbook_executions (playbook_id, alert_id)
-    WHERE alert_id IS NOT NULL;
+    WHERE alert_id IS NOT NULL
+      AND status IN ('pending', 'running', 'awaiting_approval');
 
 DO $$
 BEGIN

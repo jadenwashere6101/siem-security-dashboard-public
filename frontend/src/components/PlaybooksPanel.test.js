@@ -11,6 +11,9 @@ import {
   createPlaybookDefinition,
   updatePlaybookDefinition,
   setPlaybookDefinitionEnabled,
+  retryExecution,
+  abandonExecution,
+  resumeExecution,
 } from "../services/playbookService";
 
 jest.mock("../services/playbookService", () => ({
@@ -21,6 +24,9 @@ jest.mock("../services/playbookService", () => ({
   createPlaybookDefinition: jest.fn(),
   updatePlaybookDefinition: jest.fn(),
   setPlaybookDefinitionEnabled: jest.fn(),
+  retryExecution: jest.fn(),
+  abandonExecution: jest.fn(),
+  resumeExecution: jest.fn(),
 }));
 
 const styleProps = {
@@ -542,6 +548,103 @@ test("does not render run, retry, cancel, or delete controls", async () => {
   expect(screen.queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
 });
 
+test("super admin sees valid simulation controls by execution state", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({
+    items: [
+      { ...execRow, id: 41, status: "failed" },
+      { ...execRow, id: 42, status: "abandoned" },
+      { ...execRow, id: 43, status: "pending" },
+      { ...execRow, id: 44, status: "running" },
+      { ...execRow, id: 45, status: "awaiting_approval" },
+      { ...execRow, id: 46, status: "success" },
+    ],
+    limit: 50,
+  });
+
+  render(<PlaybooksPanel {...styleProps} userRole="super_admin" />);
+  await screen.findByText("pb_one");
+  await userEvent.click(screen.getByRole("button", { name: /^executions$/i }));
+
+  expect(await screen.findAllByRole("button", { name: /^retry simulation$/i })).toHaveLength(2);
+  expect(screen.getAllByRole("button", { name: /^abandon$/i })).toHaveLength(3);
+  expect(screen.getByRole("button", { name: /^resume simulation$/i })).toBeInTheDocument();
+});
+
+test("retry simulation control calls service and refreshes executions", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [{ ...execRow, status: "failed" }], limit: 50 });
+  retryExecution.mockResolvedValue({ new_execution_id: 99, status: "pending" });
+
+  render(<PlaybooksPanel {...styleProps} userRole="super_admin" />);
+  await screen.findByText("pb_one");
+  await userEvent.click(screen.getByRole("button", { name: /^executions$/i }));
+
+  await userEvent.click(await screen.findByRole("button", { name: /^retry simulation$/i }));
+
+  await waitFor(() => {
+    expect(retryExecution).toHaveBeenCalledWith(42);
+  });
+  expect(listPlaybookExecutions.mock.calls.length).toBeGreaterThan(1);
+});
+
+test("abandon simulation control requires confirmation", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [execRow], limit: 50 });
+  abandonExecution.mockResolvedValue({ outcome: "abandoned" });
+  const confirmSpy = jest.spyOn(window, "confirm").mockReturnValue(true);
+
+  try {
+    render(<PlaybooksPanel {...styleProps} userRole="super_admin" />);
+    await screen.findByText("pb_one");
+    await userEvent.click(screen.getByRole("button", { name: /^executions$/i }));
+
+    await userEvent.click(await screen.findByRole("button", { name: /^abandon$/i }));
+
+    await waitFor(() => {
+      expect(abandonExecution).toHaveBeenCalledWith(42);
+    });
+    expect(confirmSpy).toHaveBeenCalledWith(
+      "Abandon this execution? It will stop and cannot be resumed."
+    );
+  } finally {
+    confirmSpy.mockRestore();
+  }
+});
+
+test("resume simulation control calls service", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({
+    items: [{ ...execRow, status: "awaiting_approval" }],
+    limit: 50,
+  });
+  resumeExecution.mockResolvedValue({ status: "pending" });
+
+  render(<PlaybooksPanel {...styleProps} userRole="super_admin" />);
+  await screen.findByText("pb_one");
+  await userEvent.click(screen.getByRole("button", { name: /^executions$/i }));
+
+  await userEvent.click(await screen.findByRole("button", { name: /^resume simulation$/i }));
+
+  await waitFor(() => {
+    expect(resumeExecution).toHaveBeenCalledWith(42);
+  });
+});
+
+test("control action error is shown per row", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [{ ...execRow, status: "failed" }], limit: 50 });
+  retryExecution.mockRejectedValue(new Error("active execution already exists"));
+
+  render(<PlaybooksPanel {...styleProps} userRole="super_admin" />);
+  await screen.findByText("pb_one");
+  await userEvent.click(screen.getByRole("button", { name: /^executions$/i }));
+
+  await userEvent.click(await screen.findByRole("button", { name: /^retry simulation$/i }));
+
+  expect(await screen.findByText(/active execution already exists/i)).toBeInTheDocument();
+});
+
 test("shows visibility-only notice", async () => {
   listPlaybooks.mockResolvedValue({ items: [], limit: 50 });
   listPlaybookExecutions.mockResolvedValue({ items: [], limit: 50 });
@@ -549,8 +652,9 @@ test("shows visibility-only notice", async () => {
   render(<PlaybooksPanel {...styleProps} userRole="analyst" />);
 
   expect(
-    await screen.findByText(/playbooks are visible only; execution is not enabled yet/i)
+    await screen.findByText(/simulation-only playbook controls/i)
   ).toBeInTheDocument();
+  expect(screen.getByText(/analyst users have read-only access/i)).toBeInTheDocument();
 });
 
 // Super admin mutation control tests
