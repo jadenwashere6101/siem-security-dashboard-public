@@ -1,6 +1,12 @@
 import inspect
+import http.client
+import smtplib
+import socket
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
+
+import pytest
+from psycopg2.extras import Json
 
 from core import approval_store, playbook_store
 from engines import playbook_step_executor
@@ -33,9 +39,28 @@ def _create_execution(conn, cur, playbook_id="pb_exec", steps=None):
     return playbook_store.create_pending_playbook_execution_once(conn, playbook_id, aid)
 
 
+def _set_playbook_steps(cur, playbook_id, steps):
+    cur.execute(
+        "UPDATE playbook_definitions SET steps = %s WHERE id = %s",
+        (Json(steps), playbook_id),
+    )
+
+
 def _count(cur, table):
     cur.execute(f"SELECT COUNT(*) FROM {table}")
     return cur.fetchone()[0]
+
+
+@pytest.fixture
+def no_network(monkeypatch):
+    def fail_network(*_args, **_kwargs):
+        raise AssertionError("network call attempted by playbook adapter simulation")
+
+    monkeypatch.setattr(socket, "socket", fail_network)
+    monkeypatch.setattr(smtplib, "SMTP", fail_network)
+    monkeypatch.setattr(smtplib, "SMTP_SSL", fail_network)
+    monkeypatch.setattr(http.client.HTTPConnection, "request", fail_network)
+    monkeypatch.setattr(http.client.HTTPSConnection, "request", fail_network)
 
 
 def _insert_user(cur, username="playbook-approver"):
@@ -111,6 +136,125 @@ def test_multiple_supported_steps_are_simulated_successfully(postgres_db):
         assert entry["output"]["simulated"] is True
         assert entry["output"]["executed"] is False
         assert entry["error"] is None
+
+
+def test_adapter_backed_steps_are_simulated_through_registry(postgres_db, no_network):
+    conn, cur = postgres_db
+    eid = _create_execution(conn, cur, "pb_adapter_steps")
+    _set_playbook_steps(
+        cur,
+        "pb_adapter_steps",
+        [
+            {"action": "notify_slack", "params": {"message": "hello", "token": "secret"}},
+            {"action": "notify_email", "params": {"subject": "alert", "password": "secret"}},
+            {"action": "block_ip", "params": {"source_ip": "203.0.113.10"}},
+            {"action": "notify_webhook", "params": {"payload": {"event": "alert"}}},
+        ],
+    )
+    before = {
+        "blocked_ips": _count(cur, "blocked_ips"),
+        "response_actions_queue": _count(cur, "response_actions_queue"),
+    }
+
+    result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "success"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["status"] == "success"
+    assert row["last_completed_step"] == 3
+    expected = [
+        ("notify_slack", "slack", "send_message"),
+        ("notify_email", "email", "send_email"),
+        ("block_ip", "firewall", "block_ip"),
+        ("notify_webhook", "webhook", "post_event"),
+    ]
+    for entry, (step_action, adapter_name, adapter_action) in zip(row["steps_log"], expected):
+        assert entry["action"] == step_action
+        assert entry["status"] == "success"
+        assert entry["mode"] == "simulation"
+        assert entry["simulated"] is True
+        assert entry["executed"] is False
+        assert entry["output"]["simulated"] is True
+        assert entry["output"]["executed"] is False
+        adapter_result = entry["output"]["adapter_result"]
+        assert adapter_result["adapter"] == adapter_name
+        assert adapter_result["action"] == adapter_action
+        assert adapter_result["mode"] == "simulation"
+        assert adapter_result["simulated"] is True
+        assert adapter_result["executed"] is False
+        assert adapter_result["success"] is True
+        assert adapter_result["context"]["execution_id"] == eid
+        assert adapter_result["context"]["playbook_id"] == "pb_adapter_steps"
+
+    assert row["steps_log"][0]["output"]["adapter_result"]["params"]["token"] == "[redacted]"
+    assert row["steps_log"][1]["output"]["adapter_result"]["params"]["password"] == "[redacted]"
+    assert _count(cur, "blocked_ips") == before["blocked_ips"]
+    assert _count(cur, "response_actions_queue") == before["response_actions_queue"]
+
+
+def test_adapter_failure_marks_step_failed_and_respects_continue(postgres_db):
+    conn, cur = postgres_db
+    eid = _create_execution(conn, cur, "pb_adapter_failure")
+    _set_playbook_steps(
+        cur,
+        "pb_adapter_failure",
+        [
+            {"action": "notify_slack", "on_failure": "continue"},
+            {"action": "monitor", "params": {}},
+        ],
+    )
+
+    class FailingAdapter:
+        def execute(self, action, params=None, context=None):
+            return {
+                "adapter": "slack",
+                "action": action,
+                "mode": "simulation",
+                "simulated": True,
+                "executed": False,
+                "success": False,
+                "message": "Simulated adapter failure.",
+                "params": params or {},
+                "context": context or {},
+                "metadata": {},
+            }
+
+    with patch(
+        "engines.playbook_step_executor.get_integration_adapter",
+        return_value=FailingAdapter(),
+    ):
+        result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "failed"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["status"] == "failed"
+    assert row["last_completed_step"] == 1
+    assert [entry["status"] for entry in row["steps_log"]] == ["failed", "success"]
+    failed = row["steps_log"][0]
+    assert failed["output"]["adapter_result"]["success"] is False
+    assert failed["output"]["adapter_result"]["simulated"] is True
+    assert failed["output"]["adapter_result"]["executed"] is False
+    assert failed["error"]["code"] == "adapter_simulation_failed"
+
+
+def test_non_simulation_integration_mode_fails_closed(postgres_db, monkeypatch, no_network):
+    conn, cur = postgres_db
+    eid = _create_execution(conn, cur, "pb_adapter_real_mode")
+    _set_playbook_steps(cur, "pb_adapter_real_mode", [{"action": "notify_slack"}])
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+
+    result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "failed"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    entry = row["steps_log"][0]
+    assert entry["status"] == "failed"
+    assert entry["error"]["code"] == "adapter_simulation_failed"
+    assert "real integration mode is not implemented" in entry["message"]
+    assert entry["output"]["simulated"] is True
+    assert entry["output"]["executed"] is False
+    assert _count(cur, "blocked_ips") == 0
+    assert _count(cur, "response_actions_queue") == 0
 
 
 def test_require_approval_pauses_execution_and_creates_linked_request(postgres_db):
@@ -249,7 +393,9 @@ def test_approved_approval_resumes_from_next_step(postgres_db):
         None,
     ]
     assert row["steps_log"][-1]["action"] == "block_ip"
-    assert row["steps_log"][-1]["output"] == {"simulated": True, "executed": False}
+    assert row["steps_log"][-1]["output"]["simulated"] is True
+    assert row["steps_log"][-1]["output"]["executed"] is False
+    assert row["steps_log"][-1]["output"]["adapter_result"]["adapter"] == "firewall"
     assert _count(cur, "response_actions_queue") == 0
     assert _count(cur, "response_actions_log") == 0
 

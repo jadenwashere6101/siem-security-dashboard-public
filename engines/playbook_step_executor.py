@@ -2,7 +2,7 @@
 Simulation-only SOAR playbook step executor.
 
 Consumes pending playbook_executions and records simulated step outcomes. It does not
-enqueue SOAR actions, create approvals, mutate firewalls/blocklists, or call adapters.
+enqueue SOAR actions, create approvals, or mutate firewalls/blocklists.
 """
 
 from __future__ import annotations
@@ -14,10 +14,17 @@ from typing import Any
 from core import approval_store
 from core import playbook_store
 from engines.playbook_registry import SUPPORTED_ACTIONS
+from integrations.integration_registry import get_integration_adapter
 
 logger = logging.getLogger(__name__)
 
 TERMINAL_STATUSES = frozenset({"success", "failed", "abandoned"})
+ADAPTER_ACTIONS = {
+    "notify_slack": ("slack", "send_message"),
+    "notify_email": ("email", "send_email"),
+    "block_ip": ("firewall", "block_ip"),
+    "notify_webhook": ("webhook", "post_event"),
+}
 
 
 def process_next_pending_playbook_execution(conn, now=None) -> dict[str, Any] | None:
@@ -425,7 +432,7 @@ def _process_steps(
             )
 
         try:
-            entry = _simulate_step(step, index, timestamp)
+            entry = _simulate_step(step, index, timestamp, execution)
         except Exception as error:
             logger.exception(
                 "[PLAYBOOK SIMULATION] step simulation failed execution_id=%s playbook_id=%s step_index=%s",
@@ -492,7 +499,12 @@ def _process_steps(
     )
 
 
-def _simulate_step(step: dict[str, Any], step_index: int, now: datetime) -> dict[str, Any]:
+def _simulate_step(
+    step: dict[str, Any],
+    step_index: int,
+    now: datetime,
+    execution: dict[str, Any],
+) -> dict[str, Any]:
     if not isinstance(step, dict):
         return _failure_entry(
             step_index=step_index,
@@ -511,6 +523,9 @@ def _simulate_step(step: dict[str, Any], step_index: int, now: datetime) -> dict
             code="missing_action",
             now=now,
         )
+
+    if action in ADAPTER_ACTIONS:
+        return _simulate_adapter_step(step, step_index, now, execution)
 
     if action not in SUPPORTED_ACTIONS:
         return _failure_entry(
@@ -542,7 +557,79 @@ def _simulate_step(step: dict[str, Any], step_index: int, now: datetime) -> dict
     }
 
 
-def _failure_entry(step_index, action, message: str, code: str, now: datetime) -> dict[str, Any]:
+def _simulate_adapter_step(
+    step: dict[str, Any],
+    step_index: int,
+    now: datetime,
+    execution: dict[str, Any],
+) -> dict[str, Any]:
+    action = step["action"]
+    adapter_name, adapter_action = ADAPTER_ACTIONS[action]
+    params = step.get("params") if isinstance(step.get("params"), dict) else {}
+    context = {
+        "execution_id": execution["id"],
+        "playbook_id": execution["playbook_id"],
+        "alert_id": execution.get("alert_id"),
+        "incident_id": execution.get("incident_id"),
+        "step_index": step_index,
+    }
+
+    try:
+        adapter = get_integration_adapter(adapter_name)
+        adapter_result = adapter.execute(adapter_action, params=params, context=context)
+    except Exception as error:
+        return _failure_entry(
+            step_index=step_index,
+            action=action,
+            message=f"Simulated adapter action failed safely: {error}",
+            code="adapter_simulation_failed",
+            now=now,
+            output={
+                "simulated": True,
+                "executed": False,
+                "adapter": adapter_name,
+                "adapter_action": adapter_action,
+            },
+        )
+
+    status = "success" if adapter_result.get("success") is True else "failed"
+    message = (
+        "Simulated adapter action completed."
+        if status == "success"
+        else adapter_result.get("message") or "Simulated adapter action failed."
+    )
+    return {
+        "step_index": step_index,
+        "action": action,
+        "status": status,
+        "mode": "simulation",
+        "simulated": True,
+        "executed": False,
+        "started_at": _iso(now),
+        "completed_at": _iso(now),
+        "message": message,
+        "output": {
+            "simulated": True,
+            "executed": False,
+            "adapter_result": adapter_result,
+        },
+        "error": None
+        if status == "success"
+        else {
+            "code": "adapter_simulation_failed",
+            "message": adapter_result.get("message") or message,
+        },
+    }
+
+
+def _failure_entry(
+    step_index,
+    action,
+    message: str,
+    code: str,
+    now: datetime,
+    output: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     return {
         "step_index": step_index,
         "action": action,
@@ -551,7 +638,7 @@ def _failure_entry(step_index, action, message: str, code: str, now: datetime) -
         "started_at": _iso(now),
         "completed_at": _iso(now),
         "message": message,
-        "output": {
+        "output": output or {
             "simulated": True,
             "executed": False,
         },
