@@ -9,6 +9,7 @@ import ApprovalsPanel from "./components/ApprovalsPanel";
 import SoarQueuePanel from "./components/SoarQueuePanel";
 import PlaybooksPanel from "./components/PlaybooksPanel";
 import IntegrationStatusPanel from "./components/IntegrationStatusPanel";
+import PlaybookMetricsPanel from "./components/PlaybookMetricsPanel";
 import ThreatHuntPanel from "./components/ThreatHuntPanel";
 import BlocklistManagerPanel from "./components/BlocklistManagerPanel";
 import {
@@ -545,6 +546,20 @@ function App() {
           {canTakeAlertActions && (
             <button
               type="button"
+              onClick={() => setActiveSection("soar-playbook-metrics")}
+              style={{
+                ...sectionTabStyle,
+                ...(activeSection === "soar-playbook-metrics"
+                  ? activeSectionTabStyle
+                  : inactiveSectionTabStyle),
+              }}
+            >
+              SOAR Metrics
+            </button>
+          )}
+          {canTakeAlertActions && (
+            <button
+              type="button"
               onClick={() => setActiveSection("soar-integrations")}
               style={{
                 ...sectionTabStyle,
@@ -707,6 +722,15 @@ function App() {
 
         {canTakeAlertActions && activeSection === "soar-integrations" && (
           <IntegrationStatusPanel
+            cardStyle={cardStyle}
+            cardHeaderStyle={cardHeaderStyle}
+            cardTitleStyle={cardTitleStyle}
+            cardSubtitleStyle={cardSubtitleStyle}
+          />
+        )}
+
+        {canTakeAlertActions && activeSection === "soar-playbook-metrics" && (
+          <PlaybookMetricsPanel
             cardStyle={cardStyle}
             cardHeaderStyle={cardHeaderStyle}
             cardTitleStyle={cardTitleStyle}
