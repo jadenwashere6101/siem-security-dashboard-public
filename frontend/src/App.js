@@ -7,6 +7,7 @@ import DetectionRulesPanel from "./components/DetectionRulesPanel";
 import IncidentsPanel from "./components/IncidentsPanel";
 import ApprovalsPanel from "./components/ApprovalsPanel";
 import SoarQueuePanel from "./components/SoarQueuePanel";
+import PlaybooksPanel from "./components/PlaybooksPanel";
 import ThreatHuntPanel from "./components/ThreatHuntPanel";
 import BlocklistManagerPanel from "./components/BlocklistManagerPanel";
 import {
@@ -528,6 +529,18 @@ function App() {
               SOAR Approvals
             </button>
           )}
+          {canTakeAlertActions && (
+            <button
+              type="button"
+              onClick={() => setActiveSection("soar-playbooks")}
+              style={{
+                ...sectionTabStyle,
+                ...(activeSection === "soar-playbooks" ? activeSectionTabStyle : inactiveSectionTabStyle),
+              }}
+            >
+              SOAR Playbooks
+            </button>
+          )}
         </div>
 
         {activeSection === "dashboard" && (
@@ -666,10 +679,17 @@ function App() {
           />
         )}
 
-
-          
-         
-
+        {canTakeAlertActions && activeSection === "soar-playbooks" && (
+          <PlaybooksPanel
+            cardStyle={cardStyle}
+            cardHeaderStyle={cardHeaderStyle}
+            cardTitleStyle={cardTitleStyle}
+            cardSubtitleStyle={cardSubtitleStyle}
+            filterWrapperStyle={filterWrapperStyle}
+            filterLabelStyle={filterLabelStyle}
+            selectStyle={selectStyle}
+          />
+        )}
       </div>
     </div>
   );
