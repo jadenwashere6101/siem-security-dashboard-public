@@ -11,7 +11,9 @@ import {
 import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
 
 const PAGE_LIMIT = 50;
-const EXEC_STATUSES = ["pending", "running", "success", "failed", "abandoned"];
+const EXEC_STATUSES = ["pending", "running", "awaiting_approval", "success", "failed", "abandoned"];
+const APPROVAL_PAUSED_MESSAGE =
+  "Approval-gated simulation paused; no later steps will run until approval.";
 const ENABLED_OPTIONS = [
   { value: "all", label: "All definitions" },
   { value: "enabled", label: "Enabled only" },
@@ -69,6 +71,8 @@ function getExecutionStatusSummary(status) {
       return "Pending simulation; no steps have been consumed yet.";
     case "running":
       return "Simulation is marked running and may have partial step output.";
+    case "awaiting_approval":
+      return "Simulation is paused at an approval gate.";
     case "success":
       return "Simulation completed successfully.";
     case "failed":
@@ -86,6 +90,8 @@ function getEmptyTimelineText(status) {
       return "No simulated steps have run yet.";
     case "running":
       return "No step output has been recorded yet.";
+    case "awaiting_approval":
+      return "No approval gate output has been recorded yet.";
     case "success":
       return "Playbook completed with no defined steps.";
     case "failed":
@@ -107,6 +113,65 @@ function getStepAction(step) {
 
 function getStepMessage(step) {
   return step.message || step.summary || step.result?.message || step.output?.message || "";
+}
+
+function getStepFlag(step, flagName) {
+  if (step[flagName] !== undefined) {
+    return step[flagName];
+  }
+  return step.output?.[flagName];
+}
+
+function getStepApprovalValue(step, fieldName) {
+  if (step[fieldName] !== null && step[fieldName] !== undefined && step[fieldName] !== "") {
+    return step[fieldName];
+  }
+  return step.output?.[fieldName];
+}
+
+function getStepSkipReason(step) {
+  return getStepApprovalValue(step, "skip_reason") || step.reason || "";
+}
+
+function getStepEventLabel(step) {
+  switch (step.event) {
+    case "approval_requested":
+      return "Approval requested";
+    case "approval_approved":
+      return "Approval approved";
+    case "approval_resumed":
+      return "Simulation resumed";
+    case "approval_denied":
+      return "Approval denied";
+    case "approval_expired":
+      return "Approval expired";
+    case "skipped_after_approval_gate":
+      return "Skipped after approval gate";
+    default:
+      break;
+  }
+
+  if (step.status === "skipped") {
+    return "Skipped";
+  }
+  if (step.status === "aborted") {
+    return "Aborted";
+  }
+  if (getStepAction(step) === "require_approval" && step.status === "failed") {
+    return "Approval gate failed";
+  }
+  return formatDetailValue(step.status, "unknown");
+}
+
+function isAwaitingApproval(detailRecord) {
+  if (detailRecord?.status === "awaiting_approval") {
+    return true;
+  }
+  return normalizeStepsLog(detailRecord?.steps_log).some(
+    (step) =>
+      step.event === "approval_requested" &&
+      (step.approval_status === "pending" || step.output?.approval_status === "pending")
+  );
 }
 
 function getStepErrorText(step) {
@@ -759,6 +824,9 @@ function PlaybooksPanel({
                   <div style={statusSummaryStyle}>
                     {getExecutionStatusSummary(detailRecord.status)}
                   </div>
+                  {isAwaitingApproval(detailRecord) ? (
+                    <div style={approvalNoticeStyle}>{APPROVAL_PAUSED_MESSAGE}</div>
+                  ) : null}
                   <div style={timelineHeaderStyle}>Step Timeline</div>
                   {normalizeStepsLog(detailRecord.steps_log).length === 0 ? (
                     <p style={emptyTextStyle}>{getEmptyTimelineText(detailRecord.status)}</p>
@@ -769,7 +837,7 @@ function PlaybooksPanel({
                           <div style={timelineCardHeaderStyle}>
                             <span style={timelineStepLabelStyle}>{formatStepLabel(step, index)}</span>
                             <span style={timelineActionStyle}>{getStepAction(step)}</span>
-                            <span style={timelineStatusStyle}>{formatDetailValue(step.status, "unknown")}</span>
+                            <span style={timelineStatusStyle}>{getStepEventLabel(step)}</span>
                           </div>
                           <div style={timelineMetaGridStyle}>
                             <div style={detailFieldStyle}>
@@ -780,12 +848,46 @@ function PlaybooksPanel({
                             </div>
                             <div style={detailFieldStyle}>
                               <span style={detailLabelStyle}>Simulated</span>
-                              <span style={detailValueStyle}>{formatFlagValue(step.simulated)}</span>
+                              <span style={detailValueStyle}>
+                                {formatFlagValue(getStepFlag(step, "simulated"))}
+                              </span>
                             </div>
                             <div style={detailFieldStyle}>
                               <span style={detailLabelStyle}>Executed</span>
-                              <span style={detailValueStyle}>{formatFlagValue(step.executed)}</span>
+                              <span style={detailValueStyle}>
+                                {formatFlagValue(getStepFlag(step, "executed"))}
+                              </span>
                             </div>
+                            {getStepApprovalValue(step, "approval_request_id") ? (
+                              <div style={detailFieldStyle}>
+                                <span style={detailLabelStyle}>Approval Request ID</span>
+                                <span style={detailValueStyle}>
+                                  {getStepApprovalValue(step, "approval_request_id")}
+                                </span>
+                              </div>
+                            ) : null}
+                            {getStepApprovalValue(step, "approval_status") ? (
+                              <div style={detailFieldStyle}>
+                                <span style={detailLabelStyle}>Approval Status</span>
+                                <span style={detailValueStyle}>
+                                  {getStepApprovalValue(step, "approval_status")}
+                                </span>
+                              </div>
+                            ) : null}
+                            {getStepApprovalValue(step, "risk_level") ? (
+                              <div style={detailFieldStyle}>
+                                <span style={detailLabelStyle}>Risk Level</span>
+                                <span style={detailValueStyle}>
+                                  {getStepApprovalValue(step, "risk_level")}
+                                </span>
+                              </div>
+                            ) : null}
+                            {getStepSkipReason(step) ? (
+                              <div style={detailFieldStyle}>
+                                <span style={detailLabelStyle}>Skip Reason</span>
+                                <span style={detailValueStyle}>{getStepSkipReason(step)}</span>
+                              </div>
+                            ) : null}
                             <div style={detailFieldStyle}>
                               <span style={detailLabelStyle}>Started</span>
                               <span style={detailValueStyle}>
@@ -1165,6 +1267,17 @@ const statusSummaryStyle = {
   backgroundColor: "rgba(88, 166, 255, 0.08)",
   color: "#c9d1d9",
   fontSize: "13px",
+};
+
+const approvalNoticeStyle = {
+  margin: "0 0 14px",
+  padding: "10px 12px",
+  borderRadius: "8px",
+  border: "1px solid rgba(250, 204, 21, 0.35)",
+  backgroundColor: "rgba(250, 204, 21, 0.08)",
+  color: "#fde68a",
+  fontSize: "13px",
+  fontWeight: "700",
 };
 
 const timelineHeaderStyle = {

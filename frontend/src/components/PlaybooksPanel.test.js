@@ -342,6 +342,175 @@ test("execution detail shows failed step errors without mutation controls", asyn
   expect(screen.queryByRole("button", { name: /run|retry|cancel/i })).not.toBeInTheDocument();
 });
 
+test("execution detail highlights awaiting approval gate context", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({
+    items: [{ ...execRow, status: "awaiting_approval" }],
+    limit: 50,
+  });
+  getPlaybookExecution.mockResolvedValue({
+    ...execRow,
+    status: "awaiting_approval",
+    steps_log: [
+      {
+        step_index: 0,
+        action: "require_approval",
+        status: "awaiting_approval",
+        event: "approval_requested",
+        mode: "simulation",
+        simulated: true,
+        executed: false,
+        approval_request_id: 901,
+        approval_status: "pending",
+        risk_level: "high",
+        message: "Approval requested before simulated containment.",
+      },
+    ],
+  });
+
+  render(<PlaybooksPanel {...styleProps} />);
+  await screen.findByText("pb_one");
+  await userEvent.click(screen.getByRole("button", { name: /^executions$/i }));
+  await screen.findByText("42");
+
+  const viewButtons = screen.getAllByRole("button", { name: /^view$/i });
+  await userEvent.click(viewButtons[viewButtons.length - 1]);
+
+  expect(
+    await screen.findByText(
+      "Approval-gated simulation paused; no later steps will run until approval."
+    )
+  ).toBeInTheDocument();
+  expect(screen.getByText("Approval requested")).toBeInTheDocument();
+  expect(screen.getByText("require_approval")).toBeInTheDocument();
+  expect(screen.getByText(/^approval request id$/i)).toBeInTheDocument();
+  expect(screen.getAllByText("901").length).toBeGreaterThan(0);
+  expect(screen.getByText(/^approval status$/i)).toBeInTheDocument();
+  expect(screen.getAllByText("pending").length).toBeGreaterThan(0);
+  expect(screen.getByText(/^risk level$/i)).toBeInTheDocument();
+  expect(screen.getAllByText("high").length).toBeGreaterThan(0);
+  expect(screen.getByText(/^simulated$/i)).toBeInTheDocument();
+  expect(screen.getAllByText(/^yes$/i).length).toBeGreaterThan(0);
+  expect(screen.getByText(/^executed$/i)).toBeInTheDocument();
+  expect(screen.getAllByText(/^no$/i).length).toBeGreaterThan(0);
+  expect(screen.queryByRole("button", { name: /approve|deny|resume|run|retry|cancel/i })).not.toBeInTheDocument();
+});
+
+test("execution detail labels approval resume timeline events", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({
+    items: [{ ...execRow, status: "success" }],
+    limit: 50,
+  });
+  getPlaybookExecution.mockResolvedValue({
+    ...execRow,
+    status: "success",
+    steps_log: [
+      {
+        step_index: 0,
+        action: "require_approval",
+        status: "success",
+        event: "approval_approved",
+        simulated: true,
+        executed: false,
+        approval_request_id: 902,
+        approval_status: "approved",
+        risk_level: "critical",
+      },
+      {
+        step_index: 0,
+        action: "require_approval",
+        status: "success",
+        event: "approval_resumed",
+        simulated: true,
+        executed: false,
+        approval_request_id: 902,
+        approval_status: "approved",
+      },
+    ],
+  });
+
+  render(<PlaybooksPanel {...styleProps} />);
+  await screen.findByText("pb_one");
+  await userEvent.click(screen.getByRole("button", { name: /^executions$/i }));
+  await screen.findByText("42");
+
+  const viewButtons = screen.getAllByRole("button", { name: /^view$/i });
+  await userEvent.click(viewButtons[viewButtons.length - 1]);
+
+  expect(await screen.findByText("Approval approved")).toBeInTheDocument();
+  expect(screen.getByText("Simulation resumed")).toBeInTheDocument();
+  expect(screen.getAllByText("approved").length).toBeGreaterThan(0);
+  expect(screen.queryByText(/no later steps will run until approval/i)).not.toBeInTheDocument();
+});
+
+test("execution detail labels denied expired skipped and aborted approval outcomes", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({
+    items: [{ ...execRow, status: "failed" }],
+    limit: 50,
+  });
+  getPlaybookExecution.mockResolvedValue({
+    ...execRow,
+    status: "failed",
+    steps_log: [
+      {
+        step_index: 0,
+        action: "require_approval",
+        status: "failed",
+        event: "approval_denied",
+        simulated: true,
+        executed: false,
+        approval_status: "denied",
+        risk_level: "critical",
+      },
+      {
+        step_index: 1,
+        action: "block_ip",
+        status: "skipped",
+        event: "skipped_after_approval_gate",
+        simulated: true,
+        executed: false,
+        output: { skip_reason: "approval_denied" },
+      },
+      {
+        step_index: 2,
+        action: "require_approval",
+        status: "failed",
+        event: "approval_expired",
+        simulated: true,
+        executed: false,
+        approval_status: "expired",
+      },
+      {
+        step_index: 3,
+        action: "notify_owner",
+        status: "aborted",
+        simulated: true,
+        executed: false,
+        reason: "approval_expired",
+      },
+    ],
+  });
+
+  render(<PlaybooksPanel {...styleProps} />);
+  await screen.findByText("pb_one");
+  await userEvent.click(screen.getByRole("button", { name: /^executions$/i }));
+  await screen.findByText("42");
+
+  const viewButtons = screen.getAllByRole("button", { name: /^view$/i });
+  await userEvent.click(viewButtons[viewButtons.length - 1]);
+
+  expect(await screen.findByText("Approval denied")).toBeInTheDocument();
+  expect(screen.getByText("Skipped after approval gate")).toBeInTheDocument();
+  expect(screen.getByText("Approval expired")).toBeInTheDocument();
+  expect(screen.getByText("Aborted")).toBeInTheDocument();
+  expect(screen.getAllByText(/^skip reason$/i).length).toBeGreaterThan(0);
+  expect(screen.getAllByText("approval_denied").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("expired").length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/^no$/i).length).toBeGreaterThan(0);
+});
+
 test("refresh triggers additional read-only GET calls", async () => {
   listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
   listPlaybookExecutions.mockResolvedValue({ items: [], limit: 50 });
