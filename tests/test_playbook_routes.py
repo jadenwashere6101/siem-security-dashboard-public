@@ -373,6 +373,25 @@ def test_list_playbook_executions_awaiting_approval_filter(client, postgres_db):
 
 
 @pytest.mark.usefixtures("postgres_db")
+def test_list_playbook_executions_permanently_failed_filter(client, postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_pf_filt", "PF", steps=_valid_steps())
+    eid = playbook_store.create_playbook_execution(conn, "pb_pf_filt", alert_id=None)
+    playbook_store.update_execution_status(conn, eid, "running")
+    playbook_store.update_execution_status(conn, eid, "permanently_failed")
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get("/playbook-executions?status=permanently_failed")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["status"] == "permanently_failed"
+    assert [item["id"] for item in body["items"]] == [eid]
+
+
+@pytest.mark.usefixtures("postgres_db")
 def test_get_playbook_execution_detail(client, postgres_db):
     conn, _cur = postgres_db
     playbook_store.create_playbook_definition(conn, "pb_ex", "E", steps=_valid_steps())
@@ -550,14 +569,18 @@ def test_abandon_already_abandoned_is_noop_without_audit(client, postgres_db):
 
 
 @pytest.mark.usefixtures("postgres_db")
-@pytest.mark.parametrize("status", ["success", "failed"])
+@pytest.mark.parametrize("status", ["success", "failed", "permanently_failed"])
 def test_abandon_terminal_success_failed_returns_409(client, postgres_db, status):
     conn, cur = postgres_db
     aid = _insert_alert(cur)
     playbook_id = f"pb_abandon_bad_{status}"
     playbook_store.create_playbook_definition(conn, playbook_id, "AB", steps=_valid_steps())
     execution_id = playbook_store.create_playbook_execution(conn, playbook_id, aid)
-    playbook_store.update_execution_status(conn, execution_id, status)
+    if status == "permanently_failed":
+        playbook_store.update_execution_status(conn, execution_id, "running")
+        playbook_store.update_execution_status(conn, execution_id, "permanently_failed")
+    else:
+        playbook_store.update_execution_status(conn, execution_id, status)
     conn.commit()
 
     _login_super_admin(client)
@@ -677,6 +700,145 @@ def test_resume_non_awaiting_states_return_409(client, postgres_db, status):
 
 
 @pytest.mark.usefixtures("postgres_db")
+def test_permanently_fail_running_execution(client, postgres_db):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_store.create_playbook_definition(conn, "pb_pff", "PFF", steps=_valid_steps())
+    eid = playbook_store.create_playbook_execution(conn, "pb_pff", aid)
+    playbook_store.set_playbook_execution_running(conn, eid)
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.post(
+            f"/playbook-executions/{eid}/permanently-fail",
+            json={"failure_reason": "stale operator review"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["status"] == "permanently_failed"
+    assert body["outcome"] == "permanently_failed"
+    cur.execute(
+        "SELECT COUNT(*) FROM audit_log WHERE event_type = 'PLAYBOOK_EXECUTION_PERMANENTLY_FAIL'"
+    )
+    assert cur.fetchone()[0] == 1
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_permanently_fail_idempotent_skips_audit(client, postgres_db):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_store.create_playbook_definition(conn, "pf_idem", "PI", steps=_valid_steps())
+    eid = playbook_store.create_playbook_execution(conn, "pf_idem", aid)
+    playbook_store.set_playbook_execution_running(conn, eid)
+    playbook_store.mark_playbook_execution_permanently_failed(conn, eid, failure_reason="x")
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.post(
+            f"/playbook-executions/{eid}/permanently-fail",
+            json={"failure_reason": "ignored"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.get_json()["outcome"] == "no_op"
+    cur.execute(
+        "SELECT COUNT(*) FROM audit_log WHERE event_type = 'PLAYBOOK_EXECUTION_PERMANENTLY_FAIL'"
+    )
+    assert cur.fetchone()[0] == 0
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_permanently_fail_409_for_success_abandoned_pending(client, postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pf_409", "P", steps=_valid_steps())
+    for st in ("success", "abandoned", "pending"):
+        eid = playbook_store.create_playbook_execution(conn, "pf_409", alert_id=None)
+        if st != "pending":
+            playbook_store.update_execution_status(conn, eid, st)
+        conn.commit()
+        _login_super_admin(client)
+        with _patched_app_db(conn):
+            resp = client.post(
+                f"/playbook-executions/{eid}/permanently-fail",
+                json={"failure_reason": "r"},
+            )
+        assert resp.status_code == 409
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_permanently_fail_not_found_returns_404(client, postgres_db):
+    conn, _cur = postgres_db
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.post(
+            "/playbook-executions/999999/permanently-fail",
+            json={"failure_reason": "x"},
+        )
+    assert resp.status_code == 404
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_permanently_fail_requires_json_body_and_reason(client, postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pf_bad", "B", steps=_valid_steps())
+    eid = playbook_store.create_playbook_execution(conn, "pf_bad", alert_id=None)
+    conn.commit()
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        no_json = client.post(f"/playbook-executions/{eid}/permanently-fail")
+        missing = client.post(f"/playbook-executions/{eid}/permanently-fail", json={})
+        bad_type = client.post(
+            f"/playbook-executions/{eid}/permanently-fail",
+            json={"failure_reason": 99},
+        )
+    assert no_json.status_code == 400
+    assert missing.status_code == 400
+    assert bad_type.status_code == 400
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_permanently_fail_does_not_enqueue_queue_rows(client, postgres_db):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_store.create_playbook_definition(conn, "pf_q", "Q", steps=_valid_steps())
+    eid = playbook_store.create_playbook_execution(conn, "pf_q", aid)
+    playbook_store.set_playbook_execution_running(conn, eid)
+    conn.commit()
+    cur.execute("SELECT COUNT(*) FROM response_actions_queue")
+    before = cur.fetchone()[0]
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.post(
+            f"/playbook-executions/{eid}/permanently-fail",
+            json={"failure_reason": "cleanup"},
+        )
+    assert resp.status_code == 200
+    cur.execute("SELECT COUNT(*) FROM response_actions_queue")
+    assert cur.fetchone()[0] == before
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_retry_permanently_failed_returns_409(client, postgres_db):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_store.create_playbook_definition(conn, "pf_retry", "R", steps=_valid_steps())
+    eid = playbook_store.create_playbook_execution(conn, "pf_retry", aid)
+    playbook_store.update_execution_status(conn, eid, "running")
+    playbook_store.update_execution_status(conn, eid, "permanently_failed")
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.post(f"/playbook-executions/{eid}/retry")
+
+    assert resp.status_code == 409
+
+
+@pytest.mark.usefixtures("postgres_db")
 @pytest.mark.parametrize("action", ["retry", "abandon", "resume"])
 def test_execution_control_actions_not_found_return_404(client, postgres_db, action):
     conn, _cur = postgres_db
@@ -691,6 +853,16 @@ def test_execution_control_actions_without_session_return_401(client, action):
     assert client.post(f"/playbook-executions/1/{action}").status_code == 401
 
 
+def test_permanently_fail_without_session_returns_401(client):
+    assert (
+        client.post(
+            "/playbook-executions/1/permanently-fail",
+            json={"failure_reason": "x"},
+        ).status_code
+        == 401
+    )
+
+
 @pytest.mark.usefixtures("postgres_db")
 @pytest.mark.parametrize("action", ["retry", "abandon", "resume"])
 def test_execution_control_actions_analyst_forbidden(client, postgres_db, action):
@@ -703,6 +875,25 @@ def test_execution_control_actions_analyst_forbidden(client, postgres_db, action
     try:
         with _patched_app_db(conn):
             resp = client.post(f"/playbook-executions/{execution_id}/{action}")
+    finally:
+        _stop_patchers(patchers)
+    assert resp.status_code == 403
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_permanently_fail_analyst_forbidden(client, postgres_db):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_store.create_playbook_definition(conn, "pf_an", "A", steps=_valid_steps())
+    execution_id = playbook_store.create_playbook_execution(conn, "pf_an", aid)
+    conn.commit()
+    patchers = _login_role(client, username="an_pf", password="p", role="analyst")
+    try:
+        with _patched_app_db(conn):
+            resp = client.post(
+                f"/playbook-executions/{execution_id}/permanently-fail",
+                json={"failure_reason": "x"},
+            )
     finally:
         _stop_patchers(patchers)
     assert resp.status_code == 403

@@ -28,6 +28,7 @@ from core.playbook_store import (
     get_playbook_definition,
     get_playbook_execution,
     list_playbook_executions,
+    mark_playbook_execution_permanently_failed,
     set_playbook_definition_enabled,
     update_execution_status,
     update_playbook_definition,
@@ -40,7 +41,15 @@ DEFAULT_LIMIT = 50
 MAX_LIMIT = 100
 
 _VALID_EXECUTION_STATUSES = frozenset(
-    {"pending", "running", "awaiting_approval", "success", "failed", "abandoned"}
+    {
+        "pending",
+        "running",
+        "awaiting_approval",
+        "success",
+        "failed",
+        "abandoned",
+        "permanently_failed",
+    }
 )
 
 PLAYBOOK_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,63}$")
@@ -659,6 +668,72 @@ def abandon_playbook_execution_route(execution_id):
         if conn:
             conn.rollback()
         current_app.logger.error("Error in abandon_playbook_execution_route: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@playbook_bp.route("/playbook-executions/<int:execution_id>/permanently-fail", methods=["POST"])
+@login_required
+@super_admin_required
+def permanently_fail_playbook_execution_route(execution_id):
+    conn = None
+    try:
+        conn = get_db_connection()
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"error": "JSON body required"}), 400
+        raw_reason = payload.get("failure_reason")
+        if raw_reason is None:
+            return jsonify({"error": "failure_reason is required"}), 400
+        if not isinstance(raw_reason, str):
+            return jsonify({"error": "failure_reason must be a string"}), 400
+
+        previous = get_playbook_execution(conn, execution_id)
+        if previous is None:
+            return jsonify({"error": "playbook execution not found"}), 404
+
+        updated = mark_playbook_execution_permanently_failed(
+            conn,
+            execution_id,
+            failure_reason=raw_reason,
+        )
+        if updated is None:
+            return jsonify({"error": "playbook execution not found"}), 404
+
+        conn.commit()
+        outcome = "no_op" if previous["status"] == "permanently_failed" else "permanently_failed"
+        if outcome != "no_op":
+            _write_playbook_execution_audit(
+                "PLAYBOOK_EXECUTION_PERMANENTLY_FAIL",
+                {
+                    "execution_id": execution_id,
+                    "playbook_id": updated["playbook_id"],
+                    "outcome": outcome,
+                    "previous_status": previous["status"],
+                },
+            )
+        body = _serialize_execution_dict(updated)
+        body["outcome"] = outcome
+        return jsonify(body), 200
+    except ValueError as error:
+        if conn:
+            conn.rollback()
+        message = str(error)
+        if message == "failure_reason is required":
+            return jsonify({"error": message}), 400
+        if "cannot mark execution as permanently_failed from terminal status" in message:
+            return jsonify({"error": message}), 409
+        if "permanently_failed is only allowed from" in message:
+            return jsonify({"error": message}), 409
+        return jsonify({"error": message}), 400
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        current_app.logger.error(
+            "Error in permanently_fail_playbook_execution_route: %s", error
+        )
         return jsonify({"error": "Internal server error"}), 500
     finally:
         if conn:

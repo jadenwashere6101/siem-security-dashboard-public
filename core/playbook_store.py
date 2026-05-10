@@ -8,7 +8,7 @@ or workers is intentionally out of scope.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import psycopg2
@@ -34,10 +34,135 @@ class _UnsetType:
 
 _UNSET = _UnsetType()
 
-_TERMINAL_EXECUTION_STATUSES = frozenset({"success", "failed", "abandoned"})
-_VALID_EXECUTION_STATUSES = frozenset(
-    {"pending", "running", "awaiting_approval", "success", "failed", "abandoned"}
+_TERMINAL_EXECUTION_STATUSES = frozenset(
+    {"success", "failed", "abandoned", "permanently_failed"}
 )
+_VALID_EXECUTION_STATUSES = frozenset(
+    {
+        "pending",
+        "running",
+        "awaiting_approval",
+        "success",
+        "failed",
+        "abandoned",
+        "permanently_failed",
+    }
+)
+
+_PERMANENT_FAIL_ELIGIBLE_STATUSES = frozenset({"running", "failed", "awaiting_approval"})
+
+
+def _utc_naive(dt: datetime) -> datetime:
+    """Normalize for elapsed-time comparisons against mixed naive/aware datetimes."""
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def playbook_execution_row_is_stale_running(row: dict[str, Any], *, now: datetime | None = None) -> bool:
+    """
+    True when status is running, reliability metadata defines a threshold, and the run
+    has been active at least that long since last_attempted_at or started_at.
+
+    If stale_after and timeout_seconds are both NULL, or reference timestamps are missing,
+    returns False (no automatic inference — operators set metadata first).
+    """
+    if row.get("status") != "running":
+        return False
+    threshold = row.get("stale_after")
+    if threshold is None:
+        threshold = row.get("timeout_seconds")
+    if threshold is None:
+        return False
+    ref = row.get("last_attempted_at") or row.get("started_at")
+    if ref is None:
+        return False
+    when = now if now is not None else datetime.utcnow()
+    elapsed = (_utc_naive(when) - _utc_naive(ref)).total_seconds()
+    return elapsed >= int(threshold)
+
+
+def playbook_execution_is_stale_running(
+    conn, execution_id: int, *, now: datetime | None = None
+) -> bool:
+    """Convenience wrapper; False when the execution is missing or not stale-running."""
+    row = get_playbook_execution(conn, execution_id)
+    if row is None:
+        return False
+    return playbook_execution_row_is_stale_running(row, now=now)
+
+
+def list_stale_running_playbook_execution_ids(
+    conn, *, now: datetime | None = None
+) -> list[int]:
+    """Return ids of running executions that are stale per metadata (manual review only)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT {_EXECUTION_COLUMNS_SQL}
+            FROM playbook_executions
+            WHERE status = 'running'
+            ORDER BY id ASC
+            """
+        )
+        rows = [_execution_row_to_dict(r) for r in cur.fetchall()]
+    return [r["id"] for r in rows if playbook_execution_row_is_stale_running(r, now=now)]
+
+
+def mark_playbook_execution_permanently_failed(
+    conn,
+    execution_id: int,
+    *,
+    failure_reason: str,
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
+    """
+    Operator dead-letter: transition running, failed, or awaiting_approval to permanently_failed.
+
+    Idempotent: if already permanently_failed, returns the current row unchanged.
+    Rejects success, abandoned, and pending. Caller commits. Does not call the executor.
+    """
+    if now is None:
+        now = datetime.utcnow()
+
+    current = get_playbook_execution(conn, execution_id)
+    if current is None:
+        return None
+    if current["status"] == "permanently_failed":
+        return current
+
+    reason = (failure_reason or "").strip()
+    if not reason:
+        raise ValueError("failure_reason is required")
+
+    if current["status"] in {"success", "abandoned"}:
+        raise ValueError(
+            f"cannot mark execution as permanently_failed from terminal status "
+            f"{current['status']!r}"
+        )
+    if current["status"] not in _PERMANENT_FAIL_ELIGIBLE_STATUSES:
+        raise ValueError(
+            "permanently_failed is only allowed from running, failed, or awaiting_approval; "
+            f"current status: {current['status']!r}"
+        )
+
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE playbook_executions
+            SET status = 'permanently_failed',
+                completed_at = %s,
+                failure_reason = %s
+            WHERE id = %s
+              AND status IN ('running', 'failed', 'awaiting_approval')
+            RETURNING {_EXECUTION_COLUMNS_SQL}
+            """,
+            (now, reason, execution_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return get_playbook_execution(conn, execution_id)
+        return _execution_row_to_dict(row)
 
 
 def _definition_row_to_dict(record: tuple[Any, ...]) -> dict[str, Any]:
@@ -417,7 +542,7 @@ def abandon_playbook_execution(conn, execution_id: int) -> str:
         raise ValueError("execution not found")
     if current["status"] == "abandoned":
         return "no_op"
-    if current["status"] in {"success", "failed"}:
+    if current["status"] in {"success", "failed", "permanently_failed"}:
         raise ValueError(
             f"cannot abandon terminal execution with status '{current['status']}'"
         )

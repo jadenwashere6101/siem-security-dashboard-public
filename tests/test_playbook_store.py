@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import psycopg2
@@ -795,3 +795,207 @@ def test_update_playbook_execution_reliability_metadata_no_ops_returns_full_row(
 
     with pytest.raises(ValueError):
         playbook_store.update_playbook_execution_reliability_metadata(conn, eid, attempt_count=-1)
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_playbook_execution_stale_running_uses_metadata(postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_stale", "S", steps=_valid_steps())
+    eid = playbook_store.create_playbook_execution(conn, "pb_stale", alert_id=None)
+    t0 = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    playbook_store.set_playbook_execution_running(conn, eid, now=t0)
+    playbook_store.update_playbook_execution_reliability_metadata(conn, eid, stale_after=300)
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["status"] == "running"
+    assert not playbook_store.playbook_execution_row_is_stale_running(
+        row, now=t0 + timedelta(seconds=200)
+    )
+    assert playbook_store.playbook_execution_row_is_stale_running(
+        row, now=t0 + timedelta(seconds=300)
+    )
+    assert playbook_store.playbook_execution_is_stale_running(
+        conn, eid, now=t0 + timedelta(seconds=400)
+    )
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_playbook_execution_stale_falls_back_to_timeout_seconds(postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_stale_to", "ST", steps=_valid_steps())
+    eid = playbook_store.create_playbook_execution(conn, "pb_stale_to", alert_id=None)
+    t0 = datetime(2026, 2, 1, 0, 0, 0, tzinfo=timezone.utc)
+    playbook_store.set_playbook_execution_running(conn, eid, now=t0)
+    playbook_store.update_playbook_execution_reliability_metadata(
+        conn, eid, timeout_seconds=100, stale_after=None
+    )
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert playbook_store.playbook_execution_row_is_stale_running(
+        row, now=t0 + timedelta(seconds=100)
+    )
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_playbook_execution_not_stale_without_threshold_or_when_not_running(postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_nstale", "N", steps=_valid_steps())
+    eid = playbook_store.create_playbook_execution(conn, "pb_nstale", alert_id=None)
+    t0 = datetime(2026, 6, 1, 0, 0, 0)
+    playbook_store.set_playbook_execution_running(conn, eid, now=t0)
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert not playbook_store.playbook_execution_row_is_stale_running(
+        row, now=t0 + timedelta(days=99)
+    )
+    playbook_store.update_playbook_execution_reliability_metadata(conn, eid, stale_after=60)
+    row = playbook_store.get_playbook_execution(conn, eid)
+    playbook_store.update_execution_status(conn, eid, "success")
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert not playbook_store.playbook_execution_row_is_stale_running(
+        row, now=t0 + timedelta(days=99)
+    )
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_stale_running_uses_last_attempted_at_over_started_at(postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_sref", "SR", steps=_valid_steps())
+    eid = playbook_store.create_playbook_execution(conn, "pb_sref", alert_id=None)
+    t0 = datetime(2026, 4, 1, 0, 0, 0, tzinfo=timezone.utc)
+    playbook_store.set_playbook_execution_running(conn, eid, now=t0)
+    playbook_store.update_playbook_execution_reliability_metadata(
+        conn,
+        eid,
+        stale_after=100,
+        last_attempted_at=t0 + timedelta(seconds=500),
+    )
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert not playbook_store.playbook_execution_row_is_stale_running(
+        row, now=t0 + timedelta(seconds=550)
+    )
+    assert playbook_store.playbook_execution_row_is_stale_running(
+        row, now=t0 + timedelta(seconds=651)
+    )
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_list_stale_running_playbook_execution_ids(postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_lst", "L", steps=_valid_steps())
+    stale_id = playbook_store.create_playbook_execution(conn, "pb_lst", alert_id=None)
+    fresh_id = playbook_store.create_playbook_execution(conn, "pb_lst", alert_id=None)
+    t0 = datetime(2026, 3, 1, 0, 0, 0, tzinfo=timezone.utc)
+    playbook_store.set_playbook_execution_running(conn, stale_id, now=t0)
+    playbook_store.set_playbook_execution_running(conn, fresh_id, now=t0 + timedelta(seconds=500))
+    playbook_store.update_playbook_execution_reliability_metadata(conn, stale_id, stale_after=100)
+    playbook_store.update_playbook_execution_reliability_metadata(conn, fresh_id, stale_after=10000)
+    now = t0 + timedelta(seconds=200)
+    assert playbook_store.list_stale_running_playbook_execution_ids(conn, now=now) == [stale_id]
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_mark_playbook_execution_permanently_failed_and_idempotent(postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_pf", "PF", steps=_valid_steps())
+    eid = playbook_store.create_playbook_execution(conn, "pb_pf", alert_id=None)
+    playbook_store.set_playbook_execution_running(conn, eid)
+    updated = playbook_store.mark_playbook_execution_permanently_failed(
+        conn, eid, failure_reason="stale running"
+    )
+    assert updated is not None
+    assert updated["status"] == "permanently_failed"
+    assert updated["failure_reason"] == "stale running"
+    assert updated["completed_at"] is not None
+
+    again = playbook_store.mark_playbook_execution_permanently_failed(
+        conn, eid, failure_reason="should not replace"
+    )
+    assert again["failure_reason"] == "stale running"
+
+    noop = playbook_store.mark_playbook_execution_permanently_failed(conn, eid, failure_reason="  ")
+    assert noop["failure_reason"] == "stale running"
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_mark_permanently_failed_requires_non_empty_reason_when_transitioning(postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_pfr", "PR", steps=_valid_steps())
+    eid = playbook_store.create_playbook_execution(conn, "pb_pfr", alert_id=None)
+    playbook_store.set_playbook_execution_running(conn, eid)
+    with pytest.raises(ValueError, match="failure_reason is required"):
+        playbook_store.mark_playbook_execution_permanently_failed(conn, eid, failure_reason="   ")
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_mark_permanently_failed_from_failed_and_awaiting_approval(postgres_db):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_store.create_playbook_definition(conn, "pb_pf2", "P2", steps=_valid_steps())
+    failed_id = playbook_store.create_playbook_execution(conn, "pb_pf2", aid)
+    playbook_store.set_playbook_execution_failed(
+        conn, failed_id, [{"step_index": 0, "status": "failed"}]
+    )
+    row = playbook_store.mark_playbook_execution_permanently_failed(
+        conn, failed_id, failure_reason="dead letter"
+    )
+    assert row["status"] == "permanently_failed"
+
+    await_id = playbook_store.create_playbook_execution(conn, "pb_pf2", aid)
+    playbook_store.set_playbook_execution_awaiting_approval(
+        conn,
+        await_id,
+        [{"step_index": 0, "status": "awaiting_approval"}],
+    )
+    row2 = playbook_store.mark_playbook_execution_permanently_failed(
+        conn, await_id, failure_reason="stuck gate"
+    )
+    assert row2["status"] == "permanently_failed"
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_mark_permanently_failed_rejects_success_abandoned_pending(postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_pfx", "PX", steps=_valid_steps())
+
+    for status in ("pending", "success", "abandoned"):
+        eid = playbook_store.create_playbook_execution(conn, "pb_pfx", alert_id=None)
+        if status != "pending":
+            playbook_store.update_execution_status(conn, eid, status)
+        with pytest.raises(ValueError):
+            playbook_store.mark_playbook_execution_permanently_failed(
+                conn, eid, failure_reason="nope"
+            )
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_abandon_rejects_permanently_failed(postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_pfa", "PA", steps=_valid_steps())
+    eid = playbook_store.create_playbook_execution(conn, "pb_pfa", alert_id=None)
+    playbook_store.update_execution_status(conn, eid, "running")
+    playbook_store.update_execution_status(conn, eid, "permanently_failed")
+    with pytest.raises(ValueError, match="cannot abandon terminal"):
+        playbook_store.abandon_playbook_execution(conn, eid)
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_update_execution_status_permanently_failed_terminal(postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_pfs", "PS", steps=_valid_steps())
+    eid = playbook_store.create_playbook_execution(conn, "pb_pfs", alert_id=None)
+    playbook_store.update_execution_status(conn, eid, "running")
+    playbook_store.update_execution_status(conn, eid, "permanently_failed")
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["status"] == "permanently_failed"
+    assert row["completed_at"] is not None
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_mark_permanently_failed_does_not_touch_queue(postgres_db):
+    conn, cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_pfq", "PQ", steps=_valid_steps())
+    eid = playbook_store.create_playbook_execution(conn, "pb_pfq", alert_id=None)
+    playbook_store.set_playbook_execution_running(conn, eid)
+    cur.execute("SELECT COUNT(*) FROM response_actions_queue")
+    before = cur.fetchone()[0]
+    playbook_store.mark_playbook_execution_permanently_failed(conn, eid, failure_reason="x")
+    cur.execute("SELECT COUNT(*) FROM response_actions_queue")
+    assert cur.fetchone()[0] == before
