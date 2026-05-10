@@ -24,15 +24,23 @@ Before writing any code, read `schema.sql` and locate the partial unique index o
 IS NOT NULL` would block a retry INSERT for the same `(playbook_id, alert_id)` pair.
 
 - [ ] Read the index definition in `schema.sql`.
-- [ ] If the index would block retries: propose a schema change to narrow the partial index
-  to `WHERE alert_id IS NOT NULL AND status = 'pending'`, confirm the change does not break
-  any existing test, and add the `ALTER INDEX` or replacement `CREATE INDEX` to `schema.sql`
-  before adding any code. Run the full existing test suite after the schema change.
+- [ ] If the index would block retries: replace it with an active-only partial unique index
+  using `WHERE alert_id IS NOT NULL AND status IN ('pending', 'running', 'awaiting_approval')`.
+  This must still block duplicate active scheduling for the same `playbook_id + alert_id`
+  while allowing historical `success`, `failed`, and `abandoned` rows. Add the replacement
+  DDL to `schema.sql` before adding route/control code. The DDL should drop the previous
+  broad index by name and recreate it with the active-only predicate. Run the existing
+  backend tests after the schema change.
+- [ ] Update `create_pending_playbook_execution_once` to use the same active-only
+  `ON CONFLICT (playbook_id, alert_id) WHERE alert_id IS NOT NULL AND status IN ('pending',
+  'running', 'awaiting_approval') DO NOTHING` predicate. The index predicate and store
+  conflict predicate must match.
 - [ ] If the index does not block retries (e.g., it was already narrowed during the
   orchestrator implementation): document this and proceed without schema changes.
 
 **Stop condition:** Do not implement `create_retry_execution` until this is resolved.
 Ambiguity in the index scope will cause `IntegrityError` in production if not addressed here.
+Do not drop uniqueness entirely.
 
 ---
 
@@ -53,6 +61,9 @@ are already defined — do not duplicate them.
 - [ ] INSERT a new row: `playbook_id`, `alert_id`, `incident_id` copied from source.
   `status = 'pending'`, `steps_log = '[]'` (via `Json([])`), `last_completed_step = NULL`.
   RETURNING id.
+- [ ] If an active `pending`, `running`, or `awaiting_approval` execution already exists for
+  the same non-null `playbook_id + alert_id`, raise `ValueError` so the route can return
+  HTTP 409. The active-only unique index is the final guard.
 - [ ] Return the new `int` execution id.
 - [ ] Do NOT use `ON CONFLICT DO NOTHING`. Do NOT copy `steps_log` or `last_completed_step`
   from the source. Do NOT touch the source row.
@@ -131,6 +142,8 @@ Verification:
 - [ ] Verify status is `failed` or `abandoned`; return 409 if not.
   Response body: `{"error": "retry requires failed or abandoned execution; current status: <status>"}`.
 - [ ] Verify `playbook_id` still exists via `get_playbook_definition`; return 409 if deleted.
+- [ ] Return 409 if an active `pending`, `running`, or `awaiting_approval` execution already
+  exists for the same non-null `playbook_id + alert_id`.
 - [ ] Call `create_retry_execution(conn, execution_id)`. Commit.
 - [ ] Write audit log: action `"PLAYBOOK_EXECUTION_RETRY"`, include
   `source_execution_id`, `new_execution_id`, `playbook_id`.
@@ -318,9 +331,20 @@ before writing. Use the Flask test client with a real test database. Do not mock
 - [ ] Ensure each test uses an isolated DB state (no shared rows across tests).
 
 **Retry tests:**
+- [ ] Duplicate active `pending` executions for the same non-null `playbook_id + alert_id`
+  are blocked.
+- [ ] Duplicate active `running` executions for the same non-null `playbook_id + alert_id`
+  are blocked.
+- [ ] Duplicate active `awaiting_approval` executions for the same non-null
+  `playbook_id + alert_id` are blocked.
+- [ ] Historical `success`, `failed`, and `abandoned` executions for the same non-null
+  `playbook_id + alert_id` are allowed to coexist.
 - [ ] From `failed` → 201, new execution row in DB with status `pending`, source row
   unchanged, `steps_log = []`, `last_completed_step` is null.
 - [ ] From `abandoned` → 201, same assertions.
+- [ ] Retry from `failed` or `abandoned` is blocked with 409 if an active `pending`,
+  `running`, or `awaiting_approval` execution already exists for the same non-null
+  `playbook_id + alert_id`.
 - [ ] From `pending` → 409.
 - [ ] From `running` → 409.
 - [ ] From `awaiting_approval` → 409.

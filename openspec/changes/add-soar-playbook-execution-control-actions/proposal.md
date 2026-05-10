@@ -16,6 +16,11 @@ Operators have visibility into execution state through `PlaybooksPanel` but zero
 act on what they see. For a simulation-only system this is manageable, but it means the panel
 is purely observational and provides no feedback loop.
 
+The current `playbook_executions` uniqueness rule also blocks immutable retry history. The
+schema has a unique partial index on `(playbook_id, alert_id)` for every non-null `alert_id`.
+That prevents a retry from creating a new execution row with the same playbook and alert as
+a historical `failed` or `abandoned` row.
+
 ---
 
 ## Goals
@@ -27,6 +32,8 @@ is purely observational and provides no feedback loop.
   state.
 - Keep the backend stateless and idempotent-safe: no hidden automatic loops, no scheduler
   coupling, no executor invocation from within the route handler.
+- Preserve scheduling safety while allowing retry history by narrowing execution uniqueness
+  to active states only: `pending`, `running`, and `awaiting_approval`.
 - Update `PlaybooksPanel` to surface these controls for `super_admin` users only, with clear
   simulation-only labeling throughout.
 
@@ -35,6 +42,11 @@ is purely observational and provides no feedback loop.
 ## Scope
 
 **Backend:**
+- Replace the current broad `(playbook_id, alert_id)` uniqueness rule with an active-only
+  partial unique index that applies only when status is `pending`, `running`, or
+  `awaiting_approval`.
+- Update `create_pending_playbook_execution_once` to use the same active-only conflict
+  predicate.
 - New store helpers in `core/playbook_store.py`:
   `create_retry_execution`, `abandon_playbook_execution`.
 - Three new POST route handlers added to `routes/playbook_routes.py`:
@@ -61,6 +73,11 @@ is purely observational and provides no feedback loop.
 **Tests:**
 - New `tests/test_playbook_control_actions.py` covering all state-transition cases, auth
   enforcement, idempotency, and resume approval-check behavior.
+- Store/route tests must prove duplicate active `pending`, `running`, and `awaiting_approval`
+  executions are blocked for the same non-null `playbook_id + alert_id`.
+- Retry tests must prove `failed` and `abandoned` history can be retried into a new
+  `pending` row, and that retry returns a conflict if an active execution already exists for
+  the same playbook and alert.
 
 ---
 
@@ -82,7 +99,12 @@ is purely observational and provides no feedback loop.
 
 - `POST /playbook-executions/<id>/retry` from a `failed` or `abandoned` execution creates a
   new `pending` execution row referencing the same playbook definition, alert, and incident.
-  The original row is unchanged. Returns the new execution id.
+  The original row is unchanged. Returns the new execution id. This succeeds only when no
+  active `pending`, `running`, or `awaiting_approval` execution already exists for the same
+  `playbook_id` and `alert_id`.
+
+- Duplicate active executions for the same non-null `playbook_id + alert_id` pair remain
+  blocked. Historical `success`, `failed`, and `abandoned` rows are allowed to coexist.
 
 - `POST /playbook-executions/<id>/retry` from any non-terminal state returns HTTP 409.
 

@@ -15,6 +15,25 @@ One existing bug: the route-level `_VALID_EXECUTION_STATUSES` constant (line 37,
 `playbook_routes.py`) does not include `awaiting_approval`, which means filtering the
 execution list by that status returns HTTP 400. This must be fixed as part of this change.
 
+One existing schema issue must be fixed before retry is implemented: the current
+`idx_playbook_executions_playbook_alert_unique` index is unique on `(playbook_id, alert_id)`
+for every non-null `alert_id`. That blocks immutable retry history because a retry needs to
+create a new execution row with the same `playbook_id` and `alert_id` as a historical
+`failed` or `abandoned` source row.
+
+Replace it with an active-only partial unique index:
+```sql
+DROP INDEX IF EXISTS idx_playbook_executions_playbook_alert_unique;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_playbook_executions_playbook_alert_unique
+    ON playbook_executions (playbook_id, alert_id)
+    WHERE alert_id IS NOT NULL
+      AND status IN ('pending', 'running', 'awaiting_approval');
+```
+
+This preserves idempotency for active scheduling while allowing historical `success`,
+`failed`, and `abandoned` rows to coexist for the same playbook and alert.
+
 ---
 
 ## Execution State Transition Rules
@@ -57,13 +76,16 @@ Retry does not mutate the original row. It creates a new execution row.
    identifying the current status.
 3. Verify the referenced `playbook_id` still exists (the definition may have been deleted).
    If not found, return HTTP 409 with a clear message.
-4. Call `create_retry_execution(conn, source_execution_id)` to INSERT a new execution row
+4. Verify there is no active execution (`pending`, `running`, or `awaiting_approval`) for the
+   same non-null `playbook_id + alert_id` pair. If one exists, return HTTP 409. The
+   active-only unique index is the final safety guard.
+5. Call `create_retry_execution(conn, source_execution_id)` to INSERT a new execution row
    with `status='pending'`, `steps_log=[]`, `last_completed_step=NULL`, and the same
    `playbook_id`, `alert_id`, `incident_id` as the source.
-5. Commit.
-6. Write audit log entry: action `PLAYBOOK_EXECUTION_RETRY`, details include source
+6. Commit.
+7. Write audit log entry: action `PLAYBOOK_EXECUTION_RETRY`, details include source
    execution id and new execution id.
-7. Return HTTP 201 with the new execution id and a simulation-labeled message.
+8. Return HTTP 201 with the new execution id and a simulation-labeled message.
 
 **Immutability guarantee:**
 The source execution row is never touched. It remains in its terminal state as permanent
@@ -84,7 +106,9 @@ No automatic execution is triggered by the retry endpoint.
    - status = 'pending'
    - steps_log = '[]'
    - last_completed_step = NULL
-4. RETURNING id — return as int.
+4. If the INSERT conflicts with the active-only uniqueness rule, raise `ValueError` with a
+   message indicating an active execution already exists for the same playbook and alert.
+5. RETURNING id — return as int.
 Caller commits. No lock on source row required.
 ```
 
@@ -269,7 +293,28 @@ idempotent no-ops are silent.
 
 ## Store Additions: core/playbook_store.py
 
-Two new functions. No existing functions are modified.
+Two new functions are added. One existing function is updated for the active-only uniqueness
+predicate.
+
+### Active-only idempotency predicate
+
+`create_pending_playbook_execution_once` currently uses:
+```sql
+ON CONFLICT (playbook_id, alert_id)
+    WHERE alert_id IS NOT NULL
+    DO NOTHING
+```
+
+It must be updated to match the new active-only index:
+```sql
+ON CONFLICT (playbook_id, alert_id)
+    WHERE alert_id IS NOT NULL
+      AND status IN ('pending', 'running', 'awaiting_approval')
+    DO NOTHING
+```
+
+The schema index and store conflict predicate must remain aligned. Do not drop uniqueness
+entirely.
 
 ### `create_retry_execution(conn, source_execution_id: int) -> int`
 
@@ -277,12 +322,10 @@ Creates a new `pending` execution copying `playbook_id`, `alert_id`, `incident_i
 source. Source must be in `failed` or `abandoned`. Raises `ValueError` otherwise. Returns
 the new execution id.
 
-Does not use the `ON CONFLICT DO NOTHING` partial index that `create_pending_playbook_execution_once`
-uses, because a retry is an intentional re-run and should not be blocked by the unique
-`(playbook_id, alert_id)` constraint on the original scheduling path. The implementer must
-verify whether the partial unique index on `(playbook_id, alert_id) WHERE alert_id IS NOT NULL`
-would conflict with retries. If it does, the retry INSERT must bypass it or the constraint
-must be scoped more narrowly (e.g., only `pending` rows). Resolve this before implementing.
+Does not mutate the source row. It intentionally creates immutable retry history, but it must
+not permit duplicate active executions. If a `pending`, `running`, or `awaiting_approval`
+execution already exists for the same non-null `playbook_id + alert_id`, the active-only
+unique index must block the insert and the helper/route must convert that into a conflict.
 
 ### `abandon_playbook_execution(conn, execution_id: int) -> str`
 
@@ -318,8 +361,14 @@ Flask test client pattern established in `tests/test_soar_queue_visibility_api.p
 
 ### Retry tests
 
+- Duplicate active `pending`, `running`, and `awaiting_approval` executions for the same
+  non-null `playbook_id + alert_id` are blocked by the active-only uniqueness rule.
+- Historical `success`, `failed`, and `abandoned` rows for the same non-null
+  `playbook_id + alert_id` can coexist.
 - From `failed` → HTTP 201, new execution row in `pending`, source row unchanged.
 - From `abandoned` → HTTP 201, new execution row in `pending`, source row unchanged.
+- Retry is blocked with HTTP 409 if an active `pending`, `running`, or `awaiting_approval`
+  execution already exists for the same non-null `playbook_id + alert_id`.
 - From `pending` → HTTP 409.
 - From `running` → HTTP 409.
 - From `awaiting_approval` → HTTP 409.
@@ -391,13 +440,10 @@ Flask test client pattern established in `tests/test_soar_queue_visibility_api.p
 ## Risks / Stop Conditions
 
 **Retry conflicts with the unique partial index.**
-`playbook_executions` has a partial unique index `ON (playbook_id, alert_id) WHERE alert_id
-IS NOT NULL`. If this index applies to retries, a second `INSERT` with the same
-`(playbook_id, alert_id)` will fail with `IntegrityError`. The `create_retry_execution`
-store function must either use a different INSERT path that is not subject to the conflict
-constraint, or the index scope must be confirmed to exclude non-`pending` rows. Resolve this
-before implementation begins. If the index blocks retries, the design will need a schema
-change (narrow the partial index to `WHERE alert_id IS NOT NULL AND status = 'pending'`).
+`playbook_executions` currently has a partial unique index `ON (playbook_id, alert_id) WHERE
+alert_id IS NOT NULL`. That blocks retry. The implementation must replace it with the
+active-only partial unique index before adding retry code. If the replacement cannot be made
+safely, stop. Do not bypass uniqueness in application code and do not drop safety entirely.
 
 **Abandon during active executor run.**
 If `scripts/run_playbook_executor_once.py` is running concurrently and holds a row lock on a
