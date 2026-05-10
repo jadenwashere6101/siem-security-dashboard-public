@@ -263,3 +263,41 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_approval_requests_queue_action_active
 ON approval_requests (queue_id, action)
 WHERE queue_id IS NOT NULL
   AND status IN ('pending', 'approved');
+
+-- Playbook definitions and executions (SOAR playbook foundation).
+-- Step execution and ingest wiring are intentionally out of scope for this schema slice.
+CREATE TABLE IF NOT EXISTS playbook_definitions (
+    id VARCHAR(64) PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    trigger_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+    steps JSONB NOT NULL DEFAULT '[]'::jsonb,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_playbook_definitions_enabled
+    ON playbook_definitions (enabled);
+
+CREATE TABLE IF NOT EXISTS playbook_executions (
+    id SERIAL PRIMARY KEY,
+    playbook_id VARCHAR(64) NOT NULL REFERENCES playbook_definitions(id),
+    alert_id INTEGER REFERENCES alerts(id) ON DELETE SET NULL,
+    incident_id INTEGER REFERENCES incidents(id) ON DELETE SET NULL,
+    status VARCHAR(30) NOT NULL DEFAULT 'pending',
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    last_completed_step INTEGER,
+    steps_log JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_playbook_executions_playbook_id
+    ON playbook_executions (playbook_id);
+CREATE INDEX IF NOT EXISTS idx_playbook_executions_alert_id
+    ON playbook_executions (alert_id);
+CREATE INDEX IF NOT EXISTS idx_playbook_executions_status
+    ON playbook_executions (status);
+CREATE INDEX IF NOT EXISTS idx_playbook_executions_created_at
+    ON playbook_executions (created_at DESC);
