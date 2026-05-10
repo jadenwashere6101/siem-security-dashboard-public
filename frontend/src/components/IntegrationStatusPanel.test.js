@@ -3,10 +3,23 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import IntegrationStatusPanel from "./IntegrationStatusPanel";
-import { getIntegrationStatus } from "../services/integrationService";
+import { readStoredSessionIdentity } from "../utils/sessionIdentity";
+import {
+  enableHalfOpenIntegrationCircuitBreaker,
+  forceOpenIntegrationCircuitBreaker,
+  getIntegrationStatus,
+  resetIntegrationCircuitBreaker,
+} from "../services/integrationService";
+
+jest.mock("../utils/sessionIdentity", () => ({
+  readStoredSessionIdentity: jest.fn(),
+}));
 
 jest.mock("../services/integrationService", () => ({
   getIntegrationStatus: jest.fn(),
+  resetIntegrationCircuitBreaker: jest.fn(),
+  forceOpenIntegrationCircuitBreaker: jest.fn(),
+  enableHalfOpenIntegrationCircuitBreaker: jest.fn(),
 }));
 
 const styleProps = {
@@ -26,6 +39,11 @@ const sampleCircuitClosed = {
   last_failure_classification: null,
   timeout_seconds: 30,
   retry_eligible: true,
+  half_open_probe_available: false,
+  last_manual_action: null,
+  last_manual_action_by: null,
+  last_manual_action_at: null,
+  last_manual_reason: null,
   state_persisted: false,
 };
 
@@ -53,8 +71,19 @@ const sampleStatus = {
   ],
 };
 
+/** One adapter simplifies super-admin control queries (single reason field / button set). */
+const sampleStatusSingleAdapter = {
+  ...sampleStatus,
+  adapters: [sampleStatus.adapters[0]],
+};
+
 beforeEach(() => {
   jest.clearAllMocks();
+  readStoredSessionIdentity.mockReturnValue({
+    authenticated: true,
+    role: "analyst",
+    username: "analyst1",
+  });
 });
 
 test("shows loading state while request is in flight", async () => {
@@ -229,6 +258,84 @@ test("does not render test-connection, run, or execute controls", async () => {
   expect(screen.queryByRole("button", { name: /test connection/i })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /run adapter/i })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /execute/i })).not.toBeInTheDocument();
+});
+
+test("analyst does not see simulation circuit breaker control buttons", async () => {
+  getIntegrationStatus.mockResolvedValueOnce(sampleStatus);
+
+  render(<IntegrationStatusPanel {...styleProps} />);
+
+  await screen.findByText("slack");
+
+  expect(screen.queryByRole("button", { name: /reset to closed/i })).not.toBeInTheDocument();
+  expect(screen.getByText(/analysts have read-only access/i)).toBeInTheDocument();
+});
+
+test("super admin sees simulation circuit breaker controls", async () => {
+  readStoredSessionIdentity.mockReturnValue({
+    authenticated: true,
+    role: "super_admin",
+    username: "admin",
+  });
+  getIntegrationStatus.mockResolvedValueOnce(sampleStatus);
+
+  render(<IntegrationStatusPanel {...styleProps} />);
+
+  await screen.findByText("slack");
+
+  expect(
+    screen.getAllByText(/simulation circuit breaker controls \(super admin\)/i).length
+  ).toBeGreaterThanOrEqual(1);
+  expect(screen.getAllByRole("button", { name: /reset to closed/i }).length).toBeGreaterThanOrEqual(1);
+  expect(screen.getAllByRole("button", { name: /force open/i }).length).toBeGreaterThanOrEqual(1);
+  expect(
+    screen.getAllByRole("button", { name: /enable half-open probe/i }).length
+  ).toBeGreaterThanOrEqual(1);
+  expect(screen.getByText(/super admins can adjust simulation circuit breakers/i)).toBeInTheDocument();
+});
+
+test("super admin must enter a reason before submitting a control", async () => {
+  readStoredSessionIdentity.mockReturnValue({
+    authenticated: true,
+    role: "super_admin",
+    username: "admin",
+  });
+  getIntegrationStatus.mockResolvedValueOnce(sampleStatusSingleAdapter);
+
+  render(<IntegrationStatusPanel {...styleProps} />);
+
+  await screen.findByText("slack");
+  await userEvent.click(screen.getByRole("button", { name: /reset to closed/i }));
+
+  expect(await screen.findByText(/non-empty reason/i)).toBeInTheDocument();
+  expect(resetIntegrationCircuitBreaker).not.toHaveBeenCalled();
+});
+
+test("super admin reset calls API and reloads status", async () => {
+  readStoredSessionIdentity.mockReturnValue({
+    authenticated: true,
+    role: "super_admin",
+    username: "admin",
+  });
+  getIntegrationStatus.mockResolvedValue(sampleStatusSingleAdapter);
+  resetIntegrationCircuitBreaker.mockResolvedValue({
+    adapter: "slack",
+    circuit_breaker: { ...sampleCircuitClosed },
+  });
+
+  render(<IntegrationStatusPanel {...styleProps} />);
+
+  await screen.findByText("slack");
+  await userEvent.type(
+    screen.getByPlaceholderText(/describe why you are changing simulation breaker state/i),
+    "post-incident review"
+  );
+  await userEvent.click(screen.getByRole("button", { name: /reset to closed/i }));
+
+  await waitFor(() => {
+    expect(resetIntegrationCircuitBreaker).toHaveBeenCalledWith("slack", "post-incident review");
+  });
+  expect(getIntegrationStatus.mock.calls.length).toBeGreaterThanOrEqual(2);
 });
 
 test("does not crash when supported_actions is missing for an adapter", async () => {

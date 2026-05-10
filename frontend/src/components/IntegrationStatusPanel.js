@@ -1,5 +1,11 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { getIntegrationStatus } from "../services/integrationService";
+import {
+  enableHalfOpenIntegrationCircuitBreaker,
+  forceOpenIntegrationCircuitBreaker,
+  getIntegrationStatus,
+  resetIntegrationCircuitBreaker,
+} from "../services/integrationService";
+import { readStoredSessionIdentity } from "../utils/sessionIdentity";
 
 const SIMULATION_NOTICE =
   "Simulation only: all integration adapters run in simulation mode. No real outbound notifications, webhooks, or firewall changes are active.";
@@ -27,7 +33,19 @@ function formatCircuitScalar(value) {
   return String(value);
 }
 
-function CircuitBreakerPanel({ circuit }) {
+function CircuitBreakerPanel({ circuit, adapterName, canManageCircuit = false, onCircuitUpdated }) {
+  const [reason, setReason] = useState("");
+  const [overrideCooldown, setOverrideCooldown] = useState(false);
+  const [busyAction, setBusyAction] = useState(null);
+  const [controlError, setControlError] = useState("");
+
+  useEffect(() => {
+    setReason("");
+    setOverrideCooldown(false);
+    setControlError("");
+    setBusyAction(null);
+  }, [adapterName]);
+
   if (!circuit || typeof circuit !== "object") {
     return null;
   }
@@ -45,8 +63,38 @@ function CircuitBreakerPanel({ circuit }) {
     },
     { label: "Timeout (seconds)", value: formatCircuitScalar(circuit.timeout_seconds) },
     { label: "Retry eligible", value: formatCircuitScalar(circuit.retry_eligible) },
+    { label: "Half-open probe allowed", value: formatCircuitScalar(circuit.half_open_probe_available) },
+    { label: "Last manual action", value: formatCircuitScalar(circuit.last_manual_action) },
+    { label: "Last manual by", value: formatCircuitScalar(circuit.last_manual_action_by) },
+    { label: "Last manual at", value: formatCircuitScalar(circuit.last_manual_action_at) },
+    { label: "Last manual reason", value: formatCircuitScalar(circuit.last_manual_reason) },
     { label: "State persisted", value: formatCircuitScalar(circuit.state_persisted) },
   ];
+
+  const runControl = async (action, fn) => {
+    const trimmed = reason.trim();
+    if (!trimmed) {
+      setControlError("Enter a non-empty reason before running a control.");
+      return;
+    }
+    setBusyAction(action);
+    setControlError("");
+    try {
+      await fn(trimmed);
+      setReason("");
+      setOverrideCooldown(false);
+      if (typeof onCircuitUpdated === "function") {
+        await onCircuitUpdated();
+      }
+    } catch (err) {
+      setControlError(err.message || "Control request failed.");
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const name = String(adapterName || "").trim();
+  const showControls = Boolean(canManageCircuit && name && typeof onCircuitUpdated === "function");
 
   return (
     <div style={circuitBreakerBlockStyle}>
@@ -66,6 +114,74 @@ function CircuitBreakerPanel({ circuit }) {
           </div>
         ))}
       </dl>
+      {showControls ? (
+        <div style={circuitControlsSectionStyle}>
+          <p style={circuitControlsIntroStyle}>
+            <strong>Simulation circuit breaker controls (super admin).</strong> These requests only
+            update in-memory simulation state on the server. They do not run adapter code, open real
+            connections, or execute a half-open probe. &quot;Enable half-open probe&quot; only marks
+            that the next simulated adapter call may use one bounded probe when playbook execution
+            reaches it.
+          </p>
+          <label htmlFor={`circuit-reason-${name}`} style={circuitLabelStyle}>
+            Reason (required)
+          </label>
+          <textarea
+            id={`circuit-reason-${name}`}
+            value={reason}
+            onChange={(e) => {
+              setReason(e.target.value);
+              if (controlError) setControlError("");
+            }}
+            rows={3}
+            style={circuitReasonTextareaStyle}
+            placeholder="Describe why you are changing simulation breaker state."
+            disabled={busyAction != null}
+          />
+          <label style={circuitCheckboxRowStyle}>
+            <input
+              type="checkbox"
+              checked={overrideCooldown}
+              onChange={(e) => setOverrideCooldown(e.target.checked)}
+              disabled={busyAction != null}
+            />
+            <span>Override cooldown when enabling half-open (super-admin bypass; use sparingly)</span>
+          </label>
+          {controlError ? <div style={circuitControlErrorStyle}>{controlError}</div> : null}
+          <div style={circuitControlButtonsRowStyle}>
+            <button
+              type="button"
+              style={circuitControlButtonPrimaryStyle}
+              disabled={busyAction != null}
+              onClick={() => runControl("reset", (r) => resetIntegrationCircuitBreaker(name, r))}
+            >
+              {busyAction === "reset" ? "Working…" : "Reset to closed"}
+            </button>
+            <button
+              type="button"
+              style={circuitControlButtonDangerStyle}
+              disabled={busyAction != null}
+              onClick={() =>
+                runControl("force_open", (r) => forceOpenIntegrationCircuitBreaker(name, r))
+              }
+            >
+              {busyAction === "force_open" ? "Working…" : "Force open"}
+            </button>
+            <button
+              type="button"
+              style={circuitControlButtonSecondaryStyle}
+              disabled={busyAction != null}
+              onClick={() =>
+                runControl("half_open", (r) =>
+                  enableHalfOpenIntegrationCircuitBreaker(name, r, overrideCooldown)
+                )
+              }
+            >
+              {busyAction === "half_open" ? "Working…" : "Enable half-open probe"}
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -79,11 +195,17 @@ function IntegrationStatusPanel({
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [sessionRole, setSessionRole] = useState(
+    () => readStoredSessionIdentity()?.role ?? null
+  );
+  const isSuperAdmin = sessionRole === "super_admin";
 
   const loadStatus = useCallback(async () => {
     try {
       setLoading(true);
       setError("");
+      const identity = readStoredSessionIdentity();
+      setSessionRole(identity?.role ?? null);
       const data = await getIntegrationStatus();
       setStatus(data && typeof data === "object" ? data : null);
     } catch (err) {
@@ -110,7 +232,10 @@ function IntegrationStatusPanel({
           <p style={sectionLabelStyle}>SOAR</p>
           <h2 style={cardTitleStyle}>Integration adapter status</h2>
           <p style={cardSubtitleStyle}>
-            Read-only view of registered simulation adapters from the backend registry.
+            View of registered simulation adapters from the backend registry.
+            {isSuperAdmin
+              ? " Super admins can adjust simulation circuit breakers per adapter below."
+              : " Analysts have read-only access to this panel."}
           </p>
         </div>
       </div>
@@ -187,7 +312,12 @@ function IntegrationStatusPanel({
                       <span style={metaMutedStyle}>Simulated:</span>{" "}
                       <span style={metaValueStyle}>{formatFlag(adapter?.simulated)}</span>
                     </div>
-                    <CircuitBreakerPanel circuit={adapter?.circuit_breaker} />
+                    <CircuitBreakerPanel
+                      circuit={adapter?.circuit_breaker}
+                      adapterName={key}
+                      canManageCircuit={isSuperAdmin}
+                      onCircuitUpdated={loadStatus}
+                    />
                     <div style={actionsBlockStyle}>
                       <span style={actionsLabelStyle}>Supported actions</span>
                       {actions.length === 0 ? (
@@ -486,6 +616,106 @@ const circuitDdStyle = {
   color: "#e6edf3",
   fontFamily: "'Courier New', monospace",
   wordBreak: "break-word",
+};
+
+const circuitControlsSectionStyle = {
+  marginTop: "14px",
+  paddingTop: "14px",
+  borderTop: "1px solid rgba(139, 148, 158, 0.25)",
+  display: "flex",
+  flexDirection: "column",
+  gap: "10px",
+};
+
+const circuitControlsIntroStyle = {
+  margin: 0,
+  fontSize: "12px",
+  lineHeight: 1.55,
+  color: "#c9d1d9",
+  fontWeight: "500",
+};
+
+const circuitLabelStyle = {
+  fontSize: "11px",
+  fontWeight: "700",
+  letterSpacing: "0.06em",
+  textTransform: "uppercase",
+  color: "#8b949e",
+};
+
+const circuitReasonTextareaStyle = {
+  width: "100%",
+  boxSizing: "border-box",
+  resize: "vertical",
+  minHeight: "72px",
+  padding: "10px 12px",
+  borderRadius: "8px",
+  border: "1px solid #30363d",
+  backgroundColor: "#010409",
+  color: "#e6edf3",
+  fontSize: "13px",
+  fontFamily: "inherit",
+};
+
+const circuitCheckboxRowStyle = {
+  display: "flex",
+  alignItems: "flex-start",
+  gap: "10px",
+  fontSize: "12px",
+  color: "#8b949e",
+  lineHeight: 1.45,
+};
+
+const circuitControlErrorStyle = {
+  padding: "8px 10px",
+  borderRadius: "8px",
+  fontSize: "12px",
+  fontWeight: "600",
+  backgroundColor: "rgba(239, 68, 68, 0.12)",
+  border: "1px solid rgba(239, 68, 68, 0.28)",
+  color: "#fca5a5",
+};
+
+const circuitControlButtonsRowStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "8px",
+};
+
+const circuitControlButtonPrimaryStyle = {
+  minHeight: "36px",
+  padding: "8px 14px",
+  borderRadius: "8px",
+  border: "1px solid rgba(88, 166, 255, 0.45)",
+  backgroundColor: "rgba(31, 111, 235, 0.18)",
+  color: "#dbeafe",
+  fontSize: "12px",
+  fontWeight: "700",
+  cursor: "pointer",
+};
+
+const circuitControlButtonSecondaryStyle = {
+  minHeight: "36px",
+  padding: "8px 14px",
+  borderRadius: "8px",
+  border: "1px solid #30363d",
+  backgroundColor: "#161b22",
+  color: "#e6edf3",
+  fontSize: "12px",
+  fontWeight: "700",
+  cursor: "pointer",
+};
+
+const circuitControlButtonDangerStyle = {
+  minHeight: "36px",
+  padding: "8px 14px",
+  borderRadius: "8px",
+  border: "1px solid rgba(239, 68, 68, 0.45)",
+  backgroundColor: "rgba(239, 68, 68, 0.12)",
+  color: "#fecaca",
+  fontSize: "12px",
+  fontWeight: "700",
+  cursor: "pointer",
 };
 
 export default IntegrationStatusPanel;
