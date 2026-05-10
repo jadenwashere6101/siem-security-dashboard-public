@@ -1,6 +1,8 @@
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+from psycopg2.extras import Json
 from werkzeug.security import generate_password_hash
 
 from core.incident_store import create_incident, link_alert_to_incident
@@ -348,3 +350,296 @@ def test_post_incident_status_missing_incident_returns_404(client, postgres_db):
 
     assert resp.status_code == 404
     assert resp.get_json()["error"] == "incident not found"
+
+
+def test_get_incident_timeline_without_session_returns_401(client):
+    resp = client.get("/incidents/1/timeline")
+    assert resp.status_code == 401
+
+
+def test_get_incident_timeline_viewer_forbidden(client, mock_db):
+    patchers = _login_role(
+        client,
+        username="inctlviewer",
+        password="viewerpass",
+        role="viewer",
+    )
+    try:
+        resp = client.get("/incidents/1/timeline")
+    finally:
+        _stop_patchers(patchers)
+
+    assert resp.status_code == 403
+
+
+def test_get_incident_timeline_missing_returns_404(client, postgres_db):
+    conn, _cur = postgres_db
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get("/incidents/999999/timeline")
+
+    assert resp.status_code == 404
+    assert resp.get_json()["error"] == "incident not found"
+
+
+def _seed_playbook_definition(cur, playbook_id="pb_timeline_test"):
+    cur.execute(
+        """
+        INSERT INTO playbook_definitions (id, name, description, trigger_config, steps)
+        VALUES (%s, %s, '', '{}'::jsonb, '[]'::jsonb)
+        ON CONFLICT (id) DO NOTHING
+        """,
+        (playbook_id, "Timeline test playbook"),
+    )
+
+
+def test_get_incident_timeline_analyst_read_only_aggregate(client, postgres_db):
+    conn, cur = postgres_db
+    cur.execute(
+        """
+        INSERT INTO users (username, password_hash, role)
+        VALUES ('tl_approver', 'x', 'analyst')
+        RETURNING id
+        """
+    )
+    uid = cur.fetchone()[0]
+    alert_id = _insert_alert(cur, source_ip="203.0.113.100")
+    incident = _insert_incident(conn, title="Timeline incident", source_ip="203.0.113.101")
+    link_alert_to_incident(conn, incident["id"], alert_id)
+    conn.commit()
+
+    _seed_playbook_definition(cur, "pb_timeline_test")
+    steps_log = [
+        {
+            "step_index": 0,
+            "action": "monitor",
+            "status": "success",
+            "started_at": "2026-05-10T12:00:00Z",
+            "completed_at": "2026-05-10T12:00:01Z",
+            "message": "simulated monitor",
+        },
+        {
+            "step_index": 1,
+            "action": "notify_slack",
+            "status": "success",
+            "started_at": "2026-05-10T12:00:02Z",
+            "completed_at": "2026-05-10T12:00:03Z",
+            "message": "slack sim",
+            "output": {
+                "simulated": True,
+                "executed": False,
+                "adapter_result": {
+                    "adapter": "slack",
+                    "action": "send_message",
+                    "success": True,
+                },
+            },
+        },
+        None,
+        "not-a-step",
+    ]
+    cur.execute(
+        """
+        INSERT INTO playbook_executions (
+            playbook_id, alert_id, incident_id, status, started_at, completed_at,
+            last_completed_step, steps_log, created_at
+        )
+        VALUES (
+            %s, %s, %s, 'success', NOW(), NOW(), 1, %s, TIMESTAMPTZ '2026-05-10T11:59:00Z'
+        )
+        RETURNING id
+        """,
+        ("pb_timeline_test", alert_id, incident["id"], Json(steps_log)),
+    )
+    ex_id = cur.fetchone()[0]
+    exp = datetime.now(timezone.utc) + timedelta(hours=2)
+    cur.execute(
+        """
+        INSERT INTO approval_requests (
+            incident_id, playbook_execution_id, playbook_step_index, status, action,
+            request_reason, created_at, decided_at, expires_at, approved_by, decided_by
+        )
+        VALUES (
+            %s, %s, 1, 'approved', 'playbook.require_approval', 'gate',
+            TIMESTAMPTZ '2026-05-10T12:05:00Z',
+            TIMESTAMPTZ '2026-05-10T12:06:00Z',
+            %s, %s, %s
+        )
+        RETURNING id
+        """,
+        (incident["id"], ex_id, exp, uid, uid),
+    )
+    ar_id = cur.fetchone()[0]
+    cur.execute(
+        """
+        INSERT INTO approval_request_events (
+            approval_request_id, event_type, previous_status, new_status, comment, created_at
+        )
+        VALUES (%s, 'created', NULL, 'pending', 'req', TIMESTAMPTZ '2026-05-10T12:05:30Z')
+        """,
+        (ar_id,),
+    )
+    cur.execute(
+        """
+        INSERT INTO approval_request_events (
+            approval_request_id, event_type, previous_status, new_status, comment, created_at
+        )
+        VALUES (%s, 'approved', 'pending', 'approved', 'ok', TIMESTAMPTZ '2026-05-10T12:05:45Z')
+        """,
+        (ar_id,),
+    )
+    cur.execute(
+        """
+        INSERT INTO audit_log (event_type, actor_username, details, created_at)
+        VALUES (
+            'UPDATE_INCIDENT_STATUS',
+            'admin',
+            %s,
+            TIMESTAMPTZ '2026-05-10T12:07:00Z'
+        )
+        """,
+        (Json({"incident_id": incident["id"], "status": "investigating"}),),
+    )
+    cur.execute(
+        """
+        INSERT INTO audit_log (event_type, actor_username, details, created_at)
+        VALUES (
+            'PLAYBOOK_EXECUTION_RESUME',
+            'admin',
+            %s,
+            TIMESTAMPTZ '2026-05-10T12:08:00Z'
+        )
+        """,
+        (Json({"execution_id": ex_id, "playbook_id": "pb_timeline_test"}),),
+    )
+    cur.execute(
+        """
+        INSERT INTO audit_log (event_type, actor_username, details, created_at)
+        VALUES (
+            'SHOULD_NOT_APPEAR',
+            'admin',
+            %s,
+            TIMESTAMPTZ '2026-05-10T12:09:00Z'
+        )
+        """,
+        (Json({"incident_id": 999999, "note": "wrong incident"}),),
+    )
+    conn.commit()
+
+    counts_before = {}
+    for table in (
+        "incidents",
+        "alerts",
+        "playbook_executions",
+        "approval_requests",
+        "approval_request_events",
+        "audit_log",
+    ):
+        cur.execute(f"SELECT COUNT(*) FROM {table}")
+        counts_before[table] = cur.fetchone()[0]
+
+    patchers = _login_role(
+        client,
+        username="inctimeline",
+        password="analystpass",
+        role="analyst",
+    )
+    try:
+        with _patched_app_db(conn):
+            resp = client.get(f"/incidents/{incident['id']}/timeline")
+    finally:
+        _stop_patchers(patchers)
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["incident_id"] == incident["id"]
+    assert isinstance(body["timeline"], list)
+    assert len(body["timeline"]) >= 1
+
+    types = [e["event_type"] for e in body["timeline"]]
+    assert "incident_created" in types
+    assert "alert_linked" in types
+    assert "playbook_execution_created" in types
+    assert "playbook_step_completed" in types
+    assert "playbook_adapter_simulated" in types
+    assert "approval_requested" in types
+    assert "approval_approved" in types
+    assert "audit_event" in types
+    assert "SHOULD_NOT_APPEAR" not in [e.get("title") for e in body["timeline"]]
+
+    adapter_ev = next(e for e in body["timeline"] if e["event_type"] == "playbook_adapter_simulated")
+    assert adapter_ev["metadata"].get("output", {}).get("adapter") == "slack"
+    assert "params" not in str(adapter_ev.get("metadata", {}))
+
+    ts_nonempty = [e["timestamp"] for e in body["timeline"] if e.get("timestamp")]
+    assert ts_nonempty == sorted(ts_nonempty)
+
+    for table in counts_before:
+        cur.execute(f"SELECT COUNT(*) FROM {table}")
+        assert cur.fetchone()[0] == counts_before[table]
+
+
+def test_get_incident_timeline_includes_execution_via_linked_alert_fallback(client, postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur, source_ip="203.0.113.120")
+    incident = _insert_incident(conn, title="Fallback incident", source_ip="203.0.113.121")
+    link_alert_to_incident(conn, incident["id"], alert_id)
+    conn.commit()
+    _seed_playbook_definition(cur, "pb_fallback_tl")
+    cur.execute(
+        """
+        INSERT INTO playbook_executions (
+            playbook_id, alert_id, incident_id, status, steps_log, created_at
+        )
+        VALUES (%s, %s, NULL, 'pending', '[]'::jsonb, NOW())
+        RETURNING id
+        """,
+        ("pb_fallback_tl", alert_id),
+    )
+    ex_id = cur.fetchone()[0]
+    conn.commit()
+
+    patchers = _login_role(
+        client,
+        username="inctlfallback",
+        password="analystpass",
+        role="analyst",
+    )
+    try:
+        with _patched_app_db(conn):
+            resp = client.get(f"/incidents/{incident['id']}/timeline")
+    finally:
+        _stop_patchers(patchers)
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    meta_exec = next(
+        e["metadata"]
+        for e in body["timeline"]
+        if e["event_type"] == "playbook_execution_created" and e["source_id"] == ex_id
+    )
+    assert meta_exec.get("via_alert_fallback") is True
+
+
+def test_get_incident_detail_unchanged_shape(client, postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur, source_ip="203.0.113.130")
+    incident = _insert_incident(conn, title="Shape check", source_ip="203.0.113.131")
+    link_alert_to_incident(conn, incident["id"], alert_id)
+    conn.commit()
+
+    patchers = _login_role(
+        client,
+        username="incshapanalyst",
+        password="analystpass",
+        role="analyst",
+    )
+    try:
+        with _patched_app_db(conn):
+            resp = client.get(f"/incidents/{incident['id']}")
+    finally:
+        _stop_patchers(patchers)
+
+    assert resp.status_code == 200
+    assert set(resp.get_json().keys()) == {"incident"}
+    assert "timeline" not in resp.get_json()["incident"]
