@@ -18,6 +18,22 @@ from engines.playbook_registry import validate_playbook_steps
 
 logger = logging.getLogger(__name__)
 
+# Conservative default for max_attempts on new execution rows (metadata only in this slice).
+DEFAULT_PLAYBOOK_EXECUTION_MAX_ATTEMPTS = 3
+
+_EXECUTION_COLUMNS_SQL = (
+    "id, playbook_id, alert_id, incident_id, status, "
+    "started_at, completed_at, last_completed_step, steps_log, created_at, "
+    "attempt_count, max_attempts, last_attempted_at, failure_reason, stale_after, timeout_seconds"
+)
+
+
+class _UnsetType:
+    __slots__ = ()
+
+
+_UNSET = _UnsetType()
+
 _TERMINAL_EXECUTION_STATUSES = frozenset({"success", "failed", "abandoned"})
 _VALID_EXECUTION_STATUSES = frozenset(
     {"pending", "running", "awaiting_approval", "success", "failed", "abandoned"}
@@ -59,6 +75,12 @@ def _execution_row_to_dict(record: tuple[Any, ...]) -> dict[str, Any]:
         last_completed_step,
         steps_log,
         created_at,
+        attempt_count,
+        max_attempts,
+        last_attempted_at,
+        failure_reason,
+        stale_after,
+        timeout_seconds,
     ) = record
     return {
         "id": row_id,
@@ -71,6 +93,12 @@ def _execution_row_to_dict(record: tuple[Any, ...]) -> dict[str, Any]:
         "last_completed_step": last_completed_step,
         "steps_log": steps_log if isinstance(steps_log, list) else [],
         "created_at": created_at,
+        "attempt_count": attempt_count,
+        "max_attempts": max_attempts,
+        "last_attempted_at": last_attempted_at,
+        "failure_reason": failure_reason,
+        "stale_after": stale_after,
+        "timeout_seconds": timeout_seconds,
     }
 
 
@@ -396,12 +424,112 @@ def abandon_playbook_execution(conn, execution_id: int) -> str:
     raise ValueError(f"cannot abandon execution with status '{current['status']}'")
 
 
-def get_playbook_execution(conn, execution_id: int) -> dict[str, Any] | None:
+def get_playbook_execution_reliability_metadata(
+    conn, execution_id: int
+) -> dict[str, Any] | None:
+    """Return reliability fields only, or None if the execution id is unknown. Caller commits."""
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT id, playbook_id, alert_id, incident_id, status,
-                   started_at, completed_at, last_completed_step, steps_log, created_at
+            SELECT attempt_count, max_attempts, last_attempted_at, failure_reason,
+                   stale_after, timeout_seconds
+            FROM playbook_executions
+            WHERE id = %s
+            """,
+            (execution_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        (
+            attempt_count,
+            max_attempts,
+            last_attempted_at,
+            failure_reason,
+            stale_after,
+            timeout_seconds,
+        ) = row
+    return {
+        "attempt_count": attempt_count,
+        "max_attempts": max_attempts,
+        "last_attempted_at": last_attempted_at,
+        "failure_reason": failure_reason,
+        "stale_after": stale_after,
+        "timeout_seconds": timeout_seconds,
+    }
+
+
+def update_playbook_execution_reliability_metadata(
+    conn,
+    execution_id: int,
+    *,
+    attempt_count: int | _UnsetType = _UNSET,
+    max_attempts: int | _UnsetType = _UNSET,
+    last_attempted_at: datetime | None | _UnsetType = _UNSET,
+    failure_reason: str | None | _UnsetType = _UNSET,
+    stale_after: int | None | _UnsetType = _UNSET,
+    timeout_seconds: int | None | _UnsetType = _UNSET,
+) -> dict[str, Any] | None:
+    """
+    Update only the provided reliability columns. Omitted parameters are left unchanged.
+
+    Pass None for nullable fields to set them to NULL. Does not commit.
+    """
+    assignments: list[str] = []
+    params: list[Any] = []
+
+    if attempt_count is not _UNSET:
+        if attempt_count < 0:
+            raise ValueError("attempt_count must be non-negative")
+        assignments.append("attempt_count = %s")
+        params.append(attempt_count)
+    if max_attempts is not _UNSET:
+        if max_attempts < 0:
+            raise ValueError("max_attempts must be non-negative")
+        assignments.append("max_attempts = %s")
+        params.append(max_attempts)
+    if last_attempted_at is not _UNSET:
+        assignments.append("last_attempted_at = %s")
+        params.append(last_attempted_at)
+    if failure_reason is not _UNSET:
+        assignments.append("failure_reason = %s")
+        params.append(failure_reason)
+    if stale_after is not _UNSET:
+        if stale_after is not None and stale_after < 0:
+            raise ValueError("stale_after must be non-negative when set")
+        assignments.append("stale_after = %s")
+        params.append(stale_after)
+    if timeout_seconds is not _UNSET:
+        if timeout_seconds is not None and timeout_seconds < 0:
+            raise ValueError("timeout_seconds must be non-negative when set")
+        assignments.append("timeout_seconds = %s")
+        params.append(timeout_seconds)
+
+    if not assignments:
+        return get_playbook_execution(conn, execution_id)
+
+    params.append(execution_id)
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE playbook_executions
+            SET {", ".join(assignments)}
+            WHERE id = %s
+            RETURNING {_EXECUTION_COLUMNS_SQL}
+            """,
+            tuple(params),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return _execution_row_to_dict(row)
+
+
+def get_playbook_execution(conn, execution_id: int) -> dict[str, Any] | None:
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT {_EXECUTION_COLUMNS_SQL}
             FROM playbook_executions
             WHERE id = %s
             """,
@@ -416,9 +544,8 @@ def get_playbook_execution(conn, execution_id: int) -> dict[str, Any] | None:
 def list_pending_playbook_executions(conn, limit: int = 10) -> list[dict[str, Any]]:
     with conn.cursor() as cur:
         cur.execute(
-            """
-            SELECT id, playbook_id, alert_id, incident_id, status,
-                   started_at, completed_at, last_completed_step, steps_log, created_at
+            f"""
+            SELECT {_EXECUTION_COLUMNS_SQL}
             FROM playbook_executions
             WHERE status = 'pending'
             ORDER BY created_at ASC, id ASC
@@ -432,9 +559,8 @@ def list_pending_playbook_executions(conn, limit: int = 10) -> list[dict[str, An
 def list_awaiting_approval_playbook_executions(conn, limit: int = 10) -> list[dict[str, Any]]:
     with conn.cursor() as cur:
         cur.execute(
-            """
-            SELECT id, playbook_id, alert_id, incident_id, status,
-                   started_at, completed_at, last_completed_step, steps_log, created_at
+            f"""
+            SELECT {_EXECUTION_COLUMNS_SQL}
             FROM playbook_executions
             WHERE status = 'awaiting_approval'
             ORDER BY created_at ASC, id ASC
@@ -466,13 +592,12 @@ def claim_next_pending_playbook_execution(conn, now: datetime | None = None) -> 
 
         execution_id = int(row[0])
         cur.execute(
-            """
+            f"""
             UPDATE playbook_executions
             SET status = 'running',
                 started_at = COALESCE(started_at, %s)
             WHERE id = %s
-            RETURNING id, playbook_id, alert_id, incident_id, status,
-                      started_at, completed_at, last_completed_step, steps_log, created_at
+            RETURNING {_EXECUTION_COLUMNS_SQL}
             """,
             (now, execution_id),
         )
@@ -492,14 +617,13 @@ def set_playbook_execution_running(
 
     with conn.cursor() as cur:
         cur.execute(
-            """
+            f"""
             UPDATE playbook_executions
             SET status = 'running',
                 started_at = COALESCE(started_at, %s)
             WHERE id = %s
               AND status = 'pending'
-            RETURNING id, playbook_id, alert_id, incident_id, status,
-                      started_at, completed_at, last_completed_step, steps_log, created_at
+            RETURNING {_EXECUTION_COLUMNS_SQL}
             """,
             (now, execution_id),
         )
@@ -521,7 +645,7 @@ def set_playbook_execution_resumed_running(
 
     with conn.cursor() as cur:
         cur.execute(
-            """
+            f"""
             UPDATE playbook_executions
             SET status = 'running',
                 started_at = COALESCE(started_at, %s),
@@ -530,8 +654,7 @@ def set_playbook_execution_resumed_running(
                 last_completed_step = %s
             WHERE id = %s
               AND status = 'awaiting_approval'
-            RETURNING id, playbook_id, alert_id, incident_id, status,
-                      started_at, completed_at, last_completed_step, steps_log, created_at
+            RETURNING {_EXECUTION_COLUMNS_SQL}
             """,
             (now, Json(steps_log), last_completed_step, execution_id),
         )
@@ -549,13 +672,12 @@ def update_playbook_execution_step_log(
 ) -> dict[str, Any] | None:
     with conn.cursor() as cur:
         cur.execute(
-            """
+            f"""
             UPDATE playbook_executions
             SET steps_log = %s,
                 last_completed_step = %s
             WHERE id = %s
-            RETURNING id, playbook_id, alert_id, incident_id, status,
-                      started_at, completed_at, last_completed_step, steps_log, created_at
+            RETURNING {_EXECUTION_COLUMNS_SQL}
             """,
             (Json(steps_log), last_completed_step, execution_id),
         )
@@ -577,15 +699,14 @@ def set_playbook_execution_success(
 
     with conn.cursor() as cur:
         cur.execute(
-            """
+            f"""
             UPDATE playbook_executions
             SET status = 'success',
                 completed_at = %s,
                 steps_log = %s,
                 last_completed_step = %s
             WHERE id = %s
-            RETURNING id, playbook_id, alert_id, incident_id, status,
-                      started_at, completed_at, last_completed_step, steps_log, created_at
+            RETURNING {_EXECUTION_COLUMNS_SQL}
             """,
             (now, Json(steps_log), last_completed_step, execution_id),
         )
@@ -607,15 +728,14 @@ def set_playbook_execution_failed(
 
     with conn.cursor() as cur:
         cur.execute(
-            """
+            f"""
             UPDATE playbook_executions
             SET status = 'failed',
                 completed_at = %s,
                 steps_log = %s,
                 last_completed_step = %s
             WHERE id = %s
-            RETURNING id, playbook_id, alert_id, incident_id, status,
-                      started_at, completed_at, last_completed_step, steps_log, created_at
+            RETURNING {_EXECUTION_COLUMNS_SQL}
             """,
             (now, Json(steps_log), last_completed_step, execution_id),
         )
@@ -633,15 +753,14 @@ def set_playbook_execution_awaiting_approval(
 ) -> dict[str, Any] | None:
     with conn.cursor() as cur:
         cur.execute(
-            """
+            f"""
             UPDATE playbook_executions
             SET status = 'awaiting_approval',
                 completed_at = NULL,
                 steps_log = %s,
                 last_completed_step = %s
             WHERE id = %s
-            RETURNING id, playbook_id, alert_id, incident_id, status,
-                      started_at, completed_at, last_completed_step, steps_log, created_at
+            RETURNING {_EXECUTION_COLUMNS_SQL}
             """,
             (Json(steps_log), last_completed_step, execution_id),
         )
@@ -725,8 +844,7 @@ def list_playbook_executions(
     with conn.cursor() as cur:
         cur.execute(
             f"""
-            SELECT id, playbook_id, alert_id, incident_id, status,
-                   started_at, completed_at, last_completed_step, steps_log, created_at
+            SELECT {_EXECUTION_COLUMNS_SQL}
             FROM playbook_executions
             {where_sql}
             ORDER BY created_at DESC

@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 import pytest
 import psycopg2
 
@@ -122,6 +124,21 @@ def test_create_and_get_execution(postgres_db):
     assert row["started_at"] is None
     assert row["completed_at"] is None
     assert row["steps_log"] == []
+    assert row["attempt_count"] == 0
+    assert row["max_attempts"] == playbook_store.DEFAULT_PLAYBOOK_EXECUTION_MAX_ATTEMPTS
+    assert row["last_attempted_at"] is None
+    assert row["failure_reason"] is None
+    assert row["stale_after"] is None
+    assert row["timeout_seconds"] is None
+    meta = playbook_store.get_playbook_execution_reliability_metadata(conn, eid)
+    assert meta == {
+        "attempt_count": 0,
+        "max_attempts": playbook_store.DEFAULT_PLAYBOOK_EXECUTION_MAX_ATTEMPTS,
+        "last_attempted_at": None,
+        "failure_reason": None,
+        "stale_after": None,
+        "timeout_seconds": None,
+    }
 
 
 @pytest.mark.usefixtures("postgres_db")
@@ -713,3 +730,68 @@ def test_playbook_execution_failed_helper(postgres_db):
     assert cur.fetchone()[0] == 0
     cur.execute("SELECT COUNT(*) FROM approval_requests")
     assert cur.fetchone()[0] == 0
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_update_playbook_execution_reliability_metadata_partial_and_clear(postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(
+        conn,
+        "pb_rel",
+        "Reliability",
+        steps=_valid_steps(),
+    )
+    eid = playbook_store.create_playbook_execution(conn, "pb_rel", alert_id=None)
+    when = datetime(2026, 5, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    updated = playbook_store.update_playbook_execution_reliability_metadata(
+        conn,
+        eid,
+        attempt_count=1,
+        last_attempted_at=when,
+        failure_reason="step simulation error",
+        stale_after=3600,
+        timeout_seconds=120,
+    )
+    assert updated is not None
+    assert updated["attempt_count"] == 1
+    assert updated["max_attempts"] == playbook_store.DEFAULT_PLAYBOOK_EXECUTION_MAX_ATTEMPTS
+    assert updated["last_attempted_at"] == when
+    assert updated["failure_reason"] == "step simulation error"
+    assert updated["stale_after"] == 3600
+    assert updated["timeout_seconds"] == 120
+
+    bumped_max = playbook_store.update_playbook_execution_reliability_metadata(
+        conn, eid, max_attempts=5
+    )
+    assert bumped_max is not None
+    assert bumped_max["max_attempts"] == 5
+    assert bumped_max["attempt_count"] == 1
+    assert bumped_max["failure_reason"] == "step simulation error"
+
+    cleared = playbook_store.update_playbook_execution_reliability_metadata(
+        conn,
+        eid,
+        failure_reason=None,
+        stale_after=None,
+    )
+    assert cleared is not None
+    assert cleared["failure_reason"] is None
+    assert cleared["stale_after"] is None
+    assert cleared["timeout_seconds"] == 120
+
+    assert playbook_store.update_playbook_execution_reliability_metadata(conn, 999999, attempt_count=0) is None
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_update_playbook_execution_reliability_metadata_no_ops_returns_full_row(postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_rel2", "R2", steps=_valid_steps())
+    eid = playbook_store.create_playbook_execution(conn, "pb_rel2", alert_id=None)
+    row = playbook_store.update_playbook_execution_reliability_metadata(conn, eid)
+    assert row is not None
+    assert row["id"] == eid
+    assert row["attempt_count"] == 0
+
+    with pytest.raises(ValueError):
+        playbook_store.update_playbook_execution_reliability_metadata(conn, eid, attempt_count=-1)

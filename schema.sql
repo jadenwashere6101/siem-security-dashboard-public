@@ -339,8 +339,27 @@ CREATE TABLE IF NOT EXISTS playbook_executions (
     completed_at TIMESTAMPTZ,
     last_completed_step INTEGER,
     steps_log JSONB NOT NULL DEFAULT '[]'::jsonb,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 3,
+    last_attempted_at TIMESTAMPTZ,
+    failure_reason TEXT,
+    stale_after INTEGER,
+    timeout_seconds INTEGER
 );
+
+ALTER TABLE playbook_executions
+    ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE playbook_executions
+    ADD COLUMN IF NOT EXISTS max_attempts INTEGER NOT NULL DEFAULT 3;
+ALTER TABLE playbook_executions
+    ADD COLUMN IF NOT EXISTS last_attempted_at TIMESTAMPTZ;
+ALTER TABLE playbook_executions
+    ADD COLUMN IF NOT EXISTS failure_reason TEXT;
+ALTER TABLE playbook_executions
+    ADD COLUMN IF NOT EXISTS stale_after INTEGER;
+ALTER TABLE playbook_executions
+    ADD COLUMN IF NOT EXISTS timeout_seconds INTEGER;
 
 CREATE INDEX IF NOT EXISTS idx_playbook_executions_playbook_id
     ON playbook_executions (playbook_id);
