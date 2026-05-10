@@ -14,6 +14,7 @@ from core.db import get_db_connection
 from core.extensions import limiter
 from core.incident_store import maybe_create_or_link_incident
 from engines.ingest_engine import ingest_normalized_event
+from engines.soar_playbook_orchestrator import create_pending_executions_for_committed_alerts
 from engines.soar_enqueue_orchestrator import enqueue_committed_alerts
 from helpers.ingest_normalizers import (
     _get_azure_app_name,
@@ -61,6 +62,18 @@ def _create_incidents_for_alerts(alerts_created, conn):
                 source_ip,
                 severity,
             )
+
+
+def _create_playbook_executions_for_alerts(alerts_created, conn):
+    try:
+        create_pending_executions_for_committed_alerts(alerts_created, conn)
+        conn.commit()
+    except Exception as playbook_error:
+        conn.rollback()
+        current_app.logger.error(
+            "[PLAYBOOK ORCHESTRATION ERROR] Post-commit playbook scheduling failed — ingest was committed: %s",
+            playbook_error,
+        )
 
 
 @ingest_bp.route("/ingest", methods=["POST"])
@@ -151,6 +164,8 @@ def add_event():
                 incident_error,
                 [(a.get("alert_id"), a.get("source_ip"), a.get("severity")) for a in alerts_created],
             )
+
+        _create_playbook_executions_for_alerts(alerts_created, conn)
 
         return jsonify({
             "message": "Event added successfully",
@@ -262,6 +277,8 @@ def add_web_log_event():
                 [(a.get("alert_id"), a.get("source_ip"), a.get("severity")) for a in alerts_created],
             )
 
+        _create_playbook_executions_for_alerts(alerts_created, conn)
+
         return jsonify({
             "message": "Event added successfully",
             "alerts_created": alerts_created
@@ -367,6 +384,8 @@ def add_azure_event():
                 [(a.get("alert_id"), a.get("source_ip"), a.get("severity")) for a in alerts_created],
             )
 
+        _create_playbook_executions_for_alerts(alerts_created, conn)
+
         success_message = "Events added successfully" if len(normalized_events) > 1 else "Event added successfully"
         return jsonify({
             "message": success_message,
@@ -458,6 +477,8 @@ def add_otel_event():
                 incident_error,
                 [(a.get("alert_id"), a.get("source_ip"), a.get("severity")) for a in alerts_created],
             )
+
+        _create_playbook_executions_for_alerts(alerts_created, conn)
 
         success_message = "Events added successfully" if len(normalized_events) > 1 else "Event added successfully"
         return jsonify({

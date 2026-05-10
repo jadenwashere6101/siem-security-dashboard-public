@@ -301,3 +301,7 @@ CREATE INDEX IF NOT EXISTS idx_playbook_executions_status
     ON playbook_executions (status);
 CREATE INDEX IF NOT EXISTS idx_playbook_executions_created_at
     ON playbook_executions (created_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_playbook_executions_playbook_alert_unique
+    ON playbook_executions (playbook_id, alert_id)
+    WHERE alert_id IS NOT NULL;

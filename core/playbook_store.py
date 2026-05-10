@@ -250,6 +250,40 @@ def create_playbook_execution(
         return int(row[0])
 
 
+def create_pending_playbook_execution_once(
+    conn,
+    playbook_id: str,
+    alert_id: int,
+    incident_id: int | None = None,
+) -> int | None:
+    """
+    Insert one pending execution for a playbook/alert pair.
+
+    Returns the new execution id, or None when the pair already exists. Caller commits.
+    """
+    if alert_id is None:
+        raise ValueError("alert_id is required")
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO playbook_executions (
+                playbook_id, alert_id, incident_id, status
+            )
+            VALUES (%s, %s, %s, 'pending')
+            ON CONFLICT (playbook_id, alert_id)
+                WHERE alert_id IS NOT NULL
+                DO NOTHING
+            RETURNING id
+            """,
+            (playbook_id, alert_id, incident_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return int(row[0])
+
+
 def get_playbook_execution(conn, execution_id: int) -> dict[str, Any] | None:
     with conn.cursor() as cur:
         cur.execute(

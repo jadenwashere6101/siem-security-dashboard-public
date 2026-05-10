@@ -372,3 +372,75 @@ def test_update_and_set_enabled_do_not_create_executions(postgres_db):
 
     cur.execute("SELECT COUNT(*) FROM playbook_executions")
     assert cur.fetchone()[0] == before
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_create_pending_playbook_execution_once_is_idempotent(postgres_db):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_store.create_playbook_definition(conn, "pb_once", "Once", steps=_valid_steps())
+
+    first = playbook_store.create_pending_playbook_execution_once(conn, "pb_once", aid)
+    second = playbook_store.create_pending_playbook_execution_once(conn, "pb_once", aid)
+
+    assert isinstance(first, int)
+    assert second is None
+
+    cur.execute(
+        """
+        SELECT id, status, started_at, completed_at
+        FROM playbook_executions
+        WHERE playbook_id = %s AND alert_id = %s
+        """,
+        ("pb_once", aid),
+    )
+    rows = cur.fetchall()
+    assert rows == [(first, "pending", None, None)]
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_create_pending_playbook_execution_once_allows_distinct_pairs(postgres_db):
+    conn, cur = postgres_db
+    aid_one = _insert_alert(cur, "10.0.0.2")
+    aid_two = _insert_alert(cur, "10.0.0.3")
+    playbook_store.create_playbook_definition(conn, "pb_one", "One", steps=_valid_steps())
+    playbook_store.create_playbook_definition(conn, "pb_two", "Two", steps=_valid_steps())
+
+    same_alert_first = playbook_store.create_pending_playbook_execution_once(conn, "pb_one", aid_one)
+    same_alert_second = playbook_store.create_pending_playbook_execution_once(conn, "pb_two", aid_one)
+    same_playbook_other_alert = playbook_store.create_pending_playbook_execution_once(conn, "pb_one", aid_two)
+
+    assert all(
+        isinstance(value, int)
+        for value in [same_alert_first, same_alert_second, same_playbook_other_alert]
+    )
+    cur.execute("SELECT COUNT(*) FROM playbook_executions")
+    assert cur.fetchone()[0] == 3
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_create_pending_playbook_execution_once_requires_alert_id(postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_req", "Req", steps=_valid_steps())
+
+    with pytest.raises(ValueError):
+        playbook_store.create_pending_playbook_execution_once(conn, "pb_req", None)
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_create_pending_playbook_execution_once_does_not_touch_queue_or_logs(postgres_db):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_store.create_playbook_definition(conn, "pb_safe", "Safe", steps=_valid_steps())
+
+    cur.execute("SELECT COUNT(*) FROM response_actions_queue")
+    queue_before = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM response_actions_log")
+    log_before = cur.fetchone()[0]
+
+    playbook_store.create_pending_playbook_execution_once(conn, "pb_safe", aid)
+
+    cur.execute("SELECT COUNT(*) FROM response_actions_queue")
+    assert cur.fetchone()[0] == queue_before
+    cur.execute("SELECT COUNT(*) FROM response_actions_log")
+    assert cur.fetchone()[0] == log_before
