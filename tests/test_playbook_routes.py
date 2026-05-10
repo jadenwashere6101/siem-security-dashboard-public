@@ -832,7 +832,7 @@ def test_post_playbooks_invalid_steps_returns_400(client, postgres_db):
     conn, _cur = postgres_db
     _login_super_admin(client)
     body = _create_body("pb_bad_steps")
-    body["steps"] = [{"action": "notify_slack"}]
+    body["steps"] = [{"action": "notify_pagerduty"}]
     with _patched_app_db(conn):
         resp = client.post("/playbooks", json=body)
     assert resp.status_code == 400

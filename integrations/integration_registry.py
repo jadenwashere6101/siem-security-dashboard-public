@@ -41,3 +41,30 @@ def list_integration_adapters(mode: str | None = None) -> dict[str, BaseIntegrat
         name: adapter_cls(mode=resolved_mode)
         for name, adapter_cls in sorted(_ADAPTERS.items())
     }
+
+
+def get_integration_status(mode: str | None = None) -> dict:
+    raw_mode = mode if mode is not None else os.getenv("INTEGRATION_MODE", SIMULATION_MODE)
+    configured_mode = str(raw_mode or SIMULATION_MODE).strip().lower()
+    real_mode_requested = configured_mode != SIMULATION_MODE
+    return {
+        "mode": SIMULATION_MODE,
+        "configured_mode": configured_mode,
+        "simulated": True,
+        "real_mode_enabled": False,
+        "real_mode_status": (
+            "disabled: real integration mode is not implemented"
+            if real_mode_requested
+            else "disabled"
+        ),
+        "adapters": [
+            {
+                "name": name,
+                "mode": SIMULATION_MODE,
+                "simulated": True,
+                "real_client": False,
+                "supported_actions": sorted(adapter_cls.supported_actions),
+            }
+            for name, adapter_cls in sorted(_ADAPTERS.items())
+        ],
+    }

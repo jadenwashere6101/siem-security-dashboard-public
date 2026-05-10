@@ -5,6 +5,7 @@ import socket
 import pytest
 
 from integrations.integration_registry import (
+    get_integration_status,
     get_integration_adapter,
     list_integration_adapters,
     resolve_integration_mode,
@@ -66,6 +67,41 @@ def test_list_integration_adapters_defaults_to_simulation(monkeypatch):
 
     assert set(adapters) == {"email", "firewall", "slack", "webhook"}
     assert {adapter.mode for adapter in adapters.values()} == {"simulation"}
+
+
+def test_integration_status_metadata_is_offline_and_simulation_only(monkeypatch, no_network):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+
+    status = get_integration_status()
+
+    assert status["mode"] == "simulation"
+    assert status["configured_mode"] == "simulation"
+    assert status["simulated"] is True
+    assert status["real_mode_enabled"] is False
+    assert status["real_mode_status"] == "disabled"
+    adapters = {adapter["name"]: adapter for adapter in status["adapters"]}
+    assert set(adapters) == {"email", "firewall", "slack", "webhook"}
+    assert adapters["slack"]["supported_actions"] == ["notify_channel", "send_message"]
+    assert adapters["email"]["supported_actions"] == ["notify_owner", "send_email"]
+    assert adapters["firewall"]["supported_actions"] == ["block_ip", "tag_ip", "unblock_ip"]
+    assert adapters["webhook"]["supported_actions"] == [
+        "notify_webhook",
+        "post_event",
+        "send_webhook",
+    ]
+    assert {adapter["real_client"] for adapter in adapters.values()} == {False}
+
+
+def test_integration_status_reports_real_mode_fail_closed(monkeypatch, no_network):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+
+    status = get_integration_status()
+
+    assert status["mode"] == "simulation"
+    assert status["configured_mode"] == "real"
+    assert status["simulated"] is True
+    assert status["real_mode_enabled"] is False
+    assert "not implemented" in status["real_mode_status"]
 
 
 def test_unknown_adapter_fails_locally():
