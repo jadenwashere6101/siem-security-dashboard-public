@@ -688,6 +688,7 @@ function App() {
             filterWrapperStyle={filterWrapperStyle}
             filterLabelStyle={filterLabelStyle}
             selectStyle={selectStyle}
+            userRole={userRole}
           />
         )}
       </div>

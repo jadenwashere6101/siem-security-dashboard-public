@@ -8,6 +8,9 @@ import {
   getPlaybookExecution,
   listPlaybookExecutions,
   listPlaybooks,
+  createPlaybookDefinition,
+  updatePlaybookDefinition,
+  setPlaybookDefinitionEnabled,
 } from "../services/playbookService";
 
 jest.mock("../services/playbookService", () => ({
@@ -15,6 +18,9 @@ jest.mock("../services/playbookService", () => ({
   getPlaybook: jest.fn(),
   listPlaybookExecutions: jest.fn(),
   getPlaybookExecution: jest.fn(),
+  createPlaybookDefinition: jest.fn(),
+  updatePlaybookDefinition: jest.fn(),
+  setPlaybookDefinitionEnabled: jest.fn(),
 }));
 
 const styleProps = {
@@ -25,6 +31,7 @@ const styleProps = {
   filterWrapperStyle: {},
   filterLabelStyle: {},
   selectStyle: {},
+  userRole: "analyst",
 };
 
 const defRow = {
@@ -234,7 +241,7 @@ test("does not render run, retry, cancel, or delete controls", async () => {
   listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
   listPlaybookExecutions.mockResolvedValue({ items: [execRow], limit: 50 });
 
-  render(<PlaybooksPanel {...styleProps} />);
+  render(<PlaybooksPanel {...styleProps} userRole="analyst" />);
   await screen.findByText("pb_one");
 
   expect(screen.queryByRole("button", { name: /run simulation/i })).not.toBeInTheDocument();
@@ -247,9 +254,343 @@ test("shows visibility-only notice", async () => {
   listPlaybooks.mockResolvedValue({ items: [], limit: 50 });
   listPlaybookExecutions.mockResolvedValue({ items: [], limit: 50 });
 
-  render(<PlaybooksPanel {...styleProps} />);
+  render(<PlaybooksPanel {...styleProps} userRole="analyst" />);
 
   expect(
     await screen.findByText(/playbooks are visible only; execution is not enabled yet/i)
   ).toBeInTheDocument();
+});
+
+// Super admin mutation control tests
+test("super admin sees New Definition button", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [], limit: 50 });
+
+  render(<PlaybooksPanel {...styleProps} userRole="super_admin" />);
+  await screen.findByText("pb_one");
+
+  expect(screen.getByRole("button", { name: /\+ New Definition/i })).toBeInTheDocument();
+});
+
+test("analyst does not see New Definition button", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [], limit: 50 });
+
+  render(<PlaybooksPanel {...styleProps} userRole="analyst" />);
+  await screen.findByText("pb_one");
+
+  expect(screen.queryByRole("button", { name: /\+ New Definition/i })).not.toBeInTheDocument();
+});
+
+test("super admin sees Edit and Enable/Disable buttons for each definition", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [], limit: 50 });
+
+  render(<PlaybooksPanel {...styleProps} userRole="super_admin" />);
+  await screen.findByText("pb_one");
+
+  expect(screen.getByRole("button", { name: /^Edit$/i })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^Disable$/i })).toBeInTheDocument();
+});
+
+test("analyst does not see Edit or Enable/Disable buttons", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [], limit: 50 });
+
+  render(<PlaybooksPanel {...styleProps} userRole="analyst" />);
+  await screen.findByText("pb_one");
+
+  expect(screen.queryByRole("button", { name: /^Edit$/i })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /^Disable$/i })).not.toBeInTheDocument();
+});
+
+test("super admin can open and close create form", async () => {
+  listPlaybooks.mockResolvedValue({ items: [], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [], limit: 50 });
+
+  render(<PlaybooksPanel {...styleProps} userRole="super_admin" />);
+
+  const newDefButton = await screen.findByRole("button", { name: /\+ New Definition/i });
+  await userEvent.click(newDefButton);
+
+  expect(
+    screen.getByText(/create new playbook definition/i)
+  ).toBeInTheDocument();
+  expect(screen.getByLabelText(/^ID \(required\)/i)).toBeInTheDocument();
+  expect(screen.getByLabelText(/^Name \(required\)/i)).toBeInTheDocument();
+
+  const closeButton = screen.getByRole("button", { name: /✕/i });
+  await userEvent.click(closeButton);
+
+  expect(
+    screen.queryByText(/create new playbook definition/i)
+  ).not.toBeInTheDocument();
+});
+
+test("super admin can open edit form with existing values", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [], limit: 50 });
+
+  render(<PlaybooksPanel {...styleProps} userRole="super_admin" />);
+  await screen.findByText("pb_one");
+
+  const editButton = screen.getByRole("button", { name: /^Edit$/i });
+  await userEvent.click(editButton);
+
+  expect(
+    screen.getByText(/edit playbook definition/i)
+  ).toBeInTheDocument();
+
+  const idInput = screen.getByLabelText(/^ID \(read-only\)/i);
+  expect(idInput).toHaveValue("pb_one");
+  expect(idInput).toBeDisabled();
+
+  const nameInput = screen.getByLabelText(/^Name \(required\)/i);
+  expect(nameInput).toHaveValue("Test playbook");
+});
+
+test("form validates required ID on create", async () => {
+  listPlaybooks.mockResolvedValue({ items: [], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [], limit: 50 });
+
+  render(<PlaybooksPanel {...styleProps} userRole="super_admin" />);
+
+  const newDefButton = await screen.findByRole("button", { name: /\+ New Definition/i });
+  await userEvent.click(newDefButton);
+
+  const nameInput = screen.getByLabelText(/^Name \(required\)/i);
+  await userEvent.clear(nameInput);
+  await userEvent.type(nameInput, "Test");
+
+  const createButton = screen.getByRole("button", { name: /^Create$/i });
+  await userEvent.click(createButton);
+
+  expect(
+    screen.getByText(/ID is required for creating a definition/i)
+  ).toBeInTheDocument();
+  expect(createPlaybookDefinition).not.toHaveBeenCalled();
+});
+
+test("form validates ID format on create", async () => {
+  listPlaybooks.mockResolvedValue({ items: [], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [], limit: 50 });
+
+  render(<PlaybooksPanel {...styleProps} userRole="super_admin" />);
+
+  const newDefButton = await screen.findByRole("button", { name: /\+ New Definition/i });
+  await userEvent.click(newDefButton);
+
+  const idInput = screen.getByLabelText(/^ID \(required\)/i);
+  await userEvent.type(idInput, "Invalid ID!");
+
+  const nameInput = screen.getByLabelText(/^Name \(required\)/i);
+  await userEvent.type(nameInput, "Test");
+
+  const createButton = screen.getByRole("button", { name: /^Create$/i });
+  await userEvent.click(createButton);
+
+  expect(
+    screen.getByText(/ID must contain only lowercase letters, digits, underscores, and hyphens/i)
+  ).toBeInTheDocument();
+  expect(createPlaybookDefinition).not.toHaveBeenCalled();
+});
+
+test("form validates required name", async () => {
+  listPlaybooks.mockResolvedValue({ items: [], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [], limit: 50 });
+
+  render(<PlaybooksPanel {...styleProps} userRole="super_admin" />);
+
+  const newDefButton = await screen.findByRole("button", { name: /\+ New Definition/i });
+  await userEvent.click(newDefButton);
+
+  const idInput = screen.getByLabelText(/^ID \(required\)/i);
+  await userEvent.type(idInput, "test_pb");
+
+  const createButton = screen.getByRole("button", { name: /^Create$/i });
+  await userEvent.click(createButton);
+
+  expect(
+    screen.getByText(/Name is required/i)
+  ).toBeInTheDocument();
+  expect(createPlaybookDefinition).not.toHaveBeenCalled();
+});
+
+test("form validates trigger JSON must be object", async () => {
+  listPlaybooks.mockResolvedValue({ items: [], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [], limit: 50 });
+
+  render(<PlaybooksPanel {...styleProps} userRole="super_admin" />);
+
+  const newDefButton = await screen.findByRole("button", { name: /\+ New Definition/i });
+  await userEvent.click(newDefButton);
+
+  const idInput = screen.getByLabelText(/^ID \(required\)/i);
+  await userEvent.type(idInput, "test_pb");
+
+  const nameInput = screen.getByLabelText(/^Name \(required\)/i);
+  await userEvent.type(nameInput, "Test");
+
+  const triggerInput = screen.getByLabelText(/^Trigger Config/i);
+  await userEvent.clear(triggerInput);
+  await userEvent.type(triggerInput, '["not", "an", "object"]');
+
+  const createButton = screen.getByRole("button", { name: /^Create$/i });
+  await userEvent.click(createButton);
+
+  // Validation should prevent the service call
+  await waitFor(() => {
+    expect(createPlaybookDefinition).not.toHaveBeenCalled();
+  });
+  
+  // Form should still be visible with error
+  expect(screen.getByText(/create new playbook definition/i)).toBeInTheDocument();
+});
+
+test("form validates steps JSON must be array", async () => {
+  listPlaybooks.mockResolvedValue({ items: [], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [], limit: 50 });
+
+  render(<PlaybooksPanel {...styleProps} userRole="super_admin" />);
+
+  const newDefButton = await screen.findByRole("button", { name: /\+ New Definition/i });
+  await userEvent.click(newDefButton);
+
+  const idInput = screen.getByLabelText(/^ID \(required\)/i);
+  await userEvent.type(idInput, "test_pb");
+
+  const nameInput = screen.getByLabelText(/^Name \(required\)/i);
+  await userEvent.type(nameInput, "Test");
+
+  const stepsInput = screen.getByLabelText(/^Steps/i);
+  await userEvent.clear(stepsInput);
+  await userEvent.type(stepsInput, '{"not": "an array"}');
+
+  const createButton = screen.getByRole("button", { name: /^Create$/i });
+  await userEvent.click(createButton);
+
+  // Validation should prevent the service call
+  await waitFor(() => {
+    expect(createPlaybookDefinition).not.toHaveBeenCalled();
+  });
+  
+  // Form should still be visible with error
+  expect(screen.getByText(/create new playbook definition/i)).toBeInTheDocument();
+});
+
+test("super admin can submit valid create form", async () => {
+  listPlaybooks.mockResolvedValue({ items: [], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [], limit: 50 });
+  createPlaybookDefinition.mockResolvedValue({ id: "new_pb", name: "New playbook" });
+  listPlaybooks.mockResolvedValueOnce({ items: [], limit: 50 });
+  listPlaybooks.mockResolvedValueOnce({
+    items: [{ id: "new_pb", name: "New playbook" }],
+    limit: 50,
+  });
+
+  render(<PlaybooksPanel {...styleProps} userRole="super_admin" />);
+
+  const newDefButton = await screen.findByRole("button", { name: /\+ New Definition/i });
+  await userEvent.click(newDefButton);
+
+  const idInput = screen.getByLabelText(/^ID \(required\)/i);
+  await userEvent.type(idInput, "new_pb");
+
+  const nameInput = screen.getByLabelText(/^Name \(required\)/i);
+  await userEvent.type(nameInput, "New playbook");
+
+  const createButton = screen.getByRole("button", { name: /^Create$/i });
+  await userEvent.click(createButton);
+
+  await waitFor(() => {
+    expect(createPlaybookDefinition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "new_pb",
+        name: "New playbook",
+      })
+    );
+  });
+});
+
+test("super admin can submit valid edit form", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [], limit: 50 });
+  updatePlaybookDefinition.mockResolvedValue({ id: "pb_one", name: "Updated" });
+  listPlaybooks.mockResolvedValueOnce({ items: [defRow], limit: 50 });
+  listPlaybooks.mockResolvedValueOnce({
+    items: [{ ...defRow, name: "Updated" }],
+    limit: 50,
+  });
+
+  render(<PlaybooksPanel {...styleProps} userRole="super_admin" />);
+  await screen.findByText("pb_one");
+
+  const editButton = screen.getByRole("button", { name: /^Edit$/i });
+  await userEvent.click(editButton);
+
+  const nameInput = screen.getByLabelText(/^Name \(required\)/i);
+  await userEvent.clear(nameInput);
+  await userEvent.type(nameInput, "Updated");
+
+  const updateButton = screen.getByRole("button", { name: /^Update$/i });
+  await userEvent.click(updateButton);
+
+  await waitFor(() => {
+    expect(updatePlaybookDefinition).toHaveBeenCalledWith(
+      "pb_one",
+      expect.objectContaining({
+        name: "Updated",
+      })
+    );
+  });
+});
+
+test("super admin can toggle definition enabled status", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [], limit: 50 });
+  setPlaybookDefinitionEnabled.mockResolvedValue({ id: "pb_one", enabled: false });
+  listPlaybooks.mockResolvedValueOnce({ items: [defRow], limit: 50 });
+  listPlaybooks.mockResolvedValueOnce({
+    items: [{ ...defRow, enabled: false }],
+    limit: 50,
+  });
+
+  render(<PlaybooksPanel {...styleProps} userRole="super_admin" />);
+  await screen.findByText("pb_one");
+
+  const disableButton = screen.getByRole("button", { name: /^Disable$/i });
+  await userEvent.click(disableButton);
+
+  await waitFor(() => {
+    expect(setPlaybookDefinitionEnabled).toHaveBeenCalledWith("pb_one", false);
+  });
+});
+
+test("shows success message after successful create", async () => {
+  listPlaybooks.mockResolvedValue({ items: [], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [], limit: 50 });
+  createPlaybookDefinition.mockResolvedValue({ id: "new_pb", name: "New playbook" });
+  listPlaybooks.mockResolvedValueOnce({ items: [], limit: 50 });
+  listPlaybooks.mockResolvedValueOnce({
+    items: [{ id: "new_pb", name: "New playbook" }],
+    limit: 50,
+  });
+
+  render(<PlaybooksPanel {...styleProps} userRole="super_admin" />);
+
+  const newDefButton = await screen.findByRole("button", { name: /\+ New Definition/i });
+  await userEvent.click(newDefButton);
+
+  const idInput = screen.getByLabelText(/^ID \(required\)/i);
+  await userEvent.type(idInput, "new_pb");
+
+  const nameInput = screen.getByLabelText(/^Name \(required\)/i);
+  await userEvent.type(nameInput, "New playbook");
+
+  const createButton = screen.getByRole("button", { name: /^Create$/i });
+  await userEvent.click(createButton);
+
+  await waitFor(() => {
+    expect(screen.getByText(/Created playbook "New playbook"/i)).toBeInTheDocument();
+  });
 });

@@ -78,3 +78,53 @@ export async function getPlaybookExecution(executionId) {
   }
   return data;
 }
+
+export async function createPlaybookDefinition(payload) {
+  const res = await fetch(buildSiemPath("/playbooks"), {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await parseJsonResponse(res, {});
+  if (!res.ok) {
+    throw new Error(
+      getApiErrorMessage(data, "Unable to create playbook definition", ["error", "message"])
+    );
+  }
+  return data;
+}
+
+export async function updatePlaybookDefinition(playbookId, payload) {
+  const encoded = encodeURIComponent(playbookId);
+  const res = await fetch(buildSiemPath(`/playbooks/${encoded}`), {
+    method: "PUT",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await parseJsonResponse(res, {});
+  if (!res.ok) {
+    throw new Error(
+      getApiErrorMessage(data, "Unable to update playbook definition", ["error", "message"])
+    );
+  }
+  return data;
+}
+
+export async function setPlaybookDefinitionEnabled(playbookId, enabled) {
+  const encoded = encodeURIComponent(playbookId);
+  const res = await fetch(buildSiemPath(`/playbooks/${encoded}/enabled`), {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  const data = await parseJsonResponse(res, {});
+  if (!res.ok) {
+    throw new Error(
+      getApiErrorMessage(data, "Unable to update playbook enabled status", ["error", "message"])
+    );
+  }
+  return data;
+}

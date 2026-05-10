@@ -4,6 +4,9 @@ import {
   getPlaybookExecution,
   listPlaybookExecutions,
   listPlaybooks,
+  createPlaybookDefinition,
+  updatePlaybookDefinition,
+  setPlaybookDefinitionEnabled,
 } from "../services/playbookService";
 import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
 
@@ -39,7 +42,9 @@ function PlaybooksPanel({
   filterWrapperStyle,
   filterLabelStyle,
   selectStyle,
+  userRole,
 }) {
+  const isSuperAdmin = userRole === "super_admin";
   const [activePanel, setActivePanel] = useState("definitions");
 
   const [definitions, setDefinitions] = useState([]);
@@ -60,6 +65,19 @@ function PlaybooksPanel({
   const [detailRecord, setDetailRecord] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
+
+  // Form state for create/edit
+  const [formMode, setFormMode] = useState(null); // null, "create", or "edit"
+  const [formId, setFormId] = useState("");
+  const [formName, setFormName] = useState("");
+  const [formDescription, setFormDescription] = useState("");
+  const [formEnabled, setFormEnabled] = useState(false);
+  const [formTriggerJson, setFormTriggerJson] = useState("{}");
+  const [formStepsJson, setFormStepsJson] = useState("[]");
+  const [formValidationError, setFormValidationError] = useState("");
+  const [formSubmitting, setFormSubmitting] = useState(false);
+  const [formSubmitError, setFormSubmitError] = useState("");
+  const [formSubmitSuccess, setFormSubmitSuccess] = useState("");
 
   const loadDefinitions = useCallback(
     async ({ quiet = false } = {}) => {
@@ -166,6 +184,145 @@ function PlaybooksPanel({
     setExecPlaybookIdApplied(execPlaybookIdDraft.trim());
   }, [execPlaybookIdDraft]);
 
+  // Form handlers
+  const validateIdFormat = (id) => {
+    if (!id) return false;
+    return /^[a-z0-9_-]+$/.test(id);
+  };
+
+  const validateForm = () => {
+    setFormValidationError("");
+    const id = formId.trim();
+    const name = formName.trim();
+    const triggerJson = formTriggerJson.trim();
+    const stepsJson = formStepsJson.trim();
+
+    if (formMode === "create" && !id) {
+      setFormValidationError("ID is required for creating a definition.");
+      return false;
+    }
+    if (formMode === "create" && !validateIdFormat(id)) {
+      setFormValidationError("ID must contain only lowercase letters, digits, underscores, and hyphens.");
+      return false;
+    }
+    if (!name) {
+      setFormValidationError("Name is required.");
+      return false;
+    }
+
+    let triggerObj;
+    try {
+      triggerObj = JSON.parse(triggerJson);
+    } catch (e) {
+      setFormValidationError(`Invalid trigger_config JSON: ${e.message}`);
+      return false;
+    }
+    if (typeof triggerObj !== "object" || Array.isArray(triggerObj)) {
+      setFormValidationError("Trigger config must be a JSON object, not an array.");
+      return false;
+    }
+
+    let stepsArr;
+    try {
+      stepsArr = JSON.parse(stepsJson);
+    } catch (e) {
+      setFormValidationError(`Invalid steps JSON: ${e.message}`);
+      return false;
+    }
+    if (!Array.isArray(stepsArr)) {
+      setFormValidationError("Steps must be a JSON array, not an object.");
+      return false;
+    }
+
+    return true;
+  };
+
+  const handleOpenCreateForm = () => {
+    setFormMode("create");
+    setFormId("");
+    setFormName("");
+    setFormDescription("");
+    setFormEnabled(false);
+    setFormTriggerJson("{}");
+    setFormStepsJson('[{"action": "monitor", "params": {}, "on_failure": "abort"}]');
+    setFormValidationError("");
+    setFormSubmitError("");
+    setFormSubmitSuccess("");
+  };
+
+  const handleOpenEditForm = (definition) => {
+    setFormMode("edit");
+    setFormId(definition.id);
+    setFormName(definition.name || "");
+    setFormDescription(definition.description || "");
+    setFormEnabled(definition.enabled || false);
+    setFormTriggerJson(JSON.stringify(definition.trigger_config || {}, null, 2));
+    setFormStepsJson(JSON.stringify(definition.steps || [], null, 2));
+    setFormValidationError("");
+    setFormSubmitError("");
+    setFormSubmitSuccess("");
+  };
+
+  const handleCloseForm = () => {
+    setFormMode(null);
+    setFormValidationError("");
+    setFormSubmitError("");
+    setFormSubmitSuccess("");
+  };
+
+  const handleSubmitForm = async () => {
+    if (!validateForm()) {
+      return;
+    }
+
+    setFormSubmitting(true);
+    setFormSubmitError("");
+    setFormSubmitSuccess("");
+
+    try {
+      const id = formId.trim();
+      const name = formName.trim();
+      const description = formDescription.trim() || null;
+      const enabled = formEnabled;
+      const triggerConfig = JSON.parse(formTriggerJson.trim());
+      const steps = JSON.parse(formStepsJson.trim());
+
+      const payload = {
+        name,
+        description,
+        enabled,
+        trigger_config: triggerConfig,
+        steps,
+      };
+
+      if (formMode === "create") {
+        await createPlaybookDefinition({ id, ...payload });
+        setFormSubmitSuccess(`Created playbook "${name}".`);
+      } else if (formMode === "edit") {
+        await updatePlaybookDefinition(id, payload);
+        setFormSubmitSuccess(`Updated playbook "${name}".`);
+      }
+
+      await loadDefinitions({ quiet: true });
+      setTimeout(() => {
+        handleCloseForm();
+      }, 1500);
+    } catch (err) {
+      setFormSubmitError(err.message || "Failed to submit form.");
+    } finally {
+      setFormSubmitting(false);
+    }
+  };
+
+  const handleToggleEnabled = async (definition) => {
+    try {
+      await setPlaybookDefinitionEnabled(definition.id, !definition.enabled);
+      await loadDefinitions({ quiet: true });
+    } catch (err) {
+      setDefError(err.message || "Failed to update enabled status.");
+    }
+  };
+
   useEffect(() => {
     loadDefinitions();
   }, [loadDefinitions]);
@@ -240,6 +397,15 @@ function PlaybooksPanel({
                   ))}
                 </select>
               </label>
+              {isSuperAdmin && (
+                <button
+                  type="button"
+                  onClick={handleOpenCreateForm}
+                  style={newDefinitionButtonStyle}
+                >
+                  + New Definition
+                </button>
+              )}
             </div>
             {defError ? <div style={errorStateStyle}>{defError}</div> : null}
             {defLoading ? (
@@ -262,6 +428,7 @@ function PlaybooksPanel({
                       <th style={headerCellStyle}>Steps</th>
                       <th style={headerCellStyle}>Created</th>
                       <th style={headerCellStyle}>Updated</th>
+                      {isSuperAdmin && <th style={headerCellStyle}>Actions</th>}
                       <th style={headerCellStyle}>View</th>
                     </tr>
                   </thead>
@@ -275,6 +442,26 @@ function PlaybooksPanel({
                         <td style={bodyCellStyle}>{stepCount(row.steps)}</td>
                         <td style={bodyCellStyle}>{formatAdminTimestamp(row.created_at, "—")}</td>
                         <td style={bodyCellStyle}>{formatAdminTimestamp(row.updated_at, "—")}</td>
+                        {isSuperAdmin && (
+                          <td style={bodyCellStyle}>
+                            <div style={actionButtonsWrapperStyle}>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditForm(row)}
+                                style={smallActionButtonStyle}
+                              >
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleToggleEnabled(row)}
+                                style={smallActionButtonStyle}
+                              >
+                                {row.enabled ? "Disable" : "Enable"}
+                              </button>
+                            </div>
+                          </td>
+                        )}
                         <td style={bodyCellStyle}>
                           <button
                             type="button"
@@ -460,6 +647,117 @@ function PlaybooksPanel({
             <p style={emptyTextStyle}>Select a row and choose View to inspect read-only JSON.</p>
           )}
         </div>
+
+        {formMode && isSuperAdmin && (
+          <div style={formPanelStyle}>
+            <div style={formHeaderStyle}>
+              <h3 style={formTitleStyle}>
+                {formMode === "create" ? "Create New Playbook Definition" : "Edit Playbook Definition"}
+              </h3>
+              <button type="button" style={formCloseButtonStyle} onClick={handleCloseForm}>
+                ✕
+              </button>
+            </div>
+
+            <p style={formSubtitleStyle}>
+              Definition management only. Execution is not enabled yet.
+            </p>
+
+            {formValidationError && <div style={errorStateStyle}>{formValidationError}</div>}
+            {formSubmitError && <div style={errorStateStyle}>{formSubmitError}</div>}
+            {formSubmitSuccess && <div style={successStateStyle}>{formSubmitSuccess}</div>}
+
+            <div style={formFieldStyle}>
+              <label style={formLabelStyle} htmlFor="form-id">ID {formMode === "create" ? "(required)" : "(read-only)"}</label>
+              <input
+                id="form-id"
+                type="text"
+                value={formId}
+                onChange={(e) => setFormId(e.target.value)}
+                disabled={formMode === "edit"}
+                placeholder="e.g., block_and_notify"
+                style={formInputStyle}
+              />
+            </div>
+
+            <div style={formFieldStyle}>
+              <label style={formLabelStyle} htmlFor="form-name">Name (required)</label>
+              <input
+                id="form-name"
+                type="text"
+                value={formName}
+                onChange={(e) => setFormName(e.target.value)}
+                placeholder="e.g., Block High-Risk IPs"
+                style={formInputStyle}
+              />
+            </div>
+
+            <div style={formFieldStyle}>
+              <label style={formLabelStyle} htmlFor="form-description">Description (optional)</label>
+              <input
+                id="form-description"
+                type="text"
+                value={formDescription}
+                onChange={(e) => setFormDescription(e.target.value)}
+                placeholder="e.g., Auto-block IPs with reputation score > 80"
+                style={formInputStyle}
+              />
+            </div>
+
+            <div style={formFieldStyle}>
+              <label style={formCheckboxLabelStyle} htmlFor="form-enabled">
+                <input
+                  id="form-enabled"
+                  type="checkbox"
+                  checked={formEnabled}
+                  onChange={(e) => setFormEnabled(e.target.checked)}
+                />
+                <span>Enabled</span>
+              </label>
+            </div>
+
+            <div style={formFieldStyle}>
+              <label style={formLabelStyle} htmlFor="form-trigger">Trigger Config (JSON object)</label>
+              <textarea
+                id="form-trigger"
+                value={formTriggerJson}
+                onChange={(e) => setFormTriggerJson(e.target.value)}
+                placeholder='{"alert_type": "password_spraying", "min_severity": "HIGH"}'
+                style={formTextareaStyle}
+              />
+            </div>
+
+            <div style={formFieldStyle}>
+              <label style={formLabelStyle} htmlFor="form-steps">Steps (JSON array)</label>
+              <textarea
+                id="form-steps"
+                value={formStepsJson}
+                onChange={(e) => setFormStepsJson(e.target.value)}
+                placeholder='[{"action": "monitor", "params": {}, "on_failure": "abort"}]'
+                style={formTextareaStyle}
+              />
+            </div>
+
+            <div style={formActionsStyle}>
+              <button
+                type="button"
+                onClick={handleSubmitForm}
+                disabled={formSubmitting}
+                style={formSubmitButtonStyle}
+              >
+                {formSubmitting ? "Submitting…" : formMode === "create" ? "Create" : "Update"}
+              </button>
+              <button
+                type="button"
+                onClick={handleCloseForm}
+                disabled={formSubmitting}
+                style={formCancelButtonStyle}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </section>
   );
@@ -690,4 +988,160 @@ const jsonPreStyle = {
   overflow: "auto",
   whiteSpace: "pre-wrap",
   wordBreak: "break-word",
+};
+
+const newDefinitionButtonStyle = {
+  minHeight: "38px",
+  padding: "8px 12px",
+  borderRadius: "8px",
+  border: "1px solid rgba(88, 166, 255, 0.35)",
+  backgroundColor: "rgba(31, 111, 235, 0.14)",
+  color: "#93c5fd",
+  fontSize: "13px",
+  fontWeight: "600",
+  cursor: "pointer",
+};
+
+const actionButtonsWrapperStyle = {
+  display: "flex",
+  gap: "6px",
+  flexWrap: "wrap",
+};
+
+const smallActionButtonStyle = {
+  padding: "4px 8px",
+  borderRadius: "4px",
+  border: "1px solid rgba(88, 166, 255, 0.35)",
+  backgroundColor: "rgba(31, 111, 235, 0.08)",
+  color: "#93c5fd",
+  fontSize: "11px",
+  fontWeight: "600",
+  cursor: "pointer",
+};
+
+const formPanelStyle = {
+  marginTop: "20px",
+  padding: "16px",
+  borderRadius: "10px",
+  border: "1px solid rgba(88, 166, 255, 0.35)",
+  backgroundColor: "rgba(31, 111, 235, 0.08)",
+};
+
+const formHeaderStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  marginBottom: "12px",
+};
+
+const formTitleStyle = {
+  margin: 0,
+  fontSize: "16px",
+  color: "#e6edf3",
+};
+
+const formCloseButtonStyle = {
+  padding: "6px 10px",
+  borderRadius: "6px",
+  border: "1px solid #30363d",
+  backgroundColor: "#161b22",
+  color: "#c9d1d9",
+  fontSize: "14px",
+  cursor: "pointer",
+};
+
+const formSubtitleStyle = {
+  margin: "0 0 12px 0",
+  fontSize: "13px",
+  color: "#8b949e",
+  fontStyle: "italic",
+};
+
+const formFieldStyle = {
+  marginBottom: "12px",
+};
+
+const formLabelStyle = {
+  display: "block",
+  fontSize: "12px",
+  color: "#8b949e",
+  fontWeight: "700",
+  marginBottom: "6px",
+  textTransform: "uppercase",
+};
+
+const formCheckboxLabelStyle = {
+  display: "flex",
+  alignItems: "center",
+  gap: "8px",
+  fontSize: "13px",
+  color: "#e6edf3",
+  cursor: "pointer",
+};
+
+const formInputStyle = {
+  width: "100%",
+  minHeight: "36px",
+  padding: "8px 10px",
+  borderRadius: "6px",
+  border: "1px solid #30363d",
+  backgroundColor: "#0d1117",
+  color: "#e6edf3",
+  fontSize: "13px",
+  fontFamily: "inherit",
+  boxSizing: "border-box",
+};
+
+const formTextareaStyle = {
+  width: "100%",
+  minHeight: "120px",
+  padding: "8px 10px",
+  borderRadius: "6px",
+  border: "1px solid #30363d",
+  backgroundColor: "#0d1117",
+  color: "#e6edf3",
+  fontSize: "12px",
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  boxSizing: "border-box",
+  resize: "vertical",
+};
+
+const formActionsStyle = {
+  display: "flex",
+  gap: "10px",
+  marginTop: "16px",
+};
+
+const formSubmitButtonStyle = {
+  minHeight: "40px",
+  padding: "10px 14px",
+  borderRadius: "8px",
+  border: "1px solid rgba(88, 166, 255, 0.35)",
+  backgroundColor: "rgba(31, 111, 235, 0.14)",
+  color: "#93c5fd",
+  fontSize: "13px",
+  fontWeight: "700",
+  cursor: "pointer",
+};
+
+const formCancelButtonStyle = {
+  minHeight: "40px",
+  padding: "10px 14px",
+  borderRadius: "8px",
+  border: "1px solid #30363d",
+  backgroundColor: "#161b22",
+  color: "#c9d1d9",
+  fontSize: "13px",
+  fontWeight: "700",
+  cursor: "pointer",
+};
+
+const successStateStyle = {
+  marginBottom: "12px",
+  padding: "10px 12px",
+  borderRadius: "8px",
+  border: "1px solid rgba(34, 197, 94, 0.35)",
+  backgroundColor: "rgba(34, 197, 94, 0.08)",
+  color: "#86efac",
+  fontSize: "13px",
 };
