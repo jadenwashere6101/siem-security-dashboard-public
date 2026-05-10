@@ -324,6 +324,24 @@ def test_half_open_probe_failure_reopens_breaker(monkeypatch, no_network):
     assert get_simulated_circuit_breaker_dict("slack")["state"] == CIRCUIT_STATE_OPEN
 
 
+def test_half_open_without_probe_fails_closed_without_simulate(monkeypatch, no_network):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+    t0 = datetime(2026, 5, 10, 12, 0, 0, tzinfo=timezone.utc)
+    configure_simulated_circuit_breaker(
+        "slack",
+        state=CIRCUIT_STATE_HALF_OPEN,
+        consecutive_failures=3,
+        cooldown_until=t0,
+        half_open_probe_available=False,
+    )
+    adapter = get_integration_adapter("slack")
+    with patch.object(adapter, "_simulate", side_effect=AssertionError("_simulate must not run")):
+        result = adapter.execute("send_message", params={})
+    assert result["success"] is False
+    assert result["metadata"]["failure_classification"] == FAILURE_CLASSIFICATION_CIRCUIT_OPEN
+    assert get_simulated_circuit_breaker_dict("slack")["state"] == CIRCUIT_STATE_HALF_OPEN
+
+
 def test_timeout_metadata_recorded_without_timers(monkeypatch, no_network):
     monkeypatch.delenv("INTEGRATION_MODE", raising=False)
     configure_simulated_circuit_breaker("webhook", timeout_seconds=42)

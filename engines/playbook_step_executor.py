@@ -14,7 +14,12 @@ from typing import Any
 from core import approval_store
 from core import playbook_store
 from engines.playbook_registry import SUPPORTED_ACTIONS
-from integrations.integration_registry import get_integration_adapter
+from integrations.base_integration import (
+    FAILURE_CLASSIFICATION_CIRCUIT_OPEN,
+    FAILURE_CLASSIFICATION_CIRCUIT_STATE_INVALID,
+    get_simulated_circuit_breaker_dict,
+)
+from integrations.integration_registry import execute_playbook_simulated_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -575,8 +580,12 @@ def _simulate_adapter_step(
     }
 
     try:
-        adapter = get_integration_adapter(adapter_name)
-        adapter_result = adapter.execute(adapter_action, params=params, context=context)
+        adapter_result = execute_playbook_simulated_adapter(
+            adapter_name,
+            adapter_action,
+            params=params,
+            context=context,
+        )
     except Exception as error:
         return _failure_entry(
             step_index=step_index,
@@ -589,6 +598,7 @@ def _simulate_adapter_step(
                 "executed": False,
                 "adapter": adapter_name,
                 "adapter_action": adapter_action,
+                "circuit_breaker": get_simulated_circuit_breaker_dict(adapter_name, now=now),
             },
         )
 
@@ -598,6 +608,15 @@ def _simulate_adapter_step(
         if status == "success"
         else adapter_result.get("message") or "Simulated adapter action failed."
     )
+    circuit_snapshot = get_simulated_circuit_breaker_dict(adapter_name, now=now)
+    err_meta = adapter_result.get("metadata")
+    err_code = "adapter_simulation_failed"
+    if status != "success" and isinstance(err_meta, dict):
+        fc = str(err_meta.get("failure_classification") or "").strip().lower()
+        if fc == FAILURE_CLASSIFICATION_CIRCUIT_STATE_INVALID:
+            err_code = "circuit_breaker_invalid"
+        elif fc == FAILURE_CLASSIFICATION_CIRCUIT_OPEN:
+            err_code = "circuit_breaker_open"
     return {
         "step_index": step_index,
         "action": action,
@@ -612,11 +631,12 @@ def _simulate_adapter_step(
             "simulated": True,
             "executed": False,
             "adapter_result": adapter_result,
+            "circuit_breaker": circuit_snapshot,
         },
         "error": None
         if status == "success"
         else {
-            "code": "adapter_simulation_failed",
+            "code": err_code,
             "message": adapter_result.get("message") or message,
         },
     }

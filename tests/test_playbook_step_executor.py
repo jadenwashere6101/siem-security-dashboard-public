@@ -10,6 +10,16 @@ from psycopg2.extras import Json
 
 from core import approval_store, playbook_store
 from engines import playbook_step_executor
+from integrations.base_integration import (
+    CIRCUIT_STATE_CLOSED,
+    CIRCUIT_STATE_HALF_OPEN,
+    CIRCUIT_STATE_OPEN,
+    FAILURE_CLASSIFICATION_TRANSIENT,
+    configure_simulated_circuit_breaker,
+    get_simulated_circuit_breaker_dict,
+    reset_simulated_circuit_breakers,
+)
+from integrations.slack_adapter import SlackSimulationAdapter
 
 
 def _valid_steps():
@@ -49,6 +59,13 @@ def _set_playbook_steps(cur, playbook_id, steps):
 def _count(cur, table):
     cur.execute(f"SELECT COUNT(*) FROM {table}")
     return cur.fetchone()[0]
+
+
+@pytest.fixture(autouse=True)
+def _reset_playbook_integration_circuits():
+    reset_simulated_circuit_breakers()
+    yield
+    reset_simulated_circuit_breakers()
 
 
 @pytest.fixture
@@ -185,6 +202,7 @@ def test_adapter_backed_steps_are_simulated_through_registry(postgres_db, no_net
         assert adapter_result["success"] is True
         assert adapter_result["context"]["execution_id"] == eid
         assert adapter_result["context"]["playbook_id"] == "pb_adapter_steps"
+        assert entry["output"]["circuit_breaker"]["state"] == CIRCUIT_STATE_CLOSED
 
     assert row["steps_log"][0]["output"]["adapter_result"]["params"]["token"] == "[redacted]"
     assert row["steps_log"][1]["output"]["adapter_result"]["params"]["password"] == "[redacted]"
@@ -204,24 +222,22 @@ def test_adapter_failure_marks_step_failed_and_respects_continue(postgres_db):
         ],
     )
 
-    class FailingAdapter:
-        def execute(self, action, params=None, context=None):
-            return {
-                "adapter": "slack",
-                "action": action,
-                "mode": "simulation",
-                "simulated": True,
-                "executed": False,
-                "success": False,
-                "message": "Simulated adapter failure.",
-                "params": params or {},
-                "context": context or {},
-                "metadata": {},
-            }
+    failing_result = {
+        "adapter": "slack",
+        "action": "send_message",
+        "mode": "simulation",
+        "simulated": True,
+        "executed": False,
+        "success": False,
+        "message": "Simulated adapter failure.",
+        "params": {},
+        "context": {},
+        "metadata": {},
+    }
 
     with patch(
-        "engines.playbook_step_executor.get_integration_adapter",
-        return_value=FailingAdapter(),
+        "engines.playbook_step_executor.execute_playbook_simulated_adapter",
+        return_value=failing_result,
     ):
         result = playbook_step_executor.process_playbook_execution(conn, eid)
 
@@ -234,6 +250,7 @@ def test_adapter_failure_marks_step_failed_and_respects_continue(postgres_db):
     assert failed["output"]["adapter_result"]["success"] is False
     assert failed["output"]["adapter_result"]["simulated"] is True
     assert failed["output"]["adapter_result"]["executed"] is False
+    assert "circuit_breaker" in failed["output"]
     assert failed["error"]["code"] == "adapter_simulation_failed"
 
 
@@ -253,8 +270,93 @@ def test_non_simulation_integration_mode_fails_closed(postgres_db, monkeypatch, 
     assert "real integration mode is not implemented" in entry["message"]
     assert entry["output"]["simulated"] is True
     assert entry["output"]["executed"] is False
+    assert "circuit_breaker" in entry["output"]
     assert _count(cur, "blocked_ips") == 0
     assert _count(cur, "response_actions_queue") == 0
+
+
+def test_playbook_notify_slack_open_circuit_fails_closed_without_simulate(
+    postgres_db, no_network
+):
+    conn, cur = postgres_db
+    eid = _create_execution(conn, cur, "pb_cb_open")
+    _set_playbook_steps(cur, "pb_cb_open", [{"action": "notify_slack", "params": {}}])
+    configure_simulated_circuit_breaker(
+        "slack",
+        state=CIRCUIT_STATE_OPEN,
+        consecutive_failures=3,
+    )
+
+    with patch.object(
+        SlackSimulationAdapter,
+        "_simulate",
+        side_effect=AssertionError("simulation body must not run when circuit is open"),
+    ):
+        result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "failed"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    entry = row["steps_log"][0]
+    assert entry["status"] == "failed"
+    assert entry["error"]["code"] == "circuit_breaker_open"
+    assert entry["output"]["circuit_breaker"]["state"] == CIRCUIT_STATE_OPEN
+    meta = entry["output"]["adapter_result"]["metadata"]
+    assert meta["failure_classification"] == "circuit_open"
+    assert _count(cur, "blocked_ips") == 0
+    assert _count(cur, "response_actions_queue") == 0
+
+
+def test_playbook_notify_slack_half_open_success_closes_circuit(postgres_db, no_network):
+    conn, cur = postgres_db
+    eid = _create_execution(conn, cur, "pb_cb_half_ok")
+    _set_playbook_steps(cur, "pb_cb_half_ok", [{"action": "notify_slack", "params": {}}])
+    t0 = datetime(2026, 5, 10, 12, 0, 0, tzinfo=timezone.utc)
+    configure_simulated_circuit_breaker(
+        "slack",
+        state=CIRCUIT_STATE_HALF_OPEN,
+        consecutive_failures=2,
+        cooldown_until=t0,
+    )
+
+    result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "success"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["steps_log"][0]["status"] == "success"
+    assert get_simulated_circuit_breaker_dict("slack")["state"] == CIRCUIT_STATE_CLOSED
+    assert row["steps_log"][0]["output"]["circuit_breaker"]["state"] == CIRCUIT_STATE_CLOSED
+
+
+def test_playbook_notify_slack_half_open_failure_reopens_circuit(postgres_db, no_network):
+    conn, cur = postgres_db
+    eid = _create_execution(conn, cur, "pb_cb_half_fail")
+    _set_playbook_steps(cur, "pb_cb_half_fail", [{"action": "notify_slack", "params": {}}])
+    t0 = datetime(2026, 5, 10, 12, 0, 0, tzinfo=timezone.utc)
+    configure_simulated_circuit_breaker(
+        "slack",
+        state=CIRCUIT_STATE_HALF_OPEN,
+        consecutive_failures=2,
+        cooldown_until=t0,
+    )
+
+    def _failing_probe(adapter_self, action, params, context):
+        return adapter_self._result(
+            action,
+            params,
+            context,
+            success=False,
+            message="simulated outage",
+            metadata={"failure_classification": FAILURE_CLASSIFICATION_TRANSIENT},
+        )
+
+    with patch.object(SlackSimulationAdapter, "_simulate", _failing_probe):
+        result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "failed"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["steps_log"][0]["status"] == "failed"
+    assert get_simulated_circuit_breaker_dict("slack")["state"] == CIRCUIT_STATE_OPEN
+    assert row["steps_log"][0]["error"]["code"] == "circuit_breaker_open"
 
 
 def test_require_approval_pauses_execution_and_creates_linked_request(postgres_db):

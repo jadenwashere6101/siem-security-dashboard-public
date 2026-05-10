@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from integrations.base_integration import (
     SIMULATION_MODE,
@@ -37,6 +38,18 @@ def get_integration_adapter(name: str, mode: str | None = None) -> BaseIntegrati
         raise ValueError(f"unknown integration adapter: {normalized_name}")
     resolved_mode = resolve_integration_mode(mode)
     return adapter_cls(mode=resolved_mode)
+
+
+def execute_playbook_simulated_adapter(
+    adapter_name: str,
+    adapter_action: str,
+    *,
+    params: dict[str, Any] | None = None,
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Run simulation-only adapter logic for playbook steps (circuit breaker enforced)."""
+    adapter = get_integration_adapter(adapter_name)
+    return adapter.execute(adapter_action, params=params, context=context)
 
 
 def list_integration_adapters(mode: str | None = None) -> dict[str, BaseIntegration]:

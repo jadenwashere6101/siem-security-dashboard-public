@@ -72,6 +72,7 @@ class _SimulatedCircuitBreakerState:
     retry_eligible: bool = True
     cooldown_until: datetime | None = None
     last_failure_classification: str | None = None
+    half_open_probe_available: bool = False
 
 
 _circuit_store: dict[str, _SimulatedCircuitBreakerState] = {}
@@ -115,6 +116,7 @@ def configure_simulated_circuit_breaker(
     last_failure_reason: str | None = None,
     last_failure_classification: str | None = None,
     retry_eligible: bool | None = None,
+    half_open_probe_available: bool | None = None,
 ) -> None:
     """Narrow test/admin hook to set simulation fields without executing adapters."""
     st = _get_circuit_state(adapter_name)
@@ -126,6 +128,10 @@ def configure_simulated_circuit_breaker(
         st.timeout_seconds = int(timeout_seconds) if timeout_seconds is not None else None
     if state is not None:
         st.state = str(state).strip().lower()
+        if st.state == CIRCUIT_STATE_HALF_OPEN:
+            st.half_open_probe_available = True
+        else:
+            st.half_open_probe_available = False
     if consecutive_failures is not None:
         st.consecutive_failures = max(0, int(consecutive_failures))
     if cooldown_until is not None:
@@ -138,6 +144,8 @@ def configure_simulated_circuit_breaker(
         st.last_failure_classification = last_failure_classification
     if retry_eligible is not None:
         st.retry_eligible = bool(retry_eligible)
+    if half_open_probe_available is not None:
+        st.half_open_probe_available = bool(half_open_probe_available)
 
 
 def get_simulated_circuit_breaker_dict(adapter_name: str, *, now: datetime | None = None) -> dict[str, Any]:
@@ -189,6 +197,7 @@ def request_half_open_probe(adapter_name: str, *, now: datetime | None = None) -
     if st.cooldown_until is not None and when < st.cooldown_until:
         return False
     st.state = CIRCUIT_STATE_HALF_OPEN
+    st.half_open_probe_available = True
     st.retry_eligible = False
     return True
 
@@ -223,6 +232,7 @@ def _reset_to_closed_success(st: _SimulatedCircuitBreakerState) -> None:
     st.last_failure_reason = None
     st.last_failure_classification = None
     st.retry_eligible = True
+    st.half_open_probe_available = False
 
 
 def _force_open(st: _SimulatedCircuitBreakerState, reason: str, classification: str, now: datetime) -> None:
@@ -232,6 +242,7 @@ def _force_open(st: _SimulatedCircuitBreakerState, reason: str, classification: 
     st.last_failure_classification = classification
     st.cooldown_until = now + timedelta(seconds=st.cooldown_seconds)
     st.retry_eligible = False
+    st.half_open_probe_available = False
     if st.consecutive_failures < st.failure_threshold:
         st.consecutive_failures = st.failure_threshold
 
@@ -264,6 +275,7 @@ def _complete_half_open_failure(st: _SimulatedCircuitBreakerState, reason: str, 
     st.last_failure_classification = FAILURE_CLASSIFICATION_TRANSIENT
     st.cooldown_until = now + timedelta(seconds=st.cooldown_seconds)
     st.retry_eligible = False
+    st.half_open_probe_available = False
 
 
 def _merge_result_circuit_metadata(adapter_name: str, result: dict[str, Any], *, now: datetime) -> None:
@@ -344,7 +356,7 @@ class BaseIntegration:
         st = _get_circuit_state(self.adapter_name)
 
         if st.state not in _VALID_CIRCUIT_STATES:
-            return self._result(
+            res = self._result(
                 normalized_action or "unspecified",
                 safe_params,
                 safe_context,
@@ -357,9 +369,11 @@ class BaseIntegration:
                     "timeout_seconds": st.timeout_seconds,
                 },
             )
+            _merge_result_circuit_metadata(self.adapter_name, res, now=now)
+            return res
 
         if st.state == CIRCUIT_STATE_OPEN:
-            return self._result(
+            res = self._result(
                 normalized_action or "unspecified",
                 safe_params,
                 safe_context,
@@ -372,6 +386,29 @@ class BaseIntegration:
                     "timeout_seconds": st.timeout_seconds,
                 },
             )
+            _merge_result_circuit_metadata(self.adapter_name, res, now=now)
+            return res
+
+        if st.state == CIRCUIT_STATE_HALF_OPEN:
+            if not st.half_open_probe_available:
+                res = self._result(
+                    normalized_action or "unspecified",
+                    safe_params,
+                    safe_context,
+                    success=False,
+                    message=(
+                        "Simulated execution blocked: half-open recovery probe was already used."
+                    ),
+                    metadata={
+                        "failure_classification": FAILURE_CLASSIFICATION_CIRCUIT_OPEN,
+                        "circuit_state": CIRCUIT_STATE_HALF_OPEN,
+                        "retry_eligible": False,
+                        "timeout_seconds": st.timeout_seconds,
+                    },
+                )
+                _merge_result_circuit_metadata(self.adapter_name, res, now=now)
+                return res
+            st.half_open_probe_available = False
 
         was_half_open = st.state == CIRCUIT_STATE_HALF_OPEN
 
@@ -385,7 +422,7 @@ class BaseIntegration:
                 classification=FAILURE_CLASSIFICATION_NON_TRANSIENT,
                 now=now,
             )
-            return self._result(
+            res = self._result(
                 normalized_action or "unspecified",
                 safe_params,
                 safe_context,
@@ -401,8 +438,35 @@ class BaseIntegration:
                     "timeout_seconds": st.timeout_seconds,
                 },
             )
+            _merge_result_circuit_metadata(self.adapter_name, res, now=now)
+            return res
 
-        result = self._simulate(normalized_action, safe_params, safe_context)
+        try:
+            result = self._simulate(normalized_action, safe_params, safe_context)
+        except Exception as exc:
+            if was_half_open:
+                _complete_half_open_failure(
+                    st,
+                    f"simulation error: {exc}",
+                    now,
+                )
+                result = self._result(
+                    normalized_action,
+                    safe_params,
+                    safe_context,
+                    success=False,
+                    message=f"Simulated execution error: {exc}",
+                    metadata={
+                        "failure_classification": FAILURE_CLASSIFICATION_CIRCUIT_OPEN,
+                        "circuit_state": CIRCUIT_STATE_OPEN,
+                        "retry_eligible": False,
+                        "timeout_seconds": st.timeout_seconds,
+                    },
+                )
+                _merge_result_circuit_metadata(self.adapter_name, result, now=now)
+                return result
+            raise
+
         if not isinstance(result, dict):
             result = self._result(
                 normalized_action,
