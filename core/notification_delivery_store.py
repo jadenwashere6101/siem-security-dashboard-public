@@ -323,6 +323,7 @@ def list_notification_delivery_attempts(
     incident_id: int | None = None,
     approval_request_id: int | None = None,
     alert_id: int | None = None,
+    adapter_name: str | None = None,
 ) -> list[dict[str, Any]]:
     """
     List attempts newest-first with optional filters. Read-only.
@@ -369,6 +370,9 @@ def list_notification_delivery_attempts(
     if alert_id is not None:
         clauses.append("alert_id = %s")
         params.append(alert_id)
+    if adapter_name is not None:
+        clauses.append("adapter_name = %s")
+        params.append(adapter_name.strip())
 
     where_sql = " AND ".join(clauses) if clauses else "TRUE"
     params.extend([cap, offset])

@@ -15,6 +15,7 @@ from routes.approval_routes import approval_bp
 from routes.incident_routes import incident_bp
 from routes.integration_routes import integration_bp
 from routes.metrics_routes import metrics_bp
+from routes.notification_delivery_routes import notification_delivery_bp
 from routes.playbook_routes import playbook_bp
 from engines.ingest_engine import ingest_normalized_event
 from core.extensions import limiter
@@ -113,6 +114,7 @@ def create_app():
     app.register_blueprint(playbook_bp)
     app.register_blueprint(integration_bp)
     app.register_blueprint(metrics_bp)
+    app.register_blueprint(notification_delivery_bp)
 
     return app
 

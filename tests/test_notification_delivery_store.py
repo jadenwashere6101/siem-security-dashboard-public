@@ -370,6 +370,37 @@ def test_list_invalid_filter_raises(postgres_db):
         notification_delivery_store.list_notification_delivery_attempts(conn, mode="nope")
 
 
+@pytest.mark.usefixtures("postgres_db")
+def test_list_filter_by_adapter_name(postgres_db):
+    conn, _cur = postgres_db
+    notification_delivery_store.create_notification_delivery_attempt(
+        conn,
+        correlation_id="ca",
+        idempotency_key="ia",
+        provider="slack",
+        mode="simulation",
+        status="success",
+        adapter_name="slack",
+        action="send_message",
+    )
+    notification_delivery_store.create_notification_delivery_attempt(
+        conn,
+        correlation_id="cb",
+        idempotency_key="ib",
+        provider="teams",
+        mode="simulation",
+        status="success",
+        adapter_name="teams",
+        action="send_message",
+    )
+    conn.commit()
+    rows = notification_delivery_store.list_notification_delivery_attempts(
+        conn, adapter_name="teams"
+    )
+    assert len(rows) == 1
+    assert rows[0]["adapter_name"] == "teams"
+
+
 def test_redact_metadata_rejects_non_dict():
     with pytest.raises(TypeError):
         notification_delivery_store.redact_notification_delivery_metadata("bad")  # type: ignore[arg-type]
