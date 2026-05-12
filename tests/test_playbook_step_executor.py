@@ -753,3 +753,225 @@ def test_executor_module_has_no_real_execution_imports():
     ]
     for token in forbidden:
         assert token not in source
+
+
+# ---------------------------------------------------------------------------
+# Slice 3: notification delivery tracking
+# ---------------------------------------------------------------------------
+
+
+def _count_deliveries(cur, playbook_execution_id):
+    cur.execute(
+        "SELECT COUNT(*) FROM notification_delivery_attempts WHERE playbook_execution_id = %s",
+        (playbook_execution_id,),
+    )
+    return cur.fetchone()[0]
+
+
+def _fetch_deliveries(cur, playbook_execution_id):
+    cur.execute(
+        """
+        SELECT provider, mode, status, playbook_step_index,
+               adapter_name, action, alert_id, circuit_breaker_state
+        FROM notification_delivery_attempts
+        WHERE playbook_execution_id = %s
+        ORDER BY playbook_step_index
+        """,
+        (playbook_execution_id,),
+    )
+    return cur.fetchall()
+
+
+def test_notify_slack_step_creates_delivery_record(postgres_db, no_network):
+    conn, cur = postgres_db
+    eid = _create_execution(conn, cur, "pb_slack_delivery")
+    _set_playbook_steps(
+        cur,
+        "pb_slack_delivery",
+        [{"action": "notify_slack", "params": {"message": "test alert"}}],
+    )
+
+    result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "success"
+    rows = _fetch_deliveries(cur, eid)
+    assert len(rows) == 1
+    provider, mode, status, step_idx, adapter_name, action, alert_id, cb_state = rows[0]
+    assert provider == "slack"
+    assert mode == "simulation"
+    assert status == "success"
+    assert step_idx == 0
+    assert adapter_name == "slack"
+    assert action == "send_message"
+    assert cb_state == "closed"
+
+
+def test_notify_teams_step_creates_delivery_record(postgres_db, no_network):
+    conn, cur = postgres_db
+    eid = _create_execution(conn, cur, "pb_teams_delivery")
+    _set_playbook_steps(
+        cur,
+        "pb_teams_delivery",
+        [{"action": "notify_teams", "params": {"message": "test alert"}}],
+    )
+
+    result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "success"
+    rows = _fetch_deliveries(cur, eid)
+    assert len(rows) == 1
+    provider, mode, status, step_idx, adapter_name, action, _alert_id, cb_state = rows[0]
+    assert provider == "teams"
+    assert mode == "simulation"
+    assert status == "success"
+    assert step_idx == 0
+    assert adapter_name == "teams"
+    assert action == "send_message"
+    assert cb_state == "closed"
+
+
+def test_non_notification_steps_do_not_create_delivery_records(postgres_db, no_network):
+    conn, cur = postgres_db
+    eid = _create_execution(conn, cur, "pb_no_delivery")
+    _set_playbook_steps(
+        cur,
+        "pb_no_delivery",
+        [
+            {"action": "monitor"},
+            {"action": "block_ip", "params": {"source_ip": "203.0.113.10"}},
+            {"action": "notify_email", "params": {"subject": "alert"}},
+            {"action": "notify_webhook", "params": {"payload": {}}},
+        ],
+    )
+
+    result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "success"
+    assert _count_deliveries(cur, eid) == 0
+
+
+def test_delivery_tracking_failure_does_not_crash_step(postgres_db, no_network):
+    conn, cur = postgres_db
+    eid = _create_execution(conn, cur, "pb_delivery_crash")
+    _set_playbook_steps(cur, "pb_delivery_crash", [{"action": "notify_slack", "params": {}}])
+
+    with patch(
+        "engines.playbook_step_executor.notification_delivery_store"
+        ".create_notification_delivery_attempt",
+        side_effect=RuntimeError("simulated delivery store crash"),
+    ):
+        result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "success"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["status"] == "success"
+    assert row["steps_log"][0]["status"] == "success"
+
+
+def test_circuit_blocked_notify_slack_creates_blocked_delivery_record(postgres_db, no_network):
+    conn, cur = postgres_db
+    eid = _create_execution(conn, cur, "pb_cb_delivery")
+    _set_playbook_steps(cur, "pb_cb_delivery", [{"action": "notify_slack", "params": {}}])
+    configure_simulated_circuit_breaker("slack", state=CIRCUIT_STATE_OPEN, consecutive_failures=3)
+
+    with patch.object(
+        SlackSimulationAdapter,
+        "_simulate",
+        side_effect=AssertionError("simulation body must not run when circuit is open"),
+    ):
+        result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "failed"
+    rows = _fetch_deliveries(cur, eid)
+    assert len(rows) == 1
+    provider, mode, status, _step_idx, _adapter, _action, _alert_id, cb_state = rows[0]
+    assert provider == "slack"
+    assert status == "blocked"
+    assert cb_state == "open"
+
+
+def test_notify_slack_and_teams_steps_create_separate_delivery_records(postgres_db, no_network):
+    conn, cur = postgres_db
+    eid = _create_execution(conn, cur, "pb_multi_notify")
+    _set_playbook_steps(
+        cur,
+        "pb_multi_notify",
+        [
+            {"action": "notify_slack", "params": {"message": "slack msg"}},
+            {"action": "notify_teams", "params": {"message": "teams msg"}},
+        ],
+    )
+
+    result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "success"
+    rows = _fetch_deliveries(cur, eid)
+    assert len(rows) == 2
+    assert (rows[0][0], rows[0][3]) == ("slack", 0)
+    assert (rows[1][0], rows[1][3]) == ("teams", 1)
+    assert all(r[2] == "success" for r in rows)
+
+
+def test_delivery_record_links_alert_id(postgres_db, no_network):
+    conn, cur = postgres_db
+    eid = _create_execution(conn, cur, "pb_slack_alert_link")
+    _set_playbook_steps(cur, "pb_slack_alert_link", [{"action": "notify_slack", "params": {}}])
+    cur.execute("SELECT alert_id FROM playbook_executions WHERE id = %s", (eid,))
+    alert_id = cur.fetchone()[0]
+
+    playbook_step_executor.process_playbook_execution(conn, eid)
+
+    cur.execute(
+        "SELECT alert_id FROM notification_delivery_attempts WHERE playbook_execution_id = %s",
+        (eid,),
+    )
+    row = cur.fetchone()
+    assert row is not None
+    assert row[0] == alert_id
+
+
+def test_delivery_record_idempotency_key_is_deterministic(postgres_db, no_network):
+    conn, cur = postgres_db
+    eid = _create_execution(conn, cur, "pb_idem_key")
+    _set_playbook_steps(cur, "pb_idem_key", [{"action": "notify_slack", "params": {}}])
+
+    playbook_step_executor.process_playbook_execution(conn, eid)
+
+    cur.execute(
+        "SELECT idempotency_key FROM notification_delivery_attempts "
+        "WHERE playbook_execution_id = %s",
+        (eid,),
+    )
+    key = cur.fetchone()[0]
+    expected = playbook_step_executor._make_delivery_idempotency_key("slack", "notify_slack", eid, 0)
+    assert key == expected
+
+
+def test_failed_notify_slack_step_creates_failed_delivery_record(postgres_db, no_network):
+    conn, cur = postgres_db
+    eid = _create_execution(conn, cur, "pb_slack_fail_delivery")
+    _set_playbook_steps(cur, "pb_slack_fail_delivery", [{"action": "notify_slack", "params": {}}])
+
+    failing_result = {
+        "adapter": "slack",
+        "action": "send_message",
+        "mode": "simulation",
+        "simulated": True,
+        "executed": False,
+        "success": False,
+        "message": "Simulated adapter failure.",
+        "params": {},
+        "context": {},
+        "metadata": {"failure_classification": "transient"},
+    }
+
+    with patch(
+        "engines.playbook_step_executor.execute_playbook_simulated_adapter",
+        return_value=failing_result,
+    ):
+        result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "failed"
+    rows = _fetch_deliveries(cur, eid)
+    assert len(rows) == 1
+    assert rows[0][2] == "failed"

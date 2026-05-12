@@ -7,16 +7,20 @@ enqueue SOAR actions, create approvals, or mutate firewalls/blocklists.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 from core import approval_store
+from core import notification_delivery_store
 from core import playbook_store
 from engines.playbook_registry import SUPPORTED_ACTIONS
 from integrations.base_integration import (
     FAILURE_CLASSIFICATION_CIRCUIT_OPEN,
     FAILURE_CLASSIFICATION_CIRCUIT_STATE_INVALID,
+    FAILURE_CLASSIFICATION_TIMEOUT,
     get_simulated_circuit_breaker_dict,
 )
 from integrations.integration_registry import execute_playbook_simulated_adapter
@@ -26,10 +30,134 @@ logger = logging.getLogger(__name__)
 TERMINAL_STATUSES = frozenset({"success", "failed", "abandoned"})
 ADAPTER_ACTIONS = {
     "notify_slack": ("slack", "send_message"),
+    "notify_teams": ("teams", "send_message"),
     "notify_email": ("email", "send_email"),
     "block_ip": ("firewall", "block_ip"),
     "notify_webhook": ("webhook", "post_event"),
 }
+
+_NOTIFICATION_ACTIONS = frozenset({"notify_slack", "notify_teams"})
+_PROVIDER_FOR_ACTION: dict[str, str] = {"notify_slack": "slack", "notify_teams": "teams"}
+
+
+def _delivery_status_from_adapter_result(adapter_result: dict[str, Any]) -> str:
+    """Map adapter result to a delivery store status value."""
+    if adapter_result.get("success") is True:
+        return "success"
+    meta = adapter_result.get("metadata") or {}
+    fc = str(meta.get("failure_classification") or "").strip().lower()
+    if fc == FAILURE_CLASSIFICATION_TIMEOUT:
+        return "timeout"
+    if fc in (FAILURE_CLASSIFICATION_CIRCUIT_OPEN, FAILURE_CLASSIFICATION_CIRCUIT_STATE_INVALID):
+        return "blocked"
+    return "failed"
+
+
+def _make_delivery_correlation_id(provider: str, execution_id: int, step_index: int) -> str:
+    return f"ntfy-{provider[:8]}-{execution_id}-{step_index}-{uuid.uuid4().hex[:12]}"
+
+
+def _make_delivery_idempotency_key(
+    provider: str, action: str, execution_id: int, step_index: int
+) -> str:
+    raw = f"{provider}:{action}:{execution_id}:{step_index}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:64]
+
+
+def _record_notification_delivery_attempt(
+    conn,
+    execution: dict[str, Any],
+    step: dict[str, Any],
+    step_index: int,
+    entry: dict[str, Any],
+    now: datetime,
+) -> None:
+    """
+    Append an immutable delivery record for a Slack/Teams notification step.
+    Failures here are logged but never propagate to the step outcome.
+    """
+    try:
+        action = step.get("action")
+        provider = _PROVIDER_FOR_ACTION.get(action)
+        if provider is None:
+            return
+
+        adapter_name, adapter_action = ADAPTER_ACTIONS[action]
+        adapter_result: dict[str, Any] = (entry.get("output") or {}).get("adapter_result") or {}
+
+        result_mode = str(adapter_result.get("mode") or "simulation").strip().lower()
+        if result_mode not in ("simulation", "real"):
+            result_mode = "simulation"
+
+        status = _delivery_status_from_adapter_result(adapter_result)
+
+        circuit_snapshot = (entry.get("output") or {}).get("circuit_breaker") or {}
+        circuit_state_raw = circuit_snapshot.get("state") or (
+            (adapter_result.get("metadata") or {}).get("circuit_state")
+        )
+        circuit_state: str | None = None
+        if circuit_state_raw:
+            candidate = str(circuit_state_raw).strip().lower()
+            if candidate in ("closed", "open", "half_open", "unknown", "invalid"):
+                circuit_state = candidate
+
+        meta = adapter_result.get("metadata") or {}
+        timeout_seconds: int | None = None
+        raw_timeout = meta.get("timeout_seconds")
+        if raw_timeout is not None:
+            try:
+                timeout_seconds = int(raw_timeout)
+            except (TypeError, ValueError):
+                pass
+
+        failure_code: str | None = None
+        failure_message: str | None = None
+        if not adapter_result.get("success"):
+            err = entry.get("error")
+            if isinstance(err, dict):
+                failure_code = err.get("code")
+                failure_message = err.get("message")
+
+        safe_meta: dict[str, Any] = {}
+        if isinstance(meta, dict):
+            safe_meta.update(meta)
+        safe_meta["adapter_mode"] = adapter_result.get("mode")
+        safe_meta["simulated"] = adapter_result.get("simulated")
+        safe_meta["executed"] = adapter_result.get("executed")
+
+        execution_id: int = execution["id"]
+        notification_delivery_store.create_notification_delivery_attempt(
+            conn,
+            correlation_id=_make_delivery_correlation_id(provider, execution_id, step_index),
+            idempotency_key=_make_delivery_idempotency_key(
+                provider, action, execution_id, step_index
+            ),
+            provider=provider,
+            mode=result_mode,
+            status=status,
+            adapter_name=adapter_name,
+            action=adapter_action,
+            metadata=safe_meta,
+            playbook_execution_id=execution_id,
+            playbook_step_index=step_index,
+            incident_id=execution.get("incident_id"),
+            approval_request_id=None,
+            alert_id=execution.get("alert_id"),
+            started_at=now,
+            completed_at=now,
+            failure_code=failure_code,
+            failure_message=failure_message,
+            timeout_seconds=timeout_seconds,
+            circuit_breaker_state=circuit_state,
+        )
+    except Exception:
+        logger.warning(
+            "[PLAYBOOK SIMULATION] delivery tracking failed safely "
+            "execution_id=%s step_index=%s",
+            execution.get("id"),
+            step_index,
+            exc_info=True,
+        )
 
 
 def process_next_pending_playbook_execution(conn, now=None) -> dict[str, Any] | None:
@@ -454,6 +582,10 @@ def _process_steps(
             )
 
         steps_log.append(entry)
+
+        if isinstance(step, dict) and step.get("action") in _NOTIFICATION_ACTIONS:
+            _record_notification_delivery_attempt(conn, execution, step, index, entry, timestamp)
+
         if entry["status"] == "success":
             last_completed_step = index
             playbook_store.update_playbook_execution_step_log(
