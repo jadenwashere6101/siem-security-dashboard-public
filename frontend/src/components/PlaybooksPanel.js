@@ -13,6 +13,7 @@ import {
   listPlaybookSchedules,
   getPlaybookSchedule,
 } from "../services/playbookService";
+import { listNotificationDeliveries } from "../services/notificationDeliveryService";
 import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
 
 const PAGE_LIMIT = 50;
@@ -260,6 +261,50 @@ function formatAdapterFieldValue(value) {
   return String(value);
 }
 
+const UNSAFE_DELIVERY_METADATA_KEY_SNIPPETS = [
+  "webhook",
+  "token",
+  "secret",
+  "password",
+  "authorization",
+  "cookie",
+  "bearer",
+  "api_key",
+  "apikey",
+  "raw_payload",
+  "raw_response",
+  "header",
+];
+
+function deliveryMetadataKeyIsSafe(key) {
+  if (!key || typeof key !== "string") {
+    return false;
+  }
+  const lk = key.toLowerCase();
+  if (lk.includes("://")) {
+    return false;
+  }
+  return !UNSAFE_DELIVERY_METADATA_KEY_SNIPPETS.some((frag) => lk.includes(frag));
+}
+
+function formatDeliveryMetadataValue(value) {
+  if (typeof value === "string" && /https?:\/\//i.test(value)) {
+    return "[REDACTED_URL]";
+  }
+  return formatAdapterFieldValue(value);
+}
+
+function getSafeNotificationDeliveryMetadataEntries(metadata) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return [];
+  }
+  return Object.entries(metadata).filter(([key]) => deliveryMetadataKeyIsSafe(key));
+}
+
+const DELIVERY_HISTORY_DISCLAIMER =
+  "Delivery history shows recorded notification attempts (simulation or real mode). " +
+  "It is operational evidence only — it does not guarantee that a human received a message at the provider.";
+
 function PlaybooksPanel({
   cardStyle,
   cardHeaderStyle,
@@ -293,6 +338,10 @@ function PlaybooksPanel({
   const [detailRecord, setDetailRecord] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
+
+  const [deliveryAttempts, setDeliveryAttempts] = useState([]);
+  const [deliveryLoading, setDeliveryLoading] = useState(false);
+  const [deliveryError, setDeliveryError] = useState("");
 
   // Form state for create/edit
   const [formMode, setFormMode] = useState(null); // null, "create", or "edit"
@@ -456,6 +505,44 @@ function PlaybooksPanel({
       setDetailLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (detailKind !== "execution" || !detailRecord?.id) {
+      setDeliveryAttempts([]);
+      setDeliveryError("");
+      setDeliveryLoading(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    setDeliveryLoading(true);
+    setDeliveryError("");
+    setDeliveryAttempts([]);
+
+    listNotificationDeliveries({
+      playbook_execution_id: detailRecord.id,
+      limit: 50,
+    })
+      .then((data) => {
+        if (cancelled) {
+          return;
+        }
+        setDeliveryAttempts(Array.isArray(data?.items) ? data.items : []);
+        setDeliveryLoading(false);
+      })
+      .catch((err) => {
+        if (cancelled) {
+          return;
+        }
+        setDeliveryAttempts([]);
+        setDeliveryError(err.message || "Unable to load notification deliveries.");
+        setDeliveryLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [detailKind, detailRecord?.id]);
 
   const handleApplyExecutionPlaybookFilter = useCallback(() => {
     setExecPlaybookIdApplied(execPlaybookIdDraft.trim());
@@ -1219,6 +1306,125 @@ function PlaybooksPanel({
                   {isAwaitingApproval(detailRecord) ? (
                     <div style={approvalNoticeStyle}>{APPROVAL_PAUSED_MESSAGE}</div>
                   ) : null}
+                  <div style={timelineHeaderStyle}>Notification delivery history</div>
+                  <p style={deliveryEvidenceNoteStyle}>{DELIVERY_HISTORY_DISCLAIMER}</p>
+                  {deliveryLoading ? (
+                    <p style={emptyTextStyle}>Loading notification deliveries…</p>
+                  ) : null}
+                  {deliveryError ? <div style={errorStateStyle}>{deliveryError}</div> : null}
+                  {!deliveryLoading && !deliveryError && deliveryAttempts.length === 0 ? (
+                    <p style={emptyTextStyle}>No delivery attempts recorded for this execution.</p>
+                  ) : null}
+                  {deliveryAttempts.length > 0 ? (
+                    <div style={timelineListStyle}>
+                      {deliveryAttempts.map((attempt) => {
+                        const metaEntries = getSafeNotificationDeliveryMetadataEntries(
+                          attempt.metadata
+                        );
+                        return (
+                          <div key={attempt.id} style={timelineCardStyle}>
+                            <div style={timelineCardHeaderStyle}>
+                              <span style={timelineStepLabelStyle}>Delivery #{attempt.id}</span>
+                              <span style={timelineActionStyle}>
+                                {formatDetailValue(attempt.provider)} /{" "}
+                                {formatDetailValue(attempt.mode)}
+                              </span>
+                              <span style={timelineStatusStyle}>
+                                {formatDetailValue(attempt.status)}
+                              </span>
+                            </div>
+                            <div style={timelineMetaGridStyle}>
+                              <div style={detailFieldStyle}>
+                                <span style={detailLabelStyle}>Correlation ID</span>
+                                <span style={detailValueStyle}>
+                                  {formatDetailValue(attempt.correlation_id)}
+                                </span>
+                              </div>
+                              <div style={detailFieldStyle}>
+                                <span style={detailLabelStyle}>Adapter</span>
+                                <span style={detailValueStyle}>
+                                  {formatDetailValue(attempt.adapter_name)}
+                                </span>
+                              </div>
+                              <div style={detailFieldStyle}>
+                                <span style={detailLabelStyle}>Action</span>
+                                <span style={detailValueStyle}>
+                                  {formatDetailValue(attempt.action)}
+                                </span>
+                              </div>
+                              <div style={detailFieldStyle}>
+                                <span style={detailLabelStyle}>Circuit breaker</span>
+                                <span style={detailValueStyle}>
+                                  {formatDetailValue(attempt.circuit_breaker_state)}
+                                </span>
+                              </div>
+                              <div style={detailFieldStyle}>
+                                <span style={detailLabelStyle}>Timeout (seconds)</span>
+                                <span style={detailValueStyle}>
+                                  {formatDetailValue(attempt.timeout_seconds)}
+                                </span>
+                              </div>
+                              <div style={detailFieldStyle}>
+                                <span style={detailLabelStyle}>Created</span>
+                                <span style={detailValueStyle}>
+                                  {formatAdminTimestamp(attempt.created_at, "—")}
+                                </span>
+                              </div>
+                              <div style={detailFieldStyle}>
+                                <span style={detailLabelStyle}>Requested</span>
+                                <span style={detailValueStyle}>
+                                  {formatAdminTimestamp(attempt.requested_at, "—")}
+                                </span>
+                              </div>
+                              <div style={detailFieldStyle}>
+                                <span style={detailLabelStyle}>Started</span>
+                                <span style={detailValueStyle}>
+                                  {formatAdminTimestamp(attempt.started_at, "—")}
+                                </span>
+                              </div>
+                              <div style={detailFieldStyle}>
+                                <span style={detailLabelStyle}>Completed</span>
+                                <span style={detailValueStyle}>
+                                  {formatAdminTimestamp(attempt.completed_at, "—")}
+                                </span>
+                              </div>
+                              {attempt.failure_code ? (
+                                <div style={detailFieldStyle}>
+                                  <span style={detailLabelStyle}>Failure code</span>
+                                  <span style={detailValueStyle}>
+                                    {formatDetailValue(attempt.failure_code)}
+                                  </span>
+                                </div>
+                              ) : null}
+                              {attempt.failure_message ? (
+                                <div style={detailFieldStyle}>
+                                  <span style={detailLabelStyle}>Failure message</span>
+                                  <span style={detailValueStyle}>
+                                    {formatDeliveryMetadataValue(attempt.failure_message)}
+                                  </span>
+                                </div>
+                              ) : null}
+                            </div>
+                            {metaEntries.length > 0 ? (
+                              <div style={adapterMetadataStyle}>
+                                <div style={adapterMetadataTitleStyle}>Safe metadata</div>
+                                <div style={timelineMetaGridStyle}>
+                                  {metaEntries.map(([key, value]) => (
+                                    <div key={key} style={detailFieldStyle}>
+                                      <span style={detailLabelStyle}>{key}</span>
+                                      <span style={detailValueStyle}>
+                                        {formatDeliveryMetadataValue(value)}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
                   <div style={timelineHeaderStyle}>Step Timeline</div>
                   {normalizeStepsLog(detailRecord.steps_log).length === 0 ? (
                     <p style={emptyTextStyle}>{getEmptyTimelineText(detailRecord.status)}</p>
@@ -1735,6 +1941,13 @@ const approvalNoticeStyle = {
   color: "#fde68a",
   fontSize: "13px",
   fontWeight: "700",
+};
+
+const deliveryEvidenceNoteStyle = {
+  margin: "0 0 12px",
+  fontSize: "12px",
+  lineHeight: 1.45,
+  color: "#8b949e",
 };
 
 const timelineHeaderStyle = {

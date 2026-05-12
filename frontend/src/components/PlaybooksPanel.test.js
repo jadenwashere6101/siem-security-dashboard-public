@@ -17,6 +17,7 @@ import {
   listPlaybookSchedules,
   getPlaybookSchedule,
 } from "../services/playbookService";
+import { listNotificationDeliveries } from "../services/notificationDeliveryService";
 
 jest.mock("../services/playbookService", () => ({
   listPlaybooks: jest.fn(),
@@ -31,6 +32,10 @@ jest.mock("../services/playbookService", () => ({
   resumeExecution: jest.fn(),
   listPlaybookSchedules: jest.fn(),
   getPlaybookSchedule: jest.fn(),
+}));
+
+jest.mock("../services/notificationDeliveryService", () => ({
+  listNotificationDeliveries: jest.fn(),
 }));
 
 const styleProps = {
@@ -87,6 +92,7 @@ const scheduleRow = {
 beforeEach(() => {
   jest.clearAllMocks();
   listPlaybookSchedules.mockResolvedValue({ items: [], limit: 50 });
+  listNotificationDeliveries.mockResolvedValue({ items: [], limit: 100, offset: 0 });
 });
 
 test("shows loading then definitions after load", async () => {
@@ -352,6 +358,147 @@ test("execution detail shows context fields and pending empty timeline", async (
   expect(screen.getByText(/^incident id$/i)).toBeInTheDocument();
   expect(screen.getByText("456")).toBeInTheDocument();
   expect(screen.getByText(/^last completed step$/i)).toBeInTheDocument();
+});
+
+test("execution detail fetches notification deliveries and renders safe fields", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [execRow], limit: 50 });
+  getPlaybookExecution.mockResolvedValue({
+    ...execRow,
+    steps_log: [],
+  });
+  listNotificationDeliveries.mockResolvedValue({
+    items: [
+      {
+        id: 7,
+        correlation_id: "corr-xyz",
+        idempotency_key: "idem-1",
+        provider: "slack",
+        mode: "simulation",
+        status: "success",
+        playbook_execution_id: 42,
+        playbook_step_index: 0,
+        incident_id: null,
+        approval_request_id: null,
+        alert_id: null,
+        adapter_name: "slack",
+        action: "send_message",
+        requested_at: "2026-05-09T12:00:00Z",
+        started_at: "2026-05-09T12:00:01Z",
+        completed_at: "2026-05-09T12:00:02Z",
+        created_at: "2026-05-09T12:00:02Z",
+        failure_code: null,
+        failure_message: null,
+        timeout_seconds: 30,
+        circuit_breaker_state: "closed",
+        metadata: { channel_label: "#soc" },
+      },
+    ],
+    limit: 50,
+    offset: 0,
+  });
+
+  render(<PlaybooksPanel {...styleProps} />);
+  await screen.findByText("pb_one");
+  await userEvent.click(screen.getByRole("button", { name: /^executions$/i }));
+  await screen.findByText("42");
+  const viewButtons = screen.getAllByRole("button", { name: /^view$/i });
+  await userEvent.click(viewButtons[viewButtons.length - 1]);
+
+  await waitFor(() => {
+    expect(listNotificationDeliveries).toHaveBeenCalledWith({
+      playbook_execution_id: 42,
+      limit: 50,
+    });
+  });
+
+  expect(screen.getByText(/notification delivery history/i)).toBeInTheDocument();
+  expect(screen.getByText(/operational evidence only/i)).toBeInTheDocument();
+  expect(screen.getByText(/delivery #7/i)).toBeInTheDocument();
+  expect(screen.getByText("corr-xyz")).toBeInTheDocument();
+  expect(screen.getByText(/slack \/ simulation/i)).toBeInTheDocument();
+  expect(screen.getByText(/send_message/i)).toBeInTheDocument();
+  expect(screen.getByText(/^closed$/i)).toBeInTheDocument();
+  expect(screen.getByText("30")).toBeInTheDocument();
+  expect(screen.getByText("#soc")).toBeInTheDocument();
+});
+
+test("execution detail still shows core fields when notification deliveries fail to load", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [execRow], limit: 50 });
+  getPlaybookExecution.mockResolvedValue({
+    ...execRow,
+    alert_id: 99,
+    steps_log: [],
+  });
+  listNotificationDeliveries.mockRejectedValue(new Error("Delivery service unavailable"));
+
+  render(<PlaybooksPanel {...styleProps} />);
+  await screen.findByText("pb_one");
+  await userEvent.click(screen.getByRole("button", { name: /^executions$/i }));
+  await screen.findByText("42");
+  const viewButtons = screen.getAllByRole("button", { name: /^view$/i });
+  await userEvent.click(viewButtons[viewButtons.length - 1]);
+
+  expect(await screen.findByText("Delivery service unavailable")).toBeInTheDocument();
+  expect(screen.getByText(/^execution id$/i)).toBeInTheDocument();
+  expect(screen.getByText("99")).toBeInTheDocument();
+});
+
+test("execution detail omits unsafe delivery metadata keys from UI", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [execRow], limit: 50 });
+  getPlaybookExecution.mockResolvedValue({ ...execRow, steps_log: [] });
+  listNotificationDeliveries.mockResolvedValue({
+    items: [
+      {
+        id: 8,
+        correlation_id: "c8",
+        idempotency_key: "i8",
+        provider: "teams",
+        mode: "real",
+        status: "failed",
+        playbook_execution_id: 42,
+        playbook_step_index: null,
+        incident_id: null,
+        approval_request_id: null,
+        alert_id: null,
+        adapter_name: "teams",
+        action: "send_message",
+        requested_at: "2026-05-09T12:00:00Z",
+        started_at: null,
+        completed_at: "2026-05-09T12:00:05Z",
+        created_at: "2026-05-09T12:00:05Z",
+        failure_code: "network_error",
+        failure_message: "bad https://hooks.example.test/x",
+        timeout_seconds: null,
+        circuit_breaker_state: "open",
+        metadata: {
+          ok: true,
+          slack_webhook_url: "https://hooks.slack.com/secret",
+        },
+      },
+    ],
+    limit: 50,
+    offset: 0,
+  });
+
+  render(<PlaybooksPanel {...styleProps} />);
+  await screen.findByText("pb_one");
+  await userEvent.click(screen.getByRole("button", { name: /^executions$/i }));
+  await screen.findByText("42");
+  const viewButtons = screen.getAllByRole("button", { name: /^view$/i });
+  await userEvent.click(viewButtons[viewButtons.length - 1]);
+
+  await waitFor(() => {
+    expect(screen.getByText(/delivery #8/i)).toBeInTheDocument();
+  });
+  expect(screen.queryByText(/slack_webhook_url/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/hooks\.slack\.com/i)).not.toBeInTheDocument();
+  expect(screen.getByText("[REDACTED_URL]")).toBeInTheDocument();
+  expect(screen.getByText(/teams \/ real/i)).toBeInTheDocument();
+  expect(screen.getByText("Safe metadata")).toBeInTheDocument();
+  expect(screen.getByText("Yes")).toBeInTheDocument();
 });
 
 test("execution detail renders simulated steps_log as timeline cards", async () => {
