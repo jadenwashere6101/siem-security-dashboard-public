@@ -1,11 +1,12 @@
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 
 import PlaybookMetricsPanel from "./PlaybookMetricsPanel";
-import { getPlaybookMetrics } from "../services/metricsService";
+import { getPlaybookMetrics, getNotificationDeliveryMetrics } from "../services/metricsService";
 
 jest.mock("../services/metricsService", () => ({
   getPlaybookMetrics: jest.fn(),
+  getNotificationDeliveryMetrics: jest.fn(),
 }));
 
 const styleProps = {
@@ -67,8 +68,32 @@ const fullPayload = {
   },
 };
 
+const emptyNotificationMetrics = {
+  total_delivery_attempts: 0,
+  by_provider: {},
+  by_mode: { simulation: 0, real: 0 },
+  by_status: { pending: 0, success: 0, failed: 0, timeout: 0, blocked: 0 },
+  by_adapter_name: {},
+  recent: {
+    window_hours: 24,
+    success: 0,
+    failed: 0,
+    timeout: 0,
+    blocked: 0,
+    time_basis: "",
+  },
+  circuit_breaker_state_counts: {
+    closed: 0,
+    open: 0,
+    half_open: 0,
+    unknown: 0,
+    invalid: 0,
+  },
+};
+
 beforeEach(() => {
   jest.clearAllMocks();
+  getNotificationDeliveryMetrics.mockResolvedValue(emptyNotificationMetrics);
 });
 
 test("renders loading state while request is in flight", async () => {
@@ -82,7 +107,9 @@ test("renders loading state while request is in flight", async () => {
   render(<PlaybookMetricsPanel {...styleProps} />);
 
   expect(screen.getByText(/loading playbook metrics/i)).toBeInTheDocument();
-  expect(screen.getByRole("note")).toHaveTextContent(/simulation only/i);
+  expect(
+    screen.getAllByRole("note").some((el) => /simulation only/i.test(el.textContent))
+  ).toBe(true);
 
   await waitFor(() => {
     expect(screen.getByText(/status breakdown/i)).toBeInTheDocument();
@@ -143,12 +170,14 @@ test("renders all six known statuses including zeros", async () => {
 
   render(<PlaybookMetricsPanel {...styleProps} />);
 
-  expect(await screen.findByText("pending")).toBeInTheDocument();
-  expect(screen.getByText("running")).toBeInTheDocument();
-  expect(screen.getByText("awaiting_approval")).toBeInTheDocument();
-  expect(screen.getByText("success")).toBeInTheDocument();
-  expect(screen.getByText("failed")).toBeInTheDocument();
-  expect(screen.getByText("abandoned")).toBeInTheDocument();
+  const statusBreakdownHeading = await screen.findByText(/^status breakdown$/i);
+  const playbookStatusRegion = statusBreakdownHeading.parentElement;
+  expect(within(playbookStatusRegion).getByText("pending")).toBeInTheDocument();
+  expect(within(playbookStatusRegion).getByText("running")).toBeInTheDocument();
+  expect(within(playbookStatusRegion).getByText("awaiting_approval")).toBeInTheDocument();
+  expect(within(playbookStatusRegion).getByText("success")).toBeInTheDocument();
+  expect(within(playbookStatusRegion).getByText("failed")).toBeInTheDocument();
+  expect(within(playbookStatusRegion).getByText("abandoned")).toBeInTheDocument();
 });
 
 test("renders recent success/failure with window label", async () => {
@@ -185,7 +214,9 @@ test("simulation notice remains visible in populated state", async () => {
   render(<PlaybookMetricsPanel {...styleProps} />);
   await screen.findByText("block_and_notify");
 
-  expect(screen.getByRole("note")).toHaveTextContent(/no real remediation/i);
+  expect(
+    screen.getAllByRole("note").some((el) => /no real remediation/i.test(el.textContent))
+  ).toBe(true);
 });
 
 test("does not render run/retry/cancel/approve mutation controls", async () => {
@@ -287,4 +318,77 @@ test("does not render Other / Unknown row when unknown_statuses is absent", asyn
 
   await screen.findByText(/status breakdown/i);
   expect(screen.queryByText(/other \/ unknown/i)).not.toBeInTheDocument();
+});
+
+test("loads notification delivery metrics alongside playbook metrics", async () => {
+  getPlaybookMetrics.mockResolvedValueOnce(fullPayload);
+
+  render(<PlaybookMetricsPanel {...styleProps} />);
+
+  await waitFor(() => {
+    expect(getNotificationDeliveryMetrics).toHaveBeenCalled();
+  });
+  expect(await screen.findByText(/notification delivery metrics/i)).toBeInTheDocument();
+});
+
+test("renders notification delivery counts when API returns data", async () => {
+  getPlaybookMetrics.mockResolvedValueOnce(fullPayload);
+  getNotificationDeliveryMetrics.mockResolvedValueOnce({
+    total_delivery_attempts: 47,
+    by_provider: { slack: 30, teams: 17 },
+    by_mode: { simulation: 40, real: 7 },
+    by_status: { pending: 2, success: 10, failed: 8, timeout: 3, blocked: 4 },
+    by_adapter_name: { slack: 25, teams: 22 },
+    recent: {
+      window_hours: 24,
+      success: 6,
+      failed: 2,
+      timeout: 1,
+      blocked: 3,
+      time_basis: "UTC basis text",
+    },
+    circuit_breaker_state_counts: {
+      closed: 10,
+      open: 4,
+      half_open: 2,
+      unknown: 1,
+      invalid: 0,
+    },
+  });
+
+  render(<PlaybookMetricsPanel {...styleProps} />);
+
+  await screen.findByText("block_and_notify");
+
+  const notifHeading = screen.getByRole("heading", { name: /notification delivery metrics/i });
+  const notifRegion = notifHeading.parentElement;
+  expect(within(notifRegion).getByText("47")).toBeInTheDocument();
+  expect(within(notifRegion).getByText(/total delivery attempts/i)).toBeInTheDocument();
+  expect(within(notifRegion).getByText(/by provider/i)).toBeInTheDocument();
+  expect(within(notifRegion).getAllByText("slack").length).toBeGreaterThanOrEqual(1);
+  expect(within(notifRegion).getAllByText("teams").length).toBeGreaterThanOrEqual(1);
+  expect(within(notifRegion).getByText(/last 24 hours — success: 6/i)).toBeInTheDocument();
+  expect(within(notifRegion).getByText(/timeout: 1/i)).toBeInTheDocument();
+  expect(within(notifRegion).getByText(/blocked: 3/i)).toBeInTheDocument();
+  expect(within(notifRegion).getByText(/circuit breaker state \(recorded\)/i)).toBeInTheDocument();
+  expect(within(notifRegion).getByText("UTC basis text")).toBeInTheDocument();
+});
+
+test("playbook metrics still render when notification metrics request fails", async () => {
+  getPlaybookMetrics.mockResolvedValueOnce(fullPayload);
+  getNotificationDeliveryMetrics.mockRejectedValueOnce(new Error("notification metrics down"));
+
+  render(<PlaybookMetricsPanel {...styleProps} />);
+
+  expect(await screen.findByText(/notification metrics error: notification metrics down/i)).toBeInTheDocument();
+  expect(screen.getByText(/status breakdown/i)).toBeInTheDocument();
+  expect(screen.getByText("block_and_notify")).toBeInTheDocument();
+});
+
+test("shows notification metrics empty message when totals are zero", async () => {
+  getPlaybookMetrics.mockResolvedValueOnce(fullPayload);
+
+  render(<PlaybookMetricsPanel {...styleProps} />);
+
+  expect(await screen.findByText(/no notification delivery data yet/i)).toBeInTheDocument();
 });

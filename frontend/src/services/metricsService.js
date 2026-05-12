@@ -13,3 +13,16 @@ export async function getPlaybookMetrics() {
   }
   return data;
 }
+
+export async function getNotificationDeliveryMetrics() {
+  const res = await fetch(buildSiemPath("/metrics/notifications"), {
+    credentials: "include",
+  });
+  const data = await parseJsonResponse(res, {});
+  if (!res.ok) {
+    throw new Error(
+      getApiErrorMessage(data, "Unable to load notification delivery metrics", ["error", "message"])
+    );
+  }
+  return data;
+}
