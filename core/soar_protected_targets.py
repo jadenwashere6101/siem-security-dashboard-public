@@ -14,6 +14,7 @@ class ProtectedTargetConfigError(ValueError):
 def load_protected_targets(
     env: Mapping[str, str] | None = None,
 ) -> list[ipaddress._BaseNetwork]:
+    # spec: SPEC-INTEG-002
     source = env if env is not None else os.environ
     raw_value = source.get("SOAR_PROTECTED_IPS", "")
     if raw_value is None:

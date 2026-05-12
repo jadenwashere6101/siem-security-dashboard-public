@@ -24,6 +24,7 @@ DEFAULT_SLACK_TIMEOUT_SECONDS = 3
 MAX_SLACK_TEXT_CHARS = 3000
 
 
+# spec: SPEC-INTEG-003
 def _truthy(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 

@@ -18,6 +18,7 @@ const CIRCUIT_BREAKER_STATES = ["closed", "open", "half_open", "unknown", "inval
 const SIMULATION_NOTICE =
   "Simulation only: these playbook metrics reflect simulated executions and visibility data. No real remediation or live integration execution is active.";
 
+// spec: SPEC-NOTIFY-001
 const NOTIFICATION_METRICS_NOTICE =
   "Operational evidence only: delivery metrics count recorded attempts (simulation and real mode). They do not prove a human received a message at Slack, Teams, or any other provider.";
 

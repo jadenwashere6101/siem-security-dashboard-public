@@ -7,6 +7,7 @@ that step definitions reference known action names before definitions are persis
 
 from __future__ import annotations
 
+# spec: SPEC-PLAYBOOK-001
 SUPPORTED_ACTIONS: frozenset[str] = frozenset(
     {
         "block_ip",

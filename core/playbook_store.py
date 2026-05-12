@@ -19,6 +19,7 @@ from engines.playbook_registry import validate_playbook_steps
 logger = logging.getLogger(__name__)
 
 # Conservative default for max_attempts on new execution rows (metadata only in this slice).
+# spec: SPEC-PLAYBOOK-003
 DEFAULT_PLAYBOOK_EXECUTION_MAX_ATTEMPTS = 3
 
 _EXECUTION_COLUMNS_SQL = (

@@ -20,6 +20,7 @@ _VALID_MODES = frozenset({"simulation", "real"})
 _VALID_STATUSES = frozenset({"pending", "success", "failed", "timeout", "blocked"})
 _VALID_CIRCUIT_STATES = frozenset({"closed", "open", "half_open", "unknown", "invalid"})
 
+# spec: SPEC-NOTIFY-001
 # Keys (case-insensitive) and substrings in keys that must never be stored.
 _METADATA_KEY_DENYLIST = frozenset(
     {

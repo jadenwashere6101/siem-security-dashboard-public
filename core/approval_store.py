@@ -9,6 +9,7 @@ from core.audit_helpers import log_audit_event
 
 logger = logging.getLogger(__name__)
 
+# spec: SPEC-PLAYBOOK-002
 APPROVAL_STATUSES = frozenset({"pending", "approved", "denied", "expired"})
 TERMINAL_APPROVAL_STATUSES = frozenset({"approved", "denied", "expired"})
 DEFAULT_APPROVAL_TTL_MINUTES = 60

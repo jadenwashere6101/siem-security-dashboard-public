@@ -30,6 +30,7 @@ _ADAPTERS: dict[str, type[BaseIntegration]] = {
 }
 
 
+# spec: SPEC-INTEG-001
 def normalize_registered_integration_adapter_name(name: str) -> str | None:
     """Return canonical adapter key if registered, else None."""
     key = str(name or "").strip().lower()

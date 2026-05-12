@@ -35,6 +35,7 @@ KNOWN_CIRCUIT_BREAKER_STATES: tuple[str, ...] = (
     "unknown",
     "invalid",
 )
+# spec: SPEC-NOTIFY-001
 KNOWN_RECENT_NOTIFICATION_BUCKETS: tuple[str, ...] = ("success", "failed", "timeout", "blocked")
 RECENT_WINDOW_HOURS = 24
 

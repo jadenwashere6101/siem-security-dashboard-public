@@ -27,7 +27,10 @@ from integrations.integration_registry import execute_playbook_simulated_adapter
 
 logger = logging.getLogger(__name__)
 
+# spec: SPEC-PLAYBOOK-003
 TERMINAL_STATUSES = frozenset({"success", "failed", "abandoned"})
+# spec: SPEC-PLAYBOOK-001
+# spec: SPEC-INTEG-002
 ADAPTER_ACTIONS = {
     "notify_slack": ("slack", "send_message"),
     "notify_teams": ("teams", "send_message"),
@@ -40,6 +43,7 @@ _NOTIFICATION_ACTIONS = frozenset({"notify_slack", "notify_teams"})
 _PROVIDER_FOR_ACTION: dict[str, str] = {"notify_slack": "slack", "notify_teams": "teams"}
 
 
+# spec: SPEC-NOTIFY-001
 def _delivery_status_from_adapter_result(adapter_result: dict[str, Any]) -> str:
     """Map adapter result to a delivery store status value."""
     if adapter_result.get("success") is True:
@@ -531,6 +535,7 @@ def _process_steps(
 
     for index, step in enumerate(steps[start_index:], start=start_index):
         if isinstance(step, dict) and step.get("action") == "require_approval":
+            # spec: SPEC-PLAYBOOK-002
             approval_request = approval_store.create_playbook_step_approval_request(
                 conn,
                 playbook_execution_id=execution_id,

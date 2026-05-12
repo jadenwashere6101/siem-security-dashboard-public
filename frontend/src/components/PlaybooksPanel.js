@@ -302,6 +302,7 @@ function getSafeNotificationDeliveryMetadataEntries(metadata) {
 }
 
 const DELIVERY_HISTORY_DISCLAIMER =
+  // spec: SPEC-NOTIFY-001
   "Delivery history shows recorded notification attempts (simulation or real mode). " +
   "It is operational evidence only — it does not guarantee that a human received a message at the provider.";
 

@@ -14,6 +14,7 @@ from core import notification_delivery_store
 from core.auth import analyst_or_super_admin_required
 from core.db import get_db_connection
 
+# spec: SPEC-NOTIFY-001
 notification_delivery_bp = Blueprint("notification_deliveries", __name__)
 
 
