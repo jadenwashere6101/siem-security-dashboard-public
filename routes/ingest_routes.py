@@ -79,6 +79,7 @@ def _create_playbook_executions_for_alerts(alerts_created, conn):
 @ingest_bp.route("/ingest", methods=["POST"])
 @limiter.limit("200 per minute")
 def add_event():
+    # spec: SPEC-INGEST-001
     api_key_error = require_api_key()
     if api_key_error:
         return api_key_error
@@ -187,6 +188,7 @@ def add_event():
 
 @ingest_bp.route("/ingest/web-log", methods=["POST"])
 def add_web_log_event():
+    # spec: SPEC-NORM-001
     api_key_error = require_api_key()
     if api_key_error:
         return api_key_error

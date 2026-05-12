@@ -1,3 +1,5 @@
+# spec: SPEC-INGEST-001
+# spec: SPEC-NORM-001
 def _safe_non_empty_string(value):
     if isinstance(value, str):
         stripped = value.strip()

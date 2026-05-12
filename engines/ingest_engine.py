@@ -15,6 +15,8 @@ from engines.detection_engine import (
 def ingest_normalized_event(event_dict, conn, cur):
     # Central normalized ingestion path. Adapters and raw ingest routes feed
     # this function, and detector/correlation fan-out happens here.
+    # spec: SPEC-INGEST-001
+    # spec: SPEC-NORM-001
     event_type = event_dict["event_type"]
     severity = event_dict["severity"]
     source_ip = event_dict["source_ip"]

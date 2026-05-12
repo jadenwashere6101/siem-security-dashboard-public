@@ -13,6 +13,7 @@ auth_bp = Blueprint("auth", __name__)
 @auth_bp.route("/login", methods=["POST"])
 @limiter.limit("5 per minute")
 def login():
+    # spec: SPEC-AUTH-001
     data = request.get_json() or {}
 
     username = data.get("username")

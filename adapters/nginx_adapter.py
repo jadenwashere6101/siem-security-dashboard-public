@@ -17,6 +17,7 @@ NGINX_ACCESS_LOG_PATTERN = re.compile(
 )
 
 
+# spec: SPEC-NORM-001
 def parse_nginx_access_log_line(line):
     # Expects one raw nginx access-log line and returns a normalized field map
     # for the backend web-log ingestion route.

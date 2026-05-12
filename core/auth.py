@@ -37,6 +37,7 @@ def get_user_by_username(username):
             conn.close()
 
 
+# spec: SPEC-AUTH-001
 class User(UserMixin):
     def __init__(self, user_id, role="admin"):
         self.id = user_id

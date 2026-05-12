@@ -102,6 +102,7 @@ def _extract_attribute_value(telemetry, *keys):
     return None
 
 
+# spec: SPEC-NORM-001
 def _extract_source_ip(telemetry):
     source_ip = _first_non_empty_value(
         telemetry.get("source_ip"),

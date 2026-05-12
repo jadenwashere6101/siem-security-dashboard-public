@@ -12,6 +12,7 @@ from engines.detection_config import (
 from core.ip_helpers import determine_response_action, lookup_ip_reputation
 
 
+# spec: SPEC-INGEST-001
 def _generate_failed_login_alerts_core(cur, conn, source=None, source_type=None):
     rule_config = get_effective_detection_rule("failed_login_threshold", cur=cur)
     threshold = rule_config["parameters"]["threshold"]

@@ -4,6 +4,7 @@ from engines.detection_config import CORRELATION_WINDOW_MINUTES
 from core.ip_helpers import determine_response_action, execute_response_action, lookup_ip_reputation
 
 
+# spec: SPEC-INGEST-001
 def generate_correlated_activity_alerts(cur, conn, source_ip):
     qualifying_alert_types = (
         "failed_login_threshold",

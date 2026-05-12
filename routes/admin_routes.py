@@ -40,6 +40,7 @@ MAX_ADMIN_RUN_BATCH_SIZE = 25
 @login_required
 @super_admin_required
 def create_user():
+    # spec: SPEC-AUTH-001
     data = request.get_json() or {}
 
     username = (data.get("username") or "").strip()

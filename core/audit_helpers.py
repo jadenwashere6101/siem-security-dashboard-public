@@ -3,6 +3,7 @@ from psycopg2.extras import Json
 from core.db import get_db_connection
 
 
+# spec: SPEC-AUTH-001
 def log_audit_event(
     event_type,
     actor_username=None,
