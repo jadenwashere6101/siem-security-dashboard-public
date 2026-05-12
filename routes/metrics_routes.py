@@ -26,11 +26,25 @@ KNOWN_EXECUTION_STATUSES: tuple[str, ...] = (
     "abandoned",
 )
 
+KNOWN_NOTIFICATION_MODES: tuple[str, ...] = ("simulation", "real")
+KNOWN_NOTIFICATION_STATUSES: tuple[str, ...] = ("pending", "success", "failed", "timeout", "blocked")
+KNOWN_CIRCUIT_BREAKER_STATES: tuple[str, ...] = (
+    "closed",
+    "open",
+    "half_open",
+    "unknown",
+    "invalid",
+)
+KNOWN_RECENT_NOTIFICATION_BUCKETS: tuple[str, ...] = ("success", "failed", "timeout", "blocked")
 RECENT_WINDOW_HOURS = 24
 
 
 def _empty_by_status() -> dict[str, int]:
     return {s: 0 for s in KNOWN_EXECUTION_STATUSES}
+
+
+def _empty_counts(keys: tuple[str, ...]) -> dict[str, int]:
+    return {k: 0 for k in keys}
 
 
 def _build_playbook_metrics(rows_by_playbook_status: list[tuple[str, str, int]]) -> list[dict[str, Any]]:
@@ -57,6 +71,27 @@ def _build_playbook_metrics(rows_by_playbook_status: list[tuple[str, str, int]])
             entry["other_status_count"] = entry["total"] - known_sum
         out.append(entry)
     return out
+
+
+def _build_count_map(rows: list[tuple[Any, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for key, cnt in rows:
+        label = str(key) if key is not None else "(null)"
+        counts[label] = counts.get(label, 0) + int(cnt)
+    return counts
+
+
+def _merge_known_counts(rows: list[tuple[Any, Any]], known_keys: tuple[str, ...]) -> tuple[dict[str, int], dict[str, int]]:
+    counts = _empty_counts(known_keys)
+    unknown: dict[str, int] = {}
+    for key, cnt in rows:
+        label = str(key) if key is not None else ""
+        c = int(cnt)
+        if label in counts:
+            counts[label] = c
+        else:
+            unknown[label or "(null)"] = unknown.get(label or "(null)", 0) + c
+    return counts, unknown
 
 
 @metrics_bp.route("/metrics/playbooks", methods=["GET"])
@@ -166,3 +201,119 @@ def playbook_execution_metrics_route():
         if conn:
             conn.close()
 
+
+@metrics_bp.route("/metrics/notifications", methods=["GET"])
+@login_required
+@analyst_or_super_admin_required
+def notification_delivery_metrics_route():
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM notification_delivery_attempts")
+            total_row = cur.fetchone()
+            total_delivery_attempts = int(total_row[0]) if total_row and total_row[0] is not None else 0
+
+            cur.execute(
+                """
+                SELECT provider, COUNT(*)
+                FROM notification_delivery_attempts
+                GROUP BY provider
+                ORDER BY provider ASC
+                """
+            )
+            by_provider = _build_count_map(cur.fetchall() or [])
+
+            cur.execute(
+                """
+                SELECT mode, COUNT(*)
+                FROM notification_delivery_attempts
+                GROUP BY mode
+                """
+            )
+            by_mode, unknown_modes = _merge_known_counts(
+                cur.fetchall() or [],
+                KNOWN_NOTIFICATION_MODES,
+            )
+
+            cur.execute(
+                """
+                SELECT status, COUNT(*)
+                FROM notification_delivery_attempts
+                GROUP BY status
+                """
+            )
+            by_status, unknown_statuses = _merge_known_counts(
+                cur.fetchall() or [],
+                KNOWN_NOTIFICATION_STATUSES,
+            )
+
+            cur.execute(
+                """
+                SELECT adapter_name, COUNT(*)
+                FROM notification_delivery_attempts
+                GROUP BY adapter_name
+                ORDER BY adapter_name ASC
+                """
+            )
+            by_adapter_name = _build_count_map(cur.fetchall() or [])
+
+            cur.execute(
+                """
+                SELECT status, COUNT(*)
+                FROM notification_delivery_attempts
+                WHERE status IN ('success', 'failed', 'timeout', 'blocked')
+                  AND COALESCE(completed_at, started_at, requested_at, created_at)
+                      >= NOW() - %s * INTERVAL '1 hour'
+                GROUP BY status
+                """,
+                (RECENT_WINDOW_HOURS,),
+            )
+            recent, unknown_recent = _merge_known_counts(
+                cur.fetchall() or [],
+                KNOWN_RECENT_NOTIFICATION_BUCKETS,
+            )
+
+            cur.execute(
+                """
+                SELECT circuit_breaker_state, COUNT(*)
+                FROM notification_delivery_attempts
+                WHERE circuit_breaker_state IS NOT NULL
+                GROUP BY circuit_breaker_state
+                """
+            )
+            circuit_breaker_state_counts, unknown_circuit_breaker_states = _merge_known_counts(
+                cur.fetchall() or [],
+                KNOWN_CIRCUIT_BREAKER_STATES,
+            )
+
+        payload: dict[str, Any] = {
+            "total_delivery_attempts": total_delivery_attempts,
+            "by_provider": by_provider,
+            "by_mode": by_mode,
+            "by_status": by_status,
+            "by_adapter_name": by_adapter_name,
+            "recent": {
+                "window_hours": RECENT_WINDOW_HOURS,
+                **recent,
+                "time_basis": "Rows are included when COALESCE(completed_at, started_at, "
+                f"requested_at, created_at) falls within the last {RECENT_WINDOW_HOURS} hours (UTC).",
+            },
+            "circuit_breaker_state_counts": circuit_breaker_state_counts,
+        }
+        if unknown_modes:
+            payload["unknown_modes"] = unknown_modes
+        if unknown_statuses:
+            payload["unknown_statuses"] = unknown_statuses
+        if unknown_recent:
+            payload["unknown_recent_statuses"] = unknown_recent
+        if unknown_circuit_breaker_states:
+            payload["unknown_circuit_breaker_states"] = unknown_circuit_breaker_states
+
+        return jsonify(payload), 200
+    except Exception as error:
+        current_app.logger.error("Error in notification_delivery_metrics_route: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
