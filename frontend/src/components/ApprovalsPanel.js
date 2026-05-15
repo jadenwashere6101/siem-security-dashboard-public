@@ -5,10 +5,29 @@ import {
   listApprovals,
   submitApprovalDecision,
 } from "../services/approvalService";
+import { listApprovalNotificationDeliveries } from "../services/notificationDeliveryService";
 import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
 
 const STATUS_FILTERS = ["all", "pending", "approved", "denied", "expired"];
 const RISK_FILTERS = ["all", "medium", "high", "critical"];
+const UNSAFE_DELIVERY_METADATA_KEY_SNIPPETS = [
+  "webhook",
+  "token",
+  "secret",
+  "password",
+  "authorization",
+  "cookie",
+  "bearer",
+  "api_key",
+  "apikey",
+  "raw_payload",
+  "raw_response",
+  "header",
+];
+const DELIVERY_HISTORY_DISCLAIMER =
+  // spec: SPEC-NOTIFY-001
+  "Delivery history shows recorded notification attempts (simulation or real mode). " +
+  "It is operational evidence only; it does not prove that a human saw the message.";
 
 function ApprovalsPanel({
   cardStyle,
@@ -35,6 +54,9 @@ function ApprovalsPanel({
   const [isExpiring, setIsExpiring] = useState(false);
   const [expireResult, setExpireResult] = useState(null);
   const [expireError, setExpireError] = useState("");
+  const [deliveryAttempts, setDeliveryAttempts] = useState([]);
+  const [deliveryLoading, setDeliveryLoading] = useState(false);
+  const [deliveryError, setDeliveryError] = useState("");
 
   const isSuperAdmin = userRole === "super_admin";
 
@@ -82,6 +104,22 @@ function ApprovalsPanel({
     }
   }, []);
 
+  const loadApprovalNotificationDeliveries = useCallback(async (approvalId) => {
+    if (!approvalId) return;
+    try {
+      setDeliveryLoading(true);
+      setDeliveryError("");
+
+      const data = await listApprovalNotificationDeliveries(approvalId, { limit: 50 });
+      setDeliveryAttempts(Array.isArray(data?.items) ? data.items : []);
+    } catch (err) {
+      setDeliveryAttempts([]);
+      setDeliveryError(err.message || "Unable to load notification deliveries.");
+    } finally {
+      setDeliveryLoading(false);
+    }
+  }, []);
+
   const handleDecision = useCallback(async (decision) => {
     if (!selectedApprovalId || !isSuperAdmin || selectedApproval?.status !== "pending") {
       return;
@@ -95,6 +133,7 @@ function ApprovalsPanel({
         reason: decisionReason,
       });
       await loadDetail(selectedApprovalId);
+      await loadApprovalNotificationDeliveries(selectedApprovalId);
       await loadApprovalList({ quiet: true });
     } catch (err) {
       setDecisionError(err.message || "Unable to submit approval decision.");
@@ -105,6 +144,7 @@ function ApprovalsPanel({
     decisionReason,
     isSuperAdmin,
     loadApprovalList,
+    loadApprovalNotificationDeliveries,
     loadDetail,
     selectedApproval,
     selectedApprovalId,
@@ -118,6 +158,9 @@ function ApprovalsPanel({
     setDecisionError("");
     setDecisionReason("");
     setSubmittingDecision("");
+    setDeliveryAttempts([]);
+    setDeliveryError("");
+    setDeliveryLoading(false);
   }, []);
 
   const handleExpireOverdue = useCallback(async () => {
@@ -130,6 +173,7 @@ function ApprovalsPanel({
       await loadApprovalList({ quiet: true, clearExpireFeedback: false });
       if (selectedApprovalId) {
         await loadDetail(selectedApprovalId);
+        await loadApprovalNotificationDeliveries(selectedApprovalId);
       }
       setExpireResult(result);
     } catch (err) {
@@ -137,7 +181,14 @@ function ApprovalsPanel({
     } finally {
       setIsExpiring(false);
     }
-  }, [isSuperAdmin, isExpiring, loadApprovalList, loadDetail, selectedApprovalId]);
+  }, [
+    isSuperAdmin,
+    isExpiring,
+    loadApprovalList,
+    loadApprovalNotificationDeliveries,
+    loadDetail,
+    selectedApprovalId,
+  ]);
 
   useEffect(() => {
     loadApprovalList();
@@ -145,9 +196,12 @@ function ApprovalsPanel({
 
   useEffect(() => {
     if (selectedApprovalId) {
+      setDeliveryAttempts([]);
+      setDeliveryError("");
       loadDetail(selectedApprovalId);
+      loadApprovalNotificationDeliveries(selectedApprovalId);
     }
-  }, [loadDetail, selectedApprovalId]);
+  }, [loadApprovalNotificationDeliveries, loadDetail, selectedApprovalId]);
 
   const filteredApprovals = useMemo(() => {
     if (riskFilter === "all") return approvals;
@@ -402,6 +456,46 @@ function ApprovalsPanel({
                   )}
                 </div>
 
+                <div style={deliverySectionStyle}>
+                  <div style={tableMetaStyle}>
+                    <span style={tableMetaLabelStyle}>Notification Delivery History</span>
+                    <span style={tableMetaCountStyle}>{deliveryAttempts.length}</span>
+                  </div>
+                  <p style={deliveryNoticeStyle}>{DELIVERY_HISTORY_DISCLAIMER}</p>
+                  {deliveryLoading ? (
+                    <p style={emptyTextStyle}>Loading notification deliveries...</p>
+                  ) : deliveryError ? (
+                    <div style={deliveryErrorStyle}>
+                      <span>Error loading notification deliveries: {deliveryError}</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          loadApprovalNotificationDeliveries(selectedApprovalId)
+                        }
+                        style={retryButtonStyle}
+                      >
+                        Retry deliveries
+                      </button>
+                    </div>
+                  ) : deliveryAttempts.length === 0 ? (
+                    <p style={emptyTextStyle}>
+                      No notification delivery attempts found for this approval.
+                    </p>
+                  ) : (
+                    <div
+                      style={deliveryListStyle}
+                      aria-label="Notification delivery history"
+                    >
+                      {deliveryAttempts.map((attempt) => (
+                        <DeliveryAttempt
+                          key={attempt.id || attempt.correlation_id}
+                          attempt={attempt}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+
                 {canDecideSelected ? (
                   <div style={decisionControlStyle}>
                     <label style={{ ...filterWrapperStyle, minWidth: "260px", flex: "1 1 260px" }}>
@@ -456,6 +550,29 @@ const formatLabel = (value) =>
   String(value || "unknown").replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 
 const formatTimestamp = (value) => formatAdminTimestamp(value, "N/A");
+
+const deliveryMetadataKeyIsSafe = (key) => {
+  if (!key || typeof key !== "string") return false;
+  const normalized = key.toLowerCase();
+  if (normalized.includes("://")) return false;
+  return !UNSAFE_DELIVERY_METADATA_KEY_SNIPPETS.some((snippet) =>
+    normalized.includes(snippet)
+  );
+};
+
+const formatDeliveryValue = (value, emptyValue = "N/A") => {
+  if (value === true) return "Yes";
+  if (value === false) return "No";
+  if (value === null || value === undefined || value === "") return emptyValue;
+  if (typeof value === "string" && /https?:\/\//i.test(value)) return "[REDACTED_URL]";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+};
+
+const getSafeDeliveryMetadataEntries = (metadata) => {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return [];
+  return Object.entries(metadata).filter(([key]) => deliveryMetadataKeyIsSafe(key));
+};
 
 const getRiskBadgeStyle = (riskLevel) => {
   const normalized = String(riskLevel || "").toLowerCase();
@@ -808,6 +925,79 @@ const eventsSectionStyle = {
   borderTop: "1px solid #21262d",
 };
 
+const deliverySectionStyle = {
+  marginTop: "18px",
+  paddingTop: "16px",
+  borderTop: "1px solid #21262d",
+};
+
+const deliveryNoticeStyle = {
+  margin: "0 0 12px 0",
+  color: "#8b949e",
+  fontSize: "13px",
+  lineHeight: 1.5,
+};
+
+const deliveryErrorStyle = {
+  ...errorStateStyle,
+  marginBottom: 0,
+};
+
+const deliveryListStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "10px",
+};
+
+const deliveryCardStyle = {
+  padding: "12px",
+  borderRadius: "8px",
+  border: "1px solid #30363d",
+  backgroundColor: "#161b22",
+};
+
+const deliveryCardHeaderStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: "10px",
+  flexWrap: "wrap",
+  marginBottom: "12px",
+};
+
+const deliveryTitleStyle = {
+  color: "#e6edf3",
+  fontSize: "13px",
+  fontWeight: "700",
+};
+
+const deliveryModeStyle = {
+  color: "#93c5fd",
+  fontSize: "12px",
+  fontWeight: "700",
+};
+
+const deliveryGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+  gap: "12px",
+};
+
+const deliveryMetadataStyle = {
+  marginTop: "12px",
+  paddingTop: "12px",
+  borderTop: "1px solid #21262d",
+};
+
+const deliveryMetadataTitleStyle = {
+  marginBottom: "10px",
+  color: "#8b949e",
+  fontSize: "11px",
+  fontWeight: "700",
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+};
+
 const decisionControlStyle = {
   display: "flex",
   alignItems: "flex-end",
@@ -857,6 +1047,61 @@ function DetailField({ label, value, mono = false }) {
       <span style={{ ...detailValueStyle, ...(mono ? detailMonoValueStyle : null) }}>
         {value}
       </span>
+    </div>
+  );
+}
+
+function DeliveryAttempt({ attempt }) {
+  const metadataEntries = getSafeDeliveryMetadataEntries(attempt?.metadata);
+  return (
+    <div style={deliveryCardStyle}>
+      <div style={deliveryCardHeaderStyle}>
+        <span style={deliveryTitleStyle}>
+          Delivery #{formatDeliveryValue(attempt?.id)}
+        </span>
+        <span style={deliveryModeStyle}>
+          {formatDeliveryValue(attempt?.provider)} / {formatDeliveryValue(attempt?.mode)}
+        </span>
+        <span style={{ ...badgeStyle, ...neutralBadgeStyle }}>
+          {formatDeliveryValue(attempt?.status)}
+        </span>
+      </div>
+      <div style={deliveryGridStyle}>
+        <DetailField label="Correlation ID" value={formatDeliveryValue(attempt?.correlation_id)} mono />
+        <DetailField label="Adapter" value={formatDeliveryValue(attempt?.adapter_name)} />
+        <DetailField label="Action" value={formatDeliveryValue(attempt?.action)} />
+        <DetailField
+          label="Circuit breaker"
+          value={formatDeliveryValue(attempt?.circuit_breaker_state)}
+        />
+        <DetailField
+          label="Timeout seconds"
+          value={formatDeliveryValue(attempt?.timeout_seconds)}
+        />
+        <DetailField label="Requested" value={formatTimestamp(attempt?.requested_at)} />
+        <DetailField label="Started" value={formatTimestamp(attempt?.started_at)} />
+        <DetailField label="Completed" value={formatTimestamp(attempt?.completed_at)} />
+        <DetailField label="Created" value={formatTimestamp(attempt?.created_at)} />
+        {attempt?.failure_code ? (
+          <DetailField label="Failure code" value={formatDeliveryValue(attempt.failure_code)} />
+        ) : null}
+        {attempt?.failure_message ? (
+          <DetailField
+            label="Failure message"
+            value={formatDeliveryValue(attempt.failure_message)}
+          />
+        ) : null}
+      </div>
+      {metadataEntries.length > 0 ? (
+        <div style={deliveryMetadataStyle}>
+          <div style={deliveryMetadataTitleStyle}>Safe metadata</div>
+          <div style={deliveryGridStyle}>
+            {metadataEntries.map(([key, value]) => (
+              <DetailField key={key} label={key} value={formatDeliveryValue(value)} />
+            ))}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

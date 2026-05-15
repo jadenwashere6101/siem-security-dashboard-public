@@ -50,3 +50,14 @@ export async function listIncidentNotificationDeliveries(incidentId, filters = {
     incident_id: incidentId,
   });
 }
+
+/**
+ * Read-only delivery attempts linked to one approval_request_id.
+ * Uses the existing GET /notification-deliveries list endpoint.
+ */
+export async function listApprovalNotificationDeliveries(approvalRequestId, filters = {}) {
+  return listNotificationDeliveries({
+    ...filters,
+    approval_request_id: approvalRequestId,
+  });
+}

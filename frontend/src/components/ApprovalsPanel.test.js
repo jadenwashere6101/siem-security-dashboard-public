@@ -9,12 +9,17 @@ import {
   listApprovals,
   submitApprovalDecision,
 } from "../services/approvalService";
+import { listApprovalNotificationDeliveries } from "../services/notificationDeliveryService";
 
 jest.mock("../services/approvalService", () => ({
   listApprovals: jest.fn(),
   getApproval: jest.fn(),
   submitApprovalDecision: jest.fn(),
   expireOverdueApprovals: jest.fn(),
+}));
+
+jest.mock("../services/notificationDeliveryService", () => ({
+  listApprovalNotificationDeliveries: jest.fn(),
 }));
 
 const approvalFixture = {
@@ -78,6 +83,7 @@ describe("ApprovalsPanel", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     expireOverdueApprovals.mockReset();
+    listApprovalNotificationDeliveries.mockResolvedValue({ items: [], limit: 50, offset: 0 });
   });
 
   test("shows loading state while approvals load", () => {
@@ -179,6 +185,7 @@ describe("ApprovalsPanel", () => {
     await userEvent.click(screen.getByText("Block Ip"));
 
     await waitFor(() => expect(getApproval).toHaveBeenCalledWith(11));
+    expect(listApprovalNotificationDeliveries).toHaveBeenCalledWith(11, { limit: 50 });
   });
 
   test("expire overdue button shows in-flight state and re-enables", async () => {
@@ -437,6 +444,127 @@ describe("ApprovalsPanel", () => {
         reason: "",
       })
     );
+  });
+
+  test("renders approval notification delivery history with safe fields", async () => {
+    listApprovals.mockResolvedValue({ approvals: [approvalFixture], count: 1 });
+    getApproval.mockResolvedValue({ approval: approvalDetailFixture });
+    listApprovalNotificationDeliveries.mockResolvedValue({
+      items: [
+        {
+          id: 21,
+          correlation_id: "approval-corr-21",
+          provider: "slack",
+          mode: "simulation",
+          status: "success",
+          approval_request_id: 11,
+          adapter_name: "slack",
+          action: "send_message",
+          circuit_breaker_state: "closed",
+          timeout_seconds: 30,
+          failure_code: null,
+          failure_message: null,
+          requested_at: "2026-05-09T12:00:00Z",
+          started_at: "2026-05-09T12:00:01Z",
+          completed_at: "2026-05-09T12:00:02Z",
+          created_at: "2026-05-09T12:00:02Z",
+          metadata: {
+            channel_label: "#soc",
+            webhook_url: "https://hooks.example.invalid/secret",
+            raw_payload: { token: "secret" },
+          },
+        },
+      ],
+      limit: 50,
+      offset: 0,
+    });
+
+    renderPanel();
+    await screen.findByText("Block Ip");
+    await userEvent.click(screen.getByText("Block Ip"));
+
+    expect(await screen.findByText("Notification Delivery History")).toBeInTheDocument();
+    expect(screen.getByText(/operational evidence only/i)).toBeInTheDocument();
+    expect(screen.getByText(/does not prove that a human saw the message/i)).toBeInTheDocument();
+    expect(screen.getByText("Delivery #21")).toBeInTheDocument();
+    expect(screen.getByText("slack / simulation")).toBeInTheDocument();
+    expect(screen.getByText("approval-corr-21")).toBeInTheDocument();
+    expect(screen.getByText("send_message")).toBeInTheDocument();
+    expect(screen.getAllByText(/^closed$/i).length).toBeGreaterThan(0);
+    expect(screen.getByText("30")).toBeInTheDocument();
+    expect(screen.getByText("Safe metadata")).toBeInTheDocument();
+    expect(screen.getByText("#soc")).toBeInTheDocument();
+    expect(screen.queryByText(/hooks\.example/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/raw_payload/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /retry deliveries/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /resend/i })).not.toBeInTheDocument();
+  });
+
+  test("renders failure metadata for approval notification deliveries", async () => {
+    listApprovals.mockResolvedValue({ approvals: [approvalFixture], count: 1 });
+    getApproval.mockResolvedValue({ approval: approvalDetailFixture });
+    listApprovalNotificationDeliveries.mockResolvedValue({
+      items: [
+        {
+          id: 22,
+          correlation_id: "approval-corr-22",
+          provider: "teams",
+          mode: "real",
+          status: "failed",
+          adapter_name: "teams",
+          action: "send_message",
+          circuit_breaker_state: "open",
+          timeout_seconds: null,
+          failure_code: "network_error",
+          failure_message: "bad https://hooks.example.invalid/secret",
+          requested_at: "2026-05-09T12:00:00Z",
+          started_at: null,
+          completed_at: "2026-05-09T12:00:05Z",
+          created_at: "2026-05-09T12:00:05Z",
+          metadata: { provider_status: "down" },
+        },
+      ],
+      limit: 50,
+      offset: 0,
+    });
+
+    renderPanel();
+    await screen.findByText("Block Ip");
+    await userEvent.click(screen.getByText("Block Ip"));
+
+    expect(await screen.findByText("teams / real")).toBeInTheDocument();
+    expect(screen.getByText("network_error")).toBeInTheDocument();
+    expect(screen.getByText("[REDACTED_URL]")).toBeInTheDocument();
+    expect(screen.getByText("provider_status")).toBeInTheDocument();
+    expect(screen.getByText("down")).toBeInTheDocument();
+    expect(screen.queryByText(/hooks\.example/)).not.toBeInTheDocument();
+  });
+
+  test("delivery errors do not clear approval detail or decision controls", async () => {
+    listApprovals.mockResolvedValue({ approvals: [approvalFixture], count: 1 });
+    getApproval.mockResolvedValue({ approval: approvalDetailFixture });
+    listApprovalNotificationDeliveries
+      .mockRejectedValueOnce(new Error("delivery failed"))
+      .mockResolvedValueOnce({ items: [], limit: 50, offset: 0 });
+
+    renderPanel({ userRole: "super_admin" });
+    await screen.findByText("Block Ip");
+    await userEvent.click(screen.getByText("Block Ip"));
+
+    expect(await screen.findByText(/Approval #11/)).toBeInTheDocument();
+    expect(screen.getByText("Event History")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Approve" })).toBeInTheDocument();
+    expect(
+      await screen.findByText("Error loading notification deliveries: delivery failed")
+    ).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Retry deliveries" }));
+
+    expect(
+      await screen.findByText("No notification delivery attempts found for this approval.")
+    ).toBeInTheDocument();
+    expect(listApprovalNotificationDeliveries).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
   });
 
   test("failed decision shows error without changing selected approval", async () => {
