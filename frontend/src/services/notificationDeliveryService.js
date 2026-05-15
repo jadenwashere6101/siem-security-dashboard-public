@@ -39,3 +39,14 @@ export async function listNotificationDeliveries(filters = {}) {
   }
   return data;
 }
+
+/**
+ * Read-only delivery attempts linked to one incident_id.
+ * Uses the existing GET /notification-deliveries list endpoint.
+ */
+export async function listIncidentNotificationDeliveries(incidentId, filters = {}) {
+  return listNotificationDeliveries({
+    ...filters,
+    incident_id: incidentId,
+  });
+}

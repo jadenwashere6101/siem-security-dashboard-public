@@ -9,12 +9,17 @@ import {
   loadIncidents,
   updateIncidentStatus,
 } from "../services/incidentService";
+import { listIncidentNotificationDeliveries } from "../services/notificationDeliveryService";
 
 jest.mock("../services/incidentService", () => ({
   loadIncidents: jest.fn(),
   loadIncidentDetail: jest.fn(),
   loadIncidentTimeline: jest.fn(),
   updateIncidentStatus: jest.fn(),
+}));
+
+jest.mock("../services/notificationDeliveryService", () => ({
+  listIncidentNotificationDeliveries: jest.fn(),
 }));
 
 const incidentFixture = {
@@ -72,6 +77,7 @@ describe("IncidentsPanel", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     loadIncidentTimeline.mockResolvedValue({ timeline: [] });
+    listIncidentNotificationDeliveries.mockResolvedValue({ items: [], limit: 50, offset: 0 });
   });
 
   test("shows loading state while incidents load", () => {
@@ -137,6 +143,9 @@ describe("IncidentsPanel", () => {
 
     await waitFor(() => expect(loadIncidentDetail).toHaveBeenCalledWith(7));
     await waitFor(() => expect(loadIncidentTimeline).toHaveBeenCalledWith(7));
+    await waitFor(() =>
+      expect(listIncidentNotificationDeliveries).toHaveBeenCalledWith(7, { limit: 50 })
+    );
   });
 
   test("shows detail loading state", async () => {
@@ -282,6 +291,133 @@ describe("IncidentsPanel", () => {
     expect(await screen.findByText("Approval requested")).toBeInTheDocument();
     expect(screen.getByText("Approval requested for simulated step")).toBeInTheDocument();
     expect(loadIncidentTimeline).toHaveBeenCalledTimes(2);
+  });
+
+  test("renders incident notification delivery history with safe fields", async () => {
+    loadIncidents.mockResolvedValue({ incidents: [incidentFixture], count: 1 });
+    loadIncidentDetail.mockResolvedValue({ incident: incidentDetailFixture });
+    listIncidentNotificationDeliveries.mockResolvedValue({
+      items: [
+        {
+          id: 12,
+          correlation_id: "incident-corr-12",
+          provider: "slack",
+          mode: "simulation",
+          status: "success",
+          incident_id: 7,
+          adapter_name: "slack",
+          action: "send_message",
+          circuit_breaker_state: "closed",
+          timeout_seconds: 30,
+          failure_code: null,
+          failure_message: null,
+          requested_at: "2026-05-09T12:00:00Z",
+          started_at: "2026-05-09T12:00:01Z",
+          completed_at: "2026-05-09T12:00:02Z",
+          created_at: "2026-05-09T12:00:02Z",
+          metadata: {
+            channel_label: "#soc",
+            webhook_url: "https://hooks.example.invalid/secret",
+            raw_payload: { token: "secret" },
+          },
+        },
+      ],
+      limit: 50,
+      offset: 0,
+    });
+
+    renderPanel();
+    await screen.findByText(incidentFixture.title);
+    await userEvent.click(screen.getByText(incidentFixture.title));
+
+    expect(await screen.findByText("Notification Delivery History")).toBeInTheDocument();
+    expect(screen.getByText(/operational evidence only/i)).toBeInTheDocument();
+    expect(screen.getByText(/does not prove that a human saw the message/i)).toBeInTheDocument();
+    expect(screen.getByText("Delivery #12")).toBeInTheDocument();
+    expect(screen.getByText("slack / simulation")).toBeInTheDocument();
+    expect(screen.getByText("incident-corr-12")).toBeInTheDocument();
+    expect(screen.getByText("send_message")).toBeInTheDocument();
+    expect(screen.getAllByText(/^closed$/i).length).toBeGreaterThan(0);
+    expect(screen.getByText("30")).toBeInTheDocument();
+    expect(screen.getByText("Safe metadata")).toBeInTheDocument();
+    expect(screen.getByText("#soc")).toBeInTheDocument();
+    expect(screen.queryByText(/hooks\.example/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/raw_payload/i)).not.toBeInTheDocument();
+  });
+
+  test("renders failure metadata for incident notification deliveries", async () => {
+    loadIncidents.mockResolvedValue({ incidents: [incidentFixture], count: 1 });
+    loadIncidentDetail.mockResolvedValue({ incident: incidentDetailFixture });
+    listIncidentNotificationDeliveries.mockResolvedValue({
+      items: [
+        {
+          id: 13,
+          correlation_id: "incident-corr-13",
+          provider: "teams",
+          mode: "real",
+          status: "failed",
+          adapter_name: "teams",
+          action: "send_message",
+          circuit_breaker_state: "open",
+          timeout_seconds: null,
+          failure_code: "network_error",
+          failure_message: "bad https://hooks.example.invalid/secret",
+          requested_at: "2026-05-09T12:00:00Z",
+          started_at: null,
+          completed_at: "2026-05-09T12:00:05Z",
+          created_at: "2026-05-09T12:00:05Z",
+          metadata: { provider_status: "down" },
+        },
+      ],
+      limit: 50,
+      offset: 0,
+    });
+
+    renderPanel();
+    await screen.findByText(incidentFixture.title);
+    await userEvent.click(screen.getByText(incidentFixture.title));
+
+    expect(await screen.findByText("teams / real")).toBeInTheDocument();
+    expect(screen.getByText("network_error")).toBeInTheDocument();
+    expect(screen.getByText("[REDACTED_URL]")).toBeInTheDocument();
+    expect(screen.getByText("provider_status")).toBeInTheDocument();
+    expect(screen.getByText("down")).toBeInTheDocument();
+    expect(screen.queryByText(/hooks\.example/)).not.toBeInTheDocument();
+  });
+
+  test("delivery errors do not clear incident detail or timeline", async () => {
+    loadIncidents.mockResolvedValue({ incidents: [incidentFixture], count: 1 });
+    loadIncidentDetail.mockResolvedValue({ incident: incidentDetailFixture });
+    loadIncidentTimeline.mockResolvedValue({
+      timeline: [
+        {
+          timestamp: "2026-05-10T18:25:00Z",
+          event_type: "approval_requested",
+          source: "approval_request",
+          summary: "Approval requested for simulated step",
+        },
+      ],
+    });
+    listIncidentNotificationDeliveries
+      .mockRejectedValueOnce(new Error("delivery failed"))
+      .mockResolvedValueOnce({ items: [], limit: 50, offset: 0 });
+
+    renderPanel();
+    await screen.findByText(incidentFixture.title);
+    await userEvent.click(screen.getByText(incidentFixture.title));
+
+    expect(await screen.findByText(/Incident #7/)).toBeInTheDocument();
+    expect(await screen.findByText("Approval requested")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Error loading notification deliveries: delivery failed")
+    ).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Retry deliveries" }));
+
+    expect(
+      await screen.findByText("No notification delivery attempts found for this incident.")
+    ).toBeInTheDocument();
+    expect(listIncidentNotificationDeliveries).toHaveBeenCalledTimes(2);
   });
 
   test("timeline section does not render mutation controls", async () => {

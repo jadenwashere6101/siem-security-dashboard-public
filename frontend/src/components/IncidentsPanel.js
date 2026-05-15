@@ -5,6 +5,7 @@ import {
   loadIncidents,
   updateIncidentStatus,
 } from "../services/incidentService";
+import { listIncidentNotificationDeliveries } from "../services/notificationDeliveryService";
 import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
 
 const INCIDENT_STATUS_FILTERS = ["all", "open", "investigating", "resolved", "closed"];
@@ -27,6 +28,24 @@ const SAFE_TIMELINE_METADATA_KEYS = [
   "source_ip",
   "severity",
 ];
+const UNSAFE_DELIVERY_METADATA_KEY_SNIPPETS = [
+  "webhook",
+  "token",
+  "secret",
+  "password",
+  "authorization",
+  "cookie",
+  "bearer",
+  "api_key",
+  "apikey",
+  "raw_payload",
+  "raw_response",
+  "header",
+];
+const DELIVERY_HISTORY_DISCLAIMER =
+  // spec: SPEC-NOTIFY-001
+  "Delivery history shows recorded notification attempts (simulation or real mode). " +
+  "It is operational evidence only; it does not prove that a human saw the message.";
 
 function IncidentsPanel({
   cardStyle,
@@ -53,6 +72,9 @@ function IncidentsPanel({
   const [timeline, setTimeline] = useState([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
   const [timelineError, setTimelineError] = useState("");
+  const [deliveryAttempts, setDeliveryAttempts] = useState([]);
+  const [deliveryLoading, setDeliveryLoading] = useState(false);
+  const [deliveryError, setDeliveryError] = useState("");
 
   const loadIncidentList = useCallback(async ({ quiet = false } = {}) => {
     try {
@@ -114,6 +136,22 @@ function IncidentsPanel({
     }
   }, []);
 
+  const loadNotificationDeliveries = useCallback(async (incidentId) => {
+    if (!incidentId) return;
+    try {
+      setDeliveryLoading(true);
+      setDeliveryError("");
+
+      const data = await listIncidentNotificationDeliveries(incidentId, { limit: 50 });
+      setDeliveryAttempts(Array.isArray(data?.items) ? data.items : []);
+    } catch (err) {
+      setDeliveryAttempts([]);
+      setDeliveryError(err.message || "Unable to load notification deliveries.");
+    } finally {
+      setDeliveryLoading(false);
+    }
+  }, []);
+
   const handleStatusUpdate = useCallback(async () => {
     if (!selectedIncidentId || !selectedIncident || !pendingStatus) return;
     if (pendingStatus === selectedIncident.status) return;
@@ -149,6 +187,9 @@ function IncidentsPanel({
     setTimeline([]);
     setTimelineError("");
     setTimelineLoading(false);
+    setDeliveryAttempts([]);
+    setDeliveryError("");
+    setDeliveryLoading(false);
   }, []);
 
   useEffect(() => {
@@ -159,10 +200,13 @@ function IncidentsPanel({
     if (selectedIncidentId) {
       setTimeline([]);
       setTimelineError("");
+      setDeliveryAttempts([]);
+      setDeliveryError("");
       loadDetail(selectedIncidentId);
       loadTimeline(selectedIncidentId);
+      loadNotificationDeliveries(selectedIncidentId);
     }
-  }, [loadDetail, loadTimeline, selectedIncidentId]);
+  }, [loadDetail, loadNotificationDeliveries, loadTimeline, selectedIncidentId]);
 
   return (
     <section style={cardStyle}>
@@ -400,6 +444,36 @@ function IncidentsPanel({
                   )}
                 </div>
 
+                <div style={deliverySectionStyle}>
+                  <div style={tableMetaStyle}>
+                    <span style={tableMetaLabelStyle}>Notification Delivery History</span>
+                    <span style={tableMetaCountStyle}>{deliveryAttempts.length}</span>
+                  </div>
+                  <p style={timelineNoticeStyle}>{DELIVERY_HISTORY_DISCLAIMER}</p>
+                  {deliveryLoading ? (
+                    <p style={emptyTextStyle}>Loading notification deliveries...</p>
+                  ) : deliveryError ? (
+                    <div style={timelineErrorStyle}>
+                      <span>Error loading notification deliveries: {deliveryError}</span>
+                      <button
+                        type="button"
+                        onClick={() => loadNotificationDeliveries(selectedIncidentId)}
+                        style={retryButtonStyle}
+                      >
+                        Retry deliveries
+                      </button>
+                    </div>
+                  ) : deliveryAttempts.length === 0 ? (
+                    <p style={emptyTextStyle}>No notification delivery attempts found for this incident.</p>
+                  ) : (
+                    <div style={deliveryListStyle} aria-label="Notification delivery history">
+                      {deliveryAttempts.map((attempt) => (
+                        <DeliveryAttempt key={attempt.id || attempt.correlation_id} attempt={attempt} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+
                 {canTakeAlertActions ? (
                   <div style={statusControlStyle}>
                     <label style={filterWrapperStyle}>
@@ -482,6 +556,29 @@ const formatMetadataValue = (value) => {
   if (value === false) return "false";
   if (value === null || value === undefined || value === "") return "N/A";
   return String(value);
+};
+
+const deliveryMetadataKeyIsSafe = (key) => {
+  if (!key || typeof key !== "string") return false;
+  const normalized = key.toLowerCase();
+  if (normalized.includes("://")) return false;
+  return !UNSAFE_DELIVERY_METADATA_KEY_SNIPPETS.some((snippet) =>
+    normalized.includes(snippet)
+  );
+};
+
+const formatDeliveryValue = (value, emptyValue = "N/A") => {
+  if (value === true) return "Yes";
+  if (value === false) return "No";
+  if (value === null || value === undefined || value === "") return emptyValue;
+  if (typeof value === "string" && /https?:\/\//i.test(value)) return "[REDACTED_URL]";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+};
+
+const getSafeDeliveryMetadataEntries = (metadata) => {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return [];
+  return Object.entries(metadata).filter(([key]) => deliveryMetadataKeyIsSafe(key));
 };
 
 const getSafeMetadataEntries = (metadata) => {
@@ -825,6 +922,12 @@ const timelineSectionStyle = {
   borderTop: "1px solid #21262d",
 };
 
+const deliverySectionStyle = {
+  marginTop: "18px",
+  paddingTop: "16px",
+  borderTop: "1px solid #21262d",
+};
+
 const timelineNoticeStyle = {
   margin: "0 0 12px 0",
   color: "#8b949e",
@@ -925,6 +1028,61 @@ const timelineMetadataKeyStyle = {
   color: "#8b949e",
 };
 
+const deliveryListStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "10px",
+};
+
+const deliveryCardStyle = {
+  padding: "12px",
+  borderRadius: "8px",
+  border: "1px solid #30363d",
+  backgroundColor: "#161b22",
+};
+
+const deliveryCardHeaderStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: "10px",
+  flexWrap: "wrap",
+  marginBottom: "12px",
+};
+
+const deliveryTitleStyle = {
+  color: "#e6edf3",
+  fontSize: "13px",
+  fontWeight: "700",
+};
+
+const deliveryModeStyle = {
+  color: "#93c5fd",
+  fontSize: "12px",
+  fontWeight: "700",
+};
+
+const deliveryGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+  gap: "12px",
+};
+
+const deliveryMetadataStyle = {
+  marginTop: "12px",
+  paddingTop: "12px",
+  borderTop: "1px solid #21262d",
+};
+
+const deliveryMetadataTitleStyle = {
+  marginBottom: "10px",
+  color: "#8b949e",
+  fontSize: "11px",
+  fontWeight: "700",
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+};
+
 const statusControlStyle = {
   display: "flex",
   alignItems: "flex-end",
@@ -981,6 +1139,61 @@ function TimelineEvent({ event }) {
         </div>
       ) : null}
     </li>
+  );
+}
+
+function DeliveryAttempt({ attempt }) {
+  const metadataEntries = getSafeDeliveryMetadataEntries(attempt?.metadata);
+  return (
+    <div style={deliveryCardStyle}>
+      <div style={deliveryCardHeaderStyle}>
+        <span style={deliveryTitleStyle}>
+          Delivery #{formatDeliveryValue(attempt?.id)}
+        </span>
+        <span style={deliveryModeStyle}>
+          {formatDeliveryValue(attempt?.provider)} / {formatDeliveryValue(attempt?.mode)}
+        </span>
+        <span style={{ ...badgeStyle, ...neutralBadgeStyle }}>
+          {formatDeliveryValue(attempt?.status)}
+        </span>
+      </div>
+      <div style={deliveryGridStyle}>
+        <DetailField label="Correlation ID" value={formatDeliveryValue(attempt?.correlation_id)} mono />
+        <DetailField label="Adapter" value={formatDeliveryValue(attempt?.adapter_name)} />
+        <DetailField label="Action" value={formatDeliveryValue(attempt?.action)} />
+        <DetailField
+          label="Circuit breaker"
+          value={formatDeliveryValue(attempt?.circuit_breaker_state)}
+        />
+        <DetailField
+          label="Timeout seconds"
+          value={formatDeliveryValue(attempt?.timeout_seconds)}
+        />
+        <DetailField label="Requested" value={formatTimestamp(attempt?.requested_at)} />
+        <DetailField label="Started" value={formatTimestamp(attempt?.started_at)} />
+        <DetailField label="Completed" value={formatTimestamp(attempt?.completed_at)} />
+        <DetailField label="Created" value={formatTimestamp(attempt?.created_at)} />
+        {attempt?.failure_code ? (
+          <DetailField label="Failure code" value={formatDeliveryValue(attempt.failure_code)} />
+        ) : null}
+        {attempt?.failure_message ? (
+          <DetailField
+            label="Failure message"
+            value={formatDeliveryValue(attempt.failure_message)}
+          />
+        ) : null}
+      </div>
+      {metadataEntries.length > 0 ? (
+        <div style={deliveryMetadataStyle}>
+          <div style={deliveryMetadataTitleStyle}>Safe metadata</div>
+          <div style={deliveryGridStyle}>
+            {metadataEntries.map(([key, value]) => (
+              <DetailField key={key} label={key} value={formatDeliveryValue(value)} />
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

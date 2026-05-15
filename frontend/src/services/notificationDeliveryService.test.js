@@ -1,4 +1,7 @@
-import { listNotificationDeliveries } from "./notificationDeliveryService";
+import {
+  listIncidentNotificationDeliveries,
+  listNotificationDeliveries,
+} from "./notificationDeliveryService";
 
 describe("listNotificationDeliveries", () => {
   beforeEach(() => {
@@ -78,5 +81,19 @@ describe("listNotificationDeliveries", () => {
     });
 
     await expect(listNotificationDeliveries()).rejects.toThrow();
+  });
+
+  test("lists notification deliveries for an incident through the existing endpoint", async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ items: [], limit: 25, offset: 0 }),
+    });
+
+    await listIncidentNotificationDeliveries(7, { limit: 25 });
+
+    const [url] = global.fetch.mock.calls[0];
+    expect(url).toContain("/notification-deliveries");
+    expect(url).toContain("incident_id=7");
+    expect(url).toContain("limit=25");
   });
 });
