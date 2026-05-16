@@ -156,7 +156,7 @@ def test_schema_snapshot_marker_matches_latest_migration():
         migrations_dir=repo_root / "migrations",
     )
 
-    assert version == 9
+    assert version == 10
 
 
 def test_schema_snapshot_validator_rejects_missing_marker(tmp_path):
@@ -539,3 +539,70 @@ def test_soar_notification_delivery_migration_scope():
         assert column in sql
     for index in expected_indexes:
         assert index in sql
+
+
+def test_soar_dead_letters_migration_scope():
+    migration_path = Path(__file__).resolve().parent.parent / "migrations" / "0010_soar_dead_letters.sql"
+    sql = migration_path.read_text(encoding="utf-8")
+
+    assert "CREATE TABLE IF NOT EXISTS soar_dead_letters" in sql
+    excluded_tables = [
+        "approval_requests",
+        "approval_request_events",
+        "playbook_executions",
+        "playbook_definitions",
+        "playbook_schedules",
+        "notification_delivery_attempts",
+        "response_actions_queue",
+        "response_actions_log",
+        "incidents",
+        "alerts",
+        "users",
+    ]
+    for table in excluded_tables:
+        assert f"CREATE TABLE IF NOT EXISTS {table}" not in sql
+
+    assert "DROP" not in sql.upper()
+    assert "TRUNCATE" not in sql.upper()
+    assert "DELETE FROM" not in sql.upper()
+    assert "RENAME" not in sql.upper()
+    assert "CONCURRENTLY" not in sql.upper()
+
+    expected_columns = [
+        "source_type VARCHAR(64) NOT NULL",
+        "source_id INTEGER NOT NULL",
+        "execution_id INTEGER REFERENCES playbook_executions(id) ON DELETE SET NULL",
+        "incident_id INTEGER REFERENCES incidents(id) ON DELETE SET NULL",
+        "alert_id INTEGER REFERENCES alerts(id) ON DELETE SET NULL",
+        "playbook_id VARCHAR(64) REFERENCES playbook_definitions(id) ON DELETE SET NULL",
+        "step_index INTEGER",
+        "action_name VARCHAR(128)",
+        "failure_class VARCHAR(64) NOT NULL DEFAULT 'unknown'",
+        "error_message TEXT NOT NULL",
+        "payload_json JSONB NOT NULL DEFAULT '{}'::jsonb",
+        "retryable BOOLEAN NOT NULL DEFAULT FALSE",
+        "status VARCHAR(32) NOT NULL DEFAULT 'open'",
+        "retry_count INTEGER NOT NULL DEFAULT 0",
+        "first_failed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+        "last_failed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+        "dismissed_at TIMESTAMPTZ",
+        "dismissed_by INTEGER REFERENCES users(id) ON DELETE SET NULL",
+        "dismiss_reason TEXT",
+        "retry_requested_at TIMESTAMPTZ",
+        "retry_requested_by INTEGER REFERENCES users(id) ON DELETE SET NULL",
+        "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+    ]
+    expected_indexes = [
+        "idx_soar_dead_letters_status_created_at",
+        "idx_soar_dead_letters_source_type_source_id",
+        "idx_soar_dead_letters_incident_id",
+        "idx_soar_dead_letters_alert_id",
+        "idx_soar_dead_letters_execution_id",
+        "idx_soar_dead_letters_failure_class",
+        "idx_soar_dead_letters_active_source_unique",
+    ]
+    for column in expected_columns:
+        assert column in sql
+    for index in expected_indexes:
+        assert index in sql
+    assert "status IN ('open', 'retrying')" in sql
