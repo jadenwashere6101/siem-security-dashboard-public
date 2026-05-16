@@ -309,3 +309,75 @@ def test_soar_approvals_migration_scope_and_original_shape():
     assert "idx_approval_request_events_request_id" in sql
     assert "idx_approval_request_events_created_at" in sql
     assert "idx_approval_requests_queue_action_active" in sql
+
+
+def test_soar_playbooks_migration_scope_and_original_execution_shape():
+    migration_path = Path(__file__).resolve().parent.parent / "migrations" / "0006_soar_playbooks.sql"
+    sql = migration_path.read_text(encoding="utf-8")
+
+    included_tables = [
+        "playbook_definitions",
+        "playbook_schedules",
+        "playbook_executions",
+    ]
+    excluded_tables = [
+        "events",
+        "alerts",
+        "response_actions_log",
+        "response_actions_queue",
+        "users",
+        "audit_log",
+        "alert_notes",
+        "detection_config",
+        "blocked_ips",
+        "incidents",
+        "incident_alerts",
+        "approval_requests",
+        "approval_request_events",
+        "notification_delivery_attempts",
+    ]
+    for table in included_tables:
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in sql
+    for table in excluded_tables:
+        assert f"CREATE TABLE IF NOT EXISTS {table}" not in sql
+
+    expected_execution_columns = [
+        "id SERIAL PRIMARY KEY",
+        "playbook_id VARCHAR(64) NOT NULL REFERENCES playbook_definitions(id)",
+        "alert_id INTEGER REFERENCES alerts(id) ON DELETE SET NULL",
+        "incident_id INTEGER REFERENCES incidents(id) ON DELETE SET NULL",
+        "status VARCHAR(30) NOT NULL DEFAULT 'pending'",
+        "started_at TIMESTAMPTZ",
+        "completed_at TIMESTAMPTZ",
+        "last_completed_step INTEGER",
+        "steps_log JSONB NOT NULL DEFAULT '[]'::jsonb",
+        "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+    ]
+    excluded_reliability_columns = [
+        "attempt_count",
+        "max_attempts",
+        "last_attempted_at",
+        "failure_reason",
+        "stale_after",
+        "timeout_seconds",
+    ]
+    for column in expected_execution_columns:
+        assert column in sql
+    for column in excluded_reliability_columns:
+        assert column not in sql
+
+    assert "DROP" not in sql.upper()
+    assert "TRUNCATE" not in sql.upper()
+    assert "DELETE FROM" not in sql.upper()
+    assert "RENAME" not in sql.upper()
+    assert "CONCURRENTLY" not in sql.upper()
+    assert "DROP INDEX" not in sql.upper()
+    assert "idx_playbook_definitions_enabled" in sql
+    assert "idx_playbook_schedules_playbook_id" in sql
+    assert "idx_playbook_schedules_next_run_at" in sql
+    assert "idx_playbook_executions_playbook_id" in sql
+    assert "idx_playbook_executions_alert_id" in sql
+    assert "idx_playbook_executions_status" in sql
+    assert "idx_playbook_executions_created_at" in sql
+    assert "idx_playbook_executions_playbook_alert_unique" in sql
+    assert "status IN ('pending', 'running', 'awaiting_approval')" in sql
