@@ -67,7 +67,7 @@ Implementation should be split into small approved slices. Do not implement from
 - [x] Add dead letter metrics helper.
 - [x] Add metrics route for count/depth/source/failure-class breakdowns.
 - [x] Ensure metrics responses do not expose metadata or secrets.
-- [ ] Document operational review workflow.
+- [x] Document operational review workflow.
 - [x] Add tests for counts, oldest age, filters, no mutation, and auth/RBAC.
 
 ---
