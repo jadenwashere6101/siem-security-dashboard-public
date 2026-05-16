@@ -10,6 +10,7 @@ from psycopg2.extras import Json
 
 from core import approval_store, notification_delivery_store, playbook_store
 from engines import playbook_step_executor
+from scripts import run_playbook_executor_once
 from integrations.base_integration import (
     CIRCUIT_STATE_CLOSED,
     CIRCUIT_STATE_HALF_OPEN,
@@ -108,6 +109,25 @@ def _set_execution_progress(
             execution_id,
         ),
     )
+
+
+def _set_expired_running_progress(cur, execution_id, *, steps_log, last_completed_step):
+    expired = datetime(2026, 5, 16, 12, 0, 0, tzinfo=timezone.utc)
+    cur.execute(
+        """
+        UPDATE playbook_executions
+        SET status = 'running',
+            steps_log = %s,
+            last_completed_step = %s,
+            lease_owner = 'stale-worker',
+            lease_acquired_at = %s,
+            lease_heartbeat_at = %s,
+            lease_expires_at = %s
+        WHERE id = %s
+        """,
+        (Json(steps_log), last_completed_step, expired, expired, expired, execution_id),
+    )
+    return expired + timedelta(minutes=5)
 
 
 @pytest.fixture(autouse=True)
@@ -1420,3 +1440,119 @@ def test_terminal_failed_or_aborted_executions_do_not_resume(utc_db, status):
     assert result["reason"] == "terminal_status"
     assert row["status"] == status
     assert row["steps_log"] == prior_log
+
+
+def test_recovered_stale_execution_later_resumes_after_completed_step(utc_db, monkeypatch):
+    conn, cur = utc_db
+    eid = _create_execution(
+        conn,
+        cur,
+        "pb_stale_resume",
+        steps=[
+            {"action": "monitor", "params": {}},
+            {"action": "flag_high_priority", "params": {}},
+        ],
+    )
+    recovery_at = _set_expired_running_progress(
+        cur,
+        eid,
+        steps_log=[_progress_entry(0, "monitor")],
+        last_completed_step=0,
+    )
+    conn.commit()
+
+    recovered = run_playbook_executor_once.recover_stale_playbook_executions(
+        conn,
+        limit=10,
+        dry_run=False,
+        now=recovery_at,
+    )
+    conn.commit()
+
+    calls = []
+    original = playbook_step_executor._simulate_step
+
+    def _record_step(step, step_index, now, execution):
+        calls.append(step_index)
+        return original(step, step_index, now, execution)
+
+    monkeypatch.setattr(playbook_step_executor, "_simulate_step", _record_step)
+    result = playbook_step_executor.process_playbook_execution(
+        conn,
+        eid,
+        worker_id="worker-alpha",
+    )
+
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert recovered["recovered"] == 1
+    assert result["outcome"] == "success"
+    assert calls == [1]
+    assert row["last_completed_step"] == 1
+    assert [entry["action"] for entry in row["steps_log"]] == [
+        "monitor",
+        "flag_high_priority",
+    ]
+
+
+def test_recovered_stale_notification_step_is_not_recorded_again(utc_db, no_network):
+    conn, cur = utc_db
+    eid = _create_execution(
+        conn,
+        cur,
+        "pb_stale_notify_resume",
+        steps=[
+            {"action": "notify_slack", "params": {"message": "already sent"}},
+            {"action": "monitor", "params": {}},
+        ],
+    )
+    cur.execute("SELECT alert_id FROM playbook_executions WHERE id = %s", (eid,))
+    alert_id = cur.fetchone()[0]
+    notification_delivery_store.create_notification_delivery_attempt(
+        conn,
+        correlation_id=f"stale-existing-{eid}-0",
+        idempotency_key=playbook_step_executor._make_delivery_idempotency_key(
+            "slack", "notify_slack", eid, 0
+        ),
+        provider="slack",
+        mode="simulation",
+        status="success",
+        adapter_name="slack",
+        action="send_message",
+        metadata={"adapter_mode": "simulation"},
+        playbook_execution_id=eid,
+        playbook_step_index=0,
+        alert_id=alert_id,
+        circuit_breaker_state="closed",
+    )
+    recovery_at = _set_expired_running_progress(
+        cur,
+        eid,
+        steps_log=[_progress_entry(0, "notify_slack")],
+        last_completed_step=0,
+    )
+    conn.commit()
+
+    recovered = run_playbook_executor_once.recover_stale_playbook_executions(
+        conn,
+        limit=10,
+        dry_run=False,
+        now=recovery_at,
+    )
+    conn.commit()
+
+    with patch(
+        "engines.playbook_step_executor.notification_delivery_store"
+        ".create_notification_delivery_attempt",
+        side_effect=AssertionError("completed notification step was replayed"),
+    ):
+        result = playbook_step_executor.process_playbook_execution(
+            conn,
+            eid,
+            worker_id="worker-alpha",
+        )
+
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert recovered["recovered"] == 1
+    assert result["outcome"] == "success"
+    assert _count_deliveries(cur, eid) == 1
+    assert [entry["action"] for entry in row["steps_log"]] == ["notify_slack", "monitor"]

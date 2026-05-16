@@ -445,6 +445,7 @@ def list_stale_running_executions(
               AND lease_expires_at <= %s
             ORDER BY lease_expires_at ASC, id ASC
             LIMIT %s
+            FOR UPDATE SKIP LOCKED
             """,
             (now, limit),
         )

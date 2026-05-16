@@ -56,12 +56,12 @@ This is a design/spec change only. Implementation should be split into later app
 
 ## Slice 4 — Stale recovery workflow
 
-- [ ] Implement stale lease scanner using `FOR UPDATE SKIP LOCKED`.
-- [ ] Requeue stale running executions when attempts remain.
-- [ ] Mark exhausted stale executions failed/permanently_failed according to policy.
-- [ ] Do not treat `awaiting_approval` as stale-running.
-- [ ] Add CLI/admin-safe recovery command or dry-run status command.
-- [ ] Add tests for stale recovery, max attempts, and no-op terminal statuses.
+- [x] Implement stale lease scanner using `FOR UPDATE SKIP LOCKED`.
+- [x] Requeue stale running executions when attempts remain.
+- [x] Mark exhausted stale executions failed/permanently_failed according to policy.
+- [x] Do not treat `awaiting_approval` as stale-running.
+- [x] Add CLI/admin-safe recovery command or dry-run status command.
+- [x] Add tests for stale recovery, max attempts, and no-op terminal statuses.
 
 ---
 
