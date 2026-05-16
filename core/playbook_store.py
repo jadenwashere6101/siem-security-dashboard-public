@@ -193,7 +193,18 @@ def acquire_execution_lease(
         )
         updated = cur.fetchone()
         if updated is None:
+            logger.info(
+                "playbook lease acquire skipped execution_id=%s worker_id=%s reason=update_race",
+                execution_id,
+                owner,
+            )
             return None
+        logger.info(
+            "playbook lease acquired execution_id=%s worker_id=%s expires_at=%s",
+            execution_id,
+            owner,
+            expires_at,
+        )
         return _execution_row_to_dict(updated)
 
 
@@ -269,7 +280,18 @@ def claim_next_pending_playbook_execution_with_lease(
         )
         updated = cur.fetchone()
         if updated is None:
+            logger.info(
+                "playbook lease claim skipped execution_id=%s worker_id=%s reason=update_race",
+                execution_id,
+                owner,
+            )
             return None
+        logger.info(
+            "playbook lease claimed execution_id=%s worker_id=%s expires_at=%s",
+            execution_id,
+            owner,
+            expires_at,
+        )
         return _execution_row_to_dict(updated)
 
 
@@ -346,7 +368,18 @@ def acquire_awaiting_approval_resume_lease(
         )
         updated = cur.fetchone()
         if updated is None:
+            logger.info(
+                "playbook approval resume lease skipped execution_id=%s worker_id=%s reason=update_race",
+                execution_id,
+                owner,
+            )
             return None
+        logger.info(
+            "playbook approval resume lease acquired execution_id=%s worker_id=%s expires_at=%s",
+            execution_id,
+            owner,
+            expires_at,
+        )
         return _execution_row_to_dict(updated)
 
 
@@ -386,7 +419,18 @@ def heartbeat_execution_lease(
         )
         row = cur.fetchone()
         if row is None:
+            logger.info(
+                "playbook lease heartbeat skipped execution_id=%s worker_id=%s reason=lease_not_active",
+                execution_id,
+                owner,
+            )
             return None
+        logger.debug(
+            "playbook lease heartbeat execution_id=%s worker_id=%s expires_at=%s",
+            execution_id,
+            owner,
+            expires_at,
+        )
         return _execution_row_to_dict(row)
 
 
@@ -416,7 +460,17 @@ def release_execution_lease(
         )
         row = cur.fetchone()
         if row is None:
+            logger.info(
+                "playbook lease release skipped execution_id=%s worker_id=%s reason=owner_mismatch",
+                execution_id,
+                owner,
+            )
             return None
+        logger.info(
+            "playbook lease released execution_id=%s worker_id=%s",
+            execution_id,
+            owner,
+        )
         return _execution_row_to_dict(row)
 
 
@@ -521,8 +575,43 @@ def mark_stale_execution_for_recovery(
         )
         updated = cur.fetchone()
         if updated is None:
+            logger.info(
+                "playbook stale recovery skipped execution_id=%s reason=update_race",
+                execution_id,
+            )
             return None
-        return _execution_row_to_dict(updated)
+        recovered = _execution_row_to_dict(updated)
+        logger.info(
+            "playbook stale recovery applied execution_id=%s new_status=%s recovery_count=%s",
+            execution_id,
+            recovered["status"],
+            recovered["recovery_count"],
+        )
+        return recovered
+
+
+def count_expired_awaiting_approval_leases(
+    conn,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """Diagnostic count only; awaiting_approval is never recovered as stale-running."""
+    if now is None:
+        now = datetime.utcnow()
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM playbook_executions
+            WHERE status = 'awaiting_approval'
+              AND lease_expires_at IS NOT NULL
+              AND lease_expires_at <= %s
+            """,
+            (now,),
+        )
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
 
 
 def mark_playbook_execution_permanently_failed(

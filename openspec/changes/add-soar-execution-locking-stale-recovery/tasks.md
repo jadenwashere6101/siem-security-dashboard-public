@@ -85,11 +85,13 @@ This is a design/spec change only. Implementation should be split into later app
 
 ## Slice 6 — Observability and operations
 
-- [ ] Expose lease fields in read-only execution APIs if needed.
-- [ ] Add worker id, claimed ids, heartbeat loss, and recovery counts to CLI output.
-- [ ] Document operational stale recovery workflow.
-- [ ] Add manual recovery/admin tasks if approved.
-- [ ] Add regression tests for existing approval and notification behavior.
+- [x] Expose lease fields in read-only execution APIs if needed.
+  - Not needed in this slice; existing route coverage remains unchanged.
+- [x] Add worker id, claimed ids, heartbeat loss, and recovery counts to CLI output.
+- [x] Document operational stale recovery workflow.
+- [x] Add manual recovery/admin tasks if approved.
+  - No admin route was approved; manual CLI recovery and validation docs cover this slice.
+- [x] Add regression tests for existing approval and notification behavior.
 
 ---
 

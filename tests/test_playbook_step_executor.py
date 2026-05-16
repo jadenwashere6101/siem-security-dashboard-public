@@ -1068,7 +1068,7 @@ def test_executor_acquires_lease_before_processing(utc_db):
     assert row["lease_owner"] is None
 
 
-def test_second_worker_cannot_process_leased_execution(utc_db):
+def test_second_worker_cannot_process_leased_execution(utc_db, caplog):
     conn, cur = utc_db
     eid = _create_execution(conn, cur, "pb_lease_block")
     leased = playbook_store.acquire_execution_lease(
@@ -1077,12 +1077,15 @@ def test_second_worker_cannot_process_leased_execution(utc_db):
     conn.commit()
     assert leased is not None
 
+    caplog.set_level("INFO", logger="engines.playbook_step_executor")
     result = playbook_step_executor.process_playbook_execution(
         conn, eid, worker_id="worker-beta"
     )
 
     assert result["outcome"] == "skipped"
     assert result["reason"] == "lease_not_owned"
+    assert "worker_id=worker-beta" in caplog.text
+    assert "reason=lease_not_owned" in caplog.text
 
 
 def test_failed_lease_acquisition_skips_processing(utc_db):

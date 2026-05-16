@@ -235,6 +235,12 @@ def process_playbook_execution(
 
     if prior_status == "running":
         if execution.get("lease_owner") and execution.get("lease_owner") != owner:
+            logger.info(
+                "[PLAYBOOK SIMULATION] lease skip execution_id=%s worker_id=%s owner=%s reason=lease_not_owned",
+                execution_id,
+                owner,
+                execution.get("lease_owner"),
+            )
             return _skip_result(
                 execution,
                 prior_status,
@@ -294,6 +300,13 @@ def process_playbook_execution(
         reason = "lease_not_acquired"
         if latest.get("status") != "pending":
             reason = "claim_failed"
+        logger.info(
+            "[PLAYBOOK SIMULATION] lease acquire skip execution_id=%s worker_id=%s reason=%s latest_status=%s",
+            execution_id,
+            owner,
+            reason,
+            latest.get("status"),
+        )
         return _skip_result(
             execution,
             prior_status,
@@ -666,6 +679,12 @@ def _process_steps(
             timestamp,
             lease_duration_seconds,
         ):
+            logger.warning(
+                "[PLAYBOOK SIMULATION] lease lost before step execution_id=%s worker_id=%s step_index=%s",
+                execution_id,
+                worker_id,
+                index,
+            )
             return _result(
                 execution,
                 prior,
@@ -704,6 +723,12 @@ def _process_steps(
                 lease_owner=worker_id,
             )
             if updated is None:
+                logger.warning(
+                    "[PLAYBOOK SIMULATION] lease lost while pausing for approval execution_id=%s worker_id=%s step_index=%s",
+                    execution_id,
+                    worker_id,
+                    index,
+                )
                 return _result(
                     execution,
                     prior,
@@ -757,6 +782,12 @@ def _process_steps(
                 )
                 is None
             ):
+                logger.warning(
+                    "[PLAYBOOK SIMULATION] lease lost while saving progress execution_id=%s worker_id=%s step_index=%s",
+                    execution_id,
+                    worker_id,
+                    index,
+                )
                 return _result(
                     execution,
                     prior,

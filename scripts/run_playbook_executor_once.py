@@ -92,15 +92,8 @@ def main(argv=None):
             if args.json:
                 print(json.dumps(payload, default=str))
             else:
-                print("=== SOAR Playbook Stale Recovery ===")
-                print(f"Mode:       {payload['mode']}")
-                print(f"Worker id:  {worker_id}")
-                print(f"Dry run:    {result['dry_run']}")
-                print(f"Scanned:    {result['scanned']}")
-                print(f"Recovered:  {result['recovered']}")
-                print(f"Pending:    {result['pending']}")
-                print(f"Failed:     {result['failed']}")
-                print("No playbook steps were executed.")
+                for line in _render_recovery_summary_lines(payload):
+                    print(line)
             return 0
         result = process_playbook_execution_batch(
             conn,
@@ -117,21 +110,16 @@ def main(argv=None):
                 "success": result["success"],
                 "failed": result["failed"],
                 "skipped": result["skipped"],
+                "skip_reasons": _skip_reason_counts(result["results"]),
+                "claimed_execution_ids": _claimed_execution_ids(result["results"]),
             },
             "results": result["results"],
         }
         if args.json:
             print(json.dumps(payload, default=str))
         else:
-            print("=== SOAR Playbook Simulation Executor ===")
-            print(f"Mode:       {payload['mode']}")
-            print(f"Worker id:  {worker_id}")
-            print(f"Batch size: {batch_size}")
-            print(f"Processed:  {payload['summary']['processed']}")
-            print(f"Success:    {payload['summary']['success']}")
-            print(f"Failed:     {payload['summary']['failed']}")
-            print(f"Skipped:    {payload['summary']['skipped']}")
-            print("No real integrations were called.")
+            for line in _render_batch_summary_lines(payload):
+                print(line)
         return 0
     except Exception as error:
         if conn is not None:
@@ -179,14 +167,24 @@ def recover_stale_playbook_executions(
         now=timestamp,
         limit=_normalize_stale_limit(limit),
     )
+    awaiting_approval_skipped = playbook_store.count_expired_awaiting_approval_leases(
+        conn,
+        now=timestamp,
+    )
 
     if dry_run:
+        logger.info(
+            "playbook stale recovery dry_run scanned=%s skipped_awaiting_approval=%s",
+            len(stale_rows),
+            awaiting_approval_skipped,
+        )
         return {
             "dry_run": True,
             "scanned": len(stale_rows),
             "recovered": 0,
             "pending": 0,
             "failed": 0,
+            "skipped_awaiting_approval": awaiting_approval_skipped,
             "stale": [_recovery_row_summary(row) for row in stale_rows],
             "results": [],
         }
@@ -223,15 +221,25 @@ def recover_stale_playbook_executions(
             }
         )
 
-    return {
+    payload = {
         "dry_run": False,
         "scanned": len(stale_rows),
         "recovered": sum(1 for row in results if row.get("outcome") == "recovered"),
         "pending": sum(1 for row in results if row.get("new_status") == "pending"),
         "failed": sum(1 for row in results if row.get("new_status") == "failed"),
+        "skipped_awaiting_approval": awaiting_approval_skipped,
         "stale": [_recovery_row_summary(row) for row in stale_rows],
         "results": results,
     }
+    logger.info(
+        "playbook stale recovery applied scanned=%s recovered=%s pending=%s failed=%s skipped_awaiting_approval=%s",
+        payload["scanned"],
+        payload["recovered"],
+        payload["pending"],
+        payload["failed"],
+        payload["skipped_awaiting_approval"],
+    )
+    return payload
 
 
 def _recovery_row_summary(row):
@@ -245,6 +253,91 @@ def _recovery_row_summary(row):
         "recovery_count": row["recovery_count"],
         "last_completed_step": row["last_completed_step"],
     }
+
+
+def _skip_reason_counts(results):
+    counts = {}
+    for row in results:
+        if row.get("outcome") != "skipped":
+            continue
+        reason = str(row.get("reason") or "unknown")
+        counts[reason] = counts.get(reason, 0) + 1
+    return counts
+
+
+def _claimed_execution_ids(results):
+    return [
+        row["execution_id"]
+        for row in results
+        if row.get("execution_id") is not None and row.get("outcome") != "skipped"
+    ]
+
+
+def _render_batch_summary_lines(payload):
+    summary = payload["summary"]
+    lines = [
+        "=== SOAR Playbook Simulation Executor ===",
+        f"Mode:       {payload['mode']}",
+        f"Worker id:  {payload['worker_id']}",
+        f"Batch size: {payload['batch_size']}",
+        f"Processed:  {summary['processed']}",
+        f"Success:    {summary['success']}",
+        f"Failed:     {summary['failed']}",
+        f"Skipped:    {summary['skipped']}",
+    ]
+    claimed_ids = summary.get("claimed_execution_ids") or []
+    lines.append(f"Claimed execution ids: {_format_id_list(claimed_ids)}")
+    skip_reasons = summary.get("skip_reasons") or {}
+    if skip_reasons:
+        rendered = ", ".join(f"{key}={value}" for key, value in sorted(skip_reasons.items()))
+    else:
+        rendered = "none"
+    lines.append(f"Skip reasons: {rendered}")
+    lines.append("No real integrations were called.")
+    return lines
+
+
+def _render_recovery_summary_lines(payload):
+    recovery = payload["recovery"]
+    stale_ids = [row["execution_id"] for row in recovery.get("stale", [])]
+    recovered_ids = [
+        row["execution_id"]
+        for row in recovery.get("results", [])
+        if row.get("outcome") == "recovered"
+    ]
+    lines = [
+        "=== SOAR Playbook Stale Recovery ===",
+        f"Mode:       {payload['mode']}",
+        f"Worker id:  {payload['worker_id']}",
+        f"Dry run:    {recovery['dry_run']}",
+        f"Scanned:    {recovery['scanned']}",
+        f"Recovered:  {recovery['recovered']}",
+        f"Pending:    {recovery['pending']}",
+        f"Failed:     {recovery['failed']}",
+        f"Skipped awaiting approval: {recovery.get('skipped_awaiting_approval', 0)}",
+        f"Stale execution ids: {_format_id_list(stale_ids)}",
+        f"Recovered execution ids: {_format_id_list(recovered_ids)}",
+    ]
+    for row in recovery.get("results", []):
+        if row.get("outcome") == "recovered":
+            lines.append(
+                "Recovered execution "
+                f"{row['execution_id']}: {row['prior_status']} -> {row['new_status']} "
+                f"recovery_count={row['recovery_count']}"
+            )
+        elif row.get("outcome") == "skipped":
+            lines.append(
+                "Skipped execution "
+                f"{row['execution_id']}: reason={row.get('reason', 'unknown')}"
+            )
+    lines.append("No playbook steps were executed.")
+    return lines
+
+
+def _format_id_list(values):
+    if not values:
+        return "none"
+    return ",".join(str(value) for value in values)
 
 
 if __name__ == "__main__":

@@ -273,12 +273,13 @@ def test_stale_recovery_dry_run_does_not_mutate(utc_db):
 
 
 @pytest.mark.usefixtures("postgres_db", "utc_db")
-def test_manual_stale_recovery_marks_expired_running_pending(utc_db):
+def test_manual_stale_recovery_marks_expired_running_pending(utc_db, caplog):
     conn, cur = utc_db
     execution_id, after_expiry = _make_expired_running_execution(
         conn, cur, playbook_id="pb_stale_pending"
     )
 
+    caplog.set_level("INFO")
     result = run_playbook_executor_once.recover_stale_playbook_executions(
         conn,
         limit=10,
@@ -296,6 +297,8 @@ def test_manual_stale_recovery_marks_expired_running_pending(utc_db):
     assert row["lease_owner"] is None
     assert row["lease_expires_at"] is None
     assert row["recovery_count"] == 1
+    assert "playbook stale recovery applied" in caplog.text
+    assert f"execution_id={execution_id}" in caplog.text
 
 
 @pytest.mark.usefixtures("postgres_db", "utc_db")
@@ -328,6 +331,7 @@ def test_manual_stale_recovery_ignores_awaiting_approval(utc_db):
     row = playbook_store.get_playbook_execution(conn, execution_id)
     assert result["scanned"] == 0
     assert result["recovered"] == 0
+    assert result["skipped_awaiting_approval"] == 1
     assert row["status"] == "awaiting_approval"
     assert row["recovery_count"] == 0
 
