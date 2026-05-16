@@ -12,6 +12,7 @@ from routes.alerts_events_routes import alerts_events_bp
 from routes.auth_routes import auth_bp
 from routes.blocklist_routes import blocklist_bp
 from routes.approval_routes import approval_bp
+from routes.dead_letter_routes import dead_letter_bp
 from routes.incident_routes import incident_bp
 from routes.integration_routes import integration_bp
 from routes.metrics_routes import metrics_bp
@@ -115,6 +116,7 @@ def create_app():
     app.register_blueprint(integration_bp)
     app.register_blueprint(metrics_bp)
     app.register_blueprint(notification_delivery_bp)
+    app.register_blueprint(dead_letter_bp)
 
     return app
 

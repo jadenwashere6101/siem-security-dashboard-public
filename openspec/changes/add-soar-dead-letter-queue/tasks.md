@@ -10,7 +10,7 @@ Implementation should be split into small approved slices. Do not implement from
 - [x] Inspect response action queue/log failure paths.
 - [x] Inspect notification delivery failure paths.
 - [x] Inspect approval denial/expiration behavior.
-- [ ] Inspect existing RBAC/audit route patterns.
+- [x] Inspect existing RBAC/audit route patterns.
 - [x] Confirm migration workflow and current latest migration number.
 - [x] Confirm metadata redaction helpers that can be reused.
 
@@ -41,12 +41,12 @@ Implementation should be split into small approved slices. Do not implement from
 
 ## Slice 3 — Review Routes
 
-- [ ] Add authenticated list route.
-- [ ] Add authenticated detail route.
-- [ ] Add filters for status, source type, retryable, limit, and offset.
-- [ ] Apply existing RBAC conventions.
-- [ ] Redact secret-bearing metadata in responses.
-- [ ] Add route tests for auth, RBAC, filters, shape, no mutation, and 404s.
+- [x] Add authenticated list route.
+- [x] Add authenticated detail route.
+- [x] Add filters for status, source type, retryable, limit, and offset.
+- [x] Apply existing RBAC conventions.
+- [x] Redact secret-bearing metadata in responses.
+- [x] Add route tests for auth, RBAC, filters, shape, no mutation, and 404s.
 
 ---
 
@@ -64,18 +64,18 @@ Implementation should be split into small approved slices. Do not implement from
 
 ## Slice 5 — Metrics and Operations
 
-- [ ] Add dead letter metrics helper.
-- [ ] Add metrics route for count/depth/source/failure-class breakdowns.
-- [ ] Ensure metrics responses do not expose metadata or secrets.
+- [x] Add dead letter metrics helper.
+- [x] Add metrics route for count/depth/source/failure-class breakdowns.
+- [x] Ensure metrics responses do not expose metadata or secrets.
 - [ ] Document operational review workflow.
-- [ ] Add tests for counts, oldest age, filters, no mutation, and auth/RBAC.
+- [x] Add tests for counts, oldest age, filters, no mutation, and auth/RBAC.
 
 ---
 
 ## Verification Planning
 
 - [x] Run dead letter store tests.
-- [ ] Run dead letter route tests.
+- [x] Run dead letter route tests.
 - [x] Run playbook execution route tests.
 - [ ] Run response action queue tests.
 - [x] Run notification delivery store/routes/metrics tests.
