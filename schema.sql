@@ -1,4 +1,4 @@
--- Schema snapshot version: 0008
+-- Schema snapshot version: 0009
 
 CREATE TABLE IF NOT EXISTS events (
     id SERIAL PRIMARY KEY,
@@ -376,7 +376,12 @@ CREATE TABLE IF NOT EXISTS playbook_executions (
     last_attempted_at TIMESTAMPTZ,
     failure_reason TEXT,
     stale_after INTEGER,
-    timeout_seconds INTEGER
+    timeout_seconds INTEGER,
+    lease_owner TEXT,
+    lease_acquired_at TIMESTAMPTZ,
+    lease_heartbeat_at TIMESTAMPTZ,
+    lease_expires_at TIMESTAMPTZ,
+    recovery_count INTEGER NOT NULL DEFAULT 0
 );
 
 ALTER TABLE playbook_executions
@@ -391,6 +396,16 @@ ALTER TABLE playbook_executions
     ADD COLUMN IF NOT EXISTS stale_after INTEGER;
 ALTER TABLE playbook_executions
     ADD COLUMN IF NOT EXISTS timeout_seconds INTEGER;
+ALTER TABLE playbook_executions
+    ADD COLUMN IF NOT EXISTS lease_owner TEXT;
+ALTER TABLE playbook_executions
+    ADD COLUMN IF NOT EXISTS lease_acquired_at TIMESTAMPTZ;
+ALTER TABLE playbook_executions
+    ADD COLUMN IF NOT EXISTS lease_heartbeat_at TIMESTAMPTZ;
+ALTER TABLE playbook_executions
+    ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
+ALTER TABLE playbook_executions
+    ADD COLUMN IF NOT EXISTS recovery_count INTEGER NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_playbook_executions_playbook_id
     ON playbook_executions (playbook_id);
@@ -400,6 +415,13 @@ CREATE INDEX IF NOT EXISTS idx_playbook_executions_status
     ON playbook_executions (status);
 CREATE INDEX IF NOT EXISTS idx_playbook_executions_created_at
     ON playbook_executions (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_playbook_executions_status_lease_expires_at
+    ON playbook_executions (status, lease_expires_at);
+CREATE INDEX IF NOT EXISTS idx_playbook_executions_lease_owner
+    ON playbook_executions (lease_owner)
+    WHERE lease_owner IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_playbook_executions_status_created_at
+    ON playbook_executions (status, created_at, id);
 
 DROP INDEX IF EXISTS idx_playbook_executions_playbook_alert_unique;
 

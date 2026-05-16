@@ -156,7 +156,7 @@ def test_schema_snapshot_marker_matches_latest_migration():
         migrations_dir=repo_root / "migrations",
     )
 
-    assert version == 8
+    assert version == 9
 
 
 def test_schema_snapshot_validator_rejects_missing_marker(tmp_path):
@@ -464,6 +464,34 @@ def test_soar_approval_playbook_wiring_migration_scope():
     ]
     for column in reliability_columns:
         assert f"ADD COLUMN IF NOT EXISTS {column}" in sql
+
+
+def test_soar_execution_leases_migration_scope():
+    migration_path = (
+        Path(__file__).resolve().parent.parent / "migrations" / "0009_soar_execution_leases.sql"
+    )
+    sql = migration_path.read_text(encoding="utf-8")
+
+    lease_columns = [
+        "lease_owner TEXT",
+        "lease_acquired_at TIMESTAMPTZ",
+        "lease_heartbeat_at TIMESTAMPTZ",
+        "lease_expires_at TIMESTAMPTZ",
+        "recovery_count INTEGER NOT NULL DEFAULT 0",
+    ]
+    for column in lease_columns:
+        assert f"ADD COLUMN IF NOT EXISTS {column}" in sql
+
+    assert "idx_playbook_executions_status_lease_expires_at" in sql
+    assert "idx_playbook_executions_lease_owner" in sql
+    assert "idx_playbook_executions_status_created_at" in sql
+
+    assert "CREATE TABLE" not in sql.upper()
+    assert "DROP" not in sql.upper()
+    assert "TRUNCATE" not in sql.upper()
+    assert "DELETE FROM" not in sql.upper()
+    assert "RENAME" not in sql.upper()
+    assert "CONCURRENTLY" not in sql.upper()
 
 
 def test_soar_notification_delivery_migration_scope():

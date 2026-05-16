@@ -8,7 +8,7 @@ or workers is intentionally out of scope.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import psycopg2
@@ -25,7 +25,8 @@ DEFAULT_PLAYBOOK_EXECUTION_MAX_ATTEMPTS = 3
 _EXECUTION_COLUMNS_SQL = (
     "id, playbook_id, alert_id, incident_id, status, "
     "started_at, completed_at, last_completed_step, steps_log, created_at, "
-    "attempt_count, max_attempts, last_attempted_at, failure_reason, stale_after, timeout_seconds"
+    "attempt_count, max_attempts, last_attempted_at, failure_reason, stale_after, timeout_seconds, "
+    "lease_owner, lease_acquired_at, lease_heartbeat_at, lease_expires_at, recovery_count"
 )
 _SCHEDULE_COLUMNS_SQL = (
     "id, playbook_id, schedule_expression, timezone, enabled, paused, "
@@ -115,6 +116,252 @@ def list_stale_running_playbook_execution_ids(
         )
         rows = [_execution_row_to_dict(r) for r in cur.fetchall()]
     return [r["id"] for r in rows if playbook_execution_row_is_stale_running(r, now=now)]
+
+
+def _lease_is_active(lease_expires_at: datetime | None, *, now: datetime) -> bool:
+    if lease_expires_at is None:
+        return False
+    return _utc_naive(lease_expires_at) > _utc_naive(now)
+
+
+def acquire_execution_lease(
+    conn,
+    execution_id: int,
+    lease_owner: str,
+    *,
+    lease_duration_seconds: int = 60,
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
+    """
+    Claim a pending execution with worker lease metadata and transition to running.
+
+    Transaction-safe: row is locked with FOR UPDATE before the lease is written.
+    Returns None when the execution is missing, not pending, or held by a non-expired lease.
+    Caller commits.
+    """
+    # spec: openspec/changes/add-soar-execution-locking-stale-recovery/
+    owner = (lease_owner or "").strip()
+    if not owner:
+        raise ValueError("lease_owner is required")
+    if lease_duration_seconds < 1:
+        raise ValueError("lease_duration_seconds must be at least 1")
+
+    if now is None:
+        now = datetime.utcnow()
+    expires_at = now + timedelta(seconds=lease_duration_seconds)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT status, lease_expires_at
+            FROM playbook_executions
+            WHERE id = %s
+            FOR UPDATE
+            """,
+            (execution_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        status, lease_expires_at = row
+        if status != "pending":
+            return None
+        if _lease_is_active(lease_expires_at, now=now):
+            return None
+
+        cur.execute(
+            f"""
+            UPDATE playbook_executions
+            SET status = 'running',
+                started_at = COALESCE(started_at, %s),
+                lease_owner = %s,
+                lease_acquired_at = %s,
+                lease_heartbeat_at = %s,
+                lease_expires_at = %s
+            WHERE id = %s
+              AND status = 'pending'
+            RETURNING {_EXECUTION_COLUMNS_SQL}
+            """,
+            (now, owner, now, now, expires_at, execution_id),
+        )
+        updated = cur.fetchone()
+        if updated is None:
+            return None
+        return _execution_row_to_dict(updated)
+
+
+def heartbeat_execution_lease(
+    conn,
+    execution_id: int,
+    lease_owner: str,
+    *,
+    lease_duration_seconds: int = 60,
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
+    """Extend an active running lease for the matching owner. Caller commits."""
+    owner = (lease_owner or "").strip()
+    if not owner:
+        raise ValueError("lease_owner is required")
+    if lease_duration_seconds < 1:
+        raise ValueError("lease_duration_seconds must be at least 1")
+
+    if now is None:
+        now = datetime.utcnow()
+    expires_at = now + timedelta(seconds=lease_duration_seconds)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE playbook_executions
+            SET lease_heartbeat_at = %s,
+                lease_expires_at = %s
+            WHERE id = %s
+              AND status = 'running'
+              AND lease_owner = %s
+              AND lease_expires_at IS NOT NULL
+              AND lease_expires_at > %s
+            RETURNING {_EXECUTION_COLUMNS_SQL}
+            """,
+            (now, expires_at, execution_id, owner, now),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return _execution_row_to_dict(row)
+
+
+def release_execution_lease(
+    conn,
+    execution_id: int,
+    lease_owner: str,
+) -> dict[str, Any] | None:
+    """Clear lease fields for a matching owner. Caller commits."""
+    owner = (lease_owner or "").strip()
+    if not owner:
+        raise ValueError("lease_owner is required")
+
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE playbook_executions
+            SET lease_owner = NULL,
+                lease_acquired_at = NULL,
+                lease_heartbeat_at = NULL,
+                lease_expires_at = NULL
+            WHERE id = %s
+              AND lease_owner = %s
+            RETURNING {_EXECUTION_COLUMNS_SQL}
+            """,
+            (execution_id, owner),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return _execution_row_to_dict(row)
+
+
+def list_stale_running_executions(
+    conn,
+    *,
+    now: datetime | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """
+    Running executions with an expired lease. Excludes awaiting_approval and other statuses.
+    Caller commits not required for read-only use.
+    """
+    if limit < 0:
+        raise ValueError("limit must be non-negative")
+    if now is None:
+        now = datetime.utcnow()
+
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT {_EXECUTION_COLUMNS_SQL}
+            FROM playbook_executions
+            WHERE status = 'running'
+              AND lease_expires_at IS NOT NULL
+              AND lease_expires_at <= %s
+            ORDER BY lease_expires_at ASC, id ASC
+            LIMIT %s
+            """,
+            (now, limit),
+        )
+        return [_execution_row_to_dict(row) for row in cur.fetchall()]
+
+
+def mark_stale_execution_for_recovery(
+    conn,
+    execution_id: int,
+    *,
+    now: datetime | None = None,
+    failure_reason: str | None = None,
+) -> dict[str, Any] | None:
+    """
+    Recover a stale running execution with an expired lease.
+
+    Requeues to pending when attempts remain; otherwise marks failed. Never recovers
+    awaiting_approval or non-expired leases. Increments recovery_count. Caller commits.
+    """
+    if now is None:
+        now = datetime.utcnow()
+
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT {_EXECUTION_COLUMNS_SQL}
+            FROM playbook_executions
+            WHERE id = %s
+            FOR UPDATE
+            """,
+            (execution_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        current = _execution_row_to_dict(row)
+        if current["status"] != "running":
+            return None
+        if current["lease_expires_at"] is None:
+            return None
+        if _utc_naive(current["lease_expires_at"]) > _utc_naive(now):
+            return None
+
+        attempt_count = int(current["attempt_count"])
+        max_attempts = int(current["max_attempts"])
+        if attempt_count < max_attempts:
+            new_status = "pending"
+            reason = failure_reason or "stale lease recovered for retry"
+            completed_at = None
+        else:
+            new_status = "failed"
+            reason = failure_reason or "stale lease exceeded max attempts"
+            completed_at = now
+
+        cur.execute(
+            f"""
+            UPDATE playbook_executions
+            SET status = %s,
+                completed_at = %s,
+                failure_reason = %s,
+                recovery_count = recovery_count + 1,
+                lease_owner = NULL,
+                lease_acquired_at = NULL,
+                lease_heartbeat_at = NULL,
+                lease_expires_at = NULL
+            WHERE id = %s
+              AND status = 'running'
+              AND lease_expires_at IS NOT NULL
+              AND lease_expires_at <= %s
+            RETURNING {_EXECUTION_COLUMNS_SQL}
+            """,
+            (new_status, completed_at, reason, execution_id, now),
+        )
+        updated = cur.fetchone()
+        if updated is None:
+            return None
+        return _execution_row_to_dict(updated)
 
 
 def mark_playbook_execution_permanently_failed(
@@ -214,6 +461,11 @@ def _execution_row_to_dict(record: tuple[Any, ...]) -> dict[str, Any]:
         failure_reason,
         stale_after,
         timeout_seconds,
+        lease_owner,
+        lease_acquired_at,
+        lease_heartbeat_at,
+        lease_expires_at,
+        recovery_count,
     ) = record
     return {
         "id": row_id,
@@ -232,6 +484,11 @@ def _execution_row_to_dict(record: tuple[Any, ...]) -> dict[str, Any]:
         "failure_reason": failure_reason,
         "stale_after": stale_after,
         "timeout_seconds": timeout_seconds,
+        "lease_owner": lease_owner,
+        "lease_acquired_at": lease_acquired_at,
+        "lease_heartbeat_at": lease_heartbeat_at,
+        "lease_expires_at": lease_expires_at,
+        "recovery_count": recovery_count,
     }
 
 
