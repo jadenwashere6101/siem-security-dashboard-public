@@ -56,7 +56,7 @@ Implementation should be split into small approved slices. Do not implement from
 - [x] Add dismissal endpoint with required reason.
 - [x] Audit retry and dismissal actions.
 - [x] Preserve approval semantics.
-- [ ] Block retry when idempotency cannot be proven.
+- [x] Block retry when idempotency cannot be proven.
 - [x] Ensure retry does not directly call adapters or send notifications.
 - [x] Add tests for allowed retry, blocked retry, dismissal, audit, and no adapter calls.
 

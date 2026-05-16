@@ -369,6 +369,47 @@ def mark_dead_letter_retry_requested(
     return _row_to_dict(row) if row else None
 
 
+def mark_dead_letter_retried(
+    conn,
+    dead_letter_id: int,
+) -> dict[str, Any] | None:
+    """
+    Mark a retry-requested dead letter as retried.
+
+    This is a state transition primitive only. It does not execute retries,
+    call adapters, send notifications, or run playbooks. Caller commits.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT {_COLUMNS}
+            FROM soar_dead_letters
+            WHERE id = %s
+            FOR UPDATE
+            """,
+            (dead_letter_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        current = _row_to_dict(row)
+        if current["status"] != "retrying":
+            return None
+
+        cur.execute(
+            f"""
+            UPDATE soar_dead_letters
+            SET status = 'retried'
+            WHERE id = %s
+              AND status = 'retrying'
+            RETURNING {_COLUMNS}
+            """,
+            (dead_letter_id,),
+        )
+        updated = cur.fetchone()
+    return _row_to_dict(updated) if updated else None
+
+
 def get_dead_letter_metrics(conn) -> dict[str, Any]:
     with conn.cursor() as cur:
         cur.execute(

@@ -181,6 +181,79 @@ def test_retry_request_flow_increments_count_once_for_open_row(postgres_db):
 
 
 @pytest.mark.usefixtures("postgres_db")
+def test_mark_dead_letter_retried_transitions_retrying_only(postgres_db):
+    conn, cur = postgres_db
+    user_id = _insert_user(cur, "dead_letter_retried")
+    row = dead_letter_store.create_dead_letter(
+        conn,
+        source_type="playbook_execution",
+        source_id=199,
+        failure_class="adapter_failed",
+        error_message="failed",
+    )
+    retrying = dead_letter_store.mark_dead_letter_retry_requested(
+        conn, row["id"], requested_by=user_id
+    )
+    conn.commit()
+
+    retried = dead_letter_store.mark_dead_letter_retried(conn, row["id"])
+    conn.commit()
+
+    assert retrying["status"] == "retrying"
+    assert retried["status"] == "retried"
+    assert retried["retry_count"] == 1
+    assert retried["retry_requested_by"] == user_id
+    assert retried["retry_requested_at"] is not None
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_mark_dead_letter_retried_rejects_open_dismissed_retried_and_missing(postgres_db):
+    conn, cur = postgres_db
+    user_id = _insert_user(cur, "dead_letter_retried_reject")
+    open_row = dead_letter_store.create_dead_letter(
+        conn,
+        source_type="playbook_execution",
+        source_id=200,
+        failure_class="adapter_failed",
+        error_message="failed",
+    )
+    dismissed_row = dead_letter_store.create_dead_letter(
+        conn,
+        source_type="response_action",
+        source_id=201,
+        failure_class="permanent",
+        error_message="dismiss me",
+    )
+    retry_row = dead_letter_store.create_dead_letter(
+        conn,
+        source_type="notification_delivery",
+        source_id=202,
+        failure_class="timeout",
+        error_message="retry me",
+    )
+    dead_letter_store.mark_dead_letter_dismissed(
+        conn, dismissed_row["id"], dismissed_by=user_id, reason="handled"
+    )
+    dead_letter_store.mark_dead_letter_retry_requested(
+        conn, retry_row["id"], requested_by=user_id
+    )
+    dead_letter_store.mark_dead_letter_retried(conn, retry_row["id"])
+    conn.commit()
+
+    assert dead_letter_store.mark_dead_letter_retried(conn, open_row["id"]) is None
+    assert dead_letter_store.mark_dead_letter_retried(conn, dismissed_row["id"]) is None
+    assert dead_letter_store.mark_dead_letter_retried(conn, retry_row["id"]) is None
+    assert dead_letter_store.mark_dead_letter_retried(conn, 999999) is None
+
+    assert dead_letter_store.get_dead_letter(conn, open_row["id"])["status"] == "open"
+    assert (
+        dead_letter_store.get_dead_letter(conn, dismissed_row["id"])["status"]
+        == "dismissed"
+    )
+    assert dead_letter_store.get_dead_letter(conn, retry_row["id"])["status"] == "retried"
+
+
+@pytest.mark.usefixtures("postgres_db")
 def test_metrics_aggregate_status_source_and_failure_class(postgres_db):
     conn, cur = postgres_db
     user_id = _insert_user(cur, "dead_letter_metrics")
