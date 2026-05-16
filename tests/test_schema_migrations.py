@@ -381,3 +381,36 @@ def test_soar_playbooks_migration_scope_and_original_execution_shape():
     assert "idx_playbook_executions_created_at" in sql
     assert "idx_playbook_executions_playbook_alert_unique" in sql
     assert "status IN ('pending', 'running', 'awaiting_approval')" in sql
+
+
+def test_soar_approval_playbook_wiring_migration_scope():
+    migration_path = Path(__file__).resolve().parent.parent / "migrations" / "0007_soar_approval_playbook_wiring.sql"
+    sql = migration_path.read_text(encoding="utf-8")
+
+    assert "CREATE TABLE IF NOT EXISTS" not in sql
+    assert "notification_delivery_attempts" not in sql
+    assert "TRUNCATE" not in sql.upper()
+    assert "DELETE FROM" not in sql.upper()
+    assert "RENAME" not in sql.upper()
+    assert "CONCURRENTLY" not in sql.upper()
+
+    assert "ADD COLUMN IF NOT EXISTS playbook_execution_id INTEGER" in sql
+    assert "ADD COLUMN IF NOT EXISTS playbook_step_index INTEGER" in sql
+    assert "OR playbook_execution_id IS NOT NULL" in sql
+    assert "approval_requests_playbook_execution_id_fkey" in sql
+    assert "REFERENCES playbook_executions(id)" in sql
+    assert "idx_approval_requests_playbook_execution_id" in sql
+    assert "idx_approval_requests_playbook_step_active" in sql
+    assert "WHERE playbook_execution_id IS NOT NULL" in sql
+    assert "status IN ('pending', 'approved')" in sql
+
+    reliability_columns = [
+        "attempt_count INTEGER NOT NULL DEFAULT 0",
+        "max_attempts INTEGER NOT NULL DEFAULT 3",
+        "last_attempted_at TIMESTAMPTZ",
+        "failure_reason TEXT",
+        "stale_after INTEGER",
+        "timeout_seconds INTEGER",
+    ]
+    for column in reliability_columns:
+        assert f"ADD COLUMN IF NOT EXISTS {column}" in sql
