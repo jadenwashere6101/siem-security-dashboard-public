@@ -2,6 +2,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from scripts import migrate
+from scripts import validate_schema_snapshot
 
 
 def _write_migration(directory, filename, sql="CREATE TABLE IF NOT EXISTS example (id SERIAL PRIMARY KEY);\n"):
@@ -145,6 +146,55 @@ def test_main_uses_db_url_argument_and_closes_connection(tmp_path):
     assert code == 0
     connect_mock.assert_called_once_with("postgresql://example/db")
     conn.close.assert_called_once()
+
+
+def test_schema_snapshot_marker_matches_latest_migration():
+    repo_root = Path(__file__).resolve().parent.parent
+
+    version = validate_schema_snapshot.validate_schema_snapshot(
+        schema_file=repo_root / "schema.sql",
+        migrations_dir=repo_root / "migrations",
+    )
+
+    assert version == 8
+
+
+def test_schema_snapshot_validator_rejects_missing_marker(tmp_path):
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    _write_migration(migrations_dir, "0001_first.sql")
+    schema_file = tmp_path / "schema.sql"
+    schema_file.write_text("CREATE TABLE example (id INTEGER);\n", encoding="utf-8")
+
+    try:
+        validate_schema_snapshot.validate_schema_snapshot(
+            schema_file=schema_file,
+            migrations_dir=migrations_dir,
+        )
+        assert False, "Expected missing schema snapshot marker to fail"
+    except validate_schema_snapshot.SchemaSnapshotValidationError as error:
+        assert "Missing schema snapshot marker" in str(error)
+
+
+def test_schema_snapshot_validator_rejects_version_drift(tmp_path):
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    _write_migration(migrations_dir, "0001_first.sql")
+    _write_migration(migrations_dir, "0002_second.sql")
+    schema_file = tmp_path / "schema.sql"
+    schema_file.write_text(
+        "-- Schema snapshot version: 0001\nCREATE TABLE example (id INTEGER);\n",
+        encoding="utf-8",
+    )
+
+    try:
+        validate_schema_snapshot.validate_schema_snapshot(
+            schema_file=schema_file,
+            migrations_dir=migrations_dir,
+        )
+        assert False, "Expected schema snapshot version drift to fail"
+    except validate_schema_snapshot.SchemaSnapshotValidationError as error:
+        assert "schema.sql=0001, migrations=0002" in str(error)
 
 
 def test_base_siem_core_migration_scope():

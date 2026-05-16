@@ -112,6 +112,9 @@ jobs:
               print(f"  - {migration.filename}")
           PY
 
+      - name: Validate schema.sql snapshot version
+        run: python3 scripts/validate_schema_snapshot.py
+
       - name: Compile migration runner
         run: python3 -m py_compile scripts/migrate.py
 

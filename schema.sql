@@ -1,3 +1,5 @@
+-- Schema snapshot version: 0008
+
 CREATE TABLE IF NOT EXISTS events (
     id SERIAL PRIMARY KEY,
     event_type TEXT NOT NULL,
