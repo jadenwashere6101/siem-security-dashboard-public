@@ -1556,3 +1556,189 @@ def test_recovered_stale_notification_step_is_not_recorded_again(utc_db, no_netw
     assert result["outcome"] == "success"
     assert _count_deliveries(cur, eid) == 1
     assert [entry["action"] for entry in row["steps_log"]] == ["notify_slack", "monitor"]
+
+
+# ---------------------------------------------------------------------------
+# Slice 5: notification/remediation duplication guard
+# ---------------------------------------------------------------------------
+
+
+def test_recovered_teams_step_does_not_create_duplicate_delivery(utc_db, no_network):
+    conn, cur = utc_db
+    eid = _create_execution(conn, cur, "pb_stale_teams_dedup")
+    _set_playbook_steps(
+        cur,
+        "pb_stale_teams_dedup",
+        [
+            {"action": "notify_teams", "params": {"message": "already sent"}},
+            {"action": "monitor", "params": {}},
+        ],
+    )
+    cur.execute("SELECT alert_id FROM playbook_executions WHERE id = %s", (eid,))
+    alert_id = cur.fetchone()[0]
+    notification_delivery_store.create_notification_delivery_attempt(
+        conn,
+        correlation_id=f"stale-teams-{eid}-0",
+        idempotency_key=playbook_step_executor._make_delivery_idempotency_key(
+            "teams", "notify_teams", eid, 0
+        ),
+        provider="teams",
+        mode="simulation",
+        status="success",
+        adapter_name="teams",
+        action="send_message",
+        metadata={"adapter_mode": "simulation"},
+        playbook_execution_id=eid,
+        playbook_step_index=0,
+        alert_id=alert_id,
+        circuit_breaker_state="closed",
+    )
+    recovery_at = _set_expired_running_progress(
+        cur,
+        eid,
+        steps_log=[_progress_entry(0, "notify_teams")],
+        last_completed_step=0,
+    )
+    conn.commit()
+
+    recovered = run_playbook_executor_once.recover_stale_playbook_executions(
+        conn, limit=10, dry_run=False, now=recovery_at
+    )
+    conn.commit()
+
+    with patch(
+        "engines.playbook_step_executor.notification_delivery_store"
+        ".create_notification_delivery_attempt",
+        side_effect=AssertionError("completed Teams notification step was replayed"),
+    ):
+        result = playbook_step_executor.process_playbook_execution(
+            conn, eid, worker_id="worker-alpha"
+        )
+
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert recovered["recovered"] == 1
+    assert result["outcome"] == "success"
+    assert _count_deliveries(cur, eid) == 1
+    assert [entry["action"] for entry in row["steps_log"]] == ["notify_teams", "monitor"]
+
+
+def test_completed_block_ip_remediation_step_skipped_on_resume(utc_db, monkeypatch, no_network):
+    conn, cur = utc_db
+    eid = _create_execution(
+        conn,
+        cur,
+        "pb_resume_block_ip",
+        steps=[
+            {"action": "block_ip", "params": {"source_ip": "1.2.3.4"}},
+            {"action": "monitor", "params": {}},
+        ],
+    )
+    _set_execution_progress(
+        cur,
+        eid,
+        status="pending",
+        steps_log=[_progress_entry(0, "block_ip")],
+        last_completed_step=0,
+    )
+    conn.commit()
+
+    steps_executed = []
+    original_simulate = playbook_step_executor._simulate_step
+
+    def _record_and_run(step, step_index, now, execution):
+        steps_executed.append(step_index)
+        return original_simulate(step, step_index, now, execution)
+
+    monkeypatch.setattr(playbook_step_executor, "_simulate_step", _record_and_run)
+
+    result = playbook_step_executor.process_playbook_execution(
+        conn, eid, worker_id="worker-alpha"
+    )
+
+    assert result["outcome"] == "success"
+    assert 0 not in steps_executed
+    assert 1 in steps_executed
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert [entry["action"] for entry in row["steps_log"]] == ["block_ip", "monitor"]
+    assert row["last_completed_step"] == 1
+
+
+def test_two_workers_cannot_both_complete_same_execution(utc_db, no_network):
+    conn, cur = utc_db
+    eid = _create_execution(
+        conn,
+        cur,
+        "pb_two_workers_dedup",
+        steps=[
+            {"action": "notify_slack", "params": {"message": "race test"}},
+            {"action": "monitor", "params": {}},
+        ],
+    )
+    playbook_store.acquire_execution_lease(
+        conn, eid, "worker-alpha", lease_duration_seconds=120
+    )
+    conn.commit()
+
+    result_beta = playbook_step_executor.process_playbook_execution(
+        conn, eid, worker_id="worker-beta"
+    )
+
+    assert result_beta["outcome"] == "skipped"
+    assert result_beta["reason"] == "lease_not_owned"
+    assert _count_deliveries(cur, eid) == 0
+
+    playbook_store.release_execution_lease(conn, eid, "worker-alpha")
+    cur.execute("UPDATE playbook_executions SET status = 'pending' WHERE id = %s", (eid,))
+    conn.commit()
+
+    result_alpha = playbook_step_executor.process_playbook_execution(
+        conn, eid, worker_id="worker-alpha"
+    )
+
+    assert result_alpha["outcome"] == "success"
+    assert _count_deliveries(cur, eid) == 1
+
+
+def test_steps_log_success_guard_prevents_reexecution_when_last_completed_step_missing(
+    utc_db, monkeypatch, no_network
+):
+    conn, cur = utc_db
+    eid = _create_execution(
+        conn,
+        cur,
+        "pb_guard_lcs_null",
+        steps=[
+            {"action": "notify_slack", "params": {"message": "done"}},
+            {"action": "monitor", "params": {}},
+        ],
+    )
+    # Intentionally diverged state: steps_log has step 0 as success but last_completed_step=NULL
+    cur.execute(
+        "UPDATE playbook_executions SET steps_log = %s, last_completed_step = NULL WHERE id = %s",
+        (Json([_progress_entry(0, "notify_slack")]), eid),
+    )
+    conn.commit()
+
+    steps_executed = []
+    original_simulate = playbook_step_executor._simulate_step
+
+    def _record_and_run(step, step_index, now, execution):
+        steps_executed.append(step_index)
+        return original_simulate(step, step_index, now, execution)
+
+    monkeypatch.setattr(playbook_step_executor, "_simulate_step", _record_and_run)
+
+    with patch(
+        "engines.playbook_step_executor.notification_delivery_store"
+        ".create_notification_delivery_attempt",
+        side_effect=AssertionError("notify_slack must not be re-executed via guard"),
+    ):
+        result = playbook_step_executor.process_playbook_execution(
+            conn, eid, worker_id="worker-alpha"
+        )
+
+    assert result["outcome"] == "success"
+    assert steps_executed == [1]
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert [entry["action"] for entry in row["steps_log"]] == ["notify_slack", "monitor"]
+    assert row["last_completed_step"] == 1

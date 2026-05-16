@@ -67,11 +67,19 @@ This is a design/spec change only. Implementation should be split into later app
 
 ## Slice 5 — Notification/remediation duplication guard
 
-- [ ] Decide whether to add unique DB constraint for `notification_delivery_attempts.idempotency_key`.
-- [ ] If approved, add migration and store `ON CONFLICT` behavior.
-- [ ] Ensure recovered execution does not resend successful notification steps.
-- [ ] Define manual-review behavior for ambiguous notification/remediation crash windows.
-- [ ] Add tests for no duplicate delivery rows on recovery/retry.
+- [x] Decide whether to add unique DB constraint for `notification_delivery_attempts.idempotency_key`.
+  - Decision: no migration required. Guard implemented at step-execution level.
+- [x] If approved, add migration and store `ON CONFLICT` behavior.
+  - Not needed: `_step_already_succeeded_in_log` guard prevents re-execution before delivery store is called.
+- [x] Ensure recovered execution does not resend successful notification steps.
+  - Guard checks `steps_log` for a success entry at the step index; skips execution + delivery recording if found.
+- [x] Define manual-review behavior for ambiguous notification/remediation crash windows.
+  - Single-transaction model means no crash window where delivery is committed but step log is not. If `last_completed_step`/`steps_log` diverge (future per-step-commit scenario), the guard catches it.
+- [x] Add tests for no duplicate delivery rows on recovery/retry.
+  - `test_recovered_teams_step_does_not_create_duplicate_delivery`
+  - `test_completed_block_ip_remediation_step_skipped_on_resume`
+  - `test_two_workers_cannot_both_complete_same_execution`
+  - `test_steps_log_success_guard_prevents_reexecution_when_last_completed_step_missing`
 
 ---
 

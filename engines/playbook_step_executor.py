@@ -651,6 +651,14 @@ def _process_steps(
     failure_message = None
 
     for index, step in enumerate(steps[start_index:], start=start_index):
+        # spec: SPEC-PLAYBOOK-003
+        # Defensive guard: if steps_log already has a success entry for this index (e.g.
+        # last_completed_step and steps_log diverged after a crash + recovery), skip the
+        # step entirely so notification/remediation side effects are never duplicated.
+        if _step_already_succeeded_in_log(steps_log, index):
+            last_completed_step = index
+            continue
+
         if not _heartbeat_lease(
             conn,
             execution_id,
@@ -1076,6 +1084,16 @@ def _skipped_later_step_entries(
             }
         )
     return entries
+
+
+def _step_already_succeeded_in_log(steps_log: list[dict[str, Any]], step_index: int) -> bool:
+    """True when steps_log already records a successful outcome for this step index."""
+    return any(
+        isinstance(e, dict)
+        and e.get("step_index") == step_index
+        and e.get("status") == "success"
+        for e in steps_log
+    )
 
 
 def _latest_gate_entry(steps_log: list[dict[str, Any]]) -> dict[str, Any] | None:
