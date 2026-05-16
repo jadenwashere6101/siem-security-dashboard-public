@@ -6,41 +6,41 @@ This is a design/spec change only. Implementation should be split into later app
 
 ## Pre-implementation review
 
-- [ ] Confirm current playbook execution claim path uses `FOR UPDATE SKIP LOCKED`.
-- [ ] Confirm current approval resume path and where it must gain lease ownership.
-- [ ] Confirm current notification delivery idempotency behavior and whether DB uniqueness exists.
-- [ ] Confirm current retry semantics for failed/abandoned executions.
-- [ ] Confirm which runner entrypoints should generate worker identity.
-- [ ] Confirm lease timeout defaults for staging.
+- [x] Confirm current playbook execution claim path uses `FOR UPDATE SKIP LOCKED`.
+- [x] Confirm current approval resume path and where it must gain lease ownership.
+- [x] Confirm current notification delivery idempotency behavior and whether DB uniqueness exists.
+- [x] Confirm current retry semantics for failed/abandoned executions.
+- [x] Confirm which runner entrypoints should generate worker identity.
+- [x] Confirm lease timeout defaults for staging.
 
 ---
 
 ## Slice 1 — Schema and store primitives
 
-- [ ] Add migration for nullable lease metadata on `playbook_executions`.
-- [ ] Add indexes for stale lease scan and owner inspection.
-- [ ] Update `schema.sql` snapshot marker and reference snapshot.
-- [ ] Extend row serialization to include lease fields.
-- [ ] Add store helpers:
-  - [ ] claim pending execution with worker lease.
-  - [ ] heartbeat owned execution.
-  - [ ] release/clear lease on terminal status.
-  - [ ] claim approval-resumed execution with worker lease.
-  - [ ] list stale leased executions.
-- [ ] Add unit tests for lease claim and heartbeat guards.
+- [x] Add migration for nullable lease metadata on `playbook_executions`.
+- [x] Add indexes for stale lease scan and owner inspection.
+- [x] Update `schema.sql` snapshot marker and reference snapshot.
+- [x] Extend row serialization to include lease fields.
+- [x] Add store helpers:
+  - [x] claim pending execution with worker lease.
+  - [x] heartbeat owned execution.
+  - [x] release/clear lease on terminal status.
+  - [x] claim approval-resumed execution with worker lease.
+  - [x] list stale leased executions.
+- [x] Add unit tests for lease claim and heartbeat guards.
 
 ---
 
 ## Slice 2 — Worker ownership integration
 
-- [ ] Generate worker identity in playbook runner entrypoints.
-- [ ] Pass `worker_id` through batch processing.
-- [ ] Claim pending executions with lease owner.
-- [ ] Claim approved `awaiting_approval` executions with lease owner before resume.
-- [ ] Guard step-log updates by lease owner.
-- [ ] Guard success/failure/awaiting-approval transitions by lease owner.
-- [ ] Stop processing if heartbeat or guarded update loses ownership.
-- [ ] Add concurrency tests with two workers/transactions.
+- [x] Generate worker identity in playbook runner entrypoints.
+- [x] Pass `worker_id` through batch processing.
+- [x] Claim pending executions with lease owner.
+- [x] Claim approved `awaiting_approval` executions with lease owner before resume.
+- [x] Guard step-log updates by lease owner.
+- [x] Guard success/failure/awaiting-approval transitions by lease owner.
+- [x] Stop processing if heartbeat or guarded update loses ownership.
+- [x] Add concurrency tests with two workers/transactions.
 
 ---
 
@@ -97,21 +97,21 @@ This is a design/spec change only. Implementation should be split into later app
 
 ## Verification planning
 
-- [ ] Run focused playbook store tests.
-- [ ] Run playbook route tests.
-- [ ] Run notification delivery store/routes tests.
-- [ ] Run approval store/routes tests.
-- [ ] Run ingest/detection/correlation regression suite.
-- [ ] Validate migrations on fresh disposable DB.
-- [ ] Validate VM dry-run before any staging apply.
+- [x] Run focused playbook store tests.
+- [x] Run playbook route tests.
+- [x] Run notification delivery store/routes tests.
+- [x] Run approval store/routes tests.
+- [x] Run ingest/detection/correlation regression suite.
+- [x] Validate migrations on fresh disposable DB.
+- [x] Validate VM dry-run before any staging apply.
 
 ---
 
 ## Safety boundaries
 
-- [ ] Do not change ingest transaction flow.
-- [ ] Do not change detection internals.
-- [ ] Do not change correlation internals.
-- [ ] Do not send notifications in tests except mocked/simulated paths.
-- [ ] Do not run real remediation adapters.
-- [ ] Do not create destructive migrations.
+- [x] Do not change ingest transaction flow.
+- [x] Do not change detection internals.
+- [x] Do not change correlation internals.
+- [x] Do not send notifications in tests except mocked/simulated paths.
+- [x] Do not run real remediation adapters.
+- [x] Do not create destructive migrations.
