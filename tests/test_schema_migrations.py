@@ -218,3 +218,44 @@ def test_auth_rbac_and_metadata_migration_scope():
     assert "idx_audit_log_event_type" in sql
     assert "idx_alert_notes_alert_id" in sql
     assert "idx_blocked_ips_ip_address" in sql
+
+
+def test_soar_incidents_migration_scope():
+    migration_path = Path(__file__).resolve().parent.parent / "migrations" / "0004_soar_incidents.sql"
+    sql = migration_path.read_text(encoding="utf-8")
+
+    included_tables = [
+        "incidents",
+        "incident_alerts",
+    ]
+    excluded_tables = [
+        "events",
+        "alerts",
+        "response_actions_log",
+        "response_actions_queue",
+        "users",
+        "audit_log",
+        "alert_notes",
+        "detection_config",
+        "blocked_ips",
+        "approval_requests",
+        "approval_request_events",
+        "playbook_definitions",
+        "playbook_executions",
+        "playbook_schedules",
+        "notification_delivery_attempts",
+    ]
+    for table in included_tables:
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in sql
+    for table in excluded_tables:
+        assert f"CREATE TABLE IF NOT EXISTS {table}" not in sql
+
+    assert "DROP" not in sql.upper()
+    assert "TRUNCATE" not in sql.upper()
+    assert "DELETE FROM" not in sql.upper()
+    assert "RENAME" not in sql.upper()
+    assert "CONCURRENTLY" not in sql.upper()
+    assert "idx_incidents_status" in sql
+    assert "idx_incidents_source_ip" in sql
+    assert "idx_incident_alerts_alert_id" in sql
+    assert "idx_incident_alerts_incident_id" in sql
