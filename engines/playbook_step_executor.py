@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_PLAYBOOK_LEASE_SECONDS = 60
 
 # spec: SPEC-PLAYBOOK-003
-TERMINAL_STATUSES = frozenset({"success", "failed", "abandoned"})
+TERMINAL_STATUSES = frozenset({"success", "failed", "abandoned", "permanently_failed"})
 # spec: SPEC-PLAYBOOK-001
 # spec: SPEC-INTEG-002
 ADAPTER_ACTIONS = {
@@ -241,6 +241,15 @@ def process_playbook_execution(
                 "lease_not_owned",
                 "Running playbook execution is owned by another worker.",
             )
+        if execution.get("lease_owner") == owner:
+            return _process_running_execution(
+                conn,
+                execution,
+                now=timestamp,
+                prior_status=prior_status,
+                worker_id=owner,
+                lease_duration_seconds=duration,
+            )
         return {
             "execution_id": execution_id,
             "playbook_id": execution["playbook_id"],
@@ -425,15 +434,17 @@ def _process_running_execution(
             "Playbook definition steps are invalid.",
         )
 
+    start_index, steps_log, last_completed_step = _resume_progress(execution)
+
     return _process_steps(
         conn,
         execution,
         steps,
         timestamp,
         prior,
-        start_index=0,
-        steps_log=[],
-        last_completed_step=None,
+        start_index=min(start_index, len(steps)),
+        steps_log=steps_log,
+        last_completed_step=last_completed_step,
         worker_id=owner,
         lease_duration_seconds=duration,
     )
@@ -789,6 +800,22 @@ def _process_steps(
         len(steps_log),
         "Simulated playbook execution completed successfully.",
     )
+
+
+def _resume_progress(
+    execution: dict[str, Any],
+) -> tuple[int, list[dict[str, Any]], int | None]:
+    steps_log = list(execution.get("steps_log") or [])
+    last_completed_step = execution.get("last_completed_step")
+    if last_completed_step is None:
+        return 0, steps_log, None
+    try:
+        completed = int(last_completed_step)
+    except (TypeError, ValueError):
+        return 0, steps_log, None
+    if completed < 0:
+        return 0, steps_log, None
+    return completed + 1, steps_log, completed
 
 
 def _simulate_step(

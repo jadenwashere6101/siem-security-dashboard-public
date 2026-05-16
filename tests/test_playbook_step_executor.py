@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 from psycopg2.extras import Json
 
-from core import approval_store, playbook_store
+from core import approval_store, notification_delivery_store, playbook_store
 from engines import playbook_step_executor
 from integrations.base_integration import (
     CIRCUIT_STATE_CLOSED,
@@ -59,6 +59,55 @@ def _set_playbook_steps(cur, playbook_id, steps):
 def _count(cur, table):
     cur.execute(f"SELECT COUNT(*) FROM {table}")
     return cur.fetchone()[0]
+
+
+def _progress_entry(step_index, action, now=None):
+    timestamp = now or datetime(2026, 5, 16, 12, 0, 0, tzinfo=timezone.utc)
+    return {
+        "step_index": step_index,
+        "action": action,
+        "status": "success",
+        "mode": "simulation",
+        "started_at": timestamp.isoformat().replace("+00:00", "Z"),
+        "completed_at": timestamp.isoformat().replace("+00:00", "Z"),
+        "message": "previously completed",
+        "output": {"simulated": True, "executed": False},
+        "error": None,
+    }
+
+
+def _set_execution_progress(
+    cur,
+    execution_id,
+    *,
+    status="pending",
+    steps_log=None,
+    last_completed_step=None,
+    lease_owner=None,
+):
+    cur.execute(
+        """
+        UPDATE playbook_executions
+        SET status = %s,
+            steps_log = %s,
+            last_completed_step = %s,
+            lease_owner = %s,
+            lease_acquired_at = CASE WHEN %s IS NULL THEN NULL ELSE NOW() END,
+            lease_heartbeat_at = CASE WHEN %s IS NULL THEN NULL ELSE NOW() END,
+            lease_expires_at = CASE WHEN %s IS NULL THEN NULL ELSE NOW() + INTERVAL '5 minutes' END
+        WHERE id = %s
+        """,
+        (
+            status,
+            Json(steps_log or []),
+            last_completed_step,
+            lease_owner,
+            lease_owner,
+            lease_owner,
+            lease_owner,
+            execution_id,
+        ),
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -1145,3 +1194,229 @@ def test_notify_slack_creates_one_delivery_under_lease_processing(utc_db, no_net
 
     assert result["outcome"] == "success"
     assert _count(cur, "notification_delivery_attempts") == 1
+
+
+def test_recovered_pending_execution_resumes_after_last_completed_step(utc_db, monkeypatch):
+    conn, cur = utc_db
+    eid = _create_execution(
+        conn,
+        cur,
+        "pb_resume_pending",
+        steps=[
+            {"action": "monitor", "params": {}},
+            {"action": "flag_high_priority", "params": {}},
+        ],
+    )
+    _set_execution_progress(
+        cur,
+        eid,
+        status="pending",
+        steps_log=[_progress_entry(0, "monitor")],
+        last_completed_step=0,
+    )
+    calls = []
+    original = playbook_step_executor._simulate_step
+
+    def _record_step(step, step_index, now, execution):
+        calls.append(step_index)
+        return original(step, step_index, now, execution)
+
+    monkeypatch.setattr(playbook_step_executor, "_simulate_step", _record_step)
+
+    result = playbook_step_executor.process_playbook_execution(
+        conn, eid, worker_id="worker-alpha"
+    )
+
+    assert result["outcome"] == "success"
+    assert calls == [1]
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["last_completed_step"] == 1
+    assert [entry["action"] for entry in row["steps_log"]] == [
+        "monitor",
+        "flag_high_priority",
+    ]
+
+
+def test_execution_without_completed_step_starts_at_step_zero(utc_db, monkeypatch):
+    conn, cur = utc_db
+    eid = _create_execution(
+        conn,
+        cur,
+        "pb_resume_fresh",
+        steps=[
+            {"action": "monitor", "params": {}},
+            {"action": "flag_high_priority", "params": {}},
+        ],
+    )
+    calls = []
+    original = playbook_step_executor._simulate_step
+
+    def _record_step(step, step_index, now, execution):
+        calls.append(step_index)
+        return original(step, step_index, now, execution)
+
+    monkeypatch.setattr(playbook_step_executor, "_simulate_step", _record_step)
+
+    result = playbook_step_executor.process_playbook_execution(
+        conn, eid, worker_id="worker-alpha"
+    )
+
+    assert result["outcome"] == "success"
+    assert calls == [0, 1]
+
+
+def test_running_owned_execution_resumes_without_replaying_success_step(utc_db, monkeypatch):
+    conn, cur = utc_db
+    eid = _create_execution(
+        conn,
+        cur,
+        "pb_resume_running",
+        steps=[
+            {"action": "monitor", "params": {}},
+            {"action": "flag_high_priority", "params": {}},
+        ],
+    )
+    _set_execution_progress(
+        cur,
+        eid,
+        status="running",
+        steps_log=[_progress_entry(0, "monitor")],
+        last_completed_step=0,
+        lease_owner="worker-alpha",
+    )
+    calls = []
+    original = playbook_step_executor._simulate_step
+
+    def _record_step(step, step_index, now, execution):
+        calls.append(step_index)
+        return original(step, step_index, now, execution)
+
+    monkeypatch.setattr(playbook_step_executor, "_simulate_step", _record_step)
+
+    result = playbook_step_executor.process_playbook_execution(
+        conn, eid, worker_id="worker-alpha"
+    )
+
+    assert result["outcome"] == "success"
+    assert calls == [1]
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["status"] == "success"
+    assert row["last_completed_step"] == 1
+
+
+def test_completed_notification_step_is_not_recorded_again_on_resume(utc_db, no_network):
+    conn, cur = utc_db
+    eid = _create_execution(
+        conn,
+        cur,
+        "pb_resume_notify",
+        steps=[
+            {"action": "notify_slack", "params": {"message": "already sent"}},
+            {"action": "monitor", "params": {}},
+        ],
+    )
+    cur.execute("SELECT alert_id FROM playbook_executions WHERE id = %s", (eid,))
+    alert_id = cur.fetchone()[0]
+    notification_delivery_store.create_notification_delivery_attempt(
+        conn,
+        correlation_id=f"existing-{eid}-0",
+        idempotency_key=playbook_step_executor._make_delivery_idempotency_key(
+            "slack", "notify_slack", eid, 0
+        ),
+        provider="slack",
+        mode="simulation",
+        status="success",
+        adapter_name="slack",
+        action="send_message",
+        metadata={"adapter_mode": "simulation"},
+        playbook_execution_id=eid,
+        playbook_step_index=0,
+        alert_id=alert_id,
+        circuit_breaker_state="closed",
+    )
+    _set_execution_progress(
+        cur,
+        eid,
+        status="pending",
+        steps_log=[_progress_entry(0, "notify_slack")],
+        last_completed_step=0,
+    )
+
+    with patch(
+        "engines.playbook_step_executor.notification_delivery_store"
+        ".create_notification_delivery_attempt",
+        side_effect=AssertionError("completed notification step was replayed"),
+    ):
+        result = playbook_step_executor.process_playbook_execution(
+            conn, eid, worker_id="worker-alpha"
+        )
+
+    assert result["outcome"] == "success"
+    assert _count_deliveries(cur, eid) == 1
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert [entry["action"] for entry in row["steps_log"]] == ["notify_slack", "monitor"]
+
+
+def test_resumed_execution_still_requires_matching_lease_owner(utc_db):
+    conn, cur = utc_db
+    eid = _create_execution(
+        conn,
+        cur,
+        "pb_resume_lease_guard",
+        steps=[
+            {"action": "monitor", "params": {}},
+            {"action": "flag_high_priority", "params": {}},
+        ],
+    )
+    prior_log = [_progress_entry(0, "monitor")]
+    _set_execution_progress(
+        cur,
+        eid,
+        status="running",
+        steps_log=prior_log,
+        last_completed_step=0,
+        lease_owner="worker-alpha",
+    )
+
+    result = playbook_step_executor.process_playbook_execution(
+        conn, eid, worker_id="worker-beta"
+    )
+
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert result["outcome"] == "skipped"
+    assert result["reason"] == "lease_not_owned"
+    assert row["status"] == "running"
+    assert row["last_completed_step"] == 0
+    assert row["steps_log"] == prior_log
+
+
+@pytest.mark.parametrize("status", ["failed", "abandoned", "permanently_failed"])
+def test_terminal_failed_or_aborted_executions_do_not_resume(utc_db, status):
+    conn, cur = utc_db
+    eid = _create_execution(
+        conn,
+        cur,
+        f"pb_terminal_{status}",
+        steps=[
+            {"action": "monitor", "params": {}},
+            {"action": "flag_high_priority", "params": {}},
+        ],
+    )
+    prior_log = [_progress_entry(0, "monitor")]
+    _set_execution_progress(
+        cur,
+        eid,
+        status=status,
+        steps_log=prior_log,
+        last_completed_step=0,
+    )
+
+    result = playbook_step_executor.process_playbook_execution(
+        conn, eid, worker_id="worker-alpha"
+    )
+
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert result["outcome"] == "skipped"
+    assert result["reason"] == "terminal_status"
+    assert row["status"] == status
+    assert row["steps_log"] == prior_log

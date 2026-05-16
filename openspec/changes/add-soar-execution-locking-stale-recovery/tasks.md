@@ -46,11 +46,11 @@ This is a design/spec change only. Implementation should be split into later app
 
 ## Slice 3 — Durable progress and resume behavior
 
-- [ ] Split fresh execution processing from recovered/resumed processing.
-- [ ] Resume from `last_completed_step + 1`.
-- [ ] Do not replay successful steps already present in `steps_log`.
-- [ ] Preserve existing approval gate entries and decision entries.
-- [ ] Add tests for crash-after-step-log and resume-from-progress scenarios.
+- [x] Split fresh execution processing from recovered/resumed processing.
+- [x] Resume from `last_completed_step + 1`.
+- [x] Do not replay successful steps already present in `steps_log`.
+- [x] Preserve existing approval gate entries and decision entries.
+- [x] Add tests for crash-after-step-log and resume-from-progress scenarios.
 
 ---
 
