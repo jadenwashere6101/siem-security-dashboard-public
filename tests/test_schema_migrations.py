@@ -178,3 +178,43 @@ def test_base_siem_core_migration_scope():
     assert "awaiting_approval" in sql
     assert "idx_response_actions_queue_status" in sql
     assert "idx_response_actions_queue_alert_id" in sql
+
+
+def test_auth_rbac_and_metadata_migration_scope():
+    migration_path = Path(__file__).resolve().parent.parent / "migrations" / "0003_auth_rbac_and_metadata.sql"
+    sql = migration_path.read_text(encoding="utf-8")
+
+    included_tables = [
+        "users",
+        "audit_log",
+        "alert_notes",
+        "detection_config",
+        "blocked_ips",
+    ]
+    excluded_tables = [
+        "events",
+        "alerts",
+        "response_actions_log",
+        "response_actions_queue",
+        "incidents",
+        "approval_requests",
+        "approval_request_events",
+        "playbook_definitions",
+        "playbook_executions",
+        "playbook_schedules",
+        "notification_delivery_attempts",
+    ]
+    for table in included_tables:
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in sql
+    for table in excluded_tables:
+        assert f"CREATE TABLE IF NOT EXISTS {table}" not in sql
+
+    assert "DROP" not in sql.upper()
+    assert "TRUNCATE" not in sql.upper()
+    assert "DELETE FROM" not in sql.upper()
+    assert "RENAME" not in sql.upper()
+    assert "CONCURRENTLY" not in sql.upper()
+    assert "idx_users_username" in sql
+    assert "idx_audit_log_event_type" in sql
+    assert "idx_alert_notes_alert_id" in sql
+    assert "idx_blocked_ips_ip_address" in sql
