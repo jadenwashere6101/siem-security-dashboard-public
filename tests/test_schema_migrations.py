@@ -259,3 +259,53 @@ def test_soar_incidents_migration_scope():
     assert "idx_incidents_source_ip" in sql
     assert "idx_incident_alerts_alert_id" in sql
     assert "idx_incident_alerts_incident_id" in sql
+
+
+def test_soar_approvals_migration_scope_and_original_shape():
+    migration_path = Path(__file__).resolve().parent.parent / "migrations" / "0005_soar_approvals.sql"
+    sql = migration_path.read_text(encoding="utf-8")
+
+    included_tables = [
+        "approval_requests",
+        "approval_request_events",
+    ]
+    excluded_tables = [
+        "events",
+        "alerts",
+        "response_actions_log",
+        "response_actions_queue",
+        "users",
+        "audit_log",
+        "alert_notes",
+        "detection_config",
+        "blocked_ips",
+        "incidents",
+        "incident_alerts",
+        "playbook_definitions",
+        "playbook_executions",
+        "playbook_schedules",
+        "notification_delivery_attempts",
+    ]
+    for table in included_tables:
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in sql
+    for table in excluded_tables:
+        assert f"CREATE TABLE IF NOT EXISTS {table}" not in sql
+
+    assert "playbook_execution_id" not in sql
+    assert "playbook_step_index" not in sql
+    assert "CHECK (incident_id IS NOT NULL OR queue_id IS NOT NULL)" in sql
+    assert "OR playbook_execution_id IS NOT NULL" not in sql
+    assert "DROP" not in sql.upper()
+    assert "TRUNCATE" not in sql.upper()
+    assert "DELETE FROM" not in sql.upper()
+    assert "RENAME" not in sql.upper()
+    assert "CONCURRENTLY" not in sql.upper()
+    assert "idx_approval_requests_status" in sql
+    assert "idx_approval_requests_incident_id" in sql
+    assert "idx_approval_requests_queue_id" in sql
+    assert "idx_approval_requests_queue_action" in sql
+    assert "idx_approval_requests_expires_at" in sql
+    assert "idx_approval_requests_pending_expiry" in sql
+    assert "idx_approval_request_events_request_id" in sql
+    assert "idx_approval_request_events_created_at" in sql
+    assert "idx_approval_requests_queue_action_active" in sql
