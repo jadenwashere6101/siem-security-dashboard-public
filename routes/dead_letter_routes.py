@@ -15,12 +15,13 @@ from flask_login import current_user, login_required
 
 from core import dead_letter_store
 from core.audit_helpers import log_audit_event
-from core.auth import analyst_or_super_admin_required
+from core.auth import analyst_or_super_admin_required, super_admin_required
 from core.db import get_db_connection
 from core.notification_delivery_store import (
     redact_notification_delivery_metadata,
     sanitize_failure_message,
 )
+from core.playbook_store import create_retry_execution
 
 
 dead_letter_bp = Blueprint("dead_letters", __name__)
@@ -335,6 +336,95 @@ def retry_request_dead_letter(dead_letter_id: int):
         if conn:
             conn.rollback()
         current_app.logger.error("retry_request_dead_letter: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@dead_letter_bp.route("/dead-letters/<int:dead_letter_id>/retry-execute", methods=["POST"])
+@login_required
+@super_admin_required
+def retry_execute_dead_letter(dead_letter_id: int):
+    conn = None
+    try:
+        conn = get_db_connection()
+        existing = dead_letter_store.get_dead_letter(conn, dead_letter_id)
+        if existing is None:
+            return jsonify({"error": "not_found", "message": "Dead letter not found."}), 404
+        if existing["status"] != "retrying":
+            return (
+                jsonify(
+                    {
+                        "error": "invalid_state",
+                        "message": "Dead letter must be retrying before retry execution.",
+                        "status": existing["status"],
+                    }
+                ),
+                409,
+            )
+        if existing["source_type"] != "playbook_execution":
+            return (
+                jsonify(
+                    {
+                        "error": "unsupported_source_type",
+                        "message": (
+                            "Retry execution currently supports only playbook_execution "
+                            "dead letters."
+                        ),
+                        "source_type": existing["source_type"],
+                    }
+                ),
+                409,
+            )
+
+        try:
+            new_execution_id = create_retry_execution(conn, existing["source_id"])
+        except ValueError as exc:
+            conn.rollback()
+            return jsonify({"error": "retry_not_allowed", "message": str(exc)}), 409
+
+        updated = dead_letter_store.mark_dead_letter_retried(conn, dead_letter_id)
+        if updated is None:
+            conn.rollback()
+            latest = dead_letter_store.get_dead_letter(conn, dead_letter_id) or existing
+            return (
+                jsonify(
+                    {
+                        "error": "invalid_state",
+                        "message": "Dead letter could not be marked retried.",
+                        "status": latest.get("status"),
+                    }
+                ),
+                409,
+            )
+
+        conn.commit()
+        _write_dead_letter_audit(
+            "DEAD_LETTER_RETRY_EXECUTE",
+            {
+                "dead_letter_id": dead_letter_id,
+                "source_type": updated["source_type"],
+                "source_id": updated["source_id"],
+                "previous_status": existing["status"],
+                "new_status": updated["status"],
+                "new_execution_id": new_execution_id,
+            },
+        )
+        return (
+            jsonify(
+                {
+                    "dead_letter": _safe_dead_letter(updated),
+                    "new_execution_id": new_execution_id,
+                    "message": "New pending playbook retry execution created. No steps have run.",
+                }
+            ),
+            201,
+        )
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        current_app.logger.error("retry_execute_dead_letter: %s", error)
         return jsonify({"error": "Internal server error"}), 500
     finally:
         if conn:

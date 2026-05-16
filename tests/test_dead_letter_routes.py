@@ -9,7 +9,7 @@ import pytest
 from psycopg2.extras import Json
 from werkzeug.security import generate_password_hash
 
-from core import dead_letter_store
+from core import dead_letter_store, playbook_store
 
 ADMIN_USER = "testadmin"
 ADMIN_PASS = "testpassword123!"
@@ -85,12 +85,41 @@ def _insert_user(cur, username, role="analyst"):
     return cur.fetchone()[0]
 
 
+def _insert_failed_playbook_execution(conn, cur, playbook_id="pb_dead_letter_retry"):
+    cur.execute(
+        """
+        INSERT INTO alerts (alert_type, severity, source_ip, message)
+        VALUES ('dead_letter_retry', 'HIGH', '10.2.3.4'::inet, 'dead letter retry')
+        RETURNING id
+        """
+    )
+    alert_id = cur.fetchone()[0]
+    playbook_store.create_playbook_definition(
+        conn,
+        playbook_id,
+        "Dead letter retry",
+        steps=[{"action": "monitor", "params": {}}],
+    )
+    cur.execute(
+        """
+        INSERT INTO playbook_executions (
+            playbook_id, alert_id, status, steps_log
+        )
+        VALUES (%s, %s, 'failed', '[]'::jsonb)
+        RETURNING id
+        """,
+        (playbook_id, alert_id),
+    )
+    return cur.fetchone()[0], alert_id, playbook_id
+
+
 def test_dead_letter_routes_without_session_return_401(client):
     assert client.get("/dead-letters").status_code == 401
     assert client.get("/dead-letters/1").status_code == 401
     assert client.get("/metrics/dead-letters").status_code == 401
     assert client.post("/dead-letters/1/dismiss").status_code == 401
     assert client.post("/dead-letters/1/retry-request").status_code == 401
+    assert client.post("/dead-letters/1/retry-execute").status_code == 401
 
 
 def test_dead_letter_routes_viewer_forbidden(client, mock_db):
@@ -101,6 +130,7 @@ def test_dead_letter_routes_viewer_forbidden(client, mock_db):
         assert client.get("/metrics/dead-letters").status_code == 403
         assert client.post("/dead-letters/1/dismiss").status_code == 403
         assert client.post("/dead-letters/1/retry-request").status_code == 403
+        assert client.post("/dead-letters/1/retry-execute").status_code == 403
     finally:
         _stop_patchers(patchers)
 
@@ -441,3 +471,230 @@ def test_dead_letter_dismiss_invalid_comment_returns_400(client, postgres_db):
     assert resp.status_code == 400
     assert resp.get_json()["error"] == "invalid_request"
     assert dead_letter_store.get_dead_letter(conn, row["id"])["status"] == "open"
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_dead_letter_retry_execute_playbook_execution_creates_pending_and_marks_retried(
+    client, postgres_db
+):
+    conn, cur = postgres_db
+    execution_id, alert_id, playbook_id = _insert_failed_playbook_execution(
+        conn, cur, "pb_dl_retry_exec"
+    )
+    row = dead_letter_store.create_dead_letter(
+        conn,
+        source_type="playbook_execution",
+        source_id=execution_id,
+        execution_id=execution_id,
+        alert_id=alert_id,
+        playbook_id=playbook_id,
+        failure_class="adapter_failed",
+        error_message="failed",
+    )
+    dead_letter_store.mark_dead_letter_retry_requested(conn, row["id"], requested_by=None)
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_dead_letter_db(conn), patch(
+        "engines.playbook_step_executor.process_playbook_execution",
+        side_effect=AssertionError("retry-execute must not process playbooks"),
+    ), patch(
+        "engines.playbook_step_executor.process_playbook_execution_batch",
+        side_effect=AssertionError("retry-execute must not process playbooks"),
+    ):
+        resp = client.post(f"/dead-letters/{row['id']}/retry-execute")
+
+    assert resp.status_code == 201
+    body = resp.get_json()
+    assert body["dead_letter"]["status"] == "retried"
+    assert body["dead_letter"]["id"] == row["id"]
+    new_execution_id = body["new_execution_id"]
+    assert new_execution_id != execution_id
+
+    new_execution = playbook_store.get_playbook_execution(conn, new_execution_id)
+    assert new_execution["status"] == "pending"
+    assert new_execution["playbook_id"] == playbook_id
+    assert new_execution["alert_id"] == alert_id
+    assert new_execution["steps_log"] == []
+
+    cur.execute(
+        "SELECT COUNT(*) FROM audit_log WHERE event_type = 'DEAD_LETTER_RETRY_EXECUTE'"
+    )
+    assert cur.fetchone()[0] == 1
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_dead_letter_retry_execute_analyst_denied(client, postgres_db):
+    conn, cur = postgres_db
+    execution_id, _alert_id, _playbook_id = _insert_failed_playbook_execution(
+        conn, cur, "pb_dl_retry_analyst"
+    )
+    row = dead_letter_store.create_dead_letter(
+        conn,
+        source_type="playbook_execution",
+        source_id=execution_id,
+        failure_class="adapter_failed",
+        error_message="failed",
+    )
+    dead_letter_store.mark_dead_letter_retry_requested(conn, row["id"], requested_by=None)
+    conn.commit()
+
+    patchers = _login_role(client, username="dl_retry_exec_analyst", password="apass", role="analyst")
+    try:
+        with _patched_dead_letter_db(conn):
+            resp = client.post(f"/dead-letters/{row['id']}/retry-execute")
+    finally:
+        _stop_patchers(patchers)
+
+    assert resp.status_code == 403
+    assert dead_letter_store.get_dead_letter(conn, row["id"])["status"] == "retrying"
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_dead_letter_retry_execute_rejects_open_until_retry_requested(client, postgres_db):
+    conn, cur = postgres_db
+    execution_id, _alert_id, _playbook_id = _insert_failed_playbook_execution(
+        conn, cur, "pb_dl_retry_open"
+    )
+    row = dead_letter_store.create_dead_letter(
+        conn,
+        source_type="playbook_execution",
+        source_id=execution_id,
+        failure_class="adapter_failed",
+        error_message="failed",
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_dead_letter_db(conn):
+        resp = client.post(f"/dead-letters/{row['id']}/retry-execute")
+
+    assert resp.status_code == 409
+    body = resp.get_json()
+    assert body["error"] == "invalid_state"
+    assert body["status"] == "open"
+    assert dead_letter_store.get_dead_letter(conn, row["id"])["status"] == "open"
+
+
+@pytest.mark.usefixtures("postgres_db")
+@pytest.mark.parametrize("source_type", ["notification_delivery", "response_action", "approval"])
+def test_dead_letter_retry_execute_rejects_non_playbook_sources(client, postgres_db, source_type):
+    conn, _cur = postgres_db
+    row = dead_letter_store.create_dead_letter(
+        conn,
+        source_type=source_type,
+        source_id=700,
+        failure_class="unsupported",
+        error_message="unsupported",
+    )
+    dead_letter_store.mark_dead_letter_retry_requested(conn, row["id"], requested_by=None)
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_dead_letter_db(conn):
+        resp = client.post(f"/dead-letters/{row['id']}/retry-execute")
+
+    assert resp.status_code == 409
+    body = resp.get_json()
+    assert body["error"] == "unsupported_source_type"
+    assert body["source_type"] == source_type
+    assert dead_letter_store.get_dead_letter(conn, row["id"])["status"] == "retrying"
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_dead_letter_retry_execute_rejects_permanently_failed_source_execution(
+    client, postgres_db
+):
+    conn, cur = postgres_db
+    execution_id, _alert_id, _playbook_id = _insert_failed_playbook_execution(
+        conn, cur, "pb_dl_retry_perm_fail"
+    )
+    cur.execute(
+        "UPDATE playbook_executions SET status = 'permanently_failed' WHERE id = %s",
+        (execution_id,),
+    )
+    row = dead_letter_store.create_dead_letter(
+        conn,
+        source_type="playbook_execution",
+        source_id=execution_id,
+        failure_class="adapter_failed",
+        error_message="failed",
+    )
+    dead_letter_store.mark_dead_letter_retry_requested(conn, row["id"], requested_by=None)
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_dead_letter_db(conn):
+        resp = client.post(f"/dead-letters/{row['id']}/retry-execute")
+
+    assert resp.status_code == 409
+    body = resp.get_json()
+    assert body["error"] == "retry_not_allowed"
+    assert "permanently_failed" in body["message"]
+    assert dead_letter_store.get_dead_letter(conn, row["id"])["status"] == "retrying"
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_dead_letter_retry_execute_active_execution_conflict_does_not_mark_retried(
+    client, postgres_db
+):
+    conn, cur = postgres_db
+    execution_id, alert_id, playbook_id = _insert_failed_playbook_execution(
+        conn, cur, "pb_dl_retry_active_conflict"
+    )
+    cur.execute(
+        """
+        INSERT INTO playbook_executions (playbook_id, alert_id, status, steps_log)
+        VALUES (%s, %s, 'pending', '[]'::jsonb)
+        """,
+        (playbook_id, alert_id),
+    )
+    row = dead_letter_store.create_dead_letter(
+        conn,
+        source_type="playbook_execution",
+        source_id=execution_id,
+        failure_class="adapter_failed",
+        error_message="failed",
+    )
+    dead_letter_store.mark_dead_letter_retry_requested(conn, row["id"], requested_by=None)
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_dead_letter_db(conn):
+        resp = client.post(f"/dead-letters/{row['id']}/retry-execute")
+
+    assert resp.status_code == 409
+    body = resp.get_json()
+    assert body["error"] == "retry_not_allowed"
+    assert "active execution already exists" in body["message"]
+    assert dead_letter_store.get_dead_letter(conn, row["id"])["status"] == "retrying"
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_dead_letter_retry_execute_marks_retried_only_after_retry_creation_succeeds(
+    client, postgres_db
+):
+    conn, cur = postgres_db
+    execution_id, _alert_id, _playbook_id = _insert_failed_playbook_execution(
+        conn, cur, "pb_dl_retry_missing_source"
+    )
+    row = dead_letter_store.create_dead_letter(
+        conn,
+        source_type="playbook_execution",
+        source_id=execution_id,
+        failure_class="adapter_failed",
+        error_message="failed",
+    )
+    dead_letter_store.mark_dead_letter_retry_requested(conn, row["id"], requested_by=None)
+    cur.execute("DELETE FROM playbook_executions WHERE id = %s", (execution_id,))
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_dead_letter_db(conn):
+        resp = client.post(f"/dead-letters/{row['id']}/retry-execute")
+
+    assert resp.status_code == 409
+    body = resp.get_json()
+    assert body["error"] == "retry_not_allowed"
+    assert "execution not found" in body["message"]
+    assert dead_letter_store.get_dead_letter(conn, row["id"])["status"] == "retrying"
