@@ -8,6 +8,8 @@ set -euo pipefail
 readonly SERVICE_NAME="siem-backend.service"
 readonly MIGRATE_SCRIPT="scripts/migrate.py"
 readonly ENV_FILE=".env"
+readonly HEALTH_MAX_ATTEMPTS=10
+readonly HEALTH_RETRY_SECONDS=2
 
 DRY_RUN_MIGRATIONS=0
 SKIP_RESTART=0
@@ -223,19 +225,30 @@ check_backend_service_status() {
 }
 
 check_health_endpoint() {
-  local health_port health_url
+  local health_port health_url attempt http_code
   health_port="${SIEM_PORT:-5051}"
   health_url="http://127.0.0.1:${health_port}/health"
   if ! command -v curl >/dev/null 2>&1; then
     log "curl not available; skipping health check for ${health_url}"
     return 0
   fi
+
   log "Probing ${health_url} ..."
-  if curl -fsS --max-time 10 "$health_url" >/dev/null; then
-    log "Health check passed."
-  else
-    die "Health check failed for ${health_url}"
-  fi
+  for attempt in $(seq 1 "$HEALTH_MAX_ATTEMPTS"); do
+    http_code="$(
+      curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "$health_url" 2>/dev/null || true
+    )"
+    if [[ "$http_code" == "200" ]]; then
+      log "Health check passed on attempt ${attempt}/${HEALTH_MAX_ATTEMPTS}."
+      return 0
+    fi
+    log "Health check attempt ${attempt}/${HEALTH_MAX_ATTEMPTS} returned ${http_code:-no response}."
+    if [[ "$attempt" -lt "$HEALTH_MAX_ATTEMPTS" ]]; then
+      sleep "$HEALTH_RETRY_SECONDS"
+    fi
+  done
+
+  die "Health check failed for ${health_url} after ${HEALTH_MAX_ATTEMPTS} attempts."
 }
 
 main() {

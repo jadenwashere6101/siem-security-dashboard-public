@@ -40,6 +40,7 @@ def test_dry_run_migrations_skips_apply_and_restart():
     assert "restart_backend_service" not in dry_run_exit
     assert "DRY_RUN_MIGRATIONS=1" in text
     assert "SKIP_RESTART=1" in text
+    assert "SKIP_HEALTH_CHECK=1" in text
 
 
 def test_does_not_echo_password_variables():
@@ -102,4 +103,52 @@ def test_default_flow_includes_dry_run_then_apply():
     dry_idx = main_body.index("run_migration_dry_run")
     apply_idx = main_body.index("run_migration_apply")
     restart_idx = main_body.index("restart_backend_service")
-    assert dry_idx < apply_idx < restart_idx
+    status_idx = main_body.index("check_backend_service_status")
+    health_idx = main_body.index("check_health_endpoint")
+    assert dry_idx < apply_idx < restart_idx < status_idx < health_idx
+
+
+def test_health_retry_loop_is_bounded_with_backoff():
+    text = read_deploy_script()
+    assert "HEALTH_MAX_ATTEMPTS=10" in text
+    assert "HEALTH_RETRY_SECONDS=2" in text
+    health_fn = text.split("check_health_endpoint() {", 1)[1].split("\n}\n\nmain", 1)[0]
+    assert 'for attempt in $(seq 1 "$HEALTH_MAX_ATTEMPTS")' in health_fn
+    assert 'sleep "$HEALTH_RETRY_SECONDS"' in health_fn
+    assert '[[ "$attempt" -lt "$HEALTH_MAX_ATTEMPTS" ]]' in health_fn
+    assert "after ${HEALTH_MAX_ATTEMPTS} attempts" in health_fn
+
+
+def test_health_retry_passes_on_http_200():
+    text = read_deploy_script()
+    health_fn = text.split("check_health_endpoint() {", 1)[1].split("\n}\n\nmain", 1)[0]
+    assert 'http_code="$(' in health_fn
+    assert '--max-time 5 "$health_url"' in health_fn
+    assert 'if [[ "$http_code" == "200" ]]; then' in health_fn
+    assert 'Health check passed on attempt ${attempt}/${HEALTH_MAX_ATTEMPTS}.' in health_fn
+    assert "return 0" in health_fn
+
+
+def test_health_retry_prints_safe_attempt_progress():
+    text = read_deploy_script()
+    health_fn = text.split("check_health_endpoint() {", 1)[1].split("\n}\n\nmain", 1)[0]
+    assert "Health check attempt ${attempt}/${HEALTH_MAX_ATTEMPTS}" in health_fn
+    assert "$DATABASE_URL" not in health_fn
+    assert "SIEM_DB_PASSWORD" not in health_fn
+    assert "DB_PASSWORD" not in health_fn
+
+
+def test_skip_health_check_still_skips_health_logic():
+    text = read_deploy_script()
+    main_body = text.split("main() {", 1)[1].split("\n}\n\nmain", 1)[0]
+    skip_block = main_body.split('if [[ "$SKIP_HEALTH_CHECK" -eq 1 ]]; then', 1)[1].split("fi", 1)[0]
+    assert "Skipping health check (--skip-health-check)." in skip_block
+    assert "exit 0" in skip_block
+    assert "check_health_endpoint" not in skip_block
+
+
+def test_restart_still_happens_before_health_check():
+    text = read_deploy_script()
+    main_body = text.split("main() {", 1)[1].split("\n}\n\nmain", 1)[0]
+    assert main_body.index("restart_backend_service") < main_body.index("check_health_endpoint")
+    assert main_body.index("check_backend_service_status") < main_body.index("check_health_endpoint")
