@@ -975,3 +975,173 @@ def test_failed_notify_slack_step_creates_failed_delivery_record(postgres_db, no
     rows = _fetch_deliveries(cur, eid)
     assert len(rows) == 1
     assert rows[0][2] == "failed"
+
+
+@pytest.fixture
+def utc_db(postgres_db):
+    conn, cur = postgres_db
+    cur.execute("SET TIME ZONE 'UTC'")
+    conn.commit()
+    return conn, cur
+
+
+def test_executor_acquires_lease_before_processing(utc_db):
+    conn, cur = utc_db
+    eid = _create_execution(conn, cur, "pb_lease_acquire")
+
+    result = playbook_step_executor.process_playbook_execution(
+        conn, eid, worker_id="worker-alpha"
+    )
+
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert result["outcome"] == "success"
+    assert row["status"] == "success"
+    assert row["lease_owner"] is None
+
+
+def test_second_worker_cannot_process_leased_execution(utc_db):
+    conn, cur = utc_db
+    eid = _create_execution(conn, cur, "pb_lease_block")
+    leased = playbook_store.acquire_execution_lease(
+        conn, eid, "worker-alpha", lease_duration_seconds=120
+    )
+    conn.commit()
+    assert leased is not None
+
+    result = playbook_step_executor.process_playbook_execution(
+        conn, eid, worker_id="worker-beta"
+    )
+
+    assert result["outcome"] == "skipped"
+    assert result["reason"] == "lease_not_owned"
+
+
+def test_failed_lease_acquisition_skips_processing(utc_db):
+    conn, cur = utc_db
+    eid = _create_execution(conn, cur, "pb_lease_skip")
+    playbook_store.acquire_execution_lease(
+        conn, eid, "worker-alpha", lease_duration_seconds=120
+    )
+    conn.commit()
+
+    result = playbook_step_executor.process_playbook_execution(
+        conn, eid, worker_id="worker-beta"
+    )
+
+    assert result["outcome"] == "skipped"
+    assert result["reason"] == "lease_not_owned"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["status"] == "running"
+    assert row["lease_owner"] == "worker-alpha"
+
+
+def test_pending_with_expired_lease_can_be_acquired_by_worker(utc_db):
+    conn, cur = utc_db
+    eid = _create_execution(conn, cur, "pb_lease_expired_pending")
+    cur.execute(
+        """
+        UPDATE playbook_executions
+        SET lease_owner = %s,
+            lease_acquired_at = NOW() - INTERVAL '10 minutes',
+            lease_heartbeat_at = NOW() - INTERVAL '10 minutes',
+            lease_expires_at = NOW() - INTERVAL '5 minutes'
+        WHERE id = %s
+        """,
+        ("stale-worker", eid),
+    )
+    conn.commit()
+
+    result = playbook_step_executor.process_playbook_execution(
+        conn, eid, worker_id="worker-beta"
+    )
+
+    assert result["outcome"] == "success"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["status"] == "success"
+
+
+def test_heartbeat_called_during_execution(utc_db, monkeypatch):
+    conn, cur = utc_db
+    eid = _create_execution(conn, cur, "pb_lease_hb")
+    calls = []
+    original_heartbeat = playbook_store.heartbeat_execution_lease
+
+    def _record_heartbeat(conn, execution_id, lease_owner, **kwargs):
+        calls.append((execution_id, lease_owner))
+        return original_heartbeat(conn, execution_id, lease_owner, **kwargs)
+
+    monkeypatch.setattr(
+        playbook_step_executor.playbook_store,
+        "heartbeat_execution_lease",
+        _record_heartbeat,
+    )
+
+    playbook_step_executor.process_playbook_execution(
+        conn, eid, worker_id="worker-alpha", lease_duration_seconds=60
+    )
+
+    assert calls
+    assert all(owner == "worker-alpha" for _, owner in calls)
+    assert all(exec_id == eid for exec_id, _ in calls)
+
+
+def test_lease_released_after_terminal_success(utc_db):
+    conn, cur = utc_db
+    eid = _create_execution(conn, cur, "pb_lease_release_ok")
+
+    playbook_step_executor.process_playbook_execution(
+        conn, eid, worker_id="worker-alpha"
+    )
+    conn.commit()
+
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["status"] == "success"
+    assert row["lease_owner"] is None
+    assert row["lease_expires_at"] is None
+
+
+def test_lease_released_when_pausing_for_approval(utc_db):
+    conn, cur = utc_db
+    eid = _create_execution(
+        conn,
+        cur,
+        "pb_lease_approval_pause",
+        steps=[{"action": "require_approval", "params": {}}],
+    )
+
+    result = playbook_step_executor.process_playbook_execution(
+        conn, eid, worker_id="worker-alpha"
+    )
+    conn.commit()
+
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert result["outcome"] == "awaiting_approval"
+    assert row["status"] == "awaiting_approval"
+    assert row["lease_owner"] is None
+
+
+def test_single_execution_path_uses_explicit_worker_id(utc_db):
+    conn, cur = utc_db
+    eid = _create_execution(conn, cur, "pb_single_worker")
+
+    result = playbook_step_executor.process_playbook_execution(
+        conn, eid, worker_id="smoke-worker-1"
+    )
+    conn.commit()
+
+    assert result["outcome"] == "success"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["lease_owner"] is None
+
+
+def test_notify_slack_creates_one_delivery_under_lease_processing(utc_db, no_network):
+    conn, cur = utc_db
+    eid = _create_execution(conn, cur, "pb_lease_notify")
+    _set_playbook_steps(cur, "pb_lease_notify", [{"action": "notify_slack", "params": {}}])
+
+    result = playbook_step_executor.process_playbook_execution(
+        conn, eid, worker_id="worker-alpha"
+    )
+
+    assert result["outcome"] == "success"
+    assert _count(cur, "notification_delivery_attempts") == 1

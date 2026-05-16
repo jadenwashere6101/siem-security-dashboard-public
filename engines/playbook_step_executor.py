@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -16,6 +17,7 @@ from typing import Any
 from core import approval_store
 from core import notification_delivery_store
 from core import playbook_store
+from core.playbook_worker_identity import generate_playbook_worker_id
 from engines.playbook_registry import SUPPORTED_ACTIONS
 from integrations.base_integration import (
     FAILURE_CLASSIFICATION_CIRCUIT_OPEN,
@@ -26,6 +28,8 @@ from integrations.base_integration import (
 from integrations.integration_registry import execute_playbook_simulated_adapter
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_PLAYBOOK_LEASE_SECONDS = 60
 
 # spec: SPEC-PLAYBOOK-003
 TERMINAL_STATUSES = frozenset({"success", "failed", "abandoned"})
@@ -164,14 +168,41 @@ def _record_notification_delivery_attempt(
         )
 
 
-def process_next_pending_playbook_execution(conn, now=None) -> dict[str, Any] | None:
-    claimed = playbook_store.claim_next_pending_playbook_execution(conn, now=_coerce_now(now))
+def process_next_pending_playbook_execution(
+    conn,
+    now=None,
+    *,
+    worker_id: str | None = None,
+    lease_duration_seconds: int | None = None,
+) -> dict[str, Any] | None:
+    owner = _resolve_worker_id(worker_id)
+    duration = _coerce_lease_duration(lease_duration_seconds)
+    claimed = playbook_store.claim_next_pending_playbook_execution_with_lease(
+        conn,
+        owner,
+        lease_duration_seconds=duration,
+        now=_coerce_now(now),
+    )
     if claimed is None:
         return None
-    return _process_running_execution(conn, claimed, now=_coerce_now(now))
+    return _process_running_execution(
+        conn,
+        claimed,
+        now=_coerce_now(now),
+        prior_status="pending",
+        worker_id=owner,
+        lease_duration_seconds=duration,
+    )
 
 
-def process_playbook_execution(conn, execution_id: int, now=None) -> dict[str, Any]:
+def process_playbook_execution(
+    conn,
+    execution_id: int,
+    now=None,
+    *,
+    worker_id: str | None = None,
+    lease_duration_seconds: int | None = None,
+) -> dict[str, Any]:
     execution = playbook_store.get_playbook_execution(conn, execution_id)
     if execution is None:
         return {
@@ -184,6 +215,10 @@ def process_playbook_execution(conn, execution_id: int, now=None) -> dict[str, A
             "steps_processed": 0,
             "message": "Playbook execution not found.",
         }
+
+    owner = _resolve_worker_id(worker_id)
+    duration = _coerce_lease_duration(lease_duration_seconds)
+    timestamp = _coerce_now(now)
 
     prior_status = execution["status"]
     if prior_status in TERMINAL_STATUSES:
@@ -199,6 +234,13 @@ def process_playbook_execution(conn, execution_id: int, now=None) -> dict[str, A
         }
 
     if prior_status == "running":
+        if execution.get("lease_owner") and execution.get("lease_owner") != owner:
+            return _skip_result(
+                execution,
+                prior_status,
+                "lease_not_owned",
+                "Running playbook execution is owned by another worker.",
+            )
         return {
             "execution_id": execution_id,
             "playbook_id": execution["playbook_id"],
@@ -211,7 +253,13 @@ def process_playbook_execution(conn, execution_id: int, now=None) -> dict[str, A
         }
 
     if prior_status == "awaiting_approval":
-        return _process_awaiting_approval_execution(conn, execution, now=_coerce_now(now))
+        return _process_awaiting_approval_execution(
+            conn,
+            execution,
+            now=timestamp,
+            worker_id=owner,
+            lease_duration_seconds=duration,
+        )
 
     if prior_status != "pending":
         return {
@@ -225,31 +273,56 @@ def process_playbook_execution(conn, execution_id: int, now=None) -> dict[str, A
             "message": "Playbook execution status is not processable.",
         }
 
-    running = playbook_store.set_playbook_execution_running(
+    running = playbook_store.acquire_execution_lease(
         conn,
         execution_id,
-        now=_coerce_now(now),
+        owner,
+        lease_duration_seconds=duration,
+        now=timestamp,
     )
     if running is None:
         latest = playbook_store.get_playbook_execution(conn, execution_id) or execution
-        return {
-            "execution_id": execution_id,
-            "playbook_id": execution["playbook_id"],
-            "prior_status": prior_status,
-            "new_status": latest.get("status"),
-            "outcome": "skipped",
-            "reason": "claim_failed",
-            "steps_processed": 0,
-            "message": "Playbook execution could not be moved to running.",
-        }
-    return _process_running_execution(conn, running, now=_coerce_now(now), prior_status=prior_status)
+        reason = "lease_not_acquired"
+        if latest.get("status") != "pending":
+            reason = "claim_failed"
+        return _skip_result(
+            execution,
+            prior_status,
+            reason,
+            "Playbook execution could not be leased for processing.",
+            new_status=latest.get("status"),
+        )
+    return _process_running_execution(
+        conn,
+        running,
+        now=timestamp,
+        prior_status=prior_status,
+        worker_id=owner,
+        lease_duration_seconds=duration,
+    )
 
 
-def process_playbook_execution_batch(conn, limit=10, now=None) -> dict[str, Any]:
+def process_playbook_execution_batch(
+    conn,
+    limit=10,
+    now=None,
+    *,
+    worker_id: str | None = None,
+    lease_duration_seconds: int | None = None,
+) -> dict[str, Any]:
+    owner = _resolve_worker_id(worker_id)
+    duration = _coerce_lease_duration(lease_duration_seconds)
+    logger.info("[PLAYBOOK SIMULATION] worker_id=%s batch_limit=%s", owner, limit)
+
     batch_limit = _normalize_limit(limit)
     results = []
     for _ in range(batch_limit):
-        result = process_next_pending_playbook_execution(conn, now=now)
+        result = process_next_pending_playbook_execution(
+            conn,
+            now=now,
+            worker_id=owner,
+            lease_duration_seconds=duration,
+        )
         if result is None:
             break
         results.append(result)
@@ -261,7 +334,15 @@ def process_playbook_execution_batch(conn, limit=10, now=None) -> dict[str, Any]
             limit=remaining,
         )
         for row in awaiting_rows:
-            results.append(process_playbook_execution(conn, row["id"], now=now))
+            results.append(
+                process_playbook_execution(
+                    conn,
+                    row["id"],
+                    now=now,
+                    worker_id=owner,
+                    lease_duration_seconds=duration,
+                )
+            )
 
     return {
         "processed": len(results),
@@ -277,11 +358,16 @@ def _process_running_execution(
     execution: dict[str, Any],
     now=None,
     prior_status: str | None = None,
+    *,
+    worker_id: str | None = None,
+    lease_duration_seconds: int | None = None,
 ) -> dict[str, Any]:
     execution_id = execution["id"]
     playbook_id = execution["playbook_id"]
     prior = prior_status or execution["status"]
     timestamp = _coerce_now(now)
+    owner = _resolve_worker_id(worker_id or execution.get("lease_owner"))
+    duration = _coerce_lease_duration(lease_duration_seconds)
 
     definition = playbook_store.get_playbook_definition(conn, playbook_id)
     if definition is None:
@@ -294,9 +380,10 @@ def _process_running_execution(
                 now=timestamp,
             )
         ]
-        playbook_store.set_playbook_execution_failed(
+        _finalize_failed(
             conn,
             execution_id,
+            owner,
             steps_log,
             last_completed_step=None,
             now=timestamp,
@@ -321,9 +408,10 @@ def _process_running_execution(
                 now=timestamp,
             )
         ]
-        playbook_store.set_playbook_execution_failed(
+        _finalize_failed(
             conn,
             execution_id,
+            owner,
             steps_log,
             last_completed_step=None,
             now=timestamp,
@@ -346,11 +434,22 @@ def _process_running_execution(
         start_index=0,
         steps_log=[],
         last_completed_step=None,
+        worker_id=owner,
+        lease_duration_seconds=duration,
     )
 
 
-def _process_awaiting_approval_execution(conn, execution: dict[str, Any], now=None) -> dict[str, Any]:
+def _process_awaiting_approval_execution(
+    conn,
+    execution: dict[str, Any],
+    now=None,
+    *,
+    worker_id: str | None = None,
+    lease_duration_seconds: int | None = None,
+) -> dict[str, Any]:
     timestamp = _coerce_now(now)
+    owner = _resolve_worker_id(worker_id)
+    duration = _coerce_lease_duration(lease_duration_seconds)
     steps_log = list(execution.get("steps_log") or [])
     approval_entry = _latest_gate_entry(steps_log)
     if approval_entry is None:
@@ -362,6 +461,7 @@ def _process_awaiting_approval_execution(conn, execution: dict[str, Any], now=No
             "missing_approval_gate",
             "Awaiting approval execution has no approval gate entry.",
             timestamp,
+            worker_id=owner,
         )
 
     gate_index = approval_entry["step_index"]
@@ -381,6 +481,7 @@ def _process_awaiting_approval_execution(conn, execution: dict[str, Any], now=No
             "missing_approval_request",
             "Linked approval request was not found.",
             timestamp,
+            worker_id=owner,
         )
 
     if approval_request["status"] == "pending":
@@ -419,25 +520,24 @@ def _process_awaiting_approval_execution(conn, execution: dict[str, Any], now=No
                 )
             )
 
-        resumed = playbook_store.set_playbook_execution_resumed_running(
+        resumed = playbook_store.acquire_awaiting_approval_resume_lease(
             conn,
             execution["id"],
+            owner,
             steps_log,
-            last_completed_step=gate_index,
+            gate_index,
+            lease_duration_seconds=duration,
             now=timestamp,
         )
         if resumed is None:
             latest = playbook_store.get_playbook_execution(conn, execution["id"]) or execution
-            return {
-                "execution_id": execution["id"],
-                "playbook_id": execution["playbook_id"],
-                "prior_status": "awaiting_approval",
-                "new_status": latest.get("status"),
-                "outcome": "skipped",
-                "reason": "resume_claim_failed",
-                "steps_processed": 0,
-                "message": "Playbook execution could not be resumed.",
-            }
+            return _skip_result(
+                execution,
+                "awaiting_approval",
+                "lease_not_acquired",
+                "Playbook execution could not be leased for approval resume.",
+                new_status=latest.get("status"),
+            )
 
         definition = playbook_store.get_playbook_definition(conn, execution["playbook_id"])
         if definition is None or not isinstance(definition.get("steps"), list):
@@ -450,6 +550,7 @@ def _process_awaiting_approval_execution(conn, execution: dict[str, Any], now=No
                 "Playbook definition could not be loaded for approval resume.",
                 timestamp,
                 prior_status="awaiting_approval",
+                worker_id=owner,
             )
 
         return _process_steps(
@@ -461,6 +562,8 @@ def _process_awaiting_approval_execution(conn, execution: dict[str, Any], now=No
             start_index=gate_index + 1,
             steps_log=steps_log,
             last_completed_step=gate_index,
+            worker_id=owner,
+            lease_duration_seconds=duration,
         )
 
     if approval_request["status"] in {"denied", "expired"}:
@@ -489,9 +592,10 @@ def _process_awaiting_approval_execution(conn, execution: dict[str, Any], now=No
                 )
             )
 
-        playbook_store.set_playbook_execution_failed(
+        _finalize_failed(
             conn,
             execution["id"],
+            owner,
             steps_log,
             last_completed_step=execution.get("last_completed_step"),
             now=timestamp,
@@ -527,6 +631,8 @@ def _process_steps(
     start_index: int,
     steps_log: list[dict[str, Any]],
     last_completed_step: int | None,
+    worker_id: str,
+    lease_duration_seconds: int,
 ) -> dict[str, Any]:
     execution_id = execution["id"]
     playbook_id = execution["playbook_id"]
@@ -534,6 +640,23 @@ def _process_steps(
     failure_message = None
 
     for index, step in enumerate(steps[start_index:], start=start_index):
+        if not _heartbeat_lease(
+            conn,
+            execution_id,
+            worker_id,
+            timestamp,
+            lease_duration_seconds,
+        ):
+            return _result(
+                execution,
+                prior,
+                execution.get("status") or "running",
+                "skipped",
+                len(steps_log),
+                "Playbook execution lease was lost before step execution.",
+                reason="lease_lost",
+            )
+
         if isinstance(step, dict) and step.get("action") == "require_approval":
             # spec: SPEC-PLAYBOOK-002
             approval_request = approval_store.create_playbook_step_approval_request(
@@ -554,12 +677,24 @@ def _process_steps(
                 now=timestamp,
             )
             steps_log.append(entry)
-            playbook_store.set_playbook_execution_awaiting_approval(
+            updated = playbook_store.set_playbook_execution_awaiting_approval(
                 conn,
                 execution_id,
                 steps_log,
                 last_completed_step=last_completed_step,
+                lease_owner=worker_id,
             )
+            if updated is None:
+                return _result(
+                    execution,
+                    prior,
+                    execution.get("status") or "running",
+                    "skipped",
+                    len(steps_log),
+                    "Playbook execution lease was lost while pausing for approval.",
+                    reason="lease_lost",
+                )
+            playbook_store.release_execution_lease(conn, execution_id, worker_id)
             return _result(
                 execution,
                 prior,
@@ -593,12 +728,25 @@ def _process_steps(
 
         if entry["status"] == "success":
             last_completed_step = index
-            playbook_store.update_playbook_execution_step_log(
-                conn,
-                execution_id,
-                steps_log,
-                last_completed_step=last_completed_step,
-            )
+            if (
+                playbook_store.update_playbook_execution_step_log(
+                    conn,
+                    execution_id,
+                    steps_log,
+                    last_completed_step=last_completed_step,
+                    lease_owner=worker_id,
+                )
+                is None
+            ):
+                return _result(
+                    execution,
+                    prior,
+                    execution.get("status") or "running",
+                    "skipped",
+                    len(steps_log),
+                    "Playbook execution lease was lost while saving step progress.",
+                    reason="lease_lost",
+                )
             continue
 
         failed = True
@@ -608,9 +756,10 @@ def _process_steps(
             break
 
     if failed:
-        playbook_store.set_playbook_execution_failed(
+        _finalize_failed(
             conn,
             execution_id,
+            worker_id,
             steps_log,
             last_completed_step=last_completed_step,
             now=timestamp,
@@ -624,9 +773,10 @@ def _process_steps(
             failure_message or "One or more simulated playbook steps failed.",
         )
 
-    playbook_store.set_playbook_execution_success(
+    _finalize_success(
         conn,
         execution_id,
+        worker_id,
         steps_log,
         last_completed_step=last_completed_step,
         now=timestamp,
@@ -937,6 +1087,8 @@ def _fail_awaiting_execution(
     message: str,
     now: datetime,
     prior_status: str = "awaiting_approval",
+    *,
+    worker_id: str | None = None,
 ) -> dict[str, Any]:
     steps_log.append(
         _failure_entry(
@@ -947,9 +1099,11 @@ def _fail_awaiting_execution(
             now=now,
         )
     )
-    playbook_store.set_playbook_execution_failed(
+    owner = _resolve_worker_id(worker_id or execution.get("lease_owner"))
+    _finalize_failed(
         conn,
         execution["id"],
+        owner,
         steps_log,
         last_completed_step=execution.get("last_completed_step"),
         now=now,
@@ -957,8 +1111,17 @@ def _fail_awaiting_execution(
     return _result(execution, prior_status, "failed", "failed", 0, message)
 
 
-def _result(execution, prior_status, new_status, outcome, steps_processed, message):
-    return {
+def _result(
+    execution,
+    prior_status,
+    new_status,
+    outcome,
+    steps_processed,
+    message,
+    *,
+    reason: str | None = None,
+):
+    payload = {
         "execution_id": execution["id"],
         "playbook_id": execution["playbook_id"],
         "prior_status": prior_status,
@@ -967,6 +1130,28 @@ def _result(execution, prior_status, new_status, outcome, steps_processed, messa
         "steps_processed": steps_processed,
         "message": message,
     }
+    if reason is not None:
+        payload["reason"] = reason
+    return payload
+
+
+def _skip_result(
+    execution: dict[str, Any],
+    prior_status: str,
+    reason: str,
+    message: str,
+    *,
+    new_status: str | None = None,
+) -> dict[str, Any]:
+    return _result(
+        execution,
+        prior_status,
+        new_status or prior_status,
+        "skipped",
+        0,
+        message,
+        reason=reason,
+    )
 
 
 def _normalize_limit(limit) -> int:
@@ -985,6 +1170,100 @@ def _coerce_now(now) -> datetime:
     if now.tzinfo is None:
         return now.replace(tzinfo=timezone.utc)
     return now
+
+
+def _coerce_lease_duration(lease_duration_seconds: int | None) -> int:
+    if lease_duration_seconds is not None:
+        parsed = int(lease_duration_seconds)
+        if parsed < 1:
+            raise ValueError("lease_duration_seconds must be at least 1")
+        return parsed
+    raw = os.getenv("SOAR_PLAYBOOK_LEASE_SECONDS", str(DEFAULT_PLAYBOOK_LEASE_SECONDS)).strip()
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return DEFAULT_PLAYBOOK_LEASE_SECONDS
+    return max(1, parsed)
+
+
+def _resolve_worker_id(worker_id: str | None) -> str:
+    owner = (worker_id or "").strip()
+    if owner:
+        return owner
+    return generate_playbook_worker_id()
+
+
+def _heartbeat_lease(
+    conn,
+    execution_id: int,
+    worker_id: str,
+    now: datetime,
+    lease_duration_seconds: int,
+) -> bool:
+    updated = playbook_store.heartbeat_execution_lease(
+        conn,
+        execution_id,
+        worker_id,
+        lease_duration_seconds=lease_duration_seconds,
+        now=now,
+    )
+    return updated is not None
+
+
+def _finalize_success(
+    conn,
+    execution_id: int,
+    worker_id: str,
+    steps_log: list[dict],
+    *,
+    last_completed_step: int | None,
+    now: datetime,
+) -> None:
+    updated = playbook_store.set_playbook_execution_success(
+        conn,
+        execution_id,
+        steps_log,
+        last_completed_step=last_completed_step,
+        now=now,
+        lease_owner=worker_id,
+    )
+    if updated is None:
+        playbook_store.set_playbook_execution_success(
+            conn,
+            execution_id,
+            steps_log,
+            last_completed_step=last_completed_step,
+            now=now,
+        )
+    playbook_store.release_execution_lease(conn, execution_id, worker_id)
+
+
+def _finalize_failed(
+    conn,
+    execution_id: int,
+    worker_id: str,
+    steps_log: list[dict],
+    *,
+    last_completed_step: int | None,
+    now: datetime,
+) -> None:
+    updated = playbook_store.set_playbook_execution_failed(
+        conn,
+        execution_id,
+        steps_log,
+        last_completed_step=last_completed_step,
+        now=now,
+        lease_owner=worker_id,
+    )
+    if updated is None:
+        playbook_store.set_playbook_execution_failed(
+            conn,
+            execution_id,
+            steps_log,
+            last_completed_step=last_completed_step,
+            now=now,
+        )
+    playbook_store.release_execution_lease(conn, execution_id, worker_id)
 
 
 def _iso(dt: datetime) -> str:

@@ -124,6 +124,13 @@ def _lease_is_active(lease_expires_at: datetime | None, *, now: datetime) -> boo
     return _utc_naive(lease_expires_at) > _utc_naive(now)
 
 
+def _lease_owner_sql(lease_owner: str | None) -> tuple[str, list[Any]]:
+    owner = (lease_owner or "").strip()
+    if not owner:
+        return "", []
+    return " AND lease_owner = %s", [owner]
+
+
 def acquire_execution_lease(
     conn,
     execution_id: int,
@@ -183,6 +190,159 @@ def acquire_execution_lease(
             RETURNING {_EXECUTION_COLUMNS_SQL}
             """,
             (now, owner, now, now, expires_at, execution_id),
+        )
+        updated = cur.fetchone()
+        if updated is None:
+            return None
+        return _execution_row_to_dict(updated)
+
+
+def claim_next_pending_playbook_execution_with_lease(
+    conn,
+    lease_owner: str,
+    *,
+    lease_duration_seconds: int = 60,
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
+    """
+    Atomically select the next pending execution (SKIP LOCKED) and acquire its lease.
+
+    Returns None when the queue is empty or the row cannot be leased. Caller commits.
+    """
+    owner = (lease_owner or "").strip()
+    if not owner:
+        raise ValueError("lease_owner is required")
+    if lease_duration_seconds < 1:
+        raise ValueError("lease_duration_seconds must be at least 1")
+    if now is None:
+        now = datetime.utcnow()
+    expires_at = now + timedelta(seconds=lease_duration_seconds)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id
+            FROM playbook_executions
+            WHERE status = 'pending'
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+            """
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+
+        execution_id = int(row[0])
+        cur.execute(
+            """
+            SELECT status, lease_expires_at
+            FROM playbook_executions
+            WHERE id = %s
+            FOR UPDATE
+            """,
+            (execution_id,),
+        )
+        locked = cur.fetchone()
+        if locked is None:
+            return None
+        status, lease_expires_at = locked
+        if status != "pending":
+            return None
+        if _lease_is_active(lease_expires_at, now=now):
+            return None
+
+        cur.execute(
+            f"""
+            UPDATE playbook_executions
+            SET status = 'running',
+                started_at = COALESCE(started_at, %s),
+                lease_owner = %s,
+                lease_acquired_at = %s,
+                lease_heartbeat_at = %s,
+                lease_expires_at = %s
+            WHERE id = %s
+              AND status = 'pending'
+            RETURNING {_EXECUTION_COLUMNS_SQL}
+            """,
+            (now, owner, now, now, expires_at, execution_id),
+        )
+        updated = cur.fetchone()
+        if updated is None:
+            return None
+        return _execution_row_to_dict(updated)
+
+
+def acquire_awaiting_approval_resume_lease(
+    conn,
+    execution_id: int,
+    lease_owner: str,
+    steps_log: list[dict],
+    last_completed_step: int | None,
+    *,
+    lease_duration_seconds: int = 60,
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
+    """
+    Resume an approved awaiting_approval execution under a new worker lease.
+
+    Transaction-safe row lock; returns None when not awaiting_approval or lease is held.
+    Caller commits.
+    """
+    owner = (lease_owner or "").strip()
+    if not owner:
+        raise ValueError("lease_owner is required")
+    if lease_duration_seconds < 1:
+        raise ValueError("lease_duration_seconds must be at least 1")
+    if now is None:
+        now = datetime.utcnow()
+    expires_at = now + timedelta(seconds=lease_duration_seconds)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT status, lease_expires_at
+            FROM playbook_executions
+            WHERE id = %s
+            FOR UPDATE
+            """,
+            (execution_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        status, lease_expires_at = row
+        if status != "awaiting_approval":
+            return None
+        if _lease_is_active(lease_expires_at, now=now):
+            return None
+
+        cur.execute(
+            f"""
+            UPDATE playbook_executions
+            SET status = 'running',
+                started_at = COALESCE(started_at, %s),
+                completed_at = NULL,
+                steps_log = %s,
+                last_completed_step = %s,
+                lease_owner = %s,
+                lease_acquired_at = %s,
+                lease_heartbeat_at = %s,
+                lease_expires_at = %s
+            WHERE id = %s
+              AND status = 'awaiting_approval'
+            RETURNING {_EXECUTION_COLUMNS_SQL}
+            """,
+            (
+                now,
+                Json(steps_log),
+                last_completed_step,
+                owner,
+                now,
+                now,
+                expires_at,
+                execution_id,
+            ),
         )
         updated = cur.fetchone()
         if updated is None:
@@ -1225,7 +1385,10 @@ def update_playbook_execution_step_log(
     execution_id: int,
     steps_log: list[dict],
     last_completed_step: int | None = None,
+    *,
+    lease_owner: str | None = None,
 ) -> dict[str, Any] | None:
+    lease_sql, lease_params = _lease_owner_sql(lease_owner)
     with conn.cursor() as cur:
         cur.execute(
             f"""
@@ -1233,9 +1396,10 @@ def update_playbook_execution_step_log(
             SET steps_log = %s,
                 last_completed_step = %s
             WHERE id = %s
+            {lease_sql}
             RETURNING {_EXECUTION_COLUMNS_SQL}
             """,
-            (Json(steps_log), last_completed_step, execution_id),
+            (Json(steps_log), last_completed_step, execution_id, *lease_params),
         )
         row = cur.fetchone()
         if row is None:
@@ -1249,10 +1413,13 @@ def set_playbook_execution_success(
     steps_log: list[dict],
     last_completed_step: int | None,
     now: datetime | None = None,
+    *,
+    lease_owner: str | None = None,
 ) -> dict[str, Any] | None:
     if now is None:
         now = datetime.utcnow()
 
+    lease_sql, lease_params = _lease_owner_sql(lease_owner)
     with conn.cursor() as cur:
         cur.execute(
             f"""
@@ -1262,9 +1429,10 @@ def set_playbook_execution_success(
                 steps_log = %s,
                 last_completed_step = %s
             WHERE id = %s
+            {lease_sql}
             RETURNING {_EXECUTION_COLUMNS_SQL}
             """,
-            (now, Json(steps_log), last_completed_step, execution_id),
+            (now, Json(steps_log), last_completed_step, execution_id, *lease_params),
         )
         row = cur.fetchone()
         if row is None:
@@ -1278,10 +1446,13 @@ def set_playbook_execution_failed(
     steps_log: list[dict],
     last_completed_step: int | None = None,
     now: datetime | None = None,
+    *,
+    lease_owner: str | None = None,
 ) -> dict[str, Any] | None:
     if now is None:
         now = datetime.utcnow()
 
+    lease_sql, lease_params = _lease_owner_sql(lease_owner)
     with conn.cursor() as cur:
         cur.execute(
             f"""
@@ -1291,9 +1462,10 @@ def set_playbook_execution_failed(
                 steps_log = %s,
                 last_completed_step = %s
             WHERE id = %s
+            {lease_sql}
             RETURNING {_EXECUTION_COLUMNS_SQL}
             """,
-            (now, Json(steps_log), last_completed_step, execution_id),
+            (now, Json(steps_log), last_completed_step, execution_id, *lease_params),
         )
         row = cur.fetchone()
         if row is None:
@@ -1306,7 +1478,10 @@ def set_playbook_execution_awaiting_approval(
     execution_id: int,
     steps_log: list[dict],
     last_completed_step: int | None = None,
+    *,
+    lease_owner: str | None = None,
 ) -> dict[str, Any] | None:
+    lease_sql, lease_params = _lease_owner_sql(lease_owner)
     with conn.cursor() as cur:
         cur.execute(
             f"""
@@ -1316,9 +1491,10 @@ def set_playbook_execution_awaiting_approval(
                 steps_log = %s,
                 last_completed_step = %s
             WHERE id = %s
+            {lease_sql}
             RETURNING {_EXECUTION_COLUMNS_SQL}
             """,
-            (Json(steps_log), last_completed_step, execution_id),
+            (Json(steps_log), last_completed_step, execution_id, *lease_params),
         )
         row = cur.fetchone()
         if row is None:

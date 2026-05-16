@@ -1,5 +1,6 @@
 import argparse
 import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -10,7 +11,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from core.playbook_worker_identity import generate_playbook_worker_id
 from engines.playbook_step_executor import process_playbook_execution_batch
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_BATCH_SIZE = 10
 MAX_BATCH_SIZE = 50
@@ -38,12 +42,20 @@ def main(argv=None):
         return 1
 
     conn = None
+    worker_id = generate_playbook_worker_id()
     try:
         conn = psycopg2.connect(database_url)
-        result = process_playbook_execution_batch(conn, limit=batch_size)
+        logging.basicConfig(level=logging.INFO)
+        logger.info("Playbook executor worker_id=%s", worker_id)
+        result = process_playbook_execution_batch(
+            conn,
+            limit=batch_size,
+            worker_id=worker_id,
+        )
         conn.commit()
         payload = {
             "mode": "simulation",
+            "worker_id": worker_id,
             "batch_size": batch_size,
             "summary": {
                 "processed": result["processed"],
@@ -58,6 +70,7 @@ def main(argv=None):
         else:
             print("=== SOAR Playbook Simulation Executor ===")
             print(f"Mode:       {payload['mode']}")
+            print(f"Worker id:  {worker_id}")
             print(f"Batch size: {batch_size}")
             print(f"Processed:  {payload['summary']['processed']}")
             print(f"Success:    {payload['summary']['success']}")
