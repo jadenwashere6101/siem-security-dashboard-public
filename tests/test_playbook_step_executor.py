@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 from psycopg2.extras import Json
 
-from core import approval_store, notification_delivery_store, playbook_store
+from core import approval_store, dead_letter_store, notification_delivery_store, playbook_store
 from engines import playbook_step_executor
 from scripts import run_playbook_executor_once
 from integrations.base_integration import (
@@ -192,6 +192,7 @@ def test_pending_monitor_step_becomes_success(postgres_db):
     assert entry["status"] == "success"
     assert entry["mode"] == "simulation"
     assert entry["output"] == {"simulated": True, "executed": False}
+    assert _count(cur, "soar_dead_letters") == 0
 
 
 def test_multiple_supported_steps_are_simulated_successfully(postgres_db):
@@ -322,6 +323,22 @@ def test_adapter_failure_marks_step_failed_and_respects_continue(postgres_db):
     assert "circuit_breaker" in failed["output"]
     assert failed["error"]["code"] == "adapter_simulation_failed"
 
+    dead_letters = dead_letter_store.list_dead_letters(
+        conn, source_type="playbook_execution", execution_id=eid
+    )
+    assert len(dead_letters) == 1
+    dead_letter = dead_letters[0]
+    assert dead_letter["source_id"] == eid
+    assert dead_letter["execution_id"] == eid
+    assert dead_letter["alert_id"] == row["alert_id"]
+    assert dead_letter["playbook_id"] == "pb_adapter_failure"
+    assert dead_letter["step_index"] == 0
+    assert dead_letter["action_name"] == "notify_slack"
+    assert dead_letter["failure_class"] == "adapter_simulation_failed"
+    assert dead_letter["error_message"] == "Simulated adapter failure."
+    assert dead_letter["payload_json"]["source"] == "playbook_step_executor"
+    assert dead_letter["payload_json"]["step"]["error"]["code"] == "adapter_simulation_failed"
+
 
 def test_non_simulation_integration_mode_fails_closed(postgres_db, monkeypatch, no_network):
     conn, cur = postgres_db
@@ -342,6 +359,103 @@ def test_non_simulation_integration_mode_fails_closed(postgres_db, monkeypatch, 
     assert "circuit_breaker" in entry["output"]
     assert _count(cur, "blocked_ips") == 0
     assert _count(cur, "response_actions_queue") == 0
+
+
+def test_failed_playbook_step_sanitizes_dead_letter_message_and_payload(postgres_db):
+    conn, cur = postgres_db
+    eid = _create_execution(conn, cur, "pb_dead_letter_sanitize")
+    _set_playbook_steps(cur, "pb_dead_letter_sanitize", [{"action": "notify_slack"}])
+
+    failing_result = {
+        "adapter": "slack",
+        "action": "send_message",
+        "mode": "simulation",
+        "simulated": True,
+        "executed": False,
+        "success": False,
+        "message": "failed webhook https://hooks.slack.com/services/secret",
+        "params": {"token": "secret-token", "channel": "#soc"},
+        "context": {},
+        "metadata": {
+            "failure_classification": FAILURE_CLASSIFICATION_TRANSIENT,
+            "webhook_url": "https://hooks.slack.com/services/secret",
+            "safe_label": "soc",
+            "callback": "https://example.test/callback",
+        },
+    }
+
+    with patch(
+        "engines.playbook_step_executor.execute_playbook_simulated_adapter",
+        return_value=failing_result,
+    ):
+        result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "failed"
+    [dead_letter] = dead_letter_store.list_dead_letters(conn, execution_id=eid)
+    assert dead_letter["failure_class"] == FAILURE_CLASSIFICATION_TRANSIENT
+    assert dead_letter["error_message"] == "failed webhook [REDACTED_URL]"
+
+    step_payload = dead_letter["payload_json"]["step"]
+    adapter_result = step_payload["output"]["adapter_result"]
+    assert adapter_result["params"] == {"channel": "#soc"}
+    assert adapter_result["metadata"]["safe_label"] == "soc"
+    assert adapter_result["metadata"]["callback"] == "[REDACTED_URL]"
+    assert "webhook_url" not in adapter_result["metadata"]
+
+
+def test_repeated_failed_execution_does_not_create_duplicate_active_dead_letter(postgres_db):
+    conn, cur = postgres_db
+    eid = _create_execution(
+        conn,
+        cur,
+        "pb_dead_letter_idempotent",
+        steps=[{"action": "notify_slack"}],
+    )
+    failing_result = {
+        "adapter": "slack",
+        "action": "send_message",
+        "mode": "simulation",
+        "simulated": True,
+        "executed": False,
+        "success": False,
+        "message": "repeatable simulated failure",
+        "params": {},
+        "context": {},
+        "metadata": {},
+    }
+
+    with patch(
+        "engines.playbook_step_executor.execute_playbook_simulated_adapter",
+        return_value=failing_result,
+    ):
+        first = playbook_step_executor.process_playbook_execution(conn, eid)
+    assert first["outcome"] == "failed"
+    first_dead_letters = dead_letter_store.list_dead_letters(conn, execution_id=eid)
+    assert len(first_dead_letters) == 1
+
+    cur.execute(
+        """
+        UPDATE playbook_executions
+        SET status = 'pending',
+            completed_at = NULL,
+            lease_owner = NULL,
+            lease_acquired_at = NULL,
+            lease_heartbeat_at = NULL,
+            lease_expires_at = NULL
+        WHERE id = %s
+        """,
+        (eid,),
+    )
+
+    with patch(
+        "engines.playbook_step_executor.execute_playbook_simulated_adapter",
+        return_value=failing_result,
+    ):
+        second = playbook_step_executor.process_playbook_execution(conn, eid)
+    assert second["outcome"] == "failed"
+    second_dead_letters = dead_letter_store.list_dead_letters(conn, execution_id=eid)
+    assert len(second_dead_letters) == 1
+    assert second_dead_letters[0]["id"] == first_dead_letters[0]["id"]
 
 
 def test_playbook_notify_slack_open_circuit_fails_closed_without_simulate(
@@ -493,6 +607,7 @@ def test_require_approval_pauses_execution_and_creates_linked_request(postgres_d
 
     assert _count(cur, "response_actions_queue") == 0
     assert _count(cur, "response_actions_log") == 0
+    assert _count(cur, "soar_dead_letters") == 0
 
 
 def test_require_approval_pending_rerun_does_not_duplicate_request_or_steps(postgres_db):

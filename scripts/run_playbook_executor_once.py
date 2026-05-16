@@ -16,7 +16,10 @@ if str(REPO_ROOT) not in sys.path:
 
 from core import playbook_store
 from core.playbook_worker_identity import generate_playbook_worker_id
-from engines.playbook_step_executor import process_playbook_execution_batch
+from engines.playbook_step_executor import (
+    capture_failed_execution_dead_letter,
+    process_playbook_execution_batch,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +210,14 @@ def recover_stale_playbook_executions(
                 }
             )
             continue
+        if updated["status"] == "failed":
+            capture_failed_execution_dead_letter(
+                conn,
+                updated,
+                updated.get("steps_log") or [],
+                last_completed_step=updated.get("last_completed_step"),
+                now=timestamp,
+            )
         results.append(
             {
                 "execution_id": updated["id"],

@@ -30,12 +30,12 @@ Implementation should be split into small approved slices. Do not implement from
 
 ## Slice 2 — Capture Failed Work
 
-- [ ] Capture failed playbook execution dead letters.
+- [x] Capture failed playbook execution dead letters.
 - [ ] Capture failed response action queue dead letters if compatible with current queue flow.
 - [ ] Capture notification delivery dead letters only for operator-actionable terminal failures.
-- [ ] Ensure creation is idempotent for the same active source.
-- [ ] Ensure read/list/metrics paths do not create dead letters.
-- [ ] Add tests for each enabled source capture path.
+- [x] Ensure creation is idempotent for the same active source.
+- [x] Ensure read/list/metrics paths do not create dead letters.
+- [x] Add tests for each enabled source capture path.
 
 ---
 
@@ -88,13 +88,13 @@ Implementation should be split into small approved slices. Do not implement from
 
 ## Safety Boundaries
 
-- [ ] Do not change ingest transaction flow.
-- [ ] Do not change detection internals.
-- [ ] Do not change correlation internals.
-- [ ] Do not create destructive migrations.
-- [ ] Do not edit `schema.sql` directly outside the migration snapshot workflow.
-- [ ] Do not run VM or live DB actions.
-- [ ] Do not send notifications.
-- [ ] Do not run playbooks from dead letter creation/list/detail/metrics.
-- [ ] Do not add autonomous retry loops, daemons, cron jobs, or schedulers.
-- [ ] Do not add frontend work in the first implementation unless separately approved.
+- [x] Do not change ingest transaction flow.
+- [x] Do not change detection internals.
+- [x] Do not change correlation internals.
+- [x] Do not create destructive migrations.
+- [x] Do not edit `schema.sql` directly outside the migration snapshot workflow.
+- [x] Do not run VM or live DB actions.
+- [x] Do not send notifications.
+- [x] Do not run playbooks from dead letter creation/list/detail/metrics.
+- [x] Do not add autonomous retry loops, daemons, cron jobs, or schedulers.
+- [x] Do not add frontend work in the first implementation unless separately approved.

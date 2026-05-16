@@ -1,8 +1,9 @@
 from datetime import datetime, timedelta
 
 import pytest
+from psycopg2.extras import Json
 
-from core import playbook_store
+from core import dead_letter_store, playbook_store
 from core.playbook_store import _utc_naive
 from scripts import run_playbook_executor_once
 
@@ -366,3 +367,62 @@ def test_manual_stale_recovery_marks_exhausted_attempts_failed(utc_db):
     assert row["lease_owner"] is None
     assert row["recovery_count"] == 1
     assert row["failure_reason"] == "stale lease exceeded max attempts"
+
+
+@pytest.mark.usefixtures("postgres_db", "utc_db")
+def test_manual_stale_recovery_exhaustion_captures_failed_step_dead_letter(utc_db):
+    conn, cur = utc_db
+    execution_id, after_expiry = _make_expired_running_execution(
+        conn, cur, playbook_id="pb_stale_dead_letter"
+    )
+    failed_steps = [
+        {
+            "step_index": 0,
+            "action": "notify_slack",
+            "status": "failed",
+            "message": "stale failed delivery https://hooks.slack.com/services/secret",
+            "output": {
+                "simulated": True,
+                "executed": False,
+                "adapter_result": {
+                    "metadata": {
+                        "failure_classification": "timeout",
+                        "webhook_url": "https://hooks.slack.com/services/secret",
+                    }
+                },
+            },
+            "error": {
+                "code": "adapter_simulation_failed",
+                "message": "stale failed delivery https://hooks.slack.com/services/secret",
+            },
+        }
+    ]
+    cur.execute(
+        "UPDATE playbook_executions SET steps_log = %s WHERE id = %s",
+        (Json(failed_steps), execution_id),
+    )
+    playbook_store.update_playbook_execution_reliability_metadata(
+        conn,
+        execution_id,
+        attempt_count=3,
+        max_attempts=3,
+    )
+    conn.commit()
+
+    result = run_playbook_executor_once.recover_stale_playbook_executions(
+        conn,
+        limit=10,
+        dry_run=False,
+        now=after_expiry,
+    )
+    conn.commit()
+
+    assert result["failed"] == 1
+    [dead_letter] = dead_letter_store.list_dead_letters(conn, execution_id=execution_id)
+    assert dead_letter["source_type"] == "playbook_execution"
+    assert dead_letter["source_id"] == execution_id
+    assert dead_letter["step_index"] == 0
+    assert dead_letter["action_name"] == "notify_slack"
+    assert dead_letter["failure_class"] == "timeout"
+    assert dead_letter["error_message"] == "stale failed delivery [REDACTED_URL]"
+    assert "webhook_url" not in dead_letter["payload_json"]["step"]["output"]["adapter_result"]["metadata"]

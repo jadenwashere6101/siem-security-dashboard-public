@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from core import approval_store
+from core import dead_letter_store
 from core import notification_delivery_store
 from core import playbook_store
 from core.playbook_worker_identity import generate_playbook_worker_id
@@ -1332,9 +1333,19 @@ def _finalize_failed(
         lease_owner=worker_id,
     )
     if updated is None:
-        playbook_store.set_playbook_execution_failed(
+        updated = playbook_store.set_playbook_execution_failed(
             conn,
             execution_id,
+            steps_log,
+            last_completed_step=last_completed_step,
+            now=now,
+        )
+    if updated is None:
+        updated = playbook_store.get_playbook_execution(conn, execution_id)
+    if updated is not None:
+        capture_failed_execution_dead_letter(
+            conn,
+            updated,
             steps_log,
             last_completed_step=last_completed_step,
             now=now,
@@ -1344,3 +1355,84 @@ def _finalize_failed(
 
 def _iso(dt: datetime) -> str:
     return dt.isoformat().replace("+00:00", "Z")
+
+
+def capture_failed_execution_dead_letter(
+    conn,
+    execution: dict[str, Any],
+    steps_log: list[dict],
+    *,
+    last_completed_step: int | None,
+    now: datetime,
+) -> None:
+    entry = _latest_failed_step_entry(steps_log)
+    if entry is None:
+        return
+
+    try:
+        error = entry.get("error") if isinstance(entry.get("error"), dict) else {}
+        message = (
+            error.get("message")
+            or entry.get("message")
+            or execution.get("failure_reason")
+            or "Playbook execution failed."
+        )
+        output = entry.get("output") if isinstance(entry.get("output"), dict) else {}
+        dead_letter_store.create_dead_letter(
+            conn,
+            source_type="playbook_execution",
+            source_id=execution["id"],
+            execution_id=execution["id"],
+            incident_id=execution.get("incident_id"),
+            alert_id=execution.get("alert_id"),
+            playbook_id=execution.get("playbook_id"),
+            step_index=entry.get("step_index") if isinstance(entry.get("step_index"), int) else None,
+            action_name=entry.get("action") if isinstance(entry.get("action"), str) else None,
+            failure_class=_dead_letter_failure_class(entry),
+            error_message=str(message),
+            payload_json={
+                "source": "playbook_step_executor",
+                "execution_status": execution.get("status"),
+                "failure_reason": execution.get("failure_reason"),
+                "last_completed_step": last_completed_step,
+                "step": {
+                    "step_index": entry.get("step_index"),
+                    "action": entry.get("action"),
+                    "status": entry.get("status"),
+                    "message": entry.get("message"),
+                    "error": error,
+                    "output": output,
+                },
+            },
+            retryable=False,
+            first_failed_at=now,
+            last_failed_at=now,
+        )
+    except Exception:
+        logger.warning(
+            "[PLAYBOOK SIMULATION] dead letter capture failed safely execution_id=%s",
+            execution.get("id"),
+            exc_info=True,
+        )
+
+
+def _latest_failed_step_entry(steps_log: list[dict]) -> dict[str, Any] | None:
+    for entry in reversed(steps_log):
+        if isinstance(entry, dict) and entry.get("status") == "failed":
+            return entry
+    return None
+
+
+def _dead_letter_failure_class(entry: dict[str, Any]) -> str:
+    output = entry.get("output") if isinstance(entry.get("output"), dict) else {}
+    adapter_result = output.get("adapter_result") if isinstance(output.get("adapter_result"), dict) else {}
+    metadata = adapter_result.get("metadata") if isinstance(adapter_result.get("metadata"), dict) else {}
+    failure_class = metadata.get("failure_classification")
+    if isinstance(failure_class, str) and failure_class.strip():
+        return failure_class.strip()[:64]
+
+    error = entry.get("error") if isinstance(entry.get("error"), dict) else {}
+    code = error.get("code")
+    if isinstance(code, str) and code.strip():
+        return code.strip()[:64]
+    return "unknown"
