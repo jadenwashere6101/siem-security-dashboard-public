@@ -414,3 +414,50 @@ def test_soar_approval_playbook_wiring_migration_scope():
     ]
     for column in reliability_columns:
         assert f"ADD COLUMN IF NOT EXISTS {column}" in sql
+
+
+def test_soar_notification_delivery_migration_scope():
+    migration_path = Path(__file__).resolve().parent.parent / "migrations" / "0008_soar_notification_delivery.sql"
+    sql = migration_path.read_text(encoding="utf-8")
+
+    assert "CREATE TABLE IF NOT EXISTS notification_delivery_attempts" in sql
+    excluded_tables = [
+        "approval_requests",
+        "approval_request_events",
+        "playbook_definitions",
+        "playbook_executions",
+        "playbook_schedules",
+        "incidents",
+        "incident_alerts",
+        "alerts",
+    ]
+    for table in excluded_tables:
+        assert f"CREATE TABLE IF NOT EXISTS {table}" not in sql
+
+    assert "INSERT INTO" not in sql.upper()
+    assert "DROP" not in sql.upper()
+    assert "TRUNCATE" not in sql.upper()
+    assert "DELETE FROM" not in sql.upper()
+    assert "RENAME" not in sql.upper()
+    assert "CONCURRENTLY" not in sql.upper()
+
+    expected_columns = [
+        "playbook_execution_id INTEGER REFERENCES playbook_executions(id) ON DELETE SET NULL",
+        "incident_id INTEGER REFERENCES incidents(id) ON DELETE SET NULL",
+        "approval_request_id INTEGER REFERENCES approval_requests(id) ON DELETE SET NULL",
+        "alert_id INTEGER REFERENCES alerts(id) ON DELETE SET NULL",
+        "metadata JSONB NOT NULL DEFAULT '{}'::jsonb",
+    ]
+    expected_indexes = [
+        "idx_notification_delivery_provider_mode_status_created",
+        "idx_notification_delivery_playbook_step",
+        "idx_notification_delivery_incident_id",
+        "idx_notification_delivery_approval_request_id",
+        "idx_notification_delivery_correlation_id",
+        "idx_notification_delivery_idempotency_key",
+        "idx_notification_delivery_alert_id",
+    ]
+    for column in expected_columns:
+        assert column in sql
+    for index in expected_indexes:
+        assert index in sql
