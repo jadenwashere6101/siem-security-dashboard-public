@@ -145,3 +145,36 @@ def test_main_uses_db_url_argument_and_closes_connection(tmp_path):
     assert code == 0
     connect_mock.assert_called_once_with("postgresql://example/db")
     conn.close.assert_called_once()
+
+
+def test_base_siem_core_migration_scope():
+    migration_path = Path(__file__).resolve().parent.parent / "migrations" / "0002_base_siem_core.sql"
+    sql = migration_path.read_text(encoding="utf-8")
+
+    included_tables = [
+        "events",
+        "alerts",
+        "response_actions_log",
+        "response_actions_queue",
+    ]
+    excluded_tables = [
+        "users",
+        "audit_log",
+        "alert_notes",
+        "detection_config",
+        "blocked_ips",
+        "incidents",
+        "approval_requests",
+        "playbook_definitions",
+        "notification_delivery_attempts",
+    ]
+    for table in included_tables:
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in sql
+    for table in excluded_tables:
+        assert f"CREATE TABLE IF NOT EXISTS {table}" not in sql
+
+    assert "DROP" not in sql.upper()
+    assert "DO $$" not in sql
+    assert "awaiting_approval" in sql
+    assert "idx_response_actions_queue_status" in sql
+    assert "idx_response_actions_queue_alert_id" in sql
