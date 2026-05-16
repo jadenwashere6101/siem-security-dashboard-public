@@ -1,8 +1,9 @@
 """
-Read-only SOAR dead letter queue APIs.
+SOAR dead letter queue APIs.
 
-Routes only list/detail/metrics persisted dead letters. They do not retry,
-dismiss, execute playbooks, call adapters, or send notifications.
+Routes list/detail/metrics persisted dead letters and allow operator review
+state changes. They do not execute retries, run playbooks, call adapters, or
+send notifications.
 """
 
 from __future__ import annotations
@@ -10,9 +11,10 @@ from __future__ import annotations
 from typing import Any
 
 from flask import Blueprint, current_app, jsonify, request
-from flask_login import login_required
+from flask_login import current_user, login_required
 
 from core import dead_letter_store
+from core.audit_helpers import log_audit_event
 from core.auth import analyst_or_super_admin_required
 from core.db import get_db_connection
 from core.notification_delivery_store import (
@@ -90,6 +92,51 @@ def _safe_dead_letter(row: dict[str, Any]) -> dict[str, Any]:
     safe["error_message"] = sanitize_failure_message(safe.get("error_message"))
     safe["dismiss_reason"] = sanitize_failure_message(safe.get("dismiss_reason"))
     return safe
+
+
+def _json_body() -> dict[str, Any]:
+    payload = request.get_json(silent=True)
+    return payload if isinstance(payload, dict) else {}
+
+
+def _review_comment(payload: dict[str, Any]) -> str | None:
+    raw = payload.get("comment")
+    if raw is None:
+        raw = payload.get("reason")
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ValueError("comment must be a string")
+    sanitized = sanitize_failure_message(raw)
+    return sanitized if sanitized else None
+
+
+def _actor_user_id(conn) -> int | None:
+    username = getattr(current_user, "id", None)
+    if not username:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM users WHERE username = %s", (username,))
+            row = cur.fetchone()
+            return int(row[0]) if row else None
+    except Exception:
+        current_app.logger.warning(
+            "dead_letter actor lookup failed username=%s", username, exc_info=True
+        )
+        return None
+
+
+def _write_dead_letter_audit(event_type: str, details: dict[str, Any]) -> None:
+    log_audit_event(
+        event_type,
+        actor_username=getattr(current_user, "id", None),
+        actor_role=getattr(current_user, "role", None),
+        http_method=request.method,
+        request_path=request.path,
+        source_ip=request.remote_addr,
+        details=details,
+    )
 
 
 @dead_letter_bp.route("/dead-letters", methods=["GET"])
@@ -173,6 +220,121 @@ def dead_letter_metrics():
         return jsonify(dead_letter_store.get_dead_letter_metrics(conn)), 200
     except Exception as error:
         current_app.logger.error("dead_letter_metrics: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@dead_letter_bp.route("/dead-letters/<int:dead_letter_id>/dismiss", methods=["POST"])
+@login_required
+@analyst_or_super_admin_required
+def dismiss_dead_letter(dead_letter_id: int):
+    conn = None
+    try:
+        payload = _json_body()
+        try:
+            comment = _review_comment(payload)
+        except ValueError as exc:
+            return jsonify({"error": "invalid_request", "message": str(exc)}), 400
+
+        conn = get_db_connection()
+        existing = dead_letter_store.get_dead_letter(conn, dead_letter_id)
+        if existing is None:
+            return jsonify({"error": "not_found", "message": "Dead letter not found."}), 404
+
+        actor_id = _actor_user_id(conn)
+        reason = comment or "dismissed from dead letter review"
+        updated = dead_letter_store.mark_dead_letter_dismissed(
+            conn,
+            dead_letter_id,
+            dismissed_by=actor_id,
+            reason=reason,
+        )
+        if updated is None:
+            conn.rollback()
+            latest = dead_letter_store.get_dead_letter(conn, dead_letter_id) or existing
+            return (
+                jsonify(
+                    {
+                        "error": "invalid_state",
+                        "message": "Dead letter cannot be dismissed from its current status.",
+                        "status": latest.get("status"),
+                    }
+                ),
+                409,
+            )
+
+        conn.commit()
+        _write_dead_letter_audit(
+            "DEAD_LETTER_DISMISS",
+            {
+                "dead_letter_id": dead_letter_id,
+                "source_type": updated["source_type"],
+                "source_id": updated["source_id"],
+                "previous_status": existing["status"],
+                "new_status": updated["status"],
+            },
+        )
+        return jsonify(_safe_dead_letter(updated)), 200
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        current_app.logger.error("dismiss_dead_letter: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@dead_letter_bp.route("/dead-letters/<int:dead_letter_id>/retry-request", methods=["POST"])
+@login_required
+@analyst_or_super_admin_required
+def retry_request_dead_letter(dead_letter_id: int):
+    conn = None
+    try:
+        conn = get_db_connection()
+        existing = dead_letter_store.get_dead_letter(conn, dead_letter_id)
+        if existing is None:
+            return jsonify({"error": "not_found", "message": "Dead letter not found."}), 404
+
+        actor_id = _actor_user_id(conn)
+        updated = dead_letter_store.mark_dead_letter_retry_requested(
+            conn,
+            dead_letter_id,
+            requested_by=actor_id,
+        )
+        if updated is None:
+            conn.rollback()
+            latest = dead_letter_store.get_dead_letter(conn, dead_letter_id) or existing
+            return (
+                jsonify(
+                    {
+                        "error": "invalid_state",
+                        "message": "Dead letter cannot be retry-requested from its current status.",
+                        "status": latest.get("status"),
+                    }
+                ),
+                409,
+            )
+
+        conn.commit()
+        _write_dead_letter_audit(
+            "DEAD_LETTER_RETRY_REQUEST",
+            {
+                "dead_letter_id": dead_letter_id,
+                "source_type": updated["source_type"],
+                "source_id": updated["source_id"],
+                "previous_status": existing["status"],
+                "new_status": updated["status"],
+                "retry_count": updated["retry_count"],
+            },
+        )
+        return jsonify(_safe_dead_letter(updated)), 200
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        current_app.logger.error("retry_request_dead_letter: %s", error)
         return jsonify({"error": "Internal server error"}), 500
     finally:
         if conn:

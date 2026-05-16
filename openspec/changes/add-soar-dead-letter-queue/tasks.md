@@ -52,13 +52,13 @@ Implementation should be split into small approved slices. Do not implement from
 
 ## Slice 4 — Retry and Dismiss Routes
 
-- [ ] Add manual retry endpoint.
-- [ ] Add dismissal endpoint with required reason.
-- [ ] Audit retry and dismissal actions.
-- [ ] Preserve approval semantics.
+- [x] Add manual retry endpoint.
+- [x] Add dismissal endpoint with required reason.
+- [x] Audit retry and dismissal actions.
+- [x] Preserve approval semantics.
 - [ ] Block retry when idempotency cannot be proven.
-- [ ] Ensure retry does not directly call adapters or send notifications.
-- [ ] Add tests for allowed retry, blocked retry, dismissal, audit, and no adapter calls.
+- [x] Ensure retry does not directly call adapters or send notifications.
+- [x] Add tests for allowed retry, blocked retry, dismissal, audit, and no adapter calls.
 
 ---
 

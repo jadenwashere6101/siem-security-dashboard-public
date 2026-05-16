@@ -73,10 +73,24 @@ def _stop_patchers(patchers):
         patcher.stop()
 
 
+def _insert_user(cur, username, role="analyst"):
+    cur.execute(
+        """
+        INSERT INTO users (username, password_hash, role)
+        VALUES (%s, 'hash', %s)
+        RETURNING id
+        """,
+        (username, role),
+    )
+    return cur.fetchone()[0]
+
+
 def test_dead_letter_routes_without_session_return_401(client):
     assert client.get("/dead-letters").status_code == 401
     assert client.get("/dead-letters/1").status_code == 401
     assert client.get("/metrics/dead-letters").status_code == 401
+    assert client.post("/dead-letters/1/dismiss").status_code == 401
+    assert client.post("/dead-letters/1/retry-request").status_code == 401
 
 
 def test_dead_letter_routes_viewer_forbidden(client, mock_db):
@@ -85,6 +99,8 @@ def test_dead_letter_routes_viewer_forbidden(client, mock_db):
         assert client.get("/dead-letters").status_code == 403
         assert client.get("/dead-letters/1").status_code == 403
         assert client.get("/metrics/dead-letters").status_code == 403
+        assert client.post("/dead-letters/1/dismiss").status_code == 403
+        assert client.post("/dead-letters/1/retry-request").status_code == 403
     finally:
         _stop_patchers(patchers)
 
@@ -263,3 +279,165 @@ def test_dead_letter_responses_redact_unsafe_payload_fields(client, postgres_db)
 
     listed_item = listed.get_json()["items"][0]
     assert listed_item["payload_json"] == body["payload_json"]
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_dead_letter_dismiss_analyst_allowed_updates_status_and_audits(client, postgres_db):
+    conn, cur = postgres_db
+    actor_id = _insert_user(cur, "dl_dismiss_analyst", role="analyst")
+    row = dead_letter_store.create_dead_letter(
+        conn,
+        source_type="playbook_execution",
+        source_id=601,
+        failure_class="adapter_failed",
+        error_message="failed",
+    )
+    conn.commit()
+
+    patchers = _login_role(
+        client, username="dl_dismiss_analyst", password="apass", role="analyst"
+    )
+    try:
+        with _patched_dead_letter_db(conn), patch(
+            "engines.playbook_step_executor.process_playbook_execution",
+            side_effect=AssertionError("retry execution must not run"),
+        ):
+            resp = client.post(
+                f"/dead-letters/{row['id']}/dismiss",
+                json={"comment": "reviewed https://example.test/secret"},
+            )
+    finally:
+        _stop_patchers(patchers)
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["status"] == "dismissed"
+    assert body["dismissed_by"] == actor_id
+    assert body["dismissed_at"] is not None
+    assert body["dismiss_reason"] == "reviewed [REDACTED_URL]"
+
+    cur.execute(
+        "SELECT COUNT(*) FROM audit_log WHERE event_type = 'DEAD_LETTER_DISMISS'"
+    )
+    assert cur.fetchone()[0] == 1
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_dead_letter_dismiss_super_admin_allowed_without_db_actor(client, postgres_db):
+    conn, _cur = postgres_db
+    row = dead_letter_store.create_dead_letter(
+        conn,
+        source_type="response_action",
+        source_id=602,
+        failure_class="permanent",
+        error_message="failed",
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_dead_letter_db(conn):
+        resp = client.post(f"/dead-letters/{row['id']}/dismiss", json={})
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["status"] == "dismissed"
+    assert body["dismissed_by"] is None
+    assert body["dismiss_reason"] == "dismissed from dead letter review"
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_dead_letter_retry_request_updates_status_and_does_not_execute(client, postgres_db):
+    conn, cur = postgres_db
+    actor_id = _insert_user(cur, "dl_retry_analyst", role="analyst")
+    row = dead_letter_store.create_dead_letter(
+        conn,
+        source_type="playbook_execution",
+        source_id=603,
+        failure_class="adapter_failed",
+        error_message="failed",
+    )
+    conn.commit()
+
+    patchers = _login_role(client, username="dl_retry_analyst", password="apass", role="analyst")
+    try:
+        with _patched_dead_letter_db(conn), patch(
+            "engines.playbook_step_executor.process_playbook_execution",
+            side_effect=AssertionError("retry execution must not run"),
+        ), patch(
+            "engines.playbook_step_executor.process_playbook_execution_batch",
+            side_effect=AssertionError("retry execution must not run"),
+        ):
+            resp = client.post(f"/dead-letters/{row['id']}/retry-request")
+    finally:
+        _stop_patchers(patchers)
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["status"] == "retrying"
+    assert body["retry_count"] == 1
+    assert body["retry_requested_by"] == actor_id
+    assert body["retry_requested_at"] is not None
+
+    cur.execute(
+        "SELECT COUNT(*) FROM audit_log WHERE event_type = 'DEAD_LETTER_RETRY_REQUEST'"
+    )
+    assert cur.fetchone()[0] == 1
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_dead_letter_mutations_missing_return_404(client, postgres_db):
+    conn, _cur = postgres_db
+    _login_super_admin(client)
+    with _patched_dead_letter_db(conn):
+        dismiss = client.post("/dead-letters/999999/dismiss", json={"comment": "x"})
+        retry = client.post("/dead-letters/999999/retry-request")
+
+    assert dismiss.status_code == 404
+    assert retry.status_code == 404
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_dead_letter_retry_request_for_dismissed_is_safe_conflict(client, postgres_db):
+    conn, _cur = postgres_db
+    row = dead_letter_store.create_dead_letter(
+        conn,
+        source_type="playbook_execution",
+        source_id=604,
+        failure_class="adapter_failed",
+        error_message="failed",
+    )
+    dead_letter_store.mark_dead_letter_dismissed(
+        conn, row["id"], dismissed_by=None, reason="handled"
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_dead_letter_db(conn):
+        resp = client.post(f"/dead-letters/{row['id']}/retry-request")
+
+    assert resp.status_code == 409
+    body = resp.get_json()
+    assert body["error"] == "invalid_state"
+    assert body["status"] == "dismissed"
+    assert dead_letter_store.get_dead_letter(conn, row["id"])["status"] == "dismissed"
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_dead_letter_dismiss_invalid_comment_returns_400(client, postgres_db):
+    conn, _cur = postgres_db
+    row = dead_letter_store.create_dead_letter(
+        conn,
+        source_type="playbook_execution",
+        source_id=605,
+        failure_class="adapter_failed",
+        error_message="failed",
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_dead_letter_db(conn):
+        resp = client.post(f"/dead-letters/{row['id']}/dismiss", json={"comment": 42})
+
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "invalid_request"
+    assert dead_letter_store.get_dead_letter(conn, row["id"])["status"] == "open"
