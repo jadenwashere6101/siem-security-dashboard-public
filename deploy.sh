@@ -1,4 +1,5 @@
 #!/bin/bash
+# Frontend artifact deploy helper. VM backend + schema migrations: scripts/deploy_backend_vm.sh
 
 set -e
 
