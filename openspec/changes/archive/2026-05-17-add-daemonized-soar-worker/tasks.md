@@ -204,10 +204,10 @@ There is **no** HTTP or daemon entry point for playbook batch execution; operato
 - [x] 11.1 Verify daemonized worker remains simulation-safe by default and real Slack/Teams/firewall execution remains disabled.
 - [x] 11.2 Verify no schema rewrites, ingest changes, detection changes, correlation changes, or autonomous remediation broadening were introduced.
 - [x] 11.3 Complete final backend, frontend, concurrency, load, and build verification.
-- [ ] 11.4 Update OpenSpec tasks with evidence and archive the change after implementation is complete.
+- [x] 11.4 Update OpenSpec tasks with evidence and archive the change after implementation is complete.
 
 ### Archive readiness notes (2026-05-17)
 
 - Final validation evidence is recorded above and all implementation, visibility, deployment-doc, load, failure, and regression tasks are complete.
 - No schema, migration, ingest, detection, correlation, runtime service, VM, systemd, or real integration changes were made in the final validation slice.
-- `11.4` remains open only for the explicit archive action; do not archive until the user requests the archive step.
+- `11.4` was completed after explicit archive request; change is ready to move to `openspec/changes/archive/`.
