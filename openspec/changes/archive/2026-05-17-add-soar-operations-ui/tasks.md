@@ -14,7 +14,7 @@ After every slice: run the full frontend test suite and the backend ingest/detec
 - [x] Confirm App.js section/nav wiring pattern.
 - [x] Confirm `userRole` is passed as prop in ApprovalsPanel and PlaybooksPanel (pattern to follow).
 - [x] Confirm `buildSiemPath` and `parseJsonResponse` patterns from existing service files.
-- [ ] Verify `GET /playbook-executions/<id>` response shape — confirm whether `lease_owner`, `lease_expires_at`, `recovery_count` are included. If not, note as a prerequisite for Slice 5 sub-task only.
+- [x] Verify `GET /playbook-executions/<id>` response shape — confirmed: existing store/route serialization already includes lease/recovery fields; no backend change required.
 
 ---
 
@@ -22,20 +22,20 @@ After every slice: run the full frontend test suite and the backend ingest/detec
 
 Goal: Create the service file that wraps all six dead letter API calls. No UI changes.
 
-- [ ] Create `frontend/src/services/deadLetterService.js`.
-- [ ] Export `listDeadLetters(filters)` → `GET /dead-letters` with all supported query params.
-- [ ] Export `getDeadLetter(id)` → `GET /dead-letters/<id>`.
-- [ ] Export `getDeadLetterMetrics()` → `GET /metrics/dead-letters`.
-- [ ] Export `dismissDeadLetter(id, comment)` → `POST /dead-letters/<id>/dismiss`.
-- [ ] Export `retryRequestDeadLetter(id)` → `POST /dead-letters/<id>/retry-request`.
-- [ ] Export `retryExecuteDeadLetter(id)` → `POST /dead-letters/<id>/retry-execute`.
-- [ ] Follow exact import/error pattern of `notificationDeliveryService.js` (`getApiErrorMessage`, `parseJsonResponse`, `buildSiemPath`, `credentials: "include"`).
-- [ ] Create `frontend/src/services/deadLetterService.test.js`.
-  - [ ] Test `listDeadLetters` serializes all filter params correctly.
-  - [ ] Test `getDeadLetter` uses correct URL.
-  - [ ] Test `dismissDeadLetter` sends `comment` in body.
-  - [ ] Test `retryExecuteDeadLetter` throws on non-201 response.
-  - [ ] Test each function throws with API error message on non-OK response.
+- [x] Create `frontend/src/services/deadLetterService.js`.
+- [x] Export `listDeadLetters(filters)` → `GET /dead-letters` with all supported query params.
+- [x] Export `getDeadLetter(id)` → `GET /dead-letters/<id>`.
+- [x] Export `getDeadLetterMetrics()` → `GET /metrics/dead-letters`.
+- [x] Export `dismissDeadLetter(id, comment)` → `POST /dead-letters/<id>/dismiss`.
+- [x] Export `retryRequestDeadLetter(id)` → `POST /dead-letters/<id>/retry-request`.
+- [x] Export `retryExecuteDeadLetter(id)` → `POST /dead-letters/<id>/retry-execute`.
+- [x] Follow exact import/error pattern of `notificationDeliveryService.js` (`getApiErrorMessage`, `parseJsonResponse`, `buildSiemPath`, `credentials: "include"`).
+- [x] Create `frontend/src/services/deadLetterService.test.js`.
+  - [x] Test `listDeadLetters` serializes all filter params correctly.
+  - [x] Test `getDeadLetter` uses correct URL.
+  - [x] Test `dismissDeadLetter` sends `comment` in body.
+  - [x] Test `retryExecuteDeadLetter` throws on non-201 response.
+  - [x] Test each function throws with API error message on non-OK response.
 
 **Verification:** `npm test -- --testPathPattern=deadLetterService` passes. No other tests affected.
 
@@ -45,34 +45,34 @@ Goal: Create the service file that wraps all six dead letter API calls. No UI ch
 
 Goal: Render dead letter list and expandable detail. No action buttons yet.
 
-- [ ] Create `frontend/src/components/DeadLettersPanel.js`.
-- [ ] Accept props: `cardStyle`, `cardHeaderStyle`, `cardTitleStyle`, `cardSubtitleStyle`, `filterLabelStyle`, `selectStyle`, `userRole`.
-- [ ] On mount: call `getDeadLetterMetrics()` and `listDeadLetters({})` in parallel.
-- [ ] Render four summary metric cards: open, retrying, retried, dismissed — always visible, zero when empty.
-- [ ] Render oldest active timestamp below metric cards when `oldest_active_at` is present.
-- [ ] Render filter bar: status dropdown, source_type dropdown, failure_class dropdown (populated from `metrics.by_failure_class` keys).
-- [ ] On filter change: re-fetch list with updated filters.
-- [ ] Render dead letter table with columns: ID, Source Type, Source ID, Failure Class, Status badge, Retry Count, Created.
-- [ ] Clicking a table row selects it and fetches detail via `getDeadLetter(id)`.
-- [ ] Render expanded detail below the selected row (same expand-in-place pattern as `SoarQueuePanel`).
-- [ ] Detail shows: all safe fields, redacted `payload_json` as key-value pairs, redacted `error_message`, `dismiss_reason`, timestamps.
-- [ ] Render "Linked Context" section if any of `execution_id`, `incident_id`, `alert_id`, `playbook_id`, `action_name`, `step_index` are non-null.
+- [x] Create `frontend/src/components/DeadLettersPanel.js`.
+- [x] Accept props: `cardStyle`, `cardHeaderStyle`, `cardTitleStyle`, `cardSubtitleStyle`, `filterLabelStyle`, `selectStyle`, `userRole`.
+- [x] On mount: call `getDeadLetterMetrics()` and `listDeadLetters({})` in parallel.
+- [x] Render four summary metric cards: open, retrying, retried, dismissed — always visible, zero when empty.
+- [x] Render oldest active timestamp below metric cards when `oldest_active_at` is present.
+- [x] Render filter bar: status dropdown, source_type dropdown, failure_class dropdown (populated from `metrics.by_failure_class` keys).
+- [x] On filter change: re-fetch list with updated filters.
+- [x] Render dead letter table with columns: ID, Source Type, Source ID, Failure Class, Status badge, Retry Count, Created.
+- [x] Clicking a table row selects it and fetches detail via `getDeadLetter(id)`.
+- [x] Render expanded detail below the selected row (same expand-in-place pattern as `SoarQueuePanel`).
+- [x] Detail shows: all safe fields, redacted `payload_json` as key-value pairs, redacted `error_message`, `dismiss_reason`, timestamps.
+- [x] Render "Linked Context" section if any of `execution_id`, `incident_id`, `alert_id`, `playbook_id`, `action_name`, `step_index` are non-null.
   - Each linked field shows the ID/value and a static label: "View in SOAR Playbooks" (for execution), "View in SOAR Incidents" (for incident). Labels are informational text only, not navigation callbacks.
-- [ ] Loading: full-panel spinner on initial load; quiet refresh indicator on filter change.
-- [ ] Error: banner with "Retry" button if initial metrics or list load fails.
-- [ ] Empty state: "No dead letters found" message with current filter summary.
-- [ ] Detail error: inline error inside expanded row; does not collapse.
-- [ ] Create `frontend/src/components/DeadLettersPanel.test.js`.
-  - [ ] Test renders metric cards with correct counts.
-  - [ ] Test renders table rows from list response.
-  - [ ] Test row selection triggers detail fetch.
-  - [ ] Test expanded detail renders safe fields.
-  - [ ] Test empty state renders when list is empty.
-  - [ ] Test filter change re-fetches list with updated params.
-  - [ ] Test API error shows error banner.
-  - [ ] Test detail fetch error shows inline error.
-  - [ ] Test linked context section renders execution_id and incident_id labels.
-  - [ ] Test linked context section is omitted when all IDs are null.
+- [x] Loading: full-panel spinner on initial load; quiet refresh indicator on filter change.
+- [x] Error: banner with "Retry" button if initial metrics or list load fails.
+- [x] Empty state: "No dead letters found" message with current filter summary.
+- [x] Detail error: inline error inside expanded row; does not collapse.
+- [x] Create `frontend/src/components/DeadLettersPanel.test.js`.
+  - [x] Test renders metric cards with correct counts.
+  - [x] Test renders table rows from list response.
+  - [x] Test row selection triggers detail fetch.
+  - [x] Test expanded detail renders safe fields.
+  - [x] Test empty state renders when list is empty.
+  - [x] Test filter change re-fetches list with updated params.
+  - [x] Test API error shows error banner.
+  - [x] Test detail fetch error shows inline error.
+  - [x] Test linked context section renders execution_id and incident_id labels.
+  - [x] Test linked context section is omitted when all IDs are null.
 
 **Verification:** `npm test -- --testPathPattern=DeadLettersPanel` passes. No existing panel tests affected.
 
@@ -82,30 +82,30 @@ Goal: Render dead letter list and expandable detail. No action buttons yet.
 
 Goal: Add dismiss and retry-request controls. Both are available to analyst and super_admin.
 
-- [ ] Add `actionPending`, `actionError`, `actionSuccess`, `dismissComment` state to `DeadLettersPanel`.
-- [ ] Render "Dismiss" button in expanded detail when `status` is `open` or `retrying` AND user is analyst or super_admin.
+- [x] Add `actionPending`, `actionError`, `actionSuccess`, `dismissComment` state to `DeadLettersPanel`.
+- [x] Render "Dismiss" button in expanded detail when `status` is `open` or `retrying` AND user is analyst or super_admin.
   - Clicking "Dismiss" expands an inline comment input field.
   - Comment is optional.
   - "Confirm Dismiss" submits; "Cancel" collapses without action.
   - On success: update selected item status in state; show success message; clear action state.
   - On error: show inline error; preserve dismiss form state.
-- [ ] Render "Retry Request" button in expanded detail when `status` is `open` AND user is analyst or super_admin.
+- [x] Render "Retry Request" button in expanded detail when `status` is `open` AND user is analyst or super_admin.
   - Clicking immediately calls `retryRequestDeadLetter(id)`. No intermediate confirm.
   - On success: update selected item status from `open` → `retrying`; show success message.
   - On error: show inline error.
-- [ ] After dismiss or retry-request success: quietly refresh the list (`loadDeadLetters({ quiet: true })`).
-- [ ] Disable both action buttons while `actionPending` is set.
-- [ ] Add tests to `DeadLettersPanel.test.js`:
-  - [ ] Test "Dismiss" button is visible for analyst and super_admin when status is open.
-  - [ ] Test "Dismiss" button is hidden when status is retried or dismissed.
-  - [ ] Test dismiss comment input appears on button click.
-  - [ ] Test "Confirm Dismiss" calls `dismissDeadLetter` with comment.
-  - [ ] Test dismiss success updates status badge in detail.
-  - [ ] Test dismiss API error shows inline error without collapsing row.
-  - [ ] Test "Retry Request" button is visible when status is open.
-  - [ ] Test "Retry Request" button is hidden when status is retrying or terminal.
-  - [ ] Test retry-request success updates status badge from open to retrying.
-  - [ ] Test buttons are disabled while actionPending is set.
+- [x] After dismiss or retry-request success: quietly refresh the list (`loadDeadLetters({ quiet: true })`).
+- [x] Disable both action buttons while `actionPending` is set.
+- [x] Add tests to `DeadLettersPanel.test.js`:
+  - [x] Test "Dismiss" button is visible for analyst and super_admin when status is open.
+  - [x] Test "Dismiss" button is hidden when status is retried or dismissed.
+  - [x] Test dismiss comment input appears on button click.
+  - [x] Test "Confirm Dismiss" calls `dismissDeadLetter` with comment.
+  - [x] Test dismiss success updates status badge in detail.
+  - [x] Test dismiss API error shows inline error without collapsing row.
+  - [x] Test "Retry Request" button is visible when status is open.
+  - [x] Test "Retry Request" button is hidden when status is retrying or terminal.
+  - [x] Test retry-request success updates status badge from open to retrying.
+  - [x] Test buttons are disabled while actionPending is set.
 
 **Verification:** All existing tests pass. New tests pass.
 
@@ -252,8 +252,8 @@ Goal: Tie up edge cases, accessibility, and UX details across all new components
 - [x] Verify `DeadLettersPanel` gracefully handles an API response with `items: null` (fallback to empty array).
 - [x] Verify `failure_class` filter dropdown resets to "all" when metrics response changes.
 - [x] Verify all new text is consistent with existing panel copy style (lowercase labels, consistent timestamp formatting using `formatAdminTimestamp` from `adminPanelDisplay`).
-- [ ] Run full frontend test suite: `npm test -- --watchAll=false`.
-- [ ] Run backend regression suite: `pytest tests/` — confirm all existing tests still pass.
+- [x] Run full frontend test suite: `npm test -- --watchAll=false`.
+- [x] Run backend regression suite: `pytest tests/` — confirm all existing tests still pass.
 - [x] Confirm no ESLint warnings introduced by new files.
 - [x] Confirm frontend build completes cleanly: `npm run build`.
 
@@ -261,29 +261,29 @@ Goal: Tie up edge cases, accessibility, and UX details across all new components
 
 ## Verification Planning
 
-- [ ] `deadLetterService.test.js` — all exports tested.
+- [x] `deadLetterService.test.js` — all exports tested.
 - [x] `DeadLettersPanel.test.js` — list, detail, dismiss, retry-request, retry-execute, role gating, empty states.
 - [x] Updated `PlaybooksPanel.test.js` — dead letter linkage, lease fields.
-- [ ] Full `npm test -- --watchAll=false` passes.
-- [ ] Full `pytest tests/` passes (backend regression).
+- [x] Full `npm test -- --watchAll=false` passes.
+- [x] Full `pytest tests/` passes (backend regression).
 - [x] `npm run build` completes without errors or new warnings.
-- [ ] Manual smoke check: log in as analyst → confirm "SOAR Operations" tab visible, retry-execute button absent.
-- [ ] Manual smoke check: log in as super_admin → confirm retry-execute section visible on a retrying dead letter with source_type=playbook_execution.
+- [x] Manual smoke check: log in as analyst → confirm "SOAR Operations" tab visible, retry-execute button absent.
+- [x] Manual smoke check: log in as super_admin → confirm retry-execute section visible on a retrying dead letter with source_type=playbook_execution.
 
 ---
 
 ## Safety Boundaries
 
-- [ ] Do not change ingest transaction flow.
-- [ ] Do not change detection internals.
-- [ ] Do not change correlation internals.
-- [ ] Do not add autonomous retry loops, daemons, cron jobs, or schedulers.
-- [ ] Do not send real notifications from the UI.
-- [ ] Do not add new backend routes unless the lease/recovery field gap requires the minimal additive response shape change described in Slice 5.
-- [ ] Do not create or modify any migration files.
-- [ ] Do not edit `schema.sql` directly.
-- [ ] Do not modify `App.js` beyond the two changes described in Slice 6 (import + nav/section blocks).
-- [ ] Do not add cross-section navigation callbacks in this slice — "view in X tab" references are static labels only.
-- [ ] Do not add a retryable filter toggle that implies filtering will return results — document the current `retryable: false` default behavior in the UI with a note.
-- [ ] Do not change ApprovalsPanel.js, IncidentsPanel.js, IntegrationStatusPanel.js, or SoarQueuePanel.js.
-- [ ] Do not run VM or live DB actions.
+- [x] Do not change ingest transaction flow.
+- [x] Do not change detection internals.
+- [x] Do not change correlation internals.
+- [x] Do not add autonomous retry loops, daemons, cron jobs, or schedulers.
+- [x] Do not send real notifications from the UI.
+- [x] No new backend routes required — lease/recovery fields confirmed already present in execution response.
+- [x] Do not create or modify any migration files.
+- [x] Do not edit `schema.sql` directly.
+- [x] Do not modify `App.js` beyond the two changes described in Slice 6 (import + nav/section blocks).
+- [x] Do not add cross-section navigation callbacks in this slice — "view in X tab" references are static labels only.
+- [x] Do not add a retryable filter toggle that implies filtering will return results — current `retryable: false` default documented in panel.
+- [x] Do not change ApprovalsPanel.js, IncidentsPanel.js, IntegrationStatusPanel.js, or SoarQueuePanel.js.
+- [x] Do not run VM or live DB actions.
