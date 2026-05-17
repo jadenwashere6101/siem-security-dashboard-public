@@ -115,39 +115,39 @@ Goal: Add dismiss and retry-request controls. Both are available to analyst and 
 
 Goal: Add retry-execute control with mandatory confirmation. Visible only to super_admin.
 
-- [ ] Add `retryExecuteConfirmed` state (bool, default `false`).
-- [ ] Render "Retry Execute" button section in expanded detail only when ALL of:
+- [x] Add `retryExecuteConfirmed` state (bool, default `false`).
+- [x] Render "Retry Execute" button section in expanded detail only when ALL of:
   - `userRole === "super_admin"`
   - `status === "retrying"`
   - `source_type === "playbook_execution"`
-- [ ] Render confirmation text before the button (verbatim from design.md):
+- [x] Render confirmation text before the button (verbatim from design.md):
   ```
   "Retry Execute creates a new pending playbook execution. No steps will run
   immediately. The new execution must be picked up by the next manual executor
   invocation (scripts/run_playbook_executor_once.py). This dead letter will
   transition to 'retried'. This action cannot be undone."
   ```
-- [ ] Render acknowledgment checkbox below confirmation text:
+- [x] Render acknowledgment checkbox below confirmation text:
   `☐ I understand that retry-execute creates pending work only and does not run steps.`
-- [ ] "Retry Execute" button is disabled until checkbox is checked.
-- [ ] On submit: call `retryExecuteDeadLetter(id)`.
+- [x] "Retry Execute" button is disabled until checkbox is checked.
+- [x] On submit: call `retryExecuteDeadLetter(id)`.
   - On success: show the returned `new_execution_id` in the success message: "New pending execution #<id> created. No steps have run. Pick it up with the manual executor."
   - Update dead letter status to `retried` in state.
   - Hide action buttons (dead letter is now terminal).
   - Uncheck the acknowledgment checkbox.
-- [ ] On 409 error: show the error message from the API response body verbatim.
-- [ ] On other error: show generic inline error.
-- [ ] Add tests to `DeadLettersPanel.test.js`:
-  - [ ] Test "Retry Execute" section is not rendered for analyst role.
-  - [ ] Test "Retry Execute" section is not rendered when source_type is not playbook_execution.
-  - [ ] Test "Retry Execute" section is not rendered when status is not retrying.
-  - [ ] Test confirmation text renders verbatim.
-  - [ ] Test "Retry Execute" button is disabled before checkbox is checked.
-  - [ ] Test "Retry Execute" button is enabled after checkbox is checked.
-  - [ ] Test success shows new_execution_id in message.
-  - [ ] Test success transitions status to retried and hides action buttons.
-  - [ ] Test 409 error shows API error message.
-  - [ ] Test non-409 error shows generic error without crashing.
+- [x] On 409 error: show the error message from the API response body verbatim.
+- [x] On other error: show generic inline error.
+- [x] Add tests to `DeadLettersPanel.test.js`:
+  - [x] Test "Retry Execute" section is not rendered for analyst role.
+  - [x] Test "Retry Execute" section is not rendered when source_type is not playbook_execution.
+  - [x] Test "Retry Execute" section is not rendered when status is not retrying.
+  - [x] Test confirmation text renders verbatim.
+  - [x] Test "Retry Execute" button is disabled before checkbox is checked.
+  - [x] Test "Retry Execute" button is enabled after checkbox is checked.
+  - [x] Test success shows new_execution_id in message.
+  - [x] Test success transitions status to retried and hides action buttons.
+  - [x] Test 409 error shows API error message.
+  - [x] Test non-409 error shows generic error without crashing.
 
 **Verification:** All existing tests pass. New tests pass. Analyst mock cannot see or trigger retry-execute.
 

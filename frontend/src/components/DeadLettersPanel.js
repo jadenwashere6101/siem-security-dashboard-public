@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   dismissDeadLetter,
+  executeDeadLetterRetry,
   getDeadLetter,
   getDeadLetterMetrics,
   getDeadLetters,
@@ -20,6 +21,7 @@ const SOURCE_TYPE_FILTERS = [
 
 const OPERATIONAL_NOTICE =
   "Operational review: dead letters are failure records for operator triage. Retry request records intent only; it does not execute playbooks or run steps.";
+const RETRY_EXECUTE_PHRASE = "RETRY";
 
 function toCount(value) {
   const n = Number(value);
@@ -157,8 +159,11 @@ function DeadLettersPanel({
   const [actionSuccess, setActionSuccess] = useState("");
   const [dismissComment, setDismissComment] = useState("");
   const [dismissConfirmOpen, setDismissConfirmOpen] = useState(false);
+  const [retryExecuteConfirmed, setRetryExecuteConfirmed] = useState(false);
+  const [retryExecutePhrase, setRetryExecutePhrase] = useState("");
 
   const canMutateDeadLetters = userRole === "analyst" || userRole === "super_admin";
+  const canExecuteDeadLetterRetry = userRole === "super_admin";
 
   const failureClassOptions = useMemo(() => {
     const keys = Object.keys(metrics?.by_failure_class || {}).sort();
@@ -211,6 +216,8 @@ function DeadLettersPanel({
     setActionSuccess("");
     setDismissConfirmOpen(false);
     setDismissComment("");
+    setRetryExecuteConfirmed(false);
+    setRetryExecutePhrase("");
     setDetailLoading(true);
     setSelectedItem(null);
     try {
@@ -233,6 +240,8 @@ function DeadLettersPanel({
     setActionSuccess("");
     setDismissConfirmOpen(false);
     setDismissComment("");
+    setRetryExecuteConfirmed(false);
+    setRetryExecutePhrase("");
   }, []);
 
   const handleDismissStart = useCallback(() => {
@@ -262,6 +271,8 @@ function DeadLettersPanel({
       );
       setDismissConfirmOpen(false);
       setDismissComment("");
+      setRetryExecuteConfirmed(false);
+      setRetryExecutePhrase("");
       setActionSuccess("Dead letter dismissed.");
       await loadPanel({ quiet: true });
     } catch (err) {
@@ -284,10 +295,48 @@ function DeadLettersPanel({
         currentItems.map((item) => (item.id === selectedId ? { ...item, ...nextItem } : item))
       );
       setDismissConfirmOpen(false);
+      setRetryExecuteConfirmed(false);
+      setRetryExecutePhrase("");
       setActionSuccess("Retry request recorded. No playbook steps were executed.");
       await loadPanel({ quiet: true });
     } catch (err) {
       setActionError(err.message || "Unable to request dead letter retry.");
+    } finally {
+      setActionPending("");
+    }
+  }, [actionPending, loadPanel, selectedId, selectedItem]);
+
+  const handleRetryExecute = useCallback(async () => {
+    if (!selectedId || actionPending) return;
+    setActionPending("retry-execute");
+    setActionError("");
+    setActionSuccess("");
+    try {
+      const result = await executeDeadLetterRetry(selectedId);
+      const updated = result?.dead_letter && typeof result.dead_letter === "object"
+        ? result.dead_letter
+        : { ...(selectedItem || {}), status: "retried" };
+      setSelectedItem(updated);
+      setItems((currentItems) =>
+        currentItems.map((item) => (item.id === selectedId ? { ...item, ...updated } : item))
+      );
+      setRetryExecuteConfirmed(false);
+      setRetryExecutePhrase("");
+      setDismissConfirmOpen(false);
+      setActionSuccess(
+        `New pending execution #${result?.new_execution_id} created. No steps have run. Pick it up with the manual executor.`
+      );
+      await loadPanel({ quiet: true });
+      try {
+        const refreshedDetail = await getDeadLetter(selectedId);
+        if (refreshedDetail && typeof refreshedDetail === "object") {
+          setSelectedItem(refreshedDetail);
+        }
+      } catch (_err) {
+        // Keep the successful local transition visible if the detail refresh is unavailable.
+      }
+    } catch (err) {
+      setActionError(err.message || "Unable to execute dead letter retry.");
     } finally {
       setActionPending("");
     }
@@ -348,11 +397,17 @@ function DeadLettersPanel({
         actionSuccess={actionSuccess}
         dismissComment={dismissComment}
         dismissConfirmOpen={dismissConfirmOpen}
+        retryExecuteConfirmed={retryExecuteConfirmed}
+        retryExecutePhrase={retryExecutePhrase}
+        canExecuteDeadLetterRetry={canExecuteDeadLetterRetry}
         onDismissStart={handleDismissStart}
         onDismissCancel={handleDismissCancel}
         onDismissConfirm={handleDismissConfirm}
         onDismissCommentChange={setDismissComment}
         onRetryRequest={handleRetryRequest}
+        onRetryExecute={handleRetryExecute}
+        onRetryExecuteConfirmedChange={setRetryExecuteConfirmed}
+        onRetryExecutePhraseChange={setRetryExecutePhrase}
         onRetryLoad={() => loadPanel()}
         onSelectRow={handleSelectRow}
         onCloseDetail={handleCloseDetail}
@@ -473,11 +528,17 @@ function PanelBody({
   actionSuccess,
   dismissComment,
   dismissConfirmOpen,
+  retryExecuteConfirmed,
+  retryExecutePhrase,
+  canExecuteDeadLetterRetry,
   onDismissStart,
   onDismissCancel,
   onDismissConfirm,
   onDismissCommentChange,
   onRetryRequest,
+  onRetryExecute,
+  onRetryExecuteConfirmedChange,
+  onRetryExecutePhraseChange,
   onRetryLoad,
   onSelectRow,
   onCloseDetail,
@@ -536,11 +597,17 @@ function PanelBody({
                 actionSuccess={actionSuccess}
                 dismissComment={dismissComment}
                 dismissConfirmOpen={dismissConfirmOpen}
+                retryExecuteConfirmed={retryExecuteConfirmed}
+                retryExecutePhrase={retryExecutePhrase}
+                canExecuteDeadLetterRetry={canExecuteDeadLetterRetry}
                 onDismissStart={onDismissStart}
                 onDismissCancel={onDismissCancel}
                 onDismissConfirm={onDismissConfirm}
                 onDismissCommentChange={onDismissCommentChange}
                 onRetryRequest={onRetryRequest}
+                onRetryExecute={onRetryExecute}
+                onRetryExecuteConfirmedChange={onRetryExecuteConfirmedChange}
+                onRetryExecutePhraseChange={onRetryExecutePhraseChange}
               />
             ) : (
               <p style={emptyTextStyle}>No detail available for this dead letter.</p>
@@ -660,11 +727,17 @@ function DeadLetterDetail({
   actionSuccess,
   dismissComment,
   dismissConfirmOpen,
+  retryExecuteConfirmed,
+  retryExecutePhrase,
+  canExecuteDeadLetterRetry,
   onDismissStart,
   onDismissCancel,
   onDismissConfirm,
   onDismissCommentChange,
   onRetryRequest,
+  onRetryExecute,
+  onRetryExecuteConfirmedChange,
+  onRetryExecutePhraseChange,
 }) {
   const payloadEntries = getPayloadEntries(item.payload_json);
 
@@ -694,11 +767,17 @@ function DeadLetterDetail({
         actionSuccess={actionSuccess}
         dismissComment={dismissComment}
         dismissConfirmOpen={dismissConfirmOpen}
+        retryExecuteConfirmed={retryExecuteConfirmed}
+        retryExecutePhrase={retryExecutePhrase}
+        canExecuteDeadLetterRetry={canExecuteDeadLetterRetry}
         onDismissStart={onDismissStart}
         onDismissCancel={onDismissCancel}
         onDismissConfirm={onDismissConfirm}
         onDismissCommentChange={onDismissCommentChange}
         onRetryRequest={onRetryRequest}
+        onRetryExecute={onRetryExecute}
+        onRetryExecuteConfirmedChange={onRetryExecuteConfirmedChange}
+        onRetryExecutePhraseChange={onRetryExecutePhraseChange}
       />
     </>
   );
@@ -712,11 +791,17 @@ function DeadLetterActions({
   actionSuccess,
   dismissComment,
   dismissConfirmOpen,
+  retryExecuteConfirmed,
+  retryExecutePhrase,
+  canExecuteDeadLetterRetry,
   onDismissStart,
   onDismissCancel,
   onDismissConfirm,
   onDismissCommentChange,
   onRetryRequest,
+  onRetryExecute,
+  onRetryExecuteConfirmedChange,
+  onRetryExecutePhraseChange,
 }) {
   if (!canMutateDeadLetters) {
     return null;
@@ -724,11 +809,17 @@ function DeadLetterActions({
 
   const canDismiss = item.status === "open" || item.status === "retrying";
   const canRetryRequest = item.status === "open";
-  if (!canDismiss && !canRetryRequest && !actionError && !actionSuccess) {
+  const canRetryExecute =
+    canExecuteDeadLetterRetry &&
+    item.status === "retrying" &&
+    item.source_type === "playbook_execution";
+  if (!canDismiss && !canRetryRequest && !canRetryExecute && !actionError && !actionSuccess) {
     return null;
   }
 
   const busy = Boolean(actionPending);
+  const retryExecuteReady =
+    retryExecuteConfirmed && retryExecutePhrase.trim().toUpperCase() === RETRY_EXECUTE_PHRASE;
 
   return (
     <div style={detailSectionStyle}>
@@ -792,6 +883,43 @@ function DeadLetterActions({
               Cancel
             </button>
           </div>
+        </div>
+      ) : null}
+      {canRetryExecute ? (
+        <div style={retryExecutePanelStyle}>
+          <div style={detailSectionTitleStyle}>Retry Execute</div>
+          <p style={actionHelpTextStyle}>
+            This creates a new pending playbook execution only. It does not run steps
+            immediately. The new execution must be picked up by the manual executor.
+          </p>
+          <label style={checkboxLabelStyle}>
+            <input
+              type="checkbox"
+              checked={retryExecuteConfirmed}
+              onChange={(event) => onRetryExecuteConfirmedChange(event.target.checked)}
+              disabled={busy}
+            />
+            <span>I understand retry-execute creates pending work only and does not run steps.</span>
+          </label>
+          <label style={dismissLabelStyle}>
+            <span style={detailLabelStyle}>Type RETRY to confirm</span>
+            <input
+              type="text"
+              value={retryExecutePhrase}
+              onChange={(event) => onRetryExecutePhraseChange(event.target.value)}
+              disabled={busy}
+              style={confirmInputStyle}
+              aria-label="Retry execute confirmation phrase"
+            />
+          </label>
+          <button
+            type="button"
+            style={dangerActionButtonStyle}
+            onClick={onRetryExecute}
+            disabled={busy || !retryExecuteReady}
+          >
+            {actionPending === "retry-execute" ? "Creating Pending Execution..." : "Retry Execute"}
+          </button>
         </div>
       ) : null}
     </div>
@@ -1343,4 +1471,35 @@ const dismissTextareaStyle = {
   padding: "8px 10px",
   fontSize: "13px",
   lineHeight: 1.4,
+};
+
+const retryExecutePanelStyle = {
+  marginTop: "14px",
+  padding: "12px",
+  borderRadius: "8px",
+  border: "1px solid rgba(248, 113, 113, 0.3)",
+  backgroundColor: "rgba(248, 113, 113, 0.06)",
+  display: "flex",
+  flexDirection: "column",
+  gap: "10px",
+};
+
+const checkboxLabelStyle = {
+  display: "flex",
+  gap: "8px",
+  alignItems: "flex-start",
+  color: "#e6edf3",
+  fontSize: "13px",
+  lineHeight: 1.4,
+};
+
+const confirmInputStyle = {
+  minHeight: "34px",
+  borderRadius: "8px",
+  border: "1px solid #30363d",
+  backgroundColor: "#0d1117",
+  color: "#e6edf3",
+  padding: "7px 10px",
+  fontSize: "13px",
+  maxWidth: "180px",
 };

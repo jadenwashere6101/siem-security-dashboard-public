@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import DeadLettersPanel from "./DeadLettersPanel";
 import {
   dismissDeadLetter,
+  executeDeadLetterRetry,
   getDeadLetter,
   getDeadLetterMetrics,
   getDeadLetters,
@@ -13,6 +14,7 @@ import {
 
 jest.mock("../services/deadLetterService", () => ({
   dismissDeadLetter: jest.fn(),
+  executeDeadLetterRetry: jest.fn(),
   getDeadLetter: jest.fn(),
   getDeadLetterMetrics: jest.fn(),
   getDeadLetters: jest.fn(),
@@ -71,6 +73,12 @@ const detailRow = {
   last_failed_at: "2026-05-10T10:00:00Z",
 };
 
+const retryingPlaybookRow = {
+  ...detailRow,
+  status: "retrying",
+  retry_requested_at: "2026-05-10T11:00:00Z",
+};
+
 const detailRowNoLinks = {
   id: 8,
   status: "dismissed",
@@ -96,6 +104,11 @@ beforeEach(() => {
   getDeadLetters.mockResolvedValue({ items: [listRow], limit: 100, offset: 0 });
   getDeadLetter.mockResolvedValue(detailRow);
   dismissDeadLetter.mockResolvedValue({ ...detailRow, status: "dismissed" });
+  executeDeadLetterRetry.mockResolvedValue({
+    dead_letter: { ...retryingPlaybookRow, status: "retried" },
+    new_execution_id: 77,
+    message: "New pending playbook retry execution created. No steps have run.",
+  });
   requestDeadLetterRetry.mockResolvedValue({
     ...detailRow,
     status: "retrying",
@@ -440,4 +453,182 @@ test("dismiss conflict error stays inline and keeps confirmation open", async ()
   ).toBeInTheDocument();
   expect(screen.getByLabelText(/dismiss comment or reason/i)).toHaveValue("Already retried");
   expect(screen.getByText(/dead letter #7/i)).toBeInTheDocument();
+});
+
+test("super_admin sees retry-execute for retrying playbook_execution dead letter", async () => {
+  getDeadLetters.mockResolvedValue({
+    items: [{ ...listRow, status: "retrying" }],
+    limit: 100,
+    offset: 0,
+  });
+  getDeadLetter.mockResolvedValue(retryingPlaybookRow);
+
+  render(<DeadLettersPanel {...styleProps} userRole="super_admin" />);
+
+  await screen.findByText("99");
+  await userEvent.click(screen.getByTitle("View dead letter 7"));
+
+  expect(await screen.findByRole("button", { name: /^retry execute$/i })).toBeInTheDocument();
+  expect(
+    screen.getByText(/creates a new pending playbook execution only/i)
+  ).toBeInTheDocument();
+  expect(screen.getByText(/does not run steps immediately/i)).toBeInTheDocument();
+});
+
+test("analyst and viewer do not see retry-execute", async () => {
+  getDeadLetters.mockResolvedValue({
+    items: [{ ...listRow, status: "retrying" }],
+    limit: 100,
+    offset: 0,
+  });
+  getDeadLetter.mockResolvedValue(retryingPlaybookRow);
+
+  render(<DeadLettersPanel {...styleProps} userRole="analyst" />);
+
+  await screen.findByText("99");
+  await userEvent.click(screen.getByTitle("View dead letter 7"));
+  await screen.findByText(/dead letter #7/i);
+  expect(screen.queryByRole("button", { name: /retry execute/i })).not.toBeInTheDocument();
+
+  cleanup();
+  jest.clearAllMocks();
+  getDeadLetterMetrics.mockResolvedValue(sampleMetrics);
+  getDeadLetters.mockResolvedValue({
+    items: [{ ...listRow, status: "retrying" }],
+    limit: 100,
+    offset: 0,
+  });
+  getDeadLetter.mockResolvedValue(retryingPlaybookRow);
+
+  render(<DeadLettersPanel {...styleProps} userRole="viewer" />);
+
+  await screen.findByText("99");
+  await userEvent.click(screen.getByTitle("View dead letter 7"));
+  await screen.findByText(/dead letter #7/i);
+  expect(screen.queryByRole("button", { name: /retry execute/i })).not.toBeInTheDocument();
+});
+
+test("retry-execute is hidden for unsupported source types", async () => {
+  getDeadLetters.mockResolvedValue({
+    items: [{ ...listRow, status: "retrying", source_type: "notification_delivery" }],
+    limit: 100,
+    offset: 0,
+  });
+  getDeadLetter.mockResolvedValue({
+    ...retryingPlaybookRow,
+    source_type: "notification_delivery",
+  });
+
+  render(<DeadLettersPanel {...styleProps} userRole="super_admin" />);
+
+  await screen.findByText("99");
+  await userEvent.click(screen.getByTitle("View dead letter 7"));
+  await screen.findByText(/dead letter #7/i);
+
+  expect(screen.queryByRole("button", { name: /retry execute/i })).not.toBeInTheDocument();
+});
+
+test("retry-execute button is disabled until checkbox and RETRY phrase", async () => {
+  getDeadLetters.mockResolvedValue({
+    items: [{ ...listRow, status: "retrying" }],
+    limit: 100,
+    offset: 0,
+  });
+  getDeadLetter.mockResolvedValue(retryingPlaybookRow);
+
+  render(<DeadLettersPanel {...styleProps} userRole="super_admin" />);
+
+  await screen.findByText("99");
+  await userEvent.click(screen.getByTitle("View dead letter 7"));
+
+  const button = await screen.findByRole("button", { name: /^retry execute$/i });
+  expect(button).toBeDisabled();
+
+  await userEvent.click(
+    screen.getByLabelText(/retry-execute creates pending work only/i)
+  );
+  expect(button).toBeDisabled();
+
+  await userEvent.type(
+    screen.getByLabelText(/retry execute confirmation phrase/i),
+    "RETRY"
+  );
+  expect(button).toBeEnabled();
+});
+
+test("retry-execute calls service, shows new execution id, and refreshes", async () => {
+  getDeadLetters
+    .mockResolvedValueOnce({
+      items: [{ ...listRow, status: "retrying" }],
+      limit: 100,
+      offset: 0,
+    })
+    .mockResolvedValueOnce({
+      items: [{ ...listRow, status: "retried" }],
+      limit: 100,
+      offset: 0,
+    });
+  getDeadLetter
+    .mockResolvedValueOnce(retryingPlaybookRow)
+    .mockResolvedValueOnce({ ...retryingPlaybookRow, status: "retried" });
+
+  render(<DeadLettersPanel {...styleProps} userRole="super_admin" />);
+
+  await screen.findByText("99");
+  await userEvent.click(screen.getByTitle("View dead letter 7"));
+  await screen.findByText(/dead letter #7/i);
+
+  await userEvent.click(
+    screen.getByLabelText(/retry-execute creates pending work only/i)
+  );
+  await userEvent.type(
+    screen.getByLabelText(/retry execute confirmation phrase/i),
+    "RETRY"
+  );
+  await userEvent.click(screen.getByRole("button", { name: /^retry execute$/i }));
+
+  await waitFor(() => {
+    expect(executeDeadLetterRetry).toHaveBeenCalledWith(7);
+  });
+  expect(await screen.findByText(/new pending execution #77 created/i)).toBeInTheDocument();
+  expect(screen.getByText(/dead letter #7/i)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /^retry execute$/i })).not.toBeInTheDocument();
+  await waitFor(() => {
+    expect(getDeadLetters).toHaveBeenCalledTimes(2);
+    expect(getDeadLetterMetrics).toHaveBeenCalledTimes(2);
+    expect(getDeadLetter).toHaveBeenCalledTimes(2);
+  });
+});
+
+test("retry-execute conflict error is displayed without changing status", async () => {
+  getDeadLetters.mockResolvedValue({
+    items: [{ ...listRow, status: "retrying" }],
+    limit: 100,
+    offset: 0,
+  });
+  getDeadLetter.mockResolvedValue(retryingPlaybookRow);
+  executeDeadLetterRetry.mockRejectedValueOnce(
+    new Error("Dead letter must be retrying before retry execution.")
+  );
+
+  render(<DeadLettersPanel {...styleProps} userRole="super_admin" />);
+
+  await screen.findByText("99");
+  await userEvent.click(screen.getByTitle("View dead letter 7"));
+  await screen.findByText(/dead letter #7/i);
+
+  await userEvent.click(
+    screen.getByLabelText(/retry-execute creates pending work only/i)
+  );
+  await userEvent.type(
+    screen.getByLabelText(/retry execute confirmation phrase/i),
+    "RETRY"
+  );
+  await userEvent.click(screen.getByRole("button", { name: /^retry execute$/i }));
+
+  expect(
+    await screen.findByText(/dead letter must be retrying before retry execution/i)
+  ).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^retry execute$/i })).toBeEnabled();
+  expect(screen.getByText(/retry requested at/i)).toBeInTheDocument();
 });
