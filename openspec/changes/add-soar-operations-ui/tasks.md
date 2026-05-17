@@ -198,8 +198,8 @@ Goal: Add dead letter linkage and lease/recovery fields to existing PlaybooksPan
 
 Goal: Register the new tab and section in App.js. Import `DeadLettersPanel`.
 
-- [ ] Add import in `App.js`: `import DeadLettersPanel from "./components/DeadLettersPanel";`
-- [ ] Add nav button in the tab bar, after "SOAR Integrations", with `canTakeAlertActions` guard:
+- [x] Add import in `App.js`: `import DeadLettersPanel from "./components/DeadLettersPanel";`
+- [x] Add nav button in the tab bar, after "SOAR Integrations", with `canTakeAlertActions` guard:
   ```jsx
   {canTakeAlertActions && (
     <button
@@ -214,7 +214,7 @@ Goal: Register the new tab and section in App.js. Import `DeadLettersPanel`.
     </button>
   )}
   ```
-- [ ] Add section render, after the "soar-playbook-metrics" section block:
+- [x] Add section render, after the "soar-playbook-metrics" section block:
   ```jsx
   {canTakeAlertActions && activeSection === "soar-operations" && (
     <DeadLettersPanel
@@ -228,8 +228,8 @@ Goal: Register the new tab and section in App.js. Import `DeadLettersPanel`.
     />
   )}
   ```
-- [ ] Confirm no other App.js changes. `activeSection`, `canTakeAlertActions`, and `userRole` require no new logic.
-- [ ] Verify `canTakeAlertActions` correctly excludes viewer role (existing logic: `isSuperAdmin || isAnalyst`).
+- [x] Confirm no other App.js changes. `activeSection`, `canTakeAlertActions`, and `userRole` require no new logic.
+- [x] Verify `canTakeAlertActions` correctly excludes viewer role (existing logic: `isSuperAdmin || isAnalyst`).
 
 **Verification:** App renders without error. Viewer role does not see the "SOAR Operations" tab. Analyst and super_admin see the tab and can load the panel. All existing section tabs remain functional.
 

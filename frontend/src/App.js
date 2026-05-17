@@ -10,6 +10,7 @@ import SoarQueuePanel from "./components/SoarQueuePanel";
 import PlaybooksPanel from "./components/PlaybooksPanel";
 import IntegrationStatusPanel from "./components/IntegrationStatusPanel";
 import PlaybookMetricsPanel from "./components/PlaybookMetricsPanel";
+import DeadLettersPanel from "./components/DeadLettersPanel";
 import ThreatHuntPanel from "./components/ThreatHuntPanel";
 import BlocklistManagerPanel from "./components/BlocklistManagerPanel";
 import {
@@ -569,6 +570,18 @@ function App() {
               SOAR Integrations
             </button>
           )}
+          {canTakeAlertActions && (
+            <button
+              type="button"
+              onClick={() => setActiveSection("soar-operations")}
+              style={{
+                ...sectionTabStyle,
+                ...(activeSection === "soar-operations" ? activeSectionTabStyle : inactiveSectionTabStyle),
+              }}
+            >
+              SOAR Operations
+            </button>
+          )}
         </div>
 
         {activeSection === "dashboard" && (
@@ -735,6 +748,18 @@ function App() {
             cardHeaderStyle={cardHeaderStyle}
             cardTitleStyle={cardTitleStyle}
             cardSubtitleStyle={cardSubtitleStyle}
+          />
+        )}
+
+        {canTakeAlertActions && activeSection === "soar-operations" && (
+          <DeadLettersPanel
+            cardStyle={cardStyle}
+            cardHeaderStyle={cardHeaderStyle}
+            cardTitleStyle={cardTitleStyle}
+            cardSubtitleStyle={cardSubtitleStyle}
+            filterLabelStyle={filterLabelStyle}
+            selectStyle={selectStyle}
+            userRole={userRole}
           />
         )}
       </div>
