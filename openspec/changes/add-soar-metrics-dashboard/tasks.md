@@ -43,15 +43,15 @@ Goal: Add a lightweight aggregate route for incident status/severity counts. No 
 
 Goal: Add a lightweight aggregate route for approval status counts. No schema changes.
 
-- [ ] In `routes/metrics_routes.py`, add `GET /metrics/approvals` under `metrics_bp`.
-- [ ] Access: `@login_required @analyst_or_super_admin_required`.
-- [ ] Query: `SELECT status, COUNT(*) FROM approval_requests GROUP BY status`.
-- [ ] Build response with zero-filled defaults for all known statuses: `pending`, `approved`, `denied`, `expired`.
-- [ ] `pending_count` mirrors `by_status["pending"]` as a convenience field.
-- [ ] Compute `total` as sum of all counts.
-- [ ] Response shape: `{ total, by_status: {pending, approved, denied, expired}, pending_count }`.
-- [ ] Add `# spec: SPEC-METRICS-001` traceability comment to the new route.
-- [ ] Confirm existing route tests still pass.
+- [x] In `routes/metrics_routes.py`, add `GET /metrics/approvals` under `metrics_bp`.
+- [x] Access: `@login_required @analyst_or_super_admin_required`.
+- [x] Query: `SELECT status, COUNT(*) FROM approval_requests GROUP BY status`.
+- [x] Build response with zero-filled defaults for all known statuses: `pending`, `approved`, `denied`, `expired`.
+- [x] `pending_count` mirrors `by_status["pending"]` as a convenience field.
+- [x] Compute `total` as sum of all counts.
+- [x] Response shape: `{ total, by_status: {pending, approved, denied, expired}, pending_count }`.
+- [x] Add `# spec: SPEC-METRICS-001` traceability comment to the new route.
+- [x] Confirm existing route tests still pass.
 
 **Verification:** `GET /metrics/approvals` returns correct shape with an empty `approval_requests` table (all zeros). Run backend test suite.
 

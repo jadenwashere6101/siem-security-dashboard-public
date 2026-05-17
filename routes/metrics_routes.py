@@ -39,6 +39,7 @@ KNOWN_CIRCUIT_BREAKER_STATES: tuple[str, ...] = (
 KNOWN_RECENT_NOTIFICATION_BUCKETS: tuple[str, ...] = ("success", "failed", "timeout", "blocked")
 KNOWN_INCIDENT_STATUSES: tuple[str, ...] = ("open", "investigating", "resolved", "closed")
 KNOWN_INCIDENT_SEVERITIES: tuple[str, ...] = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
+KNOWN_APPROVAL_STATUSES: tuple[str, ...] = ("pending", "approved", "denied", "expired")
 RECENT_WINDOW_HOURS = 24
 
 
@@ -403,6 +404,73 @@ def incident_metrics_route():
         )
     except Exception as error:
         current_app.logger.error("Error in incident_metrics_route: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@metrics_bp.route("/metrics/approvals", methods=["GET"])
+@login_required
+@analyst_or_super_admin_required
+def approval_metrics_route():
+    # spec: SPEC-METRICS-001
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT status, COUNT(*)
+                FROM approval_requests
+                GROUP BY status
+                """
+            )
+            rows = cur.fetchall() or []
+
+            by_status = _empty_counts(KNOWN_APPROVAL_STATUSES)
+            total_count = 0
+            for status, cnt in rows:
+                count = int(cnt)
+                normalized_status = str(status) if status is not None else ""
+                total_count += count
+                if normalized_status in by_status:
+                    by_status[normalized_status] += count
+
+            cur.execute(
+                """
+                SELECT MAX(created_at)
+                FROM approval_requests
+                """
+            )
+            newest_row = cur.fetchone()
+            newest_approval_at = newest_row[0] if newest_row else None
+
+            cur.execute(
+                """
+                SELECT MIN(created_at)
+                FROM approval_requests
+                WHERE status = 'pending'
+                """
+            )
+            oldest_pending_row = cur.fetchone()
+            oldest_pending_approval_at = oldest_pending_row[0] if oldest_pending_row else None
+
+        return (
+            jsonify(
+                {
+                    "total_count": total_count,
+                    "total": total_count,
+                    "by_status": by_status,
+                    "pending_count": by_status["pending"],
+                    "newest_approval_at": _iso_timestamp(newest_approval_at),
+                    "oldest_pending_approval_at": _iso_timestamp(oldest_pending_approval_at),
+                }
+            ),
+            200,
+        )
+    except Exception as error:
+        current_app.logger.error("Error in approval_metrics_route: %s", error)
         return jsonify({"error": "Internal server error"}), 500
     finally:
         if conn:
