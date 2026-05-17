@@ -1,18 +1,22 @@
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import DeadLettersPanel from "./DeadLettersPanel";
 import {
+  dismissDeadLetter,
   getDeadLetter,
   getDeadLetterMetrics,
   getDeadLetters,
+  requestDeadLetterRetry,
 } from "../services/deadLetterService";
 
 jest.mock("../services/deadLetterService", () => ({
+  dismissDeadLetter: jest.fn(),
   getDeadLetter: jest.fn(),
   getDeadLetterMetrics: jest.fn(),
   getDeadLetters: jest.fn(),
+  requestDeadLetterRetry: jest.fn(),
 }));
 
 const styleProps = {
@@ -91,6 +95,12 @@ beforeEach(() => {
   getDeadLetterMetrics.mockResolvedValue(sampleMetrics);
   getDeadLetters.mockResolvedValue({ items: [listRow], limit: 100, offset: 0 });
   getDeadLetter.mockResolvedValue(detailRow);
+  dismissDeadLetter.mockResolvedValue({ ...detailRow, status: "dismissed" });
+  requestDeadLetterRetry.mockResolvedValue({
+    ...detailRow,
+    status: "retrying",
+    retry_requested_at: "2026-05-10T11:00:00Z",
+  });
 });
 
 test("renders loading then list", async () => {
@@ -104,7 +114,7 @@ test("renders loading then list", async () => {
   render(<DeadLettersPanel {...styleProps} />);
 
   expect(screen.getByText(/loading dead letters/i)).toBeInTheDocument();
-  expect(screen.getByRole("note")).toHaveTextContent(/operational review only/i);
+  expect(screen.getByRole("note")).toHaveTextContent(/does not execute playbooks/i);
 
   expect(await screen.findByText("99")).toBeInTheDocument();
   expect(screen.getByTitle("View dead letter 7")).toBeInTheDocument();
@@ -251,14 +261,183 @@ test("linked context section omitted when all ids are null", async () => {
   expect(screen.queryByText(/view in soar playbooks/i)).not.toBeInTheDocument();
 });
 
-test("does not render dismiss or retry action buttons", async () => {
+test("analyst sees dismiss and retry-request actions for open dead letter", async () => {
   render(<DeadLettersPanel {...styleProps} />);
 
   await screen.findByText("99");
   await userEvent.click(screen.getByTitle("View dead letter 7"));
   await screen.findByText(/dead letter #7/i);
 
-  expect(screen.queryByRole("button", { name: /dismiss/i })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: /retry request/i })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^dismiss$/i })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /retry request/i })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /retry execute/i })).not.toBeInTheDocument();
+});
+
+test("super_admin sees dismiss and retry-request actions for open dead letter", async () => {
+  render(<DeadLettersPanel {...styleProps} userRole="super_admin" />);
+
+  await screen.findByText("99");
+  await userEvent.click(screen.getByTitle("View dead letter 7"));
+  await screen.findByText(/dead letter #7/i);
+
+  expect(screen.getByRole("button", { name: /^dismiss$/i })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /retry request/i })).toBeInTheDocument();
+});
+
+test("viewer does not see dismiss or retry-request actions", async () => {
+  render(<DeadLettersPanel {...styleProps} userRole="viewer" />);
+
+  await screen.findByText("99");
+  await userEvent.click(screen.getByTitle("View dead letter 7"));
+  await screen.findByText(/dead letter #7/i);
+
+  expect(screen.queryByRole("button", { name: /^dismiss$/i })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /retry request/i })).not.toBeInTheDocument();
+  expect(screen.queryByText(/review actions/i)).not.toBeInTheDocument();
+});
+
+test("dismiss flow calls service with comment and preserves selected detail", async () => {
+  getDeadLetters
+    .mockResolvedValueOnce({ items: [listRow], limit: 100, offset: 0 })
+    .mockResolvedValueOnce({
+      items: [{ ...listRow, status: "dismissed" }],
+      limit: 100,
+      offset: 0,
+    });
+
+  render(<DeadLettersPanel {...styleProps} />);
+
+  await screen.findByText("99");
+  await userEvent.click(screen.getByTitle("View dead letter 7"));
+  await screen.findByText(/dead letter #7/i);
+
+  await userEvent.click(screen.getByRole("button", { name: /^dismiss$/i }));
+  expect(screen.getByLabelText(/dismiss comment or reason/i)).toBeInTheDocument();
+
+  await userEvent.type(screen.getByLabelText(/dismiss comment or reason/i), "Reviewed");
+  await userEvent.click(screen.getByRole("button", { name: /confirm dismiss/i }));
+
+  await waitFor(() => {
+    expect(dismissDeadLetter).toHaveBeenCalledWith(7, { comment: "Reviewed" });
+  });
+  expect(await screen.findByText(/dead letter dismissed/i)).toBeInTheDocument();
+  expect(screen.getByText(/dead letter #7/i)).toBeInTheDocument();
+  await waitFor(() => {
+    expect(getDeadLetters).toHaveBeenCalledTimes(2);
+  });
+});
+
+test("retry-request flow calls service and updates status copy", async () => {
+  getDeadLetters
+    .mockResolvedValueOnce({ items: [listRow], limit: 100, offset: 0 })
+    .mockResolvedValueOnce({
+      items: [{ ...listRow, status: "retrying" }],
+      limit: 100,
+      offset: 0,
+    });
+
+  render(<DeadLettersPanel {...styleProps} />);
+
+  await screen.findByText("99");
+  await userEvent.click(screen.getByTitle("View dead letter 7"));
+  await screen.findByText(/dead letter #7/i);
+
+  await userEvent.click(screen.getByRole("button", { name: /retry request/i }));
+
+  await waitFor(() => {
+    expect(requestDeadLetterRetry).toHaveBeenCalledWith(7);
+  });
+  expect(
+    await screen.findByText(/retry request recorded\. no playbook steps were executed/i)
+  ).toBeInTheDocument();
+  expect(screen.getByText(/retry requested at/i)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /retry request/i })).not.toBeInTheDocument();
+});
+
+test("retry-request is hidden for non-open statuses", async () => {
+  getDeadLetters.mockResolvedValue({
+    items: [{ ...listRow, status: "retrying" }],
+    limit: 100,
+    offset: 0,
+  });
+  getDeadLetter.mockResolvedValue({ ...detailRow, status: "retrying" });
+
+  render(<DeadLettersPanel {...styleProps} />);
+
+  await screen.findByText("99");
+  await userEvent.click(screen.getByTitle("View dead letter 7"));
+  await screen.findByText(/dead letter #7/i);
+
+  expect(screen.getByRole("button", { name: /^dismiss$/i })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /retry request/i })).not.toBeInTheDocument();
+
+  cleanup();
+  jest.clearAllMocks();
+  getDeadLetterMetrics.mockResolvedValue(sampleMetrics);
+  getDeadLetters.mockResolvedValue({
+    items: [{ ...listRow, status: "retried" }],
+    limit: 100,
+    offset: 0,
+  });
+  getDeadLetter.mockResolvedValue({ ...detailRow, status: "retried" });
+
+  render(<DeadLettersPanel {...styleProps} />);
+
+  await screen.findByTitle("View dead letter 7");
+  await userEvent.click(screen.getByTitle("View dead letter 7"));
+  await screen.findByText(/dead letter #7/i);
+
+  expect(screen.queryByRole("button", { name: /retry request/i })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /^dismiss$/i })).not.toBeInTheDocument();
+});
+
+test("action buttons are disabled while retry request is in flight", async () => {
+  let resolveRetry;
+  requestDeadLetterRetry.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        resolveRetry = resolve;
+      })
+  );
+
+  render(<DeadLettersPanel {...styleProps} />);
+
+  await screen.findByText("99");
+  await userEvent.click(screen.getByTitle("View dead letter 7"));
+  await screen.findByText(/dead letter #7/i);
+
+  await userEvent.click(screen.getByRole("button", { name: /retry request/i }));
+
+  expect(screen.getByRole("button", { name: /^dismiss$/i })).toBeDisabled();
+  expect(screen.getByRole("button", { name: /requesting/i })).toBeDisabled();
+
+  resolveRetry({
+    ...detailRow,
+    status: "retrying",
+    retry_requested_at: "2026-05-10T11:00:00Z",
+  });
+
+  expect(await screen.findByText(/retry request recorded/i)).toBeInTheDocument();
+});
+
+test("dismiss conflict error stays inline and keeps confirmation open", async () => {
+  dismissDeadLetter.mockRejectedValueOnce(
+    new Error("Dead letter cannot be dismissed from its current status.")
+  );
+
+  render(<DeadLettersPanel {...styleProps} />);
+
+  await screen.findByText("99");
+  await userEvent.click(screen.getByTitle("View dead letter 7"));
+  await screen.findByText(/dead letter #7/i);
+
+  await userEvent.click(screen.getByRole("button", { name: /^dismiss$/i }));
+  await userEvent.type(screen.getByLabelText(/dismiss comment or reason/i), "Already retried");
+  await userEvent.click(screen.getByRole("button", { name: /confirm dismiss/i }));
+
+  expect(
+    await screen.findByText(/dead letter cannot be dismissed from its current status/i)
+  ).toBeInTheDocument();
+  expect(screen.getByLabelText(/dismiss comment or reason/i)).toHaveValue("Already retried");
+  expect(screen.getByText(/dead letter #7/i)).toBeInTheDocument();
 });

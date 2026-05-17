@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  dismissDeadLetter,
   getDeadLetter,
   getDeadLetterMetrics,
   getDeadLetters,
+  requestDeadLetterRetry,
 } from "../services/deadLetterService";
 import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
 
@@ -17,7 +19,7 @@ const SOURCE_TYPE_FILTERS = [
 ];
 
 const OPERATIONAL_NOTICE =
-  "Operational review only: dead letters are failure records for operator triage. Review context here; dismiss and retry actions are added in a later slice.";
+  "Operational review: dead letters are failure records for operator triage. Retry request records intent only; it does not execute playbooks or run steps.";
 
 function toCount(value) {
   const n = Number(value);
@@ -136,7 +138,7 @@ function DeadLettersPanel({
   cardSubtitleStyle,
   filterLabelStyle,
   selectStyle,
-  userRole: _userRole,
+  userRole,
 }) {
   const [metrics, setMetrics] = useState(null);
   const [items, setItems] = useState([]);
@@ -150,6 +152,13 @@ function DeadLettersPanel({
   const [selectedItem, setSelectedItem] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
+  const [actionPending, setActionPending] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [actionSuccess, setActionSuccess] = useState("");
+  const [dismissComment, setDismissComment] = useState("");
+  const [dismissConfirmOpen, setDismissConfirmOpen] = useState(false);
+
+  const canMutateDeadLetters = userRole === "analyst" || userRole === "super_admin";
 
   const failureClassOptions = useMemo(() => {
     const keys = Object.keys(metrics?.by_failure_class || {}).sort();
@@ -198,6 +207,10 @@ function DeadLettersPanel({
   const handleSelectRow = useCallback(async (deadLetterId) => {
     setSelectedId(deadLetterId);
     setDetailError("");
+    setActionError("");
+    setActionSuccess("");
+    setDismissConfirmOpen(false);
+    setDismissComment("");
     setDetailLoading(true);
     setSelectedItem(null);
     try {
@@ -216,7 +229,69 @@ function DeadLettersPanel({
     setSelectedItem(null);
     setDetailError("");
     setDetailLoading(false);
+    setActionError("");
+    setActionSuccess("");
+    setDismissConfirmOpen(false);
+    setDismissComment("");
   }, []);
+
+  const handleDismissStart = useCallback(() => {
+    setActionError("");
+    setActionSuccess("");
+    setDismissConfirmOpen(true);
+  }, []);
+
+  const handleDismissCancel = useCallback(() => {
+    if (actionPending) return;
+    setDismissConfirmOpen(false);
+    setDismissComment("");
+    setActionError("");
+  }, [actionPending]);
+
+  const handleDismissConfirm = useCallback(async () => {
+    if (!selectedId || actionPending) return;
+    setActionPending("dismiss");
+    setActionError("");
+    setActionSuccess("");
+    try {
+      const updated = await dismissDeadLetter(selectedId, { comment: dismissComment });
+      const nextItem = updated && typeof updated === "object" ? updated : selectedItem;
+      setSelectedItem(nextItem);
+      setItems((currentItems) =>
+        currentItems.map((item) => (item.id === selectedId ? { ...item, ...nextItem } : item))
+      );
+      setDismissConfirmOpen(false);
+      setDismissComment("");
+      setActionSuccess("Dead letter dismissed.");
+      await loadPanel({ quiet: true });
+    } catch (err) {
+      setActionError(err.message || "Unable to dismiss dead letter.");
+    } finally {
+      setActionPending("");
+    }
+  }, [actionPending, dismissComment, loadPanel, selectedId, selectedItem]);
+
+  const handleRetryRequest = useCallback(async () => {
+    if (!selectedId || actionPending) return;
+    setActionPending("retry-request");
+    setActionError("");
+    setActionSuccess("");
+    try {
+      const updated = await requestDeadLetterRetry(selectedId);
+      const nextItem = updated && typeof updated === "object" ? updated : selectedItem;
+      setSelectedItem(nextItem);
+      setItems((currentItems) =>
+        currentItems.map((item) => (item.id === selectedId ? { ...item, ...nextItem } : item))
+      );
+      setDismissConfirmOpen(false);
+      setActionSuccess("Retry request recorded. No playbook steps were executed.");
+      await loadPanel({ quiet: true });
+    } catch (err) {
+      setActionError(err.message || "Unable to request dead letter retry.");
+    } finally {
+      setActionPending("");
+    }
+  }, [actionPending, loadPanel, selectedId, selectedItem]);
 
   useEffect(() => {
     loadPanel();
@@ -267,6 +342,17 @@ function DeadLettersPanel({
         selectedItem={selectedItem}
         detailLoading={detailLoading}
         detailError={detailError}
+        canMutateDeadLetters={canMutateDeadLetters}
+        actionPending={actionPending}
+        actionError={actionError}
+        actionSuccess={actionSuccess}
+        dismissComment={dismissComment}
+        dismissConfirmOpen={dismissConfirmOpen}
+        onDismissStart={handleDismissStart}
+        onDismissCancel={handleDismissCancel}
+        onDismissConfirm={handleDismissConfirm}
+        onDismissCommentChange={setDismissComment}
+        onRetryRequest={handleRetryRequest}
         onRetryLoad={() => loadPanel()}
         onSelectRow={handleSelectRow}
         onCloseDetail={handleCloseDetail}
@@ -381,6 +467,17 @@ function PanelBody({
   selectedItem,
   detailLoading,
   detailError,
+  canMutateDeadLetters,
+  actionPending,
+  actionError,
+  actionSuccess,
+  dismissComment,
+  dismissConfirmOpen,
+  onDismissStart,
+  onDismissCancel,
+  onDismissConfirm,
+  onDismissCommentChange,
+  onRetryRequest,
   onRetryLoad,
   onSelectRow,
   onCloseDetail,
@@ -431,7 +528,20 @@ function PanelBody({
             ) : detailError ? (
               <DetailError error={detailError} />
             ) : selectedItem ? (
-              <DeadLetterDetail item={selectedItem} />
+              <DeadLetterDetail
+                item={selectedItem}
+                canMutateDeadLetters={canMutateDeadLetters}
+                actionPending={actionPending}
+                actionError={actionError}
+                actionSuccess={actionSuccess}
+                dismissComment={dismissComment}
+                dismissConfirmOpen={dismissConfirmOpen}
+                onDismissStart={onDismissStart}
+                onDismissCancel={onDismissCancel}
+                onDismissConfirm={onDismissConfirm}
+                onDismissCommentChange={onDismissCommentChange}
+                onRetryRequest={onRetryRequest}
+              />
             ) : (
               <p style={emptyTextStyle}>No detail available for this dead letter.</p>
             )}
@@ -542,7 +652,20 @@ function DeadLetterTable({ items, selectedId, onSelectRow }) {
   );
 }
 
-function DeadLetterDetail({ item }) {
+function DeadLetterDetail({
+  item,
+  canMutateDeadLetters,
+  actionPending,
+  actionError,
+  actionSuccess,
+  dismissComment,
+  dismissConfirmOpen,
+  onDismissStart,
+  onDismissCancel,
+  onDismissConfirm,
+  onDismissCommentChange,
+  onRetryRequest,
+}) {
   const payloadEntries = getPayloadEntries(item.payload_json);
 
   return (
@@ -563,7 +686,115 @@ function DeadLetterDetail({ item }) {
         </div>
       ) : null}
       {item.retry_requested_at ? <RetryRequestSection item={item} /> : null}
+      <DeadLetterActions
+        item={item}
+        canMutateDeadLetters={canMutateDeadLetters}
+        actionPending={actionPending}
+        actionError={actionError}
+        actionSuccess={actionSuccess}
+        dismissComment={dismissComment}
+        dismissConfirmOpen={dismissConfirmOpen}
+        onDismissStart={onDismissStart}
+        onDismissCancel={onDismissCancel}
+        onDismissConfirm={onDismissConfirm}
+        onDismissCommentChange={onDismissCommentChange}
+        onRetryRequest={onRetryRequest}
+      />
     </>
+  );
+}
+
+function DeadLetterActions({
+  item,
+  canMutateDeadLetters,
+  actionPending,
+  actionError,
+  actionSuccess,
+  dismissComment,
+  dismissConfirmOpen,
+  onDismissStart,
+  onDismissCancel,
+  onDismissConfirm,
+  onDismissCommentChange,
+  onRetryRequest,
+}) {
+  if (!canMutateDeadLetters) {
+    return null;
+  }
+
+  const canDismiss = item.status === "open" || item.status === "retrying";
+  const canRetryRequest = item.status === "open";
+  if (!canDismiss && !canRetryRequest && !actionError && !actionSuccess) {
+    return null;
+  }
+
+  const busy = Boolean(actionPending);
+
+  return (
+    <div style={detailSectionStyle}>
+      <div style={detailSectionTitleStyle}>Review Actions</div>
+      <p style={actionHelpTextStyle}>
+        Retry request records operator intent only. It does not execute playbooks or run
+        steps.
+      </p>
+      {actionSuccess ? <div style={actionSuccessStyle}>{actionSuccess}</div> : null}
+      {actionError ? <div style={detailErrorStyle}>{actionError}</div> : null}
+      <div style={actionButtonRowStyle}>
+        {canDismiss ? (
+          <button
+            type="button"
+            style={secondaryActionButtonStyle}
+            onClick={onDismissStart}
+            disabled={busy}
+          >
+            {actionPending === "dismiss" ? "Dismissing..." : "Dismiss"}
+          </button>
+        ) : null}
+        {canRetryRequest ? (
+          <button
+            type="button"
+            style={primaryActionButtonStyle}
+            onClick={onRetryRequest}
+            disabled={busy}
+          >
+            {actionPending === "retry-request" ? "Requesting..." : "Retry Request"}
+          </button>
+        ) : null}
+      </div>
+      {dismissConfirmOpen && canDismiss ? (
+        <div style={dismissFormStyle}>
+          <label style={dismissLabelStyle}>
+            <span style={detailLabelStyle}>Comment or reason (optional)</span>
+            <textarea
+              value={dismissComment}
+              onChange={(event) => onDismissCommentChange(event.target.value)}
+              rows={3}
+              style={dismissTextareaStyle}
+              disabled={busy}
+              aria-label="Dismiss comment or reason"
+            />
+          </label>
+          <div style={actionButtonRowStyle}>
+            <button
+              type="button"
+              style={dangerActionButtonStyle}
+              onClick={onDismissConfirm}
+              disabled={busy}
+            >
+              {actionPending === "dismiss" ? "Dismissing..." : "Confirm Dismiss"}
+            </button>
+            <button
+              type="button"
+              style={secondaryActionButtonStyle}
+              onClick={onDismissCancel}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -1027,4 +1258,89 @@ const detailErrorStyle = {
   backgroundColor: "rgba(248, 113, 113, 0.08)",
   color: "#fca5a5",
   fontSize: "13px",
+};
+
+const actionHelpTextStyle = {
+  margin: "0 0 10px",
+  color: "#8b949e",
+  fontSize: "13px",
+  lineHeight: 1.5,
+};
+
+const actionSuccessStyle = {
+  marginBottom: "10px",
+  padding: "10px 12px",
+  borderRadius: "8px",
+  border: "1px solid rgba(126, 231, 135, 0.35)",
+  backgroundColor: "rgba(126, 231, 135, 0.08)",
+  color: "#7ee787",
+  fontSize: "13px",
+};
+
+const actionButtonRowStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "8px",
+  alignItems: "center",
+};
+
+const primaryActionButtonStyle = {
+  minHeight: "32px",
+  padding: "7px 12px",
+  borderRadius: "8px",
+  border: "1px solid rgba(88, 166, 255, 0.45)",
+  backgroundColor: "rgba(31, 111, 235, 0.18)",
+  color: "#93c5fd",
+  fontSize: "12px",
+  fontWeight: "700",
+  cursor: "pointer",
+};
+
+const secondaryActionButtonStyle = {
+  minHeight: "32px",
+  padding: "7px 12px",
+  borderRadius: "8px",
+  border: "1px solid #30363d",
+  backgroundColor: "#161b22",
+  color: "#c9d1d9",
+  fontSize: "12px",
+  fontWeight: "700",
+  cursor: "pointer",
+};
+
+const dangerActionButtonStyle = {
+  minHeight: "32px",
+  padding: "7px 12px",
+  borderRadius: "8px",
+  border: "1px solid rgba(248, 113, 113, 0.45)",
+  backgroundColor: "rgba(248, 113, 113, 0.12)",
+  color: "#fecaca",
+  fontSize: "12px",
+  fontWeight: "700",
+  cursor: "pointer",
+};
+
+const dismissFormStyle = {
+  marginTop: "12px",
+  display: "flex",
+  flexDirection: "column",
+  gap: "10px",
+};
+
+const dismissLabelStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "6px",
+};
+
+const dismissTextareaStyle = {
+  minHeight: "72px",
+  resize: "vertical",
+  borderRadius: "8px",
+  border: "1px solid #30363d",
+  backgroundColor: "#0d1117",
+  color: "#e6edf3",
+  padding: "8px 10px",
+  fontSize: "13px",
+  lineHeight: 1.4,
 };
