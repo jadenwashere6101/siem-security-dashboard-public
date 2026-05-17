@@ -214,6 +214,46 @@ test("empty state", async () => {
   ).toBeInTheDocument();
 });
 
+test("empty state handles null items response", async () => {
+  getDeadLetters.mockResolvedValue({ items: null, limit: 100, offset: 0 });
+
+  render(<DeadLettersPanel {...styleProps} />);
+
+  expect(
+    await screen.findByText(/no dead letters found \(no filters applied\)/i)
+  ).toBeInTheDocument();
+});
+
+test("failure class filter resets when metrics no longer include selected class", async () => {
+  getDeadLetterMetrics
+    .mockResolvedValueOnce(sampleMetrics)
+    .mockResolvedValueOnce({
+      ...sampleMetrics,
+      by_failure_class: { timeout: 1 },
+    });
+  getDeadLetters.mockResolvedValue({ items: [listRow], limit: 100, offset: 0 });
+
+  render(<DeadLettersPanel {...styleProps} />);
+
+  await screen.findByText("99");
+  await userEvent.selectOptions(
+    screen.getByLabelText(/filter dead letters by failure class/i),
+    "adapter_failed"
+  );
+
+  await waitFor(() => {
+    expect(screen.getByLabelText(/filter dead letters by failure class/i)).toHaveValue(
+      "adapter_failed"
+    );
+  });
+
+  await userEvent.click(screen.getByRole("button", { name: /^refresh$/i }));
+
+  await waitFor(() => {
+    expect(screen.getByLabelText(/filter dead letters by failure class/i)).toHaveValue("all");
+  });
+});
+
 test("error state", async () => {
   getDeadLetterMetrics.mockRejectedValueOnce(new Error("Metrics unavailable"));
 
@@ -591,6 +631,7 @@ test("retry-execute calls service, shows new execution id, and refreshes", async
     expect(executeDeadLetterRetry).toHaveBeenCalledWith(7);
   });
   expect(await screen.findByText(/new pending execution #77 created/i)).toBeInTheDocument();
+  expect(screen.getByText(/scripts\/run_playbook_executor_once\.py/i)).toBeInTheDocument();
   expect(screen.getByText(/dead letter #7/i)).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /^retry execute$/i })).not.toBeInTheDocument();
   await waitFor(() => {

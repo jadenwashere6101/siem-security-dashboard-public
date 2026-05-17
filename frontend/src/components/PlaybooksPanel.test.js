@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import PlaybooksPanel from "./PlaybooksPanel";
@@ -1303,7 +1303,7 @@ test("form validates trigger JSON must be object", async () => {
 
   const triggerInput = screen.getByLabelText(/^Trigger Config/i);
   await userEvent.clear(triggerInput);
-  await userEvent.type(triggerInput, '["not", "an", "object"]');
+  fireEvent.change(triggerInput, { target: { value: '["not", "an", "object"]' } });
 
   const createButton = screen.getByRole("button", { name: /^Create$/i });
   await userEvent.click(createButton);
@@ -1334,7 +1334,7 @@ test("form validates steps JSON must be array", async () => {
 
   const stepsInput = screen.getByLabelText(/^Steps/i);
   await userEvent.clear(stepsInput);
-  await userEvent.type(stepsInput, '{"not": "an array"}');
+  fireEvent.change(stepsInput, { target: { value: '{"not": "an array"}' } });
 
   const createButton = screen.getByRole("button", { name: /^Create$/i });
   await userEvent.click(createButton);

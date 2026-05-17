@@ -52,6 +52,14 @@ function truncateText(value, maxLength = 48) {
   return `${text.slice(0, maxLength)}...`;
 }
 
+function formatRetryExecuteSuccess(newExecutionId) {
+  const prefix =
+    newExecutionId === undefined || newExecutionId === null
+      ? "New pending execution created."
+      : `New pending execution #${newExecutionId} created.`;
+  return `${prefix} No steps have run. Start it with scripts/run_playbook_executor_once.py.`;
+}
+
 export function buildListFilters({ statusFilter, sourceTypeFilter, failureClassFilter }) {
   const filters = {};
   if (statusFilter !== "all") {
@@ -100,16 +108,16 @@ function hasLinkedContext(item) {
 function getStatusBadgeStyle(status) {
   if (status === "open") {
     return {
-      color: "#fca5a5",
-      borderColor: "rgba(248, 113, 113, 0.35)",
-      backgroundColor: "rgba(248, 113, 113, 0.12)",
+      color: "#f5d487",
+      borderColor: "rgba(245, 212, 135, 0.38)",
+      backgroundColor: "rgba(245, 212, 135, 0.1)",
     };
   }
   if (status === "retrying") {
     return {
-      color: "#f5d487",
-      borderColor: "rgba(245, 212, 135, 0.35)",
-      backgroundColor: "rgba(245, 212, 135, 0.1)",
+      color: "#93c5fd",
+      borderColor: "rgba(88, 166, 255, 0.38)",
+      backgroundColor: "rgba(31, 111, 235, 0.12)",
     };
   }
   if (status === "retried") {
@@ -323,9 +331,7 @@ function DeadLettersPanel({
       setRetryExecuteConfirmed(false);
       setRetryExecutePhrase("");
       setDismissConfirmOpen(false);
-      setActionSuccess(
-        `New pending execution #${result?.new_execution_id} created. No steps have run. Pick it up with the manual executor.`
-      );
+      setActionSuccess(formatRetryExecuteSuccess(result?.new_execution_id));
       await loadPanel({ quiet: true });
       try {
         const refreshedDetail = await getDeadLetter(selectedId);
@@ -828,8 +834,16 @@ function DeadLetterActions({
         Retry request records operator intent only. It does not execute playbooks or run
         steps.
       </p>
-      {actionSuccess ? <div style={actionSuccessStyle}>{actionSuccess}</div> : null}
-      {actionError ? <div style={detailErrorStyle}>{actionError}</div> : null}
+      {actionSuccess ? (
+        <div style={actionSuccessStyle} role="status" aria-live="polite">
+          {actionSuccess}
+        </div>
+      ) : null}
+      {actionError ? (
+        <div style={detailErrorStyle} role="alert">
+          {actionError}
+        </div>
+      ) : null}
       <div style={actionButtonRowStyle}>
         {canDismiss ? (
           <button
@@ -863,6 +877,7 @@ function DeadLetterActions({
               style={dismissTextareaStyle}
               disabled={busy}
               aria-label="Dismiss comment or reason"
+              autoFocus
             />
           </label>
           <div style={actionButtonRowStyle}>
@@ -879,6 +894,7 @@ function DeadLetterActions({
               style={secondaryActionButtonStyle}
               onClick={onDismissCancel}
               disabled={busy}
+              aria-label="Cancel dismiss confirmation"
             >
               Cancel
             </button>
@@ -910,6 +926,7 @@ function DeadLetterActions({
               disabled={busy}
               style={confirmInputStyle}
               aria-label="Retry execute confirmation phrase"
+              autoFocus={retryExecuteConfirmed}
             />
           </label>
           <button
@@ -1329,7 +1346,7 @@ const payloadListStyle = {
 
 const payloadRowStyle = {
   display: "grid",
-  gridTemplateColumns: "minmax(120px, 180px) 1fr",
+  gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
   gap: "10px",
   alignItems: "start",
 };

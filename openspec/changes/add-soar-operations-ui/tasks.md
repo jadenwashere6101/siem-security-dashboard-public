@@ -239,34 +239,34 @@ Goal: Register the new tab and section in App.js. Import `DeadLettersPanel`.
 
 Goal: Tie up edge cases, accessibility, and UX details across all new components.
 
-- [ ] Verify all loading states use quiet refresh (not full spinner) on re-fetch after filter change.
-- [ ] Verify empty state message includes current filter summary (e.g. "No dead letters found with status 'open'").
-- [ ] Verify status badges use consistent color conventions matching existing panels:
+- [x] Verify all loading states use quiet refresh (not full spinner) on re-fetch after filter change.
+- [x] Verify empty state message includes current filter summary (e.g. "No dead letters found with status 'open'").
+- [x] Verify status badges use consistent color conventions matching existing panels:
   - open: amber / warning color
   - retrying: blue / info color
   - retried: green / success color
   - dismissed: gray / muted color
-- [ ] Verify action buttons are properly disabled during pending API calls (no double-submit).
-- [ ] Verify panel-level error banner shows a retry button that re-triggers initial load.
-- [ ] Verify expanded row detail does not lose scroll position on filter re-fetch.
-- [ ] Verify `DeadLettersPanel` gracefully handles an API response with `items: null` (fallback to empty array).
-- [ ] Verify `failure_class` filter dropdown resets to "all" when metrics response changes.
-- [ ] Verify all new text is consistent with existing panel copy style (lowercase labels, consistent timestamp formatting using `formatAdminTimestamp` from `adminPanelDisplay`).
+- [x] Verify action buttons are properly disabled during pending API calls (no double-submit).
+- [x] Verify panel-level error banner shows a retry button that re-triggers initial load.
+- [x] Verify expanded row detail does not lose scroll position on filter re-fetch.
+- [x] Verify `DeadLettersPanel` gracefully handles an API response with `items: null` (fallback to empty array).
+- [x] Verify `failure_class` filter dropdown resets to "all" when metrics response changes.
+- [x] Verify all new text is consistent with existing panel copy style (lowercase labels, consistent timestamp formatting using `formatAdminTimestamp` from `adminPanelDisplay`).
 - [ ] Run full frontend test suite: `npm test -- --watchAll=false`.
 - [ ] Run backend regression suite: `pytest tests/` — confirm all existing tests still pass.
-- [ ] Confirm no ESLint warnings introduced by new files.
-- [ ] Confirm frontend build completes cleanly: `npm run build`.
+- [x] Confirm no ESLint warnings introduced by new files.
+- [x] Confirm frontend build completes cleanly: `npm run build`.
 
 ---
 
 ## Verification Planning
 
 - [ ] `deadLetterService.test.js` — all exports tested.
-- [ ] `DeadLettersPanel.test.js` — list, detail, dismiss, retry-request, retry-execute, role gating, empty states.
-- [ ] Updated `PlaybooksPanel.test.js` — dead letter linkage, lease fields.
+- [x] `DeadLettersPanel.test.js` — list, detail, dismiss, retry-request, retry-execute, role gating, empty states.
+- [x] Updated `PlaybooksPanel.test.js` — dead letter linkage, lease fields.
 - [ ] Full `npm test -- --watchAll=false` passes.
 - [ ] Full `pytest tests/` passes (backend regression).
-- [ ] `npm run build` completes without errors or new warnings.
+- [x] `npm run build` completes without errors or new warnings.
 - [ ] Manual smoke check: log in as analyst → confirm "SOAR Operations" tab visible, retry-execute button absent.
 - [ ] Manual smoke check: log in as super_admin → confirm retry-execute section visible on a retrying dead letter with source_type=playbook_execution.
 
