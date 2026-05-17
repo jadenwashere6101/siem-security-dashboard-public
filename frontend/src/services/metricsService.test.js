@@ -3,6 +3,7 @@ import {
   getIncidentMetrics,
   getNotificationDeliveryMetrics,
   getPlaybookMetrics,
+  getPlaybookWorkerMetrics,
 } from "./metricsService";
 
 describe("getPlaybookMetrics", () => {
@@ -250,5 +251,40 @@ describe("SOAR operational metric fetchers", () => {
     });
 
     await expect(getIncidentMetrics()).resolves.toEqual({});
+  });
+
+  test("getPlaybookWorkerMetrics calls GET /metrics/playbook-worker with session credentials", async () => {
+    const payload = {
+      daemon_health: { status: "unknown", worker_heartbeat_available: false },
+      queue_depth: { pending: 1, running: 2, awaiting_approval: 0, active_total: 3 },
+      running: { total: 2, active_leased: 1, stale: 1, missing_lease: 0 },
+      stale_running_count: 1,
+      recent: { failed_executions: 1, active_dead_letters: 2 },
+      recovery: { total_recovery_count: 3, recovered_execution_count: 1 },
+    };
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(payload),
+    });
+
+    const result = await getPlaybookWorkerMetrics();
+
+    expect(result).toEqual(payload);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const [url, options] = global.fetch.mock.calls[0];
+    expect(url).toContain("/metrics/playbook-worker");
+    expect(options).toEqual({ credentials: "include" });
+  });
+
+  test("getPlaybookWorkerMetrics throws fallback message on non-OK malformed JSON", async () => {
+    global.fetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: () => Promise.reject(new SyntaxError("bad json")),
+    });
+
+    await expect(getPlaybookWorkerMetrics()).rejects.toThrow(
+      "Unable to load playbook worker metrics"
+    );
   });
 });

@@ -12,6 +12,7 @@ import {
   getIncidentMetrics,
   getNotificationDeliveryMetrics,
   getPlaybookMetrics,
+  getPlaybookWorkerMetrics,
 } from "../services/metricsService";
 import { loadSoarQueueStatus } from "../services/soarQueueService";
 
@@ -35,6 +36,7 @@ jest.mock("../services/metricsService", () => ({
   getNotificationDeliveryMetrics: jest.fn(),
   getIncidentMetrics: jest.fn(),
   getApprovalMetrics: jest.fn(),
+  getPlaybookWorkerMetrics: jest.fn(),
 }));
 
 jest.mock("../services/deadLetterService", () => ({
@@ -66,6 +68,7 @@ function mockAllResolved() {
   getNotificationDeliveryMetrics.mockResolvedValue(emptyData);
   getIncidentMetrics.mockResolvedValue(emptyData);
   getApprovalMetrics.mockResolvedValue(emptyData);
+  getPlaybookWorkerMetrics.mockResolvedValue(emptyData);
   loadSoarQueueStatus.mockResolvedValue(emptyData);
 }
 
@@ -151,12 +154,43 @@ const queueFixture = {
   generated_at: "2026-05-17T12:00:00Z",
 };
 
+const workerFixture = {
+  daemon_health: {
+    status: "unknown",
+    worker_heartbeat_available: false,
+    message: "Worker process heartbeat is not persisted yet; DB queue health is available.",
+  },
+  queue_depth: {
+    pending: 6,
+    running: 2,
+    awaiting_approval: 1,
+    active_total: 9,
+  },
+  running: {
+    total: 2,
+    active_leased: 1,
+    stale: 1,
+    missing_lease: 1,
+  },
+  stale_running_count: 1,
+  recent: {
+    failed_executions: 3,
+    active_dead_letters: 4,
+    active_playbook_dead_letters: 2,
+  },
+  recovery: {
+    total_recovery_count: 5,
+    recovered_execution_count: 2,
+  },
+};
+
 function mockAllFixtures() {
   getPlaybookMetrics.mockResolvedValue(playbookFixture);
   getDeadLetterMetrics.mockResolvedValue(deadLetterFixture);
   getNotificationDeliveryMetrics.mockResolvedValue(notificationFixture);
   getIncidentMetrics.mockResolvedValue(incidentFixture);
   getApprovalMetrics.mockResolvedValue(approvalFixture);
+  getPlaybookWorkerMetrics.mockResolvedValue(workerFixture);
   loadSoarQueueStatus.mockResolvedValue(queueFixture);
 }
 
@@ -171,7 +205,7 @@ describe("SoarMetricsDashboard", () => {
 
   // --- Section rendering ---
 
-  test("renders five section headings for analyst role", async () => {
+  test("renders six section headings for analyst role", async () => {
     mockAllResolved();
     render(<SoarMetricsDashboard {...analystProps} />);
     expect(screen.getByRole("region", { name: "Playbook Metrics" })).toBeInTheDocument();
@@ -179,6 +213,13 @@ describe("SoarMetricsDashboard", () => {
     expect(screen.getByRole("region", { name: "Notification Delivery Metrics" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Incident Metrics" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Approval Metrics" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Worker Operations" })).toBeInTheDocument();
+  });
+
+  test("does not render Worker Operations section for viewer", () => {
+    mockAllResolved();
+    render(<SoarMetricsDashboard {...styleProps} userRole="viewer" />);
+    expect(screen.queryByRole("region", { name: "Worker Operations" })).not.toBeInTheDocument();
   });
 
   test("renders SOAR Queue Health section for super_admin", () => {
@@ -218,6 +259,7 @@ describe("SoarMetricsDashboard", () => {
     getNotificationDeliveryMetrics.mockReturnValue(new Promise(() => {}));
     getIncidentMetrics.mockReturnValue(new Promise(() => {}));
     getApprovalMetrics.mockReturnValue(new Promise(() => {}));
+    getPlaybookWorkerMetrics.mockReturnValue(new Promise(() => {}));
 
     render(<SoarMetricsDashboard {...analystProps} />);
 
@@ -226,6 +268,7 @@ describe("SoarMetricsDashboard", () => {
     expect(screen.getByLabelText("Loading Notification Delivery Metrics")).toBeInTheDocument();
     expect(screen.getByLabelText("Loading Incident Metrics")).toBeInTheDocument();
     expect(screen.getByLabelText("Loading Approval Metrics")).toBeInTheDocument();
+    expect(screen.getByLabelText("Loading Worker Operations")).toBeInTheDocument();
   });
 
   test("clears all loading indicators after successful data load", async () => {
@@ -247,6 +290,9 @@ describe("SoarMetricsDashboard", () => {
       expect(
         screen.queryByLabelText("Loading Approval Metrics")
       ).not.toBeInTheDocument();
+      expect(
+        screen.queryByLabelText("Loading Worker Operations")
+      ).not.toBeInTheDocument();
     });
   });
 
@@ -258,6 +304,7 @@ describe("SoarMetricsDashboard", () => {
     getNotificationDeliveryMetrics.mockResolvedValue(emptyData);
     getIncidentMetrics.mockResolvedValue(emptyData);
     getApprovalMetrics.mockResolvedValue(emptyData);
+    getPlaybookWorkerMetrics.mockResolvedValue(emptyData);
 
     render(<SoarMetricsDashboard {...analystProps} />);
 
@@ -281,6 +328,7 @@ describe("SoarMetricsDashboard", () => {
     getNotificationDeliveryMetrics.mockResolvedValue(emptyData);
     getIncidentMetrics.mockResolvedValue(emptyData);
     getApprovalMetrics.mockResolvedValue(emptyData);
+    getPlaybookWorkerMetrics.mockResolvedValue(emptyData);
 
     render(<SoarMetricsDashboard {...analystProps} />);
 
@@ -302,16 +350,18 @@ describe("SoarMetricsDashboard", () => {
     getNotificationDeliveryMetrics.mockRejectedValue(new Error("e3"));
     getIncidentMetrics.mockRejectedValue(new Error("e4"));
     getApprovalMetrics.mockRejectedValue(new Error("e5"));
+    getPlaybookWorkerMetrics.mockRejectedValue(new Error("e6"));
 
     render(<SoarMetricsDashboard {...analystProps} />);
 
     await waitFor(() => {
       expect(screen.getByText("e1")).toBeInTheDocument();
       expect(screen.getByText("e5")).toBeInTheDocument();
+      expect(screen.getByText("e6")).toBeInTheDocument();
     });
 
     expect(screen.getByText("SOAR Metrics Dashboard")).toBeInTheDocument();
-    expect(screen.getAllByRole("alert")).toHaveLength(5);
+    expect(screen.getAllByRole("alert")).toHaveLength(6);
   });
 
   // --- Promise.allSettled partial failure ---
@@ -322,6 +372,7 @@ describe("SoarMetricsDashboard", () => {
     getNotificationDeliveryMetrics.mockResolvedValue(emptyData);
     getIncidentMetrics.mockRejectedValue(new Error("incident failed"));
     getApprovalMetrics.mockResolvedValue(emptyData);
+    getPlaybookWorkerMetrics.mockResolvedValue(emptyData);
 
     render(<SoarMetricsDashboard {...analystProps} />);
 
@@ -336,6 +387,9 @@ describe("SoarMetricsDashboard", () => {
 
     const approvalSection = screen.getByRole("region", { name: "Approval Metrics" });
     expect(within(approvalSection).queryByRole("alert")).not.toBeInTheDocument();
+
+    const workerSection = screen.getByRole("region", { name: "Worker Operations" });
+    expect(within(workerSection).queryByRole("alert")).not.toBeInTheDocument();
 
     const dlSection = screen.getByRole("region", { name: "Dead Letter Metrics" });
     expect(within(dlSection).getByRole("alert")).toBeInTheDocument();
@@ -353,6 +407,23 @@ describe("SoarMetricsDashboard", () => {
       expect(getPlaybookMetrics).toHaveBeenCalled();
     });
     expect(loadSoarQueueStatus).not.toHaveBeenCalled();
+  });
+
+  test("calls getPlaybookWorkerMetrics for analyst", async () => {
+    mockAllResolved();
+    render(<SoarMetricsDashboard {...analystProps} />);
+    await waitFor(() => {
+      expect(getPlaybookWorkerMetrics).toHaveBeenCalled();
+    });
+  });
+
+  test("does not call getPlaybookWorkerMetrics for viewer", async () => {
+    mockAllResolved();
+    render(<SoarMetricsDashboard {...styleProps} userRole="viewer" />);
+    await waitFor(() => {
+      expect(getPlaybookMetrics).toHaveBeenCalled();
+    });
+    expect(getPlaybookWorkerMetrics).not.toHaveBeenCalled();
   });
 
   test("calls loadSoarQueueStatus for super_admin", async () => {
@@ -391,6 +462,7 @@ describe("SoarMetricsDashboard", () => {
       expect(getNotificationDeliveryMetrics).toHaveBeenCalledTimes(2);
       expect(getIncidentMetrics).toHaveBeenCalledTimes(2);
       expect(getApprovalMetrics).toHaveBeenCalledTimes(2);
+      expect(getPlaybookWorkerMetrics).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -402,6 +474,7 @@ describe("SoarMetricsDashboard", () => {
     getNotificationDeliveryMetrics.mockResolvedValue(emptyData);
     getIncidentMetrics.mockResolvedValue(emptyData);
     getApprovalMetrics.mockResolvedValue(emptyData);
+    getPlaybookWorkerMetrics.mockResolvedValue(emptyData);
 
     render(<SoarMetricsDashboard {...analystProps} />);
 
@@ -458,6 +531,7 @@ describe("SoarMetricsDashboard", () => {
     expect(getDeadLetterMetrics).toHaveBeenCalledTimes(2);
     expect(getIncidentMetrics).toHaveBeenCalledTimes(2);
     expect(getApprovalMetrics).toHaveBeenCalledTimes(2);
+    expect(getPlaybookWorkerMetrics).toHaveBeenCalledTimes(2);
   });
 
   test("interval does not fire after unmount", async () => {
@@ -511,6 +585,7 @@ describe("SoarMetricsDashboard", () => {
       getNotificationDeliveryMetrics.mockResolvedValue(emptyData);
       getIncidentMetrics.mockResolvedValue(emptyData);
       getApprovalMetrics.mockResolvedValue(emptyData);
+      getPlaybookWorkerMetrics.mockResolvedValue(emptyData);
 
       render(<SoarMetricsDashboard {...analystProps} />);
       const section = await screen.findByRole("region", { name: "Playbook Metrics" });
@@ -539,6 +614,7 @@ describe("SoarMetricsDashboard", () => {
       getNotificationDeliveryMetrics.mockResolvedValue(emptyData);
       getIncidentMetrics.mockResolvedValue(emptyData);
       getApprovalMetrics.mockResolvedValue(emptyData);
+      getPlaybookWorkerMetrics.mockResolvedValue(emptyData);
 
       render(<SoarMetricsDashboard {...analystProps} />);
       const section = await screen.findByRole("region", { name: "Playbook Metrics" });
@@ -585,6 +661,7 @@ describe("SoarMetricsDashboard", () => {
       getNotificationDeliveryMetrics.mockResolvedValue(emptyData);
       getIncidentMetrics.mockResolvedValue(emptyData);
       getApprovalMetrics.mockResolvedValue(emptyData);
+      getPlaybookWorkerMetrics.mockResolvedValue(emptyData);
 
       render(<SoarMetricsDashboard {...analystProps} />);
       await screen.findByRole("region", { name: "Playbook Metrics" });
@@ -624,6 +701,7 @@ describe("SoarMetricsDashboard", () => {
       getNotificationDeliveryMetrics.mockResolvedValue(emptyData);
       getIncidentMetrics.mockResolvedValue(emptyData);
       getApprovalMetrics.mockResolvedValue(emptyData);
+      getPlaybookWorkerMetrics.mockResolvedValue(emptyData);
 
       render(<SoarMetricsDashboard {...analystProps} />);
       const section = await screen.findByRole("region", { name: "Dead Letter Metrics" });
@@ -638,6 +716,7 @@ describe("SoarMetricsDashboard", () => {
       getNotificationDeliveryMetrics.mockResolvedValue(emptyData);
       getIncidentMetrics.mockResolvedValue(emptyData);
       getApprovalMetrics.mockResolvedValue(emptyData);
+      getPlaybookWorkerMetrics.mockResolvedValue(emptyData);
 
       render(<SoarMetricsDashboard {...analystProps} />);
       const section = await screen.findByRole("region", { name: "Dead Letter Metrics" });
@@ -650,6 +729,7 @@ describe("SoarMetricsDashboard", () => {
       getNotificationDeliveryMetrics.mockResolvedValue(emptyData);
       getIncidentMetrics.mockResolvedValue(emptyData);
       getApprovalMetrics.mockResolvedValue(emptyData);
+      getPlaybookWorkerMetrics.mockResolvedValue(emptyData);
 
       render(<SoarMetricsDashboard {...analystProps} />);
       const section = await screen.findByRole("region", { name: "Dead Letter Metrics" });
@@ -806,12 +886,109 @@ describe("SoarMetricsDashboard", () => {
     });
   });
 
+  describe("Worker Operations section", () => {
+    test("renders worker queue and recovery metric cards", async () => {
+      mockAllFixtures();
+      render(<SoarMetricsDashboard {...analystProps} />);
+      const section = await screen.findByRole("region", { name: "Worker Operations" });
+      expect(within(section).getByText("Heartbeat")).toBeInTheDocument();
+      expect(within(section).getByText("unknown")).toBeInTheDocument();
+      expect(within(section).getByText("Pending")).toBeInTheDocument();
+      expect(within(section).getByText("Running")).toBeInTheDocument();
+      expect(within(section).getByText("Awaiting Approval")).toBeInTheDocument();
+      expect(within(section).getByText("Stale Running")).toBeInTheDocument();
+      expect(within(section).getByText("Missing Lease")).toBeInTheDocument();
+      expect(within(section).getByText("Active Dead Letters")).toBeInTheDocument();
+      expect(within(section).getByText("Recoveries")).toBeInTheDocument();
+      expect(within(section).getByText("Recovered Executions")).toBeInTheDocument();
+    });
+
+    test("renders unknown heartbeat copy from backend", async () => {
+      mockAllFixtures();
+      render(<SoarMetricsDashboard {...analystProps} />);
+      const section = await screen.findByRole("region", { name: "Worker Operations" });
+      expect(
+        within(section).getByText(/Worker process heartbeat is not persisted yet/)
+      ).toBeInTheDocument();
+    });
+
+    test("renders operational visibility notice without real remediation copy", async () => {
+      mockAllFixtures();
+      render(<SoarMetricsDashboard {...analystProps} />);
+      const section = await screen.findByRole("region", { name: "Worker Operations" });
+      expect(within(section).getByRole("note")).toHaveTextContent(
+        "Operational visibility only"
+      );
+      expect(within(section).getByRole("note")).toHaveTextContent(
+        "do not indicate real remediation is active"
+      );
+    });
+
+    test("renders empty worker state from default response", async () => {
+      getPlaybookMetrics.mockResolvedValue(emptyData);
+      getDeadLetterMetrics.mockResolvedValue(emptyData);
+      getNotificationDeliveryMetrics.mockResolvedValue(emptyData);
+      getIncidentMetrics.mockResolvedValue(emptyData);
+      getApprovalMetrics.mockResolvedValue(emptyData);
+      getPlaybookWorkerMetrics.mockResolvedValue({
+        daemon_health: { status: "unknown", worker_heartbeat_available: false },
+        queue_depth: { pending: 0, running: 0, awaiting_approval: 0, active_total: 0 },
+        running: { total: 0, active_leased: 0, stale: 0, missing_lease: 0 },
+        recent: { failed_executions: 0, active_dead_letters: 0 },
+        recovery: { total_recovery_count: 0, recovered_execution_count: 0 },
+      });
+
+      render(<SoarMetricsDashboard {...analystProps} />);
+      const section = await screen.findByRole("region", { name: "Worker Operations" });
+      expect(
+        within(section).getByText("No worker queue activity recorded.")
+      ).toBeInTheDocument();
+    });
+
+    test("does not crash on missing optional worker fields", async () => {
+      getPlaybookMetrics.mockResolvedValue(emptyData);
+      getDeadLetterMetrics.mockResolvedValue(emptyData);
+      getNotificationDeliveryMetrics.mockResolvedValue(emptyData);
+      getIncidentMetrics.mockResolvedValue(emptyData);
+      getApprovalMetrics.mockResolvedValue(emptyData);
+      getPlaybookWorkerMetrics.mockResolvedValue({});
+
+      render(<SoarMetricsDashboard {...analystProps} />);
+      const section = await screen.findByRole("region", { name: "Worker Operations" });
+      expect(within(section).getByText("unknown")).toBeInTheDocument();
+      expect(
+        within(section).getByText(/Worker heartbeat is unknown/)
+      ).toBeInTheDocument();
+    });
+
+    test("isolates worker metrics failure from other sections", async () => {
+      getPlaybookMetrics.mockResolvedValue(emptyData);
+      getDeadLetterMetrics.mockResolvedValue(emptyData);
+      getNotificationDeliveryMetrics.mockResolvedValue(emptyData);
+      getIncidentMetrics.mockResolvedValue(emptyData);
+      getApprovalMetrics.mockResolvedValue(emptyData);
+      getPlaybookWorkerMetrics.mockRejectedValue(new Error("worker failed"));
+
+      render(<SoarMetricsDashboard {...analystProps} />);
+      const workerSection = await screen.findByRole("region", {
+        name: "Worker Operations",
+      });
+      await waitFor(() => {
+        expect(within(workerSection).getByText("worker failed")).toBeInTheDocument();
+      });
+      const playbookSection = screen.getByRole("region", { name: "Playbook Metrics" });
+      expect(within(playbookSection).queryByRole("alert")).not.toBeInTheDocument();
+    });
+  });
+
   describe("SOAR Queue Health section (super_admin only)", () => {
     test("renders queue metric card labels with fixture data", async () => {
       mockAllFixtures();
       render(<SoarMetricsDashboard {...adminProps} />);
       const section = await screen.findByRole("region", { name: "SOAR Queue Health" });
-      expect(within(section).getByText("Pending")).toBeInTheDocument();
+      await waitFor(() => {
+        expect(within(section).getByText("Pending")).toBeInTheDocument();
+      });
       expect(within(section).getByText("Running")).toBeInTheDocument();
       expect(within(section).getByText("Failed")).toBeInTheDocument();
       expect(within(section).getByText("3")).toBeInTheDocument(); // pending count
@@ -821,7 +998,11 @@ describe("SoarMetricsDashboard", () => {
       mockAllFixtures();
       render(<SoarMetricsDashboard {...adminProps} />);
       const section = await screen.findByRole("region", { name: "SOAR Queue Health" });
-      expect(within(section).getByLabelText("Queue snapshot timestamp")).toBeInTheDocument();
+      await waitFor(() => {
+        expect(
+          within(section).getByLabelText("Queue snapshot timestamp")
+        ).toBeInTheDocument();
+      });
       expect(within(section).getByText(/Queue snapshot as of/)).toBeInTheDocument();
     });
 
@@ -829,7 +1010,9 @@ describe("SoarMetricsDashboard", () => {
       mockAllFixtures();
       render(<SoarMetricsDashboard {...adminProps} />);
       const section = await screen.findByRole("region", { name: "SOAR Queue Health" });
-      expect(within(section).getByTestId("chart-container")).toBeInTheDocument();
+      await waitFor(() => {
+        expect(within(section).getByTestId("chart-container")).toBeInTheDocument();
+      });
     });
 
     test("renders empty queue state when all counts are zero", async () => {
@@ -838,6 +1021,7 @@ describe("SoarMetricsDashboard", () => {
       getNotificationDeliveryMetrics.mockResolvedValue(emptyData);
       getIncidentMetrics.mockResolvedValue(emptyData);
       getApprovalMetrics.mockResolvedValue(emptyData);
+      getPlaybookWorkerMetrics.mockResolvedValue(emptyData);
       loadSoarQueueStatus.mockResolvedValue({
         counts: {
           pending: 0,
@@ -851,7 +1035,9 @@ describe("SoarMetricsDashboard", () => {
 
       render(<SoarMetricsDashboard {...adminProps} />);
       const section = await screen.findByRole("region", { name: "SOAR Queue Health" });
-      expect(within(section).getByText("No queue entries recorded.")).toBeInTheDocument();
+      await waitFor(() => {
+        expect(within(section).getByText("No queue entries recorded.")).toBeInTheDocument();
+      });
     });
   });
 

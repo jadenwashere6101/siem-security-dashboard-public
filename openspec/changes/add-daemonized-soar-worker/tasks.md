@@ -153,10 +153,19 @@ There is **no** HTTP or daemon entry point for playbook batch execution; operato
 
 ## 8. Dashboard Visibility
 
-- [ ] 8.1 Extend SOAR Metrics or SOAR Operations UI with read-only worker health and queue visibility.
-- [ ] 8.2 Preserve viewer exclusion for SOAR worker operational data if consistent with current SOAR gating.
-- [ ] 8.3 Add frontend tests for loading, empty, stale, unhealthy, and partial-metrics states.
-- [ ] 8.4 Confirm no mutation controls are added for viewers.
+- [x] 8.1 Extend SOAR Metrics or SOAR Operations UI with read-only worker health and queue visibility.
+- [x] 8.2 Preserve viewer exclusion for SOAR worker operational data if consistent with current SOAR gating.
+- [x] 8.3 Add frontend tests for loading, empty, stale, unhealthy, and partial-metrics states.
+- [x] 8.4 Confirm no mutation controls are added for viewers.
+
+### Slice 5 frontend worker visibility notes (2026-05-17)
+
+- Added `getPlaybookWorkerMetrics()` to the frontend metrics service for `GET /metrics/playbook-worker`.
+- Added a read-only Worker Operations section to the SOAR Metrics dashboard with queue, running, awaiting approval, stale, missing lease, recent failure, active dead-letter, recovery, and heartbeat visibility.
+- Preserved dashboard fetch isolation and refresh behavior with the existing `Promise.allSettled` pattern.
+- Viewer role remains excluded from worker operational data; analyst and super_admin can view the read-only section.
+- The UI labels worker metrics as operational visibility only and does not imply real remediation is active.
+- No mutation controls were added.
 
 ## 9. Deployment Design and Rollout Artifacts
 

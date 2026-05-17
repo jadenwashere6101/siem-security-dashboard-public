@@ -34,3 +34,10 @@ export async function getIncidentMetrics() {
 export async function getApprovalMetrics() {
   return fetchMetrics("/metrics/approvals", "Unable to load approval metrics");
 }
+
+export async function getPlaybookWorkerMetrics() {
+  return fetchMetrics(
+    "/metrics/playbook-worker",
+    "Unable to load playbook worker metrics"
+  );
+}

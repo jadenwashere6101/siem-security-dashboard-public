@@ -14,6 +14,7 @@ import {
   getIncidentMetrics,
   getNotificationDeliveryMetrics,
   getPlaybookMetrics,
+  getPlaybookWorkerMetrics,
 } from "../services/metricsService";
 import { loadSoarQueueStatus } from "../services/soarQueueService";
 
@@ -51,6 +52,9 @@ const SIMULATION_NOTICE =
 // spec: SPEC-NOTIFY-001
 const NOTIFICATION_METRICS_NOTICE =
   "Operational evidence only: delivery metrics count recorded attempts (simulation and real mode). They do not prove a human received a message at Slack, Teams, or any other provider.";
+
+const WORKER_OPERATIONS_NOTICE =
+  "Operational visibility only: worker and queue metrics do not indicate real remediation is active.";
 
 const STATUS_COLOR = {
   success: "#3fb950",
@@ -322,12 +326,14 @@ export default function SoarMetricsDashboard({
   const [notification, setNotification] = useState(initSection);
   const [incident, setIncident] = useState(initSection);
   const [approval, setApproval] = useState(initSection);
+  const [worker, setWorker] = useState(initSection);
   const [queue, setQueue] = useState(initSection);
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState(null);
 
   const intervalRef = useRef(null);
   const isSuperAdmin = userRole === "super_admin";
+  const canViewWorkerOperations = userRole === "analyst" || userRole === "super_admin";
 
   const fetchSection = useCallback(async (fetchFn, setter) => {
     setter((prev) => ({ ...prev, loading: true, error: null }));
@@ -354,6 +360,12 @@ export default function SoarMetricsDashboard({
       [getApprovalMetrics, setApproval],
     ];
 
+    if (canViewWorkerOperations) {
+      sections.push([getPlaybookWorkerMetrics, setWorker]);
+    } else {
+      setWorker((prev) => ({ ...prev, loading: false }));
+    }
+
     if (userRole === "super_admin") {
       sections.push([loadSoarQueueStatus, setQueue]);
     } else {
@@ -377,7 +389,7 @@ export default function SoarMetricsDashboard({
 
     setRefreshing(false);
     setLastRefreshedAt(new Date());
-  }, [userRole]);
+  }, [canViewWorkerOperations, userRole]);
 
   useEffect(() => {
     fetchAll();
@@ -393,6 +405,7 @@ export default function SoarMetricsDashboard({
     setNotification((prev) => ({ ...prev, error: null }));
     setIncident((prev) => ({ ...prev, error: null }));
     setApproval((prev) => ({ ...prev, error: null }));
+    setWorker((prev) => ({ ...prev, error: null }));
     setQueue((prev) => ({ ...prev, error: null }));
     clearInterval(intervalRef.current);
     intervalRef.current = setInterval(fetchAll, REFRESH_INTERVAL_MS);
@@ -439,6 +452,22 @@ export default function SoarMetricsDashboard({
   const approvalPending = toCount(
     approval.data?.pending_count ?? approval.data?.by_status?.pending
   );
+
+  const workerQueueDepth = worker.data?.queue_depth || {};
+  const workerRunning = worker.data?.running || {};
+  const workerRecent = worker.data?.recent || {};
+  const workerRecovery = worker.data?.recovery || {};
+  const workerHealth = worker.data?.daemon_health || {};
+  const workerHeartbeatStatus = workerHealth.status || "unknown";
+  const workerHeartbeatMessage =
+    workerHealth.message ||
+    "Worker heartbeat is unknown because process heartbeat persistence is not available.";
+  const workerHasMetrics =
+    toCount(workerQueueDepth.active_total) > 0 ||
+    toCount(workerRunning.total) > 0 ||
+    toCount(workerRecent.failed_executions) > 0 ||
+    toCount(workerRecent.active_dead_letters) > 0 ||
+    toCount(workerRecovery.total_recovery_count) > 0;
 
   const queueStatusData = toChartData(queue.data?.counts, QUEUE_STATUSES);
   const queueGeneratedAt = queue.data?.generated_at;
@@ -753,7 +782,97 @@ export default function SoarMetricsDashboard({
           )}
         </section>
 
-        {/* ── Section 6: SOAR Queue Health (super_admin only) ── */}
+        {/* ── Section 6: Worker Operations ── */}
+        {canViewWorkerOperations && (
+          <section aria-label="Worker Operations" style={sectionWrapStyle}>
+            <h3 style={sectionHeadingStyle}>Worker Operations</h3>
+            {worker.loading && <SectionLoading label="Worker Operations" />}
+            {!worker.loading && worker.error && (
+              <SectionError
+                message={worker.error}
+                onRetry={() => fetchSection(getPlaybookWorkerMetrics, setWorker)}
+              />
+            )}
+            {!worker.loading && !worker.error && (
+              <>
+                <div style={workerNoticeStyle} role="note">
+                  {WORKER_OPERATIONS_NOTICE}
+                </div>
+                <div style={summaryGridStyle}>
+                  <MetricCard
+                    label="Heartbeat"
+                    value={workerHeartbeatStatus}
+                    accent={workerHeartbeatStatus === "unknown" ? "#d29922" : undefined}
+                  />
+                  <MetricCard
+                    label="Pending"
+                    value={toCount(workerQueueDepth.pending)}
+                    accent={toCount(workerQueueDepth.pending) > 0 ? "#d29922" : undefined}
+                  />
+                  <MetricCard
+                    label="Running"
+                    value={toCount(workerQueueDepth.running)}
+                    accent="#388bfd"
+                  />
+                  <MetricCard
+                    label="Awaiting Approval"
+                    value={toCount(workerQueueDepth.awaiting_approval)}
+                    accent="#bc8cff"
+                  />
+                  <MetricCard
+                    label="Stale Running"
+                    value={toCount(
+                      worker.data?.stale_running_count ?? workerRunning.stale
+                    )}
+                    accent={
+                      toCount(worker.data?.stale_running_count ?? workerRunning.stale) > 0
+                        ? "#f85149"
+                        : undefined
+                    }
+                  />
+                  <MetricCard
+                    label="Missing Lease"
+                    value={toCount(workerRunning.missing_lease)}
+                    accent={toCount(workerRunning.missing_lease) > 0 ? "#d29922" : undefined}
+                  />
+                  <MetricCard
+                    label="Failed (24 h)"
+                    value={toCount(workerRecent.failed_executions)}
+                    accent={toCount(workerRecent.failed_executions) > 0 ? "#f85149" : undefined}
+                  />
+                  <MetricCard
+                    label="Active Dead Letters"
+                    value={toCount(workerRecent.active_dead_letters)}
+                    accent={toCount(workerRecent.active_dead_letters) > 0 ? "#f85149" : undefined}
+                  />
+                  <MetricCard
+                    label="Playbook Dead Letters"
+                    value={toCount(workerRecent.active_playbook_dead_letters)}
+                    accent={
+                      toCount(workerRecent.active_playbook_dead_letters) > 0
+                        ? "#f85149"
+                        : undefined
+                    }
+                  />
+                  <MetricCard
+                    label="Recoveries"
+                    value={toCount(workerRecovery.total_recovery_count)}
+                  />
+                  <MetricCard
+                    label="Recovered Executions"
+                    value={toCount(workerRecovery.recovered_execution_count)}
+                  />
+                </div>
+                <p style={mutedTextStyle}>{workerHeartbeatMessage}</p>
+                {!workerHasMetrics && (
+                  <p style={emptyTextStyle}>No worker queue activity recorded.</p>
+                )}
+              </>
+            )}
+          </section>
+        )}
+
+        {/* ── Section 7: SOAR Queue Health (super_admin only) ── */}
         {isSuperAdmin && (
           <section aria-label="SOAR Queue Health" style={sectionWrapStyle}>
             <h3 style={sectionHeadingStyle}>SOAR Queue Health</h3>
@@ -914,6 +1033,18 @@ const notificationNoticeStyle = {
   border: "1px solid rgba(56, 139, 253, 0.35)",
   backgroundColor: "rgba(56, 139, 253, 0.08)",
   color: "#c9e1ff",
+  fontSize: "12px",
+  fontWeight: "600",
+  lineHeight: 1.45,
+};
+
+const workerNoticeStyle = {
+  marginBottom: "14px",
+  padding: "10px 12px",
+  borderRadius: "10px",
+  border: "1px solid rgba(188, 140, 255, 0.35)",
+  backgroundColor: "rgba(188, 140, 255, 0.08)",
+  color: "#d8c4ff",
   fontSize: "12px",
   fontWeight: "600",
   lineHeight: 1.45,
