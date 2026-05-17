@@ -17,6 +17,7 @@ import {
   listPlaybookSchedules,
   getPlaybookSchedule,
 } from "../services/playbookService";
+import { listDeadLetters } from "../services/deadLetterService";
 import { listNotificationDeliveries } from "../services/notificationDeliveryService";
 
 jest.mock("../services/playbookService", () => ({
@@ -36,6 +37,10 @@ jest.mock("../services/playbookService", () => ({
 
 jest.mock("../services/notificationDeliveryService", () => ({
   listNotificationDeliveries: jest.fn(),
+}));
+
+jest.mock("../services/deadLetterService", () => ({
+  listDeadLetters: jest.fn(),
 }));
 
 const styleProps = {
@@ -93,6 +98,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   listPlaybookSchedules.mockResolvedValue({ items: [], limit: 50 });
   listNotificationDeliveries.mockResolvedValue({ items: [], limit: 100, offset: 0 });
+  listDeadLetters.mockResolvedValue({ items: [], limit: 1, offset: 0 });
 });
 
 test("shows loading then definitions after load", async () => {
@@ -421,6 +427,140 @@ test("execution detail fetches notification deliveries and renders safe fields",
   expect(screen.getByText(/^closed$/i)).toBeInTheDocument();
   expect(screen.getByText("30")).toBeInTheDocument();
   expect(screen.getByText("#soc")).toBeInTheDocument();
+});
+
+test("execution detail fetches and renders linked dead letter summary", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [execRow], limit: 50 });
+  getPlaybookExecution.mockResolvedValue({ ...execRow, status: "failed", steps_log: [] });
+  listDeadLetters.mockResolvedValue({
+    items: [
+      {
+        id: 11,
+        status: "open",
+        failure_class: "adapter_failed",
+        source_type: "playbook_execution",
+        retry_count: 2,
+        created_at: "2026-05-09T12:05:00Z",
+      },
+    ],
+    limit: 1,
+    offset: 0,
+  });
+
+  render(<PlaybooksPanel {...styleProps} />);
+  await screen.findByText("pb_one");
+  await userEvent.click(screen.getByRole("button", { name: /^executions$/i }));
+  await screen.findByText("42");
+
+  const viewButtons = screen.getAllByRole("button", { name: /^view$/i });
+  await userEvent.click(viewButtons[viewButtons.length - 1]);
+
+  await waitFor(() => {
+    expect(listDeadLetters).toHaveBeenCalledWith({
+      execution_id: 42,
+      limit: 1,
+    });
+  });
+
+  expect(await screen.findByText(/dead letter review/i)).toBeInTheDocument();
+  expect(screen.getByText(/dead letter #11/i)).toBeInTheDocument();
+  expect(screen.getByText("adapter_failed")).toBeInTheDocument();
+  expect(screen.getByText("playbook_execution")).toBeInTheDocument();
+  expect(screen.getByText("2")).toBeInTheDocument();
+  expect(screen.getByText(/soar operations \/ dead letters panel/i)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /dismiss|retry request|retry execute/i })).not.toBeInTheDocument();
+});
+
+test("execution detail omits dead letter section when none exist", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [execRow], limit: 50 });
+  getPlaybookExecution.mockResolvedValue({ ...execRow, steps_log: [] });
+  listDeadLetters.mockResolvedValue({ items: [], limit: 1, offset: 0 });
+
+  render(<PlaybooksPanel {...styleProps} />);
+  await screen.findByText("pb_one");
+  await userEvent.click(screen.getByRole("button", { name: /^executions$/i }));
+  await screen.findByText("42");
+
+  const viewButtons = screen.getAllByRole("button", { name: /^view$/i });
+  await userEvent.click(viewButtons[viewButtons.length - 1]);
+
+  await waitFor(() => {
+    expect(listDeadLetters).toHaveBeenCalledWith({
+      execution_id: 42,
+      limit: 1,
+    });
+  });
+  expect(screen.queryByText(/dead letter review/i)).not.toBeInTheDocument();
+});
+
+test("dead letter fetch failure does not break execution detail", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [execRow], limit: 50 });
+  getPlaybookExecution.mockResolvedValue({ ...execRow, alert_id: 99, steps_log: [] });
+  listDeadLetters.mockRejectedValue(new Error("Dead letters unavailable"));
+
+  render(<PlaybooksPanel {...styleProps} />);
+  await screen.findByText("pb_one");
+  await userEvent.click(screen.getByRole("button", { name: /^executions$/i }));
+  await screen.findByText("42");
+
+  const viewButtons = screen.getAllByRole("button", { name: /^view$/i });
+  await userEvent.click(viewButtons[viewButtons.length - 1]);
+
+  expect(await screen.findByText(/^execution id$/i)).toBeInTheDocument();
+  expect(screen.getByText("99")).toBeInTheDocument();
+  expect(await screen.findByText(/dead letter lookup unavailable/i)).toBeInTheDocument();
+  expect(screen.getByText(/dead letters unavailable/i)).toBeInTheDocument();
+});
+
+test("execution detail renders worker lease and recovery fields when present", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [execRow], limit: 50 });
+  getPlaybookExecution.mockResolvedValue({
+    ...execRow,
+    steps_log: [],
+    lease_owner: "host:123:abc",
+    lease_acquired_at: "2026-05-09T12:01:00Z",
+    lease_heartbeat_at: "2026-05-09T12:02:00Z",
+    lease_expires_at: "2026-05-09T12:03:00Z",
+    recovery_count: 3,
+  });
+
+  render(<PlaybooksPanel {...styleProps} />);
+  await screen.findByText("pb_one");
+  await userEvent.click(screen.getByRole("button", { name: /^executions$/i }));
+  await screen.findByText("42");
+
+  const viewButtons = screen.getAllByRole("button", { name: /^view$/i });
+  await userEvent.click(viewButtons[viewButtons.length - 1]);
+
+  expect(await screen.findByText(/worker lease \/ recovery/i)).toBeInTheDocument();
+  expect(screen.getByText(/^lease owner$/i)).toBeInTheDocument();
+  expect(screen.getByText("host:123:abc")).toBeInTheDocument();
+  expect(screen.getByText(/^lease acquired$/i)).toBeInTheDocument();
+  expect(screen.getByText(/^lease heartbeat$/i)).toBeInTheDocument();
+  expect(screen.getByText(/^lease expires$/i)).toBeInTheDocument();
+  expect(screen.getByText(/^recovery count$/i)).toBeInTheDocument();
+  expect(screen.getByText("3")).toBeInTheDocument();
+});
+
+test("execution detail hides worker lease section when lease fields are absent", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({ items: [execRow], limit: 50 });
+  getPlaybookExecution.mockResolvedValue({ ...execRow, steps_log: [] });
+
+  render(<PlaybooksPanel {...styleProps} />);
+  await screen.findByText("pb_one");
+  await userEvent.click(screen.getByRole("button", { name: /^executions$/i }));
+  await screen.findByText("42");
+
+  const viewButtons = screen.getAllByRole("button", { name: /^view$/i });
+  await userEvent.click(viewButtons[viewButtons.length - 1]);
+
+  expect(await screen.findByText(/^execution id$/i)).toBeInTheDocument();
+  expect(screen.queryByText(/worker lease \/ recovery/i)).not.toBeInTheDocument();
 });
 
 test("execution detail still shows core fields when notification deliveries fail to load", async () => {

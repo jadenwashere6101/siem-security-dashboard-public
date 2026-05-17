@@ -158,37 +158,37 @@ Goal: Add retry-execute control with mandatory confirmation. Visible only to sup
 Goal: Add dead letter linkage and lease/recovery fields to existing PlaybooksPanel execution detail.
 
 **Pre-slice verification:**
-- [ ] Read the response shape of `GET /playbook-executions/<id>` to confirm which fields are returned.
-- [ ] If `lease_owner`, `lease_expires_at`, `recovery_count` are not in the response: add them to the backend response in `routes/playbook_routes.py` (additive only — no behavior change, no schema change). Run backend tests before continuing.
+- [x] Read the response shape of `GET /playbook-executions/<id>` to confirm which fields are returned.
+- [x] If `lease_owner`, `lease_expires_at`, `recovery_count` are not in the response: add them to the backend response in `routes/playbook_routes.py` (additive only — no behavior change, no schema change). Run backend tests before continuing. Not required; the existing store/route serialization already includes lease/recovery fields.
 
 **Dead letter linkage (in PlaybooksPanel execution detail):**
 
-- [ ] After loading execution detail, call `listDeadLetters({ execution_id: selectedExecutionId, limit: 1 })`.
-- [ ] Import `listDeadLetters` from `deadLetterService.js`.
-- [ ] If a dead letter row is returned, render a read-only "Dead Letter" section in the execution detail:
+- [x] After loading execution detail, call `listDeadLetters({ execution_id: selectedExecutionId, limit: 1 })`.
+- [x] Import `listDeadLetters` from `deadLetterService.js`.
+- [x] If a dead letter row is returned, render a read-only "Dead Letter" section in the execution detail:
   - Status badge, failure_class, created timestamp.
   - Static label: "Review in SOAR Operations tab" (no navigation callback).
-- [ ] If no dead letter row, omit the section entirely.
-- [ ] Dead letter fetch error is silently suppressed — never breaks execution detail loading.
-- [ ] Dead letter fetch does not block or delay the execution detail render.
+- [x] If no dead letter row, omit the section entirely.
+- [x] Dead letter fetch error is isolated and shown as a small inline warning — never breaks execution detail loading.
+- [x] Dead letter fetch does not block or delay the execution detail render.
 
 **Lease/recovery fields (in PlaybooksPanel execution detail):**
 
-- [ ] If the execution response includes any of `lease_owner`, `lease_acquired_at`, `lease_heartbeat_at`, `lease_expires_at`, `recovery_count`, render a read-only "Worker Lease" section:
+- [x] If the execution response includes any of `lease_owner`, `lease_acquired_at`, `lease_heartbeat_at`, `lease_expires_at`, `recovery_count`, render a read-only "Worker Lease" section:
   - Lease Owner: `<value>` or "none"
   - Lease Acquired: `<timestamp>` or "—"
   - Lease Expires: `<timestamp>` or "—"
   - Heartbeat: `<timestamp>` or "—"
   - Recovery Count: `<n>`
-- [ ] If all lease fields are null or absent, omit the section.
+- [x] If all lease fields are null or absent, omit the section.
 
 **Tests (add to `PlaybooksPanel.test.js`):**
 
-- [ ] Test dead letter section renders when `listDeadLetters` returns one row for the execution.
-- [ ] Test dead letter section is omitted when `listDeadLetters` returns empty.
-- [ ] Test dead letter fetch error is suppressed and execution detail still renders.
-- [ ] Test lease section renders when execution response includes `lease_owner`.
-- [ ] Test lease section is omitted when all lease fields are null.
+- [x] Test dead letter section renders when `listDeadLetters` returns one row for the execution.
+- [x] Test dead letter section is omitted when `listDeadLetters` returns empty.
+- [x] Test dead letter fetch error is suppressed and execution detail still renders.
+- [x] Test lease section renders when execution response includes `lease_owner`.
+- [x] Test lease section is omitted when all lease fields are null.
 
 **Verification:** All existing `PlaybooksPanel.test.js` tests pass. New tests pass. No regressions in execution detail behavior.
 

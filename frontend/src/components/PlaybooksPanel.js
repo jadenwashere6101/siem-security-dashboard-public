@@ -13,6 +13,7 @@ import {
   listPlaybookSchedules,
   getPlaybookSchedule,
 } from "../services/playbookService";
+import { listDeadLetters } from "../services/deadLetterService";
 import { listNotificationDeliveries } from "../services/notificationDeliveryService";
 import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
 
@@ -306,6 +307,19 @@ const DELIVERY_HISTORY_DISCLAIMER =
   "Delivery history shows recorded notification attempts (simulation or real mode). " +
   "It is operational evidence only — it does not guarantee that a human received a message at the provider.";
 
+function hasWorkerLeaseRecoveryFields(execution) {
+  if (!execution || typeof execution !== "object") {
+    return false;
+  }
+  return [
+    "lease_owner",
+    "lease_acquired_at",
+    "lease_heartbeat_at",
+    "lease_expires_at",
+    "recovery_count",
+  ].some((field) => execution[field] !== undefined && execution[field] !== null && execution[field] !== "");
+}
+
 function PlaybooksPanel({
   cardStyle,
   cardHeaderStyle,
@@ -343,6 +357,8 @@ function PlaybooksPanel({
   const [deliveryAttempts, setDeliveryAttempts] = useState([]);
   const [deliveryLoading, setDeliveryLoading] = useState(false);
   const [deliveryError, setDeliveryError] = useState("");
+  const [deadLetters, setDeadLetters] = useState([]);
+  const [deadLetterWarning, setDeadLetterWarning] = useState("");
 
   // Form state for create/edit
   const [formMode, setFormMode] = useState(null); // null, "create", or "edit"
@@ -457,6 +473,8 @@ function PlaybooksPanel({
     setDetailRecord(null);
     setDetailError("");
     setDetailLoading(false);
+    setDeadLetters([]);
+    setDeadLetterWarning("");
   }, []);
 
   const handleViewDefinition = useCallback(async (playbookId) => {
@@ -538,6 +556,40 @@ function PlaybooksPanel({
         setDeliveryAttempts([]);
         setDeliveryError(err.message || "Unable to load notification deliveries.");
         setDeliveryLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [detailKind, detailRecord?.id]);
+
+  useEffect(() => {
+    if (detailKind !== "execution" || !detailRecord?.id) {
+      setDeadLetters([]);
+      setDeadLetterWarning("");
+      return undefined;
+    }
+
+    let cancelled = false;
+    setDeadLetters([]);
+    setDeadLetterWarning("");
+
+    listDeadLetters({
+      execution_id: detailRecord.id,
+      limit: 1,
+    })
+      .then((data) => {
+        if (cancelled) {
+          return;
+        }
+        setDeadLetters(Array.isArray(data?.items) ? data.items : []);
+      })
+      .catch((err) => {
+        if (cancelled) {
+          return;
+        }
+        setDeadLetters([]);
+        setDeadLetterWarning(err.message || "Unable to load linked dead letter review.");
       });
 
     return () => {
@@ -1307,6 +1359,106 @@ function PlaybooksPanel({
                   {isAwaitingApproval(detailRecord) ? (
                     <div style={approvalNoticeStyle}>{APPROVAL_PAUSED_MESSAGE}</div>
                   ) : null}
+                  {hasWorkerLeaseRecoveryFields(detailRecord) ? (
+                    <div style={detailSubsectionStyle}>
+                      <div style={timelineHeaderStyle}>Worker Lease / Recovery</div>
+                      <div style={timelineMetaGridStyle}>
+                        {detailRecord.lease_owner ? (
+                          <div style={detailFieldStyle}>
+                            <span style={detailLabelStyle}>Lease Owner</span>
+                            <span style={detailValueStyle}>
+                              {formatDetailValue(detailRecord.lease_owner, "none")}
+                            </span>
+                          </div>
+                        ) : null}
+                        {detailRecord.lease_acquired_at ? (
+                          <div style={detailFieldStyle}>
+                            <span style={detailLabelStyle}>Lease Acquired</span>
+                            <span style={detailValueStyle}>
+                              {formatAdminTimestamp(detailRecord.lease_acquired_at, "—")}
+                            </span>
+                          </div>
+                        ) : null}
+                        {detailRecord.lease_heartbeat_at ? (
+                          <div style={detailFieldStyle}>
+                            <span style={detailLabelStyle}>Lease Heartbeat</span>
+                            <span style={detailValueStyle}>
+                              {formatAdminTimestamp(detailRecord.lease_heartbeat_at, "—")}
+                            </span>
+                          </div>
+                        ) : null}
+                        {detailRecord.lease_expires_at ? (
+                          <div style={detailFieldStyle}>
+                            <span style={detailLabelStyle}>Lease Expires</span>
+                            <span style={detailValueStyle}>
+                              {formatAdminTimestamp(detailRecord.lease_expires_at, "—")}
+                            </span>
+                          </div>
+                        ) : null}
+                        {detailRecord.recovery_count !== undefined &&
+                        detailRecord.recovery_count !== null ? (
+                          <div style={detailFieldStyle}>
+                            <span style={detailLabelStyle}>Recovery Count</span>
+                            <span style={detailValueStyle}>
+                              {formatDetailValue(detailRecord.recovery_count)}
+                            </span>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
+                  {deadLetters.length > 0 || deadLetterWarning ? (
+                    <div style={detailSubsectionStyle}>
+                      <div style={timelineHeaderStyle}>Dead Letter Review</div>
+                      {deadLetterWarning ? (
+                        <p style={inlineWarningStyle}>
+                          Dead letter lookup unavailable: {deadLetterWarning}
+                        </p>
+                      ) : null}
+                      {deadLetters.map((deadLetter) => (
+                        <div key={deadLetter.id} style={timelineCardStyle}>
+                          <div style={timelineCardHeaderStyle}>
+                            <span style={timelineStepLabelStyle}>
+                              Dead Letter #{deadLetter.id}
+                            </span>
+                            <span style={timelineStatusStyle}>
+                              {formatDetailValue(deadLetter.status)}
+                            </span>
+                          </div>
+                          <div style={timelineMetaGridStyle}>
+                            <div style={detailFieldStyle}>
+                              <span style={detailLabelStyle}>Failure Class</span>
+                              <span style={detailValueStyle}>
+                                {formatDetailValue(deadLetter.failure_class)}
+                              </span>
+                            </div>
+                            <div style={detailFieldStyle}>
+                              <span style={detailLabelStyle}>Source Type</span>
+                              <span style={detailValueStyle}>
+                                {formatDetailValue(deadLetter.source_type)}
+                              </span>
+                            </div>
+                            <div style={detailFieldStyle}>
+                              <span style={detailLabelStyle}>Retry Count</span>
+                              <span style={detailValueStyle}>
+                                {formatDetailValue(deadLetter.retry_count)}
+                              </span>
+                            </div>
+                            <div style={detailFieldStyle}>
+                              <span style={detailLabelStyle}>Created</span>
+                              <span style={detailValueStyle}>
+                                {formatAdminTimestamp(deadLetter.created_at, "—")}
+                              </span>
+                            </div>
+                          </div>
+                          <p style={timelineTextStyle}>
+                            Review, dismiss, retry-request, and retry-execute actions are
+                            handled in the SOAR Operations / Dead Letters panel.
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                   <div style={timelineHeaderStyle}>Notification delivery history</div>
                   <p style={deliveryEvidenceNoteStyle}>{DELIVERY_HISTORY_DISCLAIMER}</p>
                   {deliveryLoading ? (
@@ -1949,6 +2101,21 @@ const deliveryEvidenceNoteStyle = {
   fontSize: "12px",
   lineHeight: 1.45,
   color: "#8b949e",
+};
+
+const detailSubsectionStyle = {
+  marginTop: "14px",
+};
+
+const inlineWarningStyle = {
+  margin: "0 0 10px",
+  padding: "8px 10px",
+  borderRadius: "8px",
+  border: "1px solid rgba(250, 204, 21, 0.3)",
+  backgroundColor: "rgba(250, 204, 21, 0.06)",
+  color: "#fde68a",
+  fontSize: "12px",
+  lineHeight: 1.45,
 };
 
 const timelineHeaderStyle = {
