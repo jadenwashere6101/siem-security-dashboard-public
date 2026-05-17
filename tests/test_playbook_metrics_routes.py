@@ -106,6 +106,10 @@ def test_metrics_playbooks_without_session_returns_401(client):
     assert client.get("/metrics/playbooks").status_code == 401
 
 
+def test_metrics_playbook_worker_without_session_returns_401(client):
+    assert client.get("/metrics/playbook-worker").status_code == 401
+
+
 def test_metrics_playbooks_viewer_forbidden(client, mock_db):
     fake = _fake_user("metrics_viewer", "vpass", "viewer")
     with patch("routes.auth_routes.get_user_by_username", return_value=fake), patch(
@@ -113,6 +117,20 @@ def test_metrics_playbooks_viewer_forbidden(client, mock_db):
     ):
         assert client.post("/login", json={"username": "metrics_viewer", "password": "vpass"}).status_code == 200
         resp = client.get("/metrics/playbooks")
+    assert resp.status_code == 403
+    assert resp.get_json()["error"] == "forbidden"
+
+
+def test_metrics_playbook_worker_viewer_forbidden(client, mock_db):
+    fake = _fake_user("worker_metrics_viewer", "vpass", "viewer")
+    with patch("routes.auth_routes.get_user_by_username", return_value=fake), patch(
+        "core.auth.get_user_by_username", return_value=fake
+    ):
+        assert client.post(
+            "/login",
+            json={"username": "worker_metrics_viewer", "password": "vpass"},
+        ).status_code == 200
+        resp = client.get("/metrics/playbook-worker")
     assert resp.status_code == 403
     assert resp.get_json()["error"] == "forbidden"
 
@@ -134,6 +152,39 @@ def test_metrics_playbooks_analyst_allowed(client, postgres_db):
 
 
 @pytest.mark.usefixtures("postgres_db")
+def test_metrics_playbook_worker_analyst_allowed_empty(client, postgres_db):
+    conn, _cur = postgres_db
+    fake = _fake_user("worker_metrics_analyst", "apass", "analyst")
+    with patch("routes.auth_routes.get_user_by_username", return_value=fake), patch(
+        "core.auth.get_user_by_username", return_value=fake
+    ):
+        assert client.post(
+            "/login",
+            json={"username": "worker_metrics_analyst", "password": "apass"},
+        ).status_code == 200
+        with _patched_metrics_db(conn):
+            resp = client.get("/metrics/playbook-worker")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["daemon_health"]["status"] == "unknown"
+    assert body["daemon_health"]["worker_heartbeat_available"] is False
+    assert body["queue_depth"] == {
+        "pending": 0,
+        "running": 0,
+        "awaiting_approval": 0,
+        "active_total": 0,
+    }
+    assert body["running"] == {
+        "total": 0,
+        "active_leased": 0,
+        "stale": 0,
+        "missing_lease": 0,
+    }
+    assert body["recent"]["active_dead_letters"] == 0
+    assert body["recovery"]["last_recovery_summary_available"] is False
+
+
+@pytest.mark.usefixtures("postgres_db")
 def test_metrics_playbooks_super_admin_allowed(client, postgres_db):
     conn, _cur = postgres_db
     fake = _fake_user("metrics_admin", "spass", "super_admin")
@@ -143,6 +194,22 @@ def test_metrics_playbooks_super_admin_allowed(client, postgres_db):
         assert client.post("/login", json={"username": "metrics_admin", "password": "spass"}).status_code == 200
         with _patched_metrics_db(conn):
             resp = client.get("/metrics/playbooks")
+    assert resp.status_code == 200
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_metrics_playbook_worker_super_admin_allowed(client, postgres_db):
+    conn, _cur = postgres_db
+    fake = _fake_user("worker_metrics_admin", "spass", "super_admin")
+    with patch("routes.auth_routes.get_user_by_username", return_value=fake), patch(
+        "core.auth.get_user_by_username", return_value=fake
+    ):
+        assert client.post(
+            "/login",
+            json={"username": "worker_metrics_admin", "password": "spass"},
+        ).status_code == 200
+        with _patched_metrics_db(conn):
+            resp = client.get("/metrics/playbook-worker")
     assert resp.status_code == 200
 
 
@@ -168,6 +235,124 @@ def test_metrics_empty_database_all_zero_buckets(client, postgres_db):
     assert data["approval_gated"]["awaiting_approval"] == 0
     assert data["approval_gated"]["with_linked_approval"] == 0
     assert "unknown_statuses" not in data
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_worker_metrics_counts_queue_running_stale_recovery_and_dead_letters(client, postgres_db):
+    conn, cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_worker_metrics", "Worker", steps=_valid_steps())
+    pending = playbook_store.create_playbook_execution(conn, "pb_worker_metrics", alert_id=None)
+    running_active = playbook_store.create_playbook_execution(conn, "pb_worker_metrics", alert_id=None)
+    running_stale = playbook_store.create_playbook_execution(conn, "pb_worker_metrics", alert_id=None)
+    running_missing_lease = playbook_store.create_playbook_execution(
+        conn,
+        "pb_worker_metrics",
+        alert_id=None,
+    )
+    awaiting = playbook_store.create_playbook_execution(conn, "pb_worker_metrics", alert_id=None)
+    failed = playbook_store.create_playbook_execution(conn, "pb_worker_metrics", alert_id=None)
+    cur.execute(
+        """
+        UPDATE playbook_executions
+        SET status = 'running',
+            lease_owner = 'worker-active',
+            lease_expires_at = NOW() + INTERVAL '10 minutes'
+        WHERE id = %s
+        """,
+        (running_active,),
+    )
+    cur.execute(
+        """
+        UPDATE playbook_executions
+        SET status = 'running',
+            lease_owner = 'worker-stale',
+            lease_expires_at = NOW() - INTERVAL '10 minutes',
+            recovery_count = 2
+        WHERE id = %s
+        """,
+        (running_stale,),
+    )
+    cur.execute(
+        """
+        UPDATE playbook_executions
+        SET status = 'running',
+            lease_owner = NULL,
+            lease_expires_at = NULL
+        WHERE id = %s
+        """,
+        (running_missing_lease,),
+    )
+    playbook_store.update_execution_status(conn, awaiting, "awaiting_approval")
+    playbook_store.update_execution_status(conn, failed, "failed")
+    cur.execute(
+        """
+        INSERT INTO soar_dead_letters (
+            source_type, source_id, execution_id, failure_class, error_message, status
+        )
+        VALUES
+            ('playbook_execution', %s, %s, 'timeout', 'safe failure', 'open'),
+            ('notification_delivery', 400, NULL, 'timeout', 'safe delivery failure', 'retrying'),
+            ('playbook_execution', 401, NULL, 'timeout', 'handled', 'dismissed')
+        """,
+        (failed, failed),
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_metrics_db(conn):
+        resp = client.get("/metrics/playbook-worker")
+    assert resp.status_code == 200
+    data = resp.get_json()
+
+    assert pending
+    assert data["queue_depth"] == {
+        "pending": 1,
+        "running": 3,
+        "awaiting_approval": 1,
+        "active_total": 5,
+    }
+    assert data["running"] == {
+        "total": 3,
+        "active_leased": 1,
+        "stale": 1,
+        "missing_lease": 1,
+    }
+    assert data["stale_running_count"] == 1
+    assert data["pending_execution_count"] == 1
+    assert data["running_execution_count"] == 3
+    assert data["recent"]["failed_executions"] == 1
+    assert data["recent"]["active_dead_letters"] == 2
+    assert data["recent"]["active_playbook_dead_letters"] == 1
+    assert data["recovery"]["total_recovery_count"] == 2
+    assert data["recovery"]["recovered_execution_count"] == 1
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_worker_metrics_response_does_not_include_worker_owner_or_secrets(client, postgres_db):
+    conn, cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_worker_secret", "Worker", steps=_valid_steps())
+    execution_id = playbook_store.create_playbook_execution(conn, "pb_worker_secret", alert_id=None)
+    cur.execute(
+        """
+        UPDATE playbook_executions
+        SET status = 'running',
+            lease_owner = 'worker-postgresql://user:secret@example.invalid/db',
+            failure_reason = 'password=secret-token',
+            lease_expires_at = NOW() - INTERVAL '10 minutes'
+        WHERE id = %s
+        """,
+        (execution_id,),
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_metrics_db(conn):
+        resp = client.get("/metrics/playbook-worker")
+    assert resp.status_code == 200
+    body_text = resp.get_data(as_text=True)
+    assert "postgresql://" not in body_text
+    assert "secret-token" not in body_text
+    assert "worker-postgresql" not in body_text
 
 
 @pytest.mark.usefixtures("postgres_db")

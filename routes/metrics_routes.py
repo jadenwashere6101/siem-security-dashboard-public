@@ -106,6 +106,127 @@ def _iso_timestamp(value: Any) -> str | None:
     return str(value)
 
 
+def _build_playbook_worker_snapshot(cur) -> dict[str, Any]:
+    cur.execute(
+        """
+        SELECT status, COUNT(*)
+        FROM playbook_executions
+        GROUP BY status
+        """
+    )
+    by_status, unknown_statuses = _merge_known_counts(
+        cur.fetchall() or [],
+        KNOWN_EXECUTION_STATUSES,
+    )
+
+    cur.execute(
+        """
+        SELECT
+            COUNT(*) FILTER (WHERE status = 'running') AS running_total,
+            COUNT(*) FILTER (
+                WHERE status = 'running'
+                  AND lease_owner IS NOT NULL
+                  AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at >= NOW()
+            ) AS active_leased,
+            COUNT(*) FILTER (
+                WHERE status = 'running'
+                  AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at < NOW()
+            ) AS stale_running,
+            COUNT(*) FILTER (
+                WHERE status = 'running'
+                  AND (lease_owner IS NULL OR lease_expires_at IS NULL)
+            ) AS missing_lease
+        FROM playbook_executions
+        """
+    )
+    running_row = cur.fetchone() or (0, 0, 0, 0)
+    running_total = int(running_row[0] or 0)
+    active_leased = int(running_row[1] or 0)
+    stale_running = int(running_row[2] or 0)
+    missing_lease = int(running_row[3] or 0)
+
+    cur.execute(
+        """
+        SELECT
+            COALESCE(SUM(recovery_count), 0),
+            COUNT(*) FILTER (WHERE recovery_count > 0)
+        FROM playbook_executions
+        """
+    )
+    recovery_row = cur.fetchone() or (0, 0)
+    total_recovery_count = int(recovery_row[0] or 0)
+    recovered_execution_count = int(recovery_row[1] or 0)
+
+    cur.execute(
+        """
+        SELECT COUNT(*)
+        FROM playbook_executions
+        WHERE status = 'failed'
+          AND COALESCE(completed_at, created_at)
+              >= NOW() - %s * INTERVAL '1 hour'
+        """,
+        (RECENT_WINDOW_HOURS,),
+    )
+    recent_failed_executions = int(cur.fetchone()[0])
+
+    cur.execute(
+        """
+        SELECT
+            COUNT(*) FILTER (WHERE status IN ('open', 'retrying')) AS active_dead_letters,
+            COUNT(*) FILTER (
+                WHERE source_type = 'playbook_execution'
+                  AND status IN ('open', 'retrying')
+            ) AS active_playbook_dead_letters
+        FROM soar_dead_letters
+        """
+    )
+    dead_letter_row = cur.fetchone() or (0, 0)
+    active_dead_letters = int(dead_letter_row[0] or 0)
+    active_playbook_dead_letters = int(dead_letter_row[1] or 0)
+
+    active_total = by_status["pending"] + by_status["running"] + by_status["awaiting_approval"]
+    payload: dict[str, Any] = {
+        "daemon_health": {
+            "status": "unknown",
+            "source": "database_snapshot",
+            "worker_heartbeat_available": False,
+            "message": "Worker process heartbeat is not persisted yet; DB queue health is available.",
+        },
+        "queue_depth": {
+            "pending": by_status["pending"],
+            "running": by_status["running"],
+            "awaiting_approval": by_status["awaiting_approval"],
+            "active_total": active_total,
+        },
+        "running": {
+            "total": running_total,
+            "active_leased": active_leased,
+            "stale": stale_running,
+            "missing_lease": missing_lease,
+        },
+        "stale_running_count": stale_running,
+        "pending_execution_count": by_status["pending"],
+        "running_execution_count": by_status["running"],
+        "recent": {
+            "window_hours": RECENT_WINDOW_HOURS,
+            "failed_executions": recent_failed_executions,
+            "active_dead_letters": active_dead_letters,
+            "active_playbook_dead_letters": active_playbook_dead_letters,
+        },
+        "recovery": {
+            "last_recovery_summary_available": False,
+            "last_recovery_summary": None,
+            "total_recovery_count": total_recovery_count,
+            "recovered_execution_count": recovered_execution_count,
+        },
+    }
+    if unknown_statuses:
+        payload["unknown_statuses"] = unknown_statuses
+    return payload
+
+
 @metrics_bp.route("/metrics/playbooks", methods=["GET"])
 @login_required
 @analyst_or_super_admin_required
@@ -221,6 +342,25 @@ def playbook_execution_metrics_route():
         return jsonify(payload), 200
     except Exception as error:
         current_app.logger.error("Error in playbook_execution_metrics_route: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@metrics_bp.route("/metrics/playbook-worker", methods=["GET"])
+@login_required
+@analyst_or_super_admin_required
+def playbook_worker_metrics_route():
+    # spec: openspec/changes/add-daemonized-soar-worker/
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            payload = _build_playbook_worker_snapshot(cur)
+        return jsonify(payload), 200
+    except Exception as error:
+        current_app.logger.error("Error in playbook_worker_metrics_route: %s", error)
         return jsonify({"error": "Internal server error"}), 500
     finally:
         if conn:

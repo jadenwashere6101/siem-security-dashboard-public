@@ -138,10 +138,18 @@ There is **no** HTTP or daemon entry point for playbook batch execution; operato
 
 ## 7. Operational Visibility APIs and Metrics
 
-- [ ] 7.1 Add read-only worker health and heartbeat visibility if supported by the selected persistence model.
-- [ ] 7.2 Add queue depth, stale execution, recovery, retry exhaustion, and failure-rate metrics.
-- [ ] 7.3 Gate worker visibility consistently with SOAR Operations and SOAR Metrics RBAC.
-- [ ] 7.4 Add backend tests for auth, RBAC, empty states, active worker state, stale worker state, queue depth, and recovery metrics.
+- [x] 7.1 Add read-only worker health and heartbeat visibility if supported by the selected persistence model.
+- [x] 7.2 Add queue depth, stale execution, recovery, retry exhaustion, and failure-rate metrics.
+- [x] 7.3 Gate worker visibility consistently with SOAR Operations and SOAR Metrics RBAC.
+- [x] 7.4 Add backend tests for auth, RBAC, empty states, active worker state, stale worker state, queue depth, and recovery metrics.
+
+### Slice 4 operational visibility notes (2026-05-17)
+
+- Added read-only `GET /metrics/playbook-worker` for DB-derived worker and queue health.
+- The endpoint reports queue depth, running/leased/stale/missing-lease counts, recent failed execution count, active dead-letter counts, and recovery counters.
+- Process heartbeat remains explicitly `unknown` because no heartbeat persistence exists yet and no schema change was made.
+- RBAC matches SOAR metrics: analyst and super_admin allowed, viewer denied.
+- Responses return aggregate counts only; no lease owner, failure text, DB URL, payload, or secret fields are exposed.
 
 ## 8. Dashboard Visibility
 
