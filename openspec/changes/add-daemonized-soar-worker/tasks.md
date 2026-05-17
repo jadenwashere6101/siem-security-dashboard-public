@@ -169,10 +169,18 @@ There is **no** HTTP or daemon entry point for playbook batch execution; operato
 
 ## 9. Deployment Design and Rollout Artifacts
 
-- [ ] 9.1 Draft systemd service design documentation with environment requirements, restart policy, logging, and graceful shutdown expectations.
-- [ ] 9.2 Add deployment checklist for one-worker simulation rollout, multi-worker simulation rollout, and rollback to manual executor operation.
-- [ ] 9.3 Add operator runbook entries for stopping the worker, checking health, reviewing dead letters, and recovering stale work.
-- [ ] 9.4 Defer actual service file installation until implementation and validation slices pass.
+- [x] 9.1 Draft systemd service design documentation with environment requirements, restart policy, logging, and graceful shutdown expectations.
+- [x] 9.2 Add deployment checklist for one-worker simulation rollout, multi-worker simulation rollout, and rollback to manual executor operation.
+- [x] 9.3 Add operator runbook entries for stopping the worker, checking health, reviewing dead letters, and recovering stale work.
+- [x] 9.4 Defer actual service file installation until implementation and validation slices pass.
+
+### Slice 6 deployment/runbook notes (2026-05-17)
+
+- Added `docs/soar_playbook_worker_daemon_runbook.md` with simulation-safe foreground commands, zero-loop smoke testing, one-loop validation, and normal daemon command guidance.
+- Documented required `SIEM_DB_*` variables and a `DATABASE_URL` construction pattern for operator `psql` checks without changing runtime connection code.
+- Documented future systemd unit design only; no service file was created, installed, enabled, or started.
+- Added start, stop, restart, status, log inspection, rollback, emergency stop, stale recovery validation, concurrency validation, and SOAR Metrics dashboard verification guidance.
+- Confirmed the runbook preserves simulation mode and does not enable real Slack, Teams, firewall, webhook, email, or response-action workers.
 
 ## 10. Load and Failure Validation
 
