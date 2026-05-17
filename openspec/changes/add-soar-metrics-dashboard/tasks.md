@@ -191,7 +191,7 @@ Goal: Implement all metric card content, BarCharts, and section-specific sub-com
 
 Goal: Replace `PlaybookMetricsPanel` with `SoarMetricsDashboard` in the existing `soar-playbook-metrics` section. Two lines only.
 
-- [ ] In `frontend/src/App.js`, replace:
+- [x] In `frontend/src/App.js`, replace:
   ```js
   import PlaybookMetricsPanel from "./components/PlaybookMetricsPanel"
   ```
@@ -199,7 +199,7 @@ Goal: Replace `PlaybookMetricsPanel` with `SoarMetricsDashboard` in the existing
   ```js
   import SoarMetricsDashboard from "./components/SoarMetricsDashboard"
   ```
-- [ ] In the `soar-playbook-metrics` section render block, replace:
+- [x] In the `soar-playbook-metrics` section render block, replace:
   ```jsx
   <PlaybookMetricsPanel ... />
   ```
@@ -213,9 +213,9 @@ Goal: Replace `PlaybookMetricsPanel` with `SoarMetricsDashboard` in the existing
     userRole={userRole}
   />
   ```
-- [ ] Section ID (`soar-playbook-metrics`), nav tab label ("SOAR Metrics"), and `canTakeAlertActions` guard are unchanged.
-- [ ] `PlaybookMetricsPanel.js` file is NOT modified or deleted.
-- [ ] `PlaybookMetricsPanel.test.js` is NOT modified.
+- [x] Section ID (`soar-playbook-metrics`), nav tab label ("SOAR Metrics"), and `canTakeAlertActions` guard are unchanged.
+- [x] `PlaybookMetricsPanel.js` file is NOT modified or deleted.
+- [x] `PlaybookMetricsPanel.test.js` is NOT modified.
 
 **Verification:** App renders without import errors. "SOAR Metrics" nav tab loads `SoarMetricsDashboard`. `PlaybookMetricsPanel` tests still pass (they test the component in isolation, not the App).
 

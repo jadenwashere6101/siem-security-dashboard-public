@@ -9,7 +9,7 @@ import ApprovalsPanel from "./components/ApprovalsPanel";
 import SoarQueuePanel from "./components/SoarQueuePanel";
 import PlaybooksPanel from "./components/PlaybooksPanel";
 import IntegrationStatusPanel from "./components/IntegrationStatusPanel";
-import PlaybookMetricsPanel from "./components/PlaybookMetricsPanel";
+import SoarMetricsDashboard from "./components/SoarMetricsDashboard";
 import DeadLettersPanel from "./components/DeadLettersPanel";
 import ThreatHuntPanel from "./components/ThreatHuntPanel";
 import BlocklistManagerPanel from "./components/BlocklistManagerPanel";
@@ -743,11 +743,12 @@ function App() {
         )}
 
         {canTakeAlertActions && activeSection === "soar-playbook-metrics" && (
-          <PlaybookMetricsPanel
+          <SoarMetricsDashboard
             cardStyle={cardStyle}
             cardHeaderStyle={cardHeaderStyle}
             cardTitleStyle={cardTitleStyle}
             cardSubtitleStyle={cardSubtitleStyle}
+            userRole={userRole}
           />
         )}
 
