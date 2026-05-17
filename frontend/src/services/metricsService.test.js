@@ -1,4 +1,9 @@
-import { getPlaybookMetrics, getNotificationDeliveryMetrics } from "./metricsService";
+import {
+  getApprovalMetrics,
+  getIncidentMetrics,
+  getNotificationDeliveryMetrics,
+  getPlaybookMetrics,
+} from "./metricsService";
 
 describe("getPlaybookMetrics", () => {
   beforeEach(() => {
@@ -158,5 +163,92 @@ describe("getNotificationDeliveryMetrics", () => {
     });
 
     await expect(getNotificationDeliveryMetrics()).rejects.toThrow();
+  });
+});
+
+describe("SOAR operational metric fetchers", () => {
+  beforeEach(() => {
+    global.fetch = jest.fn();
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test("getIncidentMetrics calls GET /metrics/incidents with session credentials", async () => {
+    const payload = {
+      total_count: 3,
+      open_count: 1,
+      open_high_critical_count: 1,
+      by_status: { open: 1, investigating: 1, resolved: 1, closed: 0 },
+      by_severity: { CRITICAL: 1, HIGH: 1, MEDIUM: 1, LOW: 0 },
+      newest_incident_at: "2026-05-17T12:00:00+00:00",
+      oldest_open_incident_at: "2026-05-17T10:00:00+00:00",
+    };
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(payload),
+    });
+
+    const result = await getIncidentMetrics();
+
+    expect(result).toEqual(payload);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const [url, options] = global.fetch.mock.calls[0];
+    expect(url).toContain("/metrics/incidents");
+    expect(options).toEqual({ credentials: "include" });
+  });
+
+  test("getApprovalMetrics calls GET /metrics/approvals with session credentials", async () => {
+    const payload = {
+      total_count: 4,
+      pending_count: 2,
+      by_status: { pending: 2, approved: 1, denied: 1, expired: 0 },
+      newest_approval_at: "2026-05-17T12:00:00+00:00",
+      oldest_pending_approval_at: "2026-05-17T09:00:00+00:00",
+    };
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(payload),
+    });
+
+    const result = await getApprovalMetrics();
+
+    expect(result).toEqual(payload);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const [url, options] = global.fetch.mock.calls[0];
+    expect(url).toContain("/metrics/approvals");
+    expect(options).toEqual({ credentials: "include" });
+  });
+
+  test("getIncidentMetrics throws backend message on non-OK response", async () => {
+    global.fetch.mockResolvedValue({
+      ok: false,
+      status: 403,
+      json: () => Promise.resolve({ error: "forbidden" }),
+    });
+
+    await expect(getIncidentMetrics()).rejects.toThrow("forbidden");
+  });
+
+  test("getApprovalMetrics throws fallback message on non-OK malformed JSON", async () => {
+    global.fetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: () => Promise.reject(new SyntaxError("bad json")),
+    });
+
+    await expect(getApprovalMetrics()).rejects.toThrow(
+      "Unable to load approval metrics"
+    );
+  });
+
+  test("metric fetchers return fallback value on successful malformed JSON", async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.reject(new SyntaxError("bad json")),
+    });
+
+    await expect(getIncidentMetrics()).resolves.toEqual({});
   });
 });

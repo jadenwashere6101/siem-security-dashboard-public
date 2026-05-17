@@ -61,14 +61,14 @@ Goal: Add a lightweight aggregate route for approval status counts. No schema ch
 
 Goal: Add one additive field to the existing playbook metrics response. Skip this slice if deemed unnecessary.
 
-- [ ] In `routes/metrics_routes.py`, in the `GET /metrics/playbooks` handler, add:
+- [x] In `routes/metrics_routes.py`, in the `GET /metrics/playbooks` handler, add:
   ```sql
   SELECT COUNT(*) FROM playbook_executions
   WHERE status = 'running' AND lease_expires_at < NOW()
   ```
-- [ ] Include result as `stale_running_count: <int>` in the JSON response.
-- [ ] Field must be additive only — existing consumers that ignore unknown fields are unaffected.
-- [ ] Add `# spec: SPEC-METRICS-001` traceability comment at the modified block.
+- [x] Include result as `stale_running_count: <int>` in the JSON response.
+- [x] Field must be additive only — existing consumers that ignore unknown fields are unaffected.
+- [x] Add `# spec: SPEC-METRICS-001` traceability comment at the modified block.
 
 **Verification:** `GET /metrics/playbooks` response includes `stale_running_count` field. No existing test broken.
 
@@ -78,7 +78,7 @@ Goal: Add one additive field to the existing playbook metrics response. Skip thi
 
 Goal: Add two new service functions for the new backend routes.
 
-- [ ] In `frontend/src/services/metricsService.js`, add:
+- [x] In `frontend/src/services/metricsService.js`, add:
   ```js
   export async function getIncidentMetrics() {
     // GET /metrics/incidents
@@ -87,12 +87,12 @@ Goal: Add two new service functions for the new backend routes.
     // GET /metrics/approvals
   }
   ```
-- [ ] Both follow the existing `buildSiemPath` / `parseJsonResponse` / `getApiErrorMessage` / `credentials: "include"` pattern.
-- [ ] Do NOT import or re-export `getDeadLetterMetrics` — it already lives in `deadLetterService.js`.
-- [ ] Update `frontend/src/services/metricsService.test.js`:
-  - [ ] Test `getIncidentMetrics` calls the correct URL and returns parsed response.
-  - [ ] Test `getApprovalMetrics` calls the correct URL and returns parsed response.
-  - [ ] Test both functions throw with API error message on non-OK response.
+- [x] Both follow the existing `buildSiemPath` / `parseJsonResponse` / `getApiErrorMessage` / `credentials: "include"` pattern.
+- [x] Do NOT import or re-export `getDeadLetterMetrics` — it already lives in `deadLetterService.js`.
+- [x] Update `frontend/src/services/metricsService.test.js`:
+  - [x] Test `getIncidentMetrics` calls the correct URL and returns parsed response.
+  - [x] Test `getApprovalMetrics` calls the correct URL and returns parsed response.
+  - [x] Test both functions throw with API error message on non-OK response.
 
 **Verification:** `npm test -- --testPathPattern=metricsService` passes. No other tests broken.
 
