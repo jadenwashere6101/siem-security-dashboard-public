@@ -1305,13 +1305,12 @@ def _finalize_success(
         lease_owner=worker_id,
     )
     if updated is None:
-        playbook_store.set_playbook_execution_success(
-            conn,
+        logger.info(
+            "[PLAYBOOK SIMULATION] success finalize skipped execution_id=%s worker_id=%s reason=lease_not_owned",
             execution_id,
-            steps_log,
-            last_completed_step=last_completed_step,
-            now=now,
+            worker_id,
         )
+        return
     playbook_store.release_execution_lease(conn, execution_id, worker_id)
 
 
@@ -1333,23 +1332,40 @@ def _finalize_failed(
         lease_owner=worker_id,
     )
     if updated is None:
-        updated = playbook_store.set_playbook_execution_failed(
-            conn,
-            execution_id,
-            steps_log,
-            last_completed_step=last_completed_step,
-            now=now,
-        )
+        current = playbook_store.get_playbook_execution(conn, execution_id)
+        if (
+            current is not None
+            and current.get("status") == "awaiting_approval"
+            and not current.get("lease_owner")
+        ):
+            updated = playbook_store.set_playbook_execution_failed(
+                conn,
+                execution_id,
+                steps_log,
+                last_completed_step=last_completed_step,
+                now=now,
+            )
+        else:
+            logger.info(
+                "[PLAYBOOK SIMULATION] failure finalize skipped execution_id=%s worker_id=%s reason=lease_not_owned",
+                execution_id,
+                worker_id,
+            )
+            return
     if updated is None:
-        updated = playbook_store.get_playbook_execution(conn, execution_id)
-    if updated is not None:
-        capture_failed_execution_dead_letter(
-            conn,
-            updated,
-            steps_log,
-            last_completed_step=last_completed_step,
-            now=now,
+        logger.info(
+            "[PLAYBOOK SIMULATION] failure finalize skipped execution_id=%s worker_id=%s reason=update_race",
+            execution_id,
+            worker_id,
         )
+        return
+    capture_failed_execution_dead_letter(
+        conn,
+        updated,
+        steps_log,
+        last_completed_step=last_completed_step,
+        now=now,
+    )
     playbook_store.release_execution_lease(conn, execution_id, worker_id)
 
 

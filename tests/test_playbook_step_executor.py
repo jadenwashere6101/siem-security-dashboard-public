@@ -1528,6 +1528,73 @@ def test_resumed_execution_still_requires_matching_lease_owner(utc_db):
     assert row["steps_log"] == prior_log
 
 
+def test_finalize_success_does_not_fallback_after_lease_loss(utc_db):
+    conn, cur = utc_db
+    eid = _create_execution(conn, cur, "pb_finalize_success_guard")
+    start = datetime(2026, 5, 16, 12, 0, 0)
+    playbook_store.acquire_execution_lease(
+        conn,
+        eid,
+        "fresh-worker",
+        lease_duration_seconds=120,
+        now=start,
+    )
+    conn.commit()
+
+    playbook_step_executor._finalize_success(
+        conn,
+        eid,
+        "stale-worker",
+        [_progress_entry(0, "monitor", now=start.replace(tzinfo=timezone.utc))],
+        last_completed_step=0,
+        now=start + timedelta(seconds=5),
+    )
+    conn.commit()
+
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["status"] == "running"
+    assert row["lease_owner"] == "fresh-worker"
+    assert row["steps_log"] == []
+
+
+def test_finalize_failed_does_not_fallback_or_dead_letter_after_lease_loss(utc_db):
+    conn, cur = utc_db
+    eid = _create_execution(conn, cur, "pb_finalize_failure_guard")
+    start = datetime(2026, 5, 16, 12, 0, 0)
+    playbook_store.acquire_execution_lease(
+        conn,
+        eid,
+        "fresh-worker",
+        lease_duration_seconds=120,
+        now=start,
+    )
+    conn.commit()
+
+    playbook_step_executor._finalize_failed(
+        conn,
+        eid,
+        "stale-worker",
+        [
+            {
+                "step_index": 0,
+                "action": "notify_slack",
+                "status": "failed",
+                "message": "stale worker failure",
+                "error": {"message": "stale worker failure"},
+            }
+        ],
+        last_completed_step=None,
+        now=start + timedelta(seconds=5),
+    )
+    conn.commit()
+
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["status"] == "running"
+    assert row["lease_owner"] == "fresh-worker"
+    assert row["steps_log"] == []
+    assert dead_letter_store.list_dead_letters(conn, execution_id=eid) == []
+
+
 @pytest.mark.parametrize("status", ["failed", "abandoned", "permanently_failed"])
 def test_terminal_failed_or_aborted_executions_do_not_resume(utc_db, status):
     conn, cur = utc_db

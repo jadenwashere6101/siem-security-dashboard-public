@@ -104,6 +104,38 @@ def test_cannot_acquire_already_leased_non_expired_execution(utc_db):
 
 
 @pytest.mark.usefixtures("postgres_db", "utc_db")
+def test_claim_next_pending_execution_allows_one_worker_only(utc_db):
+    conn, cur = utc_db
+    execution_id = _create_pending_execution(conn, cur)
+    now = datetime(2026, 5, 16, 12, 0, 0)
+
+    first = playbook_store.claim_next_pending_playbook_execution_with_lease(
+        conn,
+        "worker-a",
+        lease_duration_seconds=120,
+        now=now,
+    )
+    conn.commit()
+    second = playbook_store.claim_next_pending_playbook_execution_with_lease(
+        conn,
+        "worker-b",
+        lease_duration_seconds=120,
+        now=now,
+    )
+    conn.commit()
+
+    assert first is not None
+    assert first["id"] == execution_id
+    assert first["status"] == "running"
+    assert first["lease_owner"] == "worker-a"
+    assert second is None
+
+    row = playbook_store.get_playbook_execution(conn, execution_id)
+    assert row["status"] == "running"
+    assert row["lease_owner"] == "worker-a"
+
+
+@pytest.mark.usefixtures("postgres_db", "utc_db")
 def test_heartbeat_only_works_for_matching_owner(utc_db):
     conn, cur = utc_db
     execution_id = _create_pending_execution(conn, cur)
@@ -135,6 +167,50 @@ def test_heartbeat_only_works_for_matching_owner(utc_db):
     assert _utc_naive(ok["lease_heartbeat_at"]) == heartbeat_at
     assert _utc_naive(ok["lease_expires_at"]) == heartbeat_at + timedelta(seconds=60)
     assert denied is None
+
+
+@pytest.mark.usefixtures("postgres_db", "utc_db")
+def test_finalize_updates_require_matching_lease_owner(utc_db):
+    conn, cur = utc_db
+    execution_id = _create_pending_execution(conn, cur)
+    start = datetime(2026, 5, 16, 12, 0, 0)
+
+    playbook_store.acquire_execution_lease(
+        conn,
+        execution_id,
+        "worker-a",
+        lease_duration_seconds=120,
+        now=start,
+    )
+    conn.commit()
+
+    stale_steps = [{"step_index": 0, "action": "monitor", "status": "success"}]
+    failed_steps = [{"step_index": 0, "action": "monitor", "status": "failed"}]
+
+    stale_success = playbook_store.set_playbook_execution_success(
+        conn,
+        execution_id,
+        stale_steps,
+        last_completed_step=0,
+        now=start + timedelta(seconds=5),
+        lease_owner="worker-b",
+    )
+    stale_failure = playbook_store.set_playbook_execution_failed(
+        conn,
+        execution_id,
+        failed_steps,
+        last_completed_step=None,
+        now=start + timedelta(seconds=6),
+        lease_owner="worker-b",
+    )
+    conn.commit()
+
+    row = playbook_store.get_playbook_execution(conn, execution_id)
+    assert stale_success is None
+    assert stale_failure is None
+    assert row["status"] == "running"
+    assert row["lease_owner"] == "worker-a"
+    assert row["steps_log"] == []
 
 
 @pytest.mark.usefixtures("postgres_db", "utc_db")
@@ -215,6 +291,99 @@ def test_awaiting_approval_is_not_treated_as_stale_running(utc_db):
 
     assert stale_rows == []
     assert recovered is None
+
+
+@pytest.mark.usefixtures("postgres_db", "utc_db")
+def test_awaiting_approval_resume_lease_allows_one_worker_only(utc_db):
+    conn, cur = utc_db
+    execution_id = _create_pending_execution(conn, cur, playbook_id="pb_resume_race")
+    steps_log = [
+        {
+            "step_index": 0,
+            "action": "require_approval",
+            "status": "awaiting_approval",
+            "event": "approval_requested",
+        }
+    ]
+    now = datetime(2026, 5, 16, 12, 0, 0)
+    cur.execute(
+        """
+        UPDATE playbook_executions
+        SET status = 'awaiting_approval',
+            steps_log = %s,
+            last_completed_step = 0,
+            lease_owner = NULL,
+            lease_acquired_at = NULL,
+            lease_heartbeat_at = NULL,
+            lease_expires_at = NULL
+        WHERE id = %s
+        """,
+        (Json(steps_log), execution_id),
+    )
+    conn.commit()
+
+    first = playbook_store.acquire_awaiting_approval_resume_lease(
+        conn,
+        execution_id,
+        "worker-a",
+        steps_log,
+        0,
+        lease_duration_seconds=120,
+        now=now,
+    )
+    conn.commit()
+    second = playbook_store.acquire_awaiting_approval_resume_lease(
+        conn,
+        execution_id,
+        "worker-b",
+        steps_log,
+        0,
+        lease_duration_seconds=120,
+        now=now,
+    )
+    conn.commit()
+
+    assert first is not None
+    assert first["status"] == "running"
+    assert first["lease_owner"] == "worker-a"
+    assert second is None
+
+
+@pytest.mark.usefixtures("postgres_db", "utc_db")
+def test_retry_execution_pending_row_is_not_double_claimed(utc_db):
+    conn, cur = utc_db
+    source_execution_id = _create_pending_execution(conn, cur, playbook_id="pb_retry_claim")
+    failed_steps = [{"step_index": 0, "action": "monitor", "status": "failed"}]
+    playbook_store.set_playbook_execution_failed(
+        conn,
+        source_execution_id,
+        failed_steps,
+        last_completed_step=None,
+        now=datetime(2026, 5, 16, 12, 0, 0),
+    )
+    retry_execution_id = playbook_store.create_retry_execution(conn, source_execution_id)
+    conn.commit()
+
+    claimed = playbook_store.claim_next_pending_playbook_execution_with_lease(
+        conn,
+        "worker-a",
+        lease_duration_seconds=120,
+        now=datetime(2026, 5, 16, 12, 1, 0),
+    )
+    conn.commit()
+    duplicate = playbook_store.claim_next_pending_playbook_execution_with_lease(
+        conn,
+        "worker-b",
+        lease_duration_seconds=120,
+        now=datetime(2026, 5, 16, 12, 1, 0),
+    )
+    conn.commit()
+
+    assert claimed is not None
+    assert claimed["id"] == retry_execution_id
+    assert claimed["status"] == "running"
+    assert claimed["lease_owner"] == "worker-a"
+    assert duplicate is None
 
 
 @pytest.mark.usefixtures("postgres_db", "utc_db")

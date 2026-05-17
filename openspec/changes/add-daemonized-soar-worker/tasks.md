@@ -83,10 +83,17 @@ There is **no** HTTP or daemon entry point for playbook batch execution; operato
 
 ## 2. Store-Level Concurrency Hardening
 
-- [ ] 2.1 Add or refine atomic lease acquisition tests proving one worker owns one execution under contention.
-- [ ] 2.2 Add ownership-checked completion, failure, renewal, and dead-letter transition tests.
-- [ ] 2.3 Add idempotency tests for completed, failed, dismissed, dead-lettered, retrying, and stale executions.
-- [ ] 2.4 Add retry-request and retry-execute coordination tests proving replacement executions do not duplicate prior attempts.
+- [x] 2.1 Add or refine atomic lease acquisition tests proving one worker owns one execution under contention.
+- [x] 2.2 Add ownership-checked completion, failure, renewal, and dead-letter transition tests.
+- [x] 2.3 Add idempotency tests for completed, failed, dismissed, dead-lettered, retrying, and stale executions.
+- [x] 2.4 Add retry-request and retry-execute coordination tests proving replacement executions do not duplicate prior attempts.
+
+### Slice 2 concurrency hardening notes (2026-05-17)
+
+- Added store-level coverage for single-owner `claim_next_pending_playbook_execution_with_lease`, matching-owner terminal updates, retry-created pending row claim safety, awaiting-approval stale recovery exclusion, and awaiting-approval resume lease contention.
+- Added executor-level regression coverage proving stale workers cannot finalize success/failure or create dead letters after losing ownership.
+- Added dead-letter capture coverage proving repeated playbook failure capture keeps one active dead letter for the same execution.
+- Fixed executor finalization safety: success/failure no longer falls back to unguarded terminal updates after lease loss. Failure finalization still permits the existing lease-free `awaiting_approval` denial/expiry path when no worker owns the row.
 
 ## 3. Worker Daemon Skeleton
 

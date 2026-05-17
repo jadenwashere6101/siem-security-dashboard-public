@@ -1,6 +1,7 @@
 import pytest
 
 from core import dead_letter_store
+from engines import playbook_step_executor
 
 
 def _insert_user(cur, username="dead_letter_user"):
@@ -343,6 +344,61 @@ def test_duplicate_active_source_updates_existing_row_and_terminal_allows_new_on
 
     assert third["id"] != first["id"]
     assert len(dead_letter_store.list_dead_letters(conn, source_type="response_action")) == 2
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_repeated_playbook_failure_capture_keeps_single_active_dead_letter(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    execution_id, playbook_id = _insert_playbook_execution(cur, alert_id=alert_id)
+    steps_log = [
+        {
+            "step_index": 0,
+            "action": "notify_slack",
+            "status": "failed",
+            "message": "first transient failure",
+            "error": {"message": "first transient failure"},
+            "output": {"adapter_result": {"metadata": {"failure_classification": "timeout"}}},
+        }
+    ]
+    conn.commit()
+
+    execution = {
+        "id": execution_id,
+        "status": "failed",
+        "failure_reason": "failed",
+        "alert_id": alert_id,
+        "incident_id": None,
+        "playbook_id": playbook_id,
+    }
+    playbook_step_executor.capture_failed_execution_dead_letter(
+        conn,
+        execution,
+        steps_log,
+        last_completed_step=None,
+        now=None,
+    )
+    steps_log[0]["message"] = "second transient failure"
+    steps_log[0]["error"]["message"] = "second transient failure"
+    playbook_step_executor.capture_failed_execution_dead_letter(
+        conn,
+        execution,
+        steps_log,
+        last_completed_step=None,
+        now=None,
+    )
+    conn.commit()
+
+    rows = dead_letter_store.list_dead_letters(
+        conn,
+        source_type="playbook_execution",
+        execution_id=execution_id,
+    )
+    assert len(rows) == 1
+    assert rows[0]["status"] == "open"
+    assert rows[0]["source_id"] == execution_id
+    assert rows[0]["failure_class"] == "timeout"
+    assert rows[0]["error_message"] == "second transient failure"
 
 
 def test_store_validation_rejects_invalid_enums_and_inputs():
