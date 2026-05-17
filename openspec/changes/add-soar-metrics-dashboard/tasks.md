@@ -102,28 +102,29 @@ Goal: Add two new service functions for the new backend routes.
 
 Goal: Create the component file, wire all data sources, implement auto-refresh, and render section headings with loading/error states. No charts or metric cards yet.
 
-- [ ] Create `frontend/src/components/SoarMetricsDashboard.js`.
-- [ ] Props: `cardStyle`, `cardHeaderStyle`, `cardTitleStyle`, `cardSubtitleStyle`, `userRole`.
-- [ ] State per data source: `playbookMetrics`, `notifMetrics`, `dlMetrics`, `incidentMetrics`, `approvalMetrics`, `queueStatus` (each initialized to `null`).
-- [ ] Loading state per section (individual booleans, not a single shared flag).
-- [ ] Error state per section (individual strings/null).
-- [ ] `refreshing` boolean for quiet refresh indicator.
-- [ ] `lastRefreshedAt` Date for the header timestamp.
-- [ ] `REFRESH_INTERVAL_MS = 60_000`.
-- [ ] `fetchAll()` function: fires all fetches via `Promise.allSettled`. Applies results independently — a rejected promise sets that section's error state only.
-- [ ] Queue fetch inside `fetchAll()` is conditional: only runs when `userRole === "super_admin"`.
-- [ ] `useEffect` on mount: call `fetchAll()`, then set up `setInterval(fetchAll, REFRESH_INTERVAL_MS)`. Return cleanup that clears the interval.
-- [ ] Manual "Refresh now" button clears all error states, calls `fetchAll()`, and resets the interval.
-- [ ] Panel header renders:
+- [x] Create `frontend/src/components/SoarMetricsDashboard.js`.
+- [x] Props: `cardStyle`, `cardHeaderStyle`, `cardTitleStyle`, `cardSubtitleStyle`, `userRole`.
+- [x] State per data source: per-section object state (`{data, loading, error}` per section).
+- [x] Loading state per section (individual, not a single shared flag).
+- [x] Error state per section (individual strings/null).
+- [x] `refreshing` boolean for quiet refresh indicator.
+- [x] `lastRefreshedAt` Date for the header timestamp.
+- [x] `REFRESH_INTERVAL_MS = 60_000` (exported constant).
+- [x] `fetchAll()` function: fires all fetches via `Promise.allSettled`. Applies results independently — a rejected promise sets that section's error state only.
+- [x] Queue fetch inside `fetchAll()` is conditional: only runs when `userRole === "super_admin"`.
+- [x] `useEffect` on mount: call `fetchAll()`, then set up `setInterval(fetchAll, REFRESH_INTERVAL_MS)`. Return cleanup that clears the interval.
+- [x] Manual "Refresh now" button clears all error states, calls `fetchAll()`, and resets the interval.
+- [x] Panel header renders:
   - Title: "SOAR Metrics Dashboard"
   - Last refreshed timestamp (formatted, e.g. "14:32:05 UTC")
   - Quiet refresh indicator (visible when `refreshing: true`)
   - "Refresh now" button
-- [ ] Render six `<section>` containers (Sections 1–6) with placeholder headings and per-section loading/error states.
+- [x] Render six `<section>` containers (Sections 1–6) with placeholder headings and per-section loading/error states.
   - Section 6 is not rendered when `userRole !== "super_admin"`.
-- [ ] Per-section error state: inline message + "Retry" button that retries only that section's fetch.
+- [x] Per-section error state: inline message + "Retry" button that retries only that section's fetch.
+- [x] Create `frontend/src/components/SoarMetricsDashboard.test.js` — 20 tests: section rendering, loading states, per-section error isolation, Promise.allSettled partial failures, role gating, manual refresh, interval setup/cleanup, fake-timer auto-refresh.
 
-**Verification:** Component mounts without errors. Data loading state renders. No chart or card content yet. No existing tests broken.
+**Verification:** 20/20 tests pass. `npm run build` clean (pre-existing App.js warning only). No chart or card content yet. No existing tests broken.
 
 ---
 
