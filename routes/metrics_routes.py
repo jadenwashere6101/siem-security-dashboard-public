@@ -37,6 +37,8 @@ KNOWN_CIRCUIT_BREAKER_STATES: tuple[str, ...] = (
 )
 # spec: SPEC-NOTIFY-001
 KNOWN_RECENT_NOTIFICATION_BUCKETS: tuple[str, ...] = ("success", "failed", "timeout", "blocked")
+KNOWN_INCIDENT_STATUSES: tuple[str, ...] = ("open", "investigating", "resolved", "closed")
+KNOWN_INCIDENT_SEVERITIES: tuple[str, ...] = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 RECENT_WINDOW_HOURS = 24
 
 
@@ -93,6 +95,14 @@ def _merge_known_counts(rows: list[tuple[Any, Any]], known_keys: tuple[str, ...]
         else:
             unknown[label or "(null)"] = unknown.get(label or "(null)", 0) + c
     return counts, unknown
+
+
+def _iso_timestamp(value: Any) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
 
 
 @metrics_bp.route("/metrics/playbooks", methods=["GET"])
@@ -314,6 +324,85 @@ def notification_delivery_metrics_route():
         return jsonify(payload), 200
     except Exception as error:
         current_app.logger.error("Error in notification_delivery_metrics_route: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@metrics_bp.route("/metrics/incidents", methods=["GET"])
+@login_required
+@analyst_or_super_admin_required
+def incident_metrics_route():
+    # spec: SPEC-METRICS-001
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT status, severity, COUNT(*)
+                FROM incidents
+                GROUP BY status, severity
+                """
+            )
+            rows = cur.fetchall() or []
+
+            by_status = _empty_counts(KNOWN_INCIDENT_STATUSES)
+            by_severity = _empty_counts(KNOWN_INCIDENT_SEVERITIES)
+            total_count = 0
+            open_high_critical_count = 0
+
+            for status, severity, cnt in rows:
+                count = int(cnt)
+                normalized_status = str(status) if status is not None else ""
+                normalized_severity = str(severity).upper() if severity is not None else ""
+
+                total_count += count
+                if normalized_status in by_status:
+                    by_status[normalized_status] += count
+                if normalized_severity in by_severity:
+                    by_severity[normalized_severity] += count
+                if normalized_status in {"open", "investigating"} and normalized_severity in {"HIGH", "CRITICAL"}:
+                    open_high_critical_count += count
+
+            cur.execute(
+                """
+                SELECT MAX(created_at)
+                FROM incidents
+                """
+            )
+            newest_row = cur.fetchone()
+            newest_incident_at = newest_row[0] if newest_row else None
+
+            cur.execute(
+                """
+                SELECT MIN(created_at)
+                FROM incidents
+                WHERE status = 'open'
+                """
+            )
+            oldest_open_row = cur.fetchone()
+            oldest_open_incident_at = oldest_open_row[0] if oldest_open_row else None
+
+        return (
+            jsonify(
+                {
+                    "total_count": total_count,
+                    "total": total_count,
+                    "open_count": by_status["open"],
+                    "by_status": by_status,
+                    "by_severity": by_severity,
+                    "open_high_critical_count": open_high_critical_count,
+                    "open_high_critical": open_high_critical_count,
+                    "newest_incident_at": _iso_timestamp(newest_incident_at),
+                    "oldest_open_incident_at": _iso_timestamp(oldest_open_incident_at),
+                }
+            ),
+            200,
+        )
+    except Exception as error:
+        current_app.logger.error("Error in incident_metrics_route: %s", error)
         return jsonify({"error": "Internal server error"}), 500
     finally:
         if conn:
