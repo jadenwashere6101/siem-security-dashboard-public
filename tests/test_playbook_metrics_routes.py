@@ -358,3 +358,96 @@ def test_metrics_does_not_invoke_integration_adapter_execute(client, postgres_db
             resp = client.get("/metrics/playbooks")
     assert resp.status_code == 200
     mock_get.assert_not_called()
+
+
+# --- stale_running_count ---
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_stale_running_count_zero_when_empty(client, postgres_db):
+    conn, _cur = postgres_db
+    _login_super_admin(client)
+    with _patched_metrics_db(conn):
+        resp = client.get("/metrics/playbooks")
+    assert resp.status_code == 200
+    assert resp.get_json()["stale_running_count"] == 0
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_stale_running_count_counts_expired_running_leases(client, postgres_db):
+    conn, cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_stale", "Stale", steps=_valid_steps())
+    ex1 = playbook_store.create_playbook_execution(conn, "pb_stale", alert_id=None)
+    ex2 = playbook_store.create_playbook_execution(conn, "pb_stale", alert_id=None)
+    # ex1: running with expired lease — counts
+    cur.execute(
+        """
+        UPDATE playbook_executions
+        SET status = 'running',
+            lease_owner = 'worker:1234:abc',
+            lease_expires_at = NOW() - INTERVAL '10 minutes'
+        WHERE id = %s
+        """,
+        (ex1,),
+    )
+    # ex2: running with non-expired lease — must not count
+    cur.execute(
+        """
+        UPDATE playbook_executions
+        SET status = 'running',
+            lease_owner = 'worker:1234:def',
+            lease_expires_at = NOW() + INTERVAL '10 minutes'
+        WHERE id = %s
+        """,
+        (ex2,),
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_metrics_db(conn):
+        resp = client.get("/metrics/playbooks")
+    assert resp.status_code == 200
+    assert resp.get_json()["stale_running_count"] == 1
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_stale_running_count_excludes_awaiting_approval(client, postgres_db):
+    conn, cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_awap", "Awap", steps=_valid_steps())
+    ex = playbook_store.create_playbook_execution(conn, "pb_awap", alert_id=None)
+    # awaiting_approval with an expired lease timestamp — must not count (wrong status)
+    cur.execute(
+        """
+        UPDATE playbook_executions
+        SET status = 'awaiting_approval',
+            lease_expires_at = NOW() - INTERVAL '5 minutes'
+        WHERE id = %s
+        """,
+        (ex,),
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_metrics_db(conn):
+        resp = client.get("/metrics/playbooks")
+    assert resp.status_code == 200
+    assert resp.get_json()["stale_running_count"] == 0
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_stale_running_count_excludes_null_lease_expires_at(client, postgres_db):
+    conn, cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_nolease", "NoLease", steps=_valid_steps())
+    ex = playbook_store.create_playbook_execution(conn, "pb_nolease", alert_id=None)
+    # running but lease_expires_at is NULL (no lease held) — must not count
+    cur.execute(
+        "UPDATE playbook_executions SET status = 'running', lease_expires_at = NULL WHERE id = %s",
+        (ex,),
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_metrics_db(conn):
+        resp = client.get("/metrics/playbooks")
+    assert resp.status_code == 200
+    assert resp.get_json()["stale_running_count"] == 0

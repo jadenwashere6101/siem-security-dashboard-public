@@ -186,6 +186,18 @@ def playbook_execution_metrics_route():
             )
             with_linked_approval = int(cur.fetchone()[0])
 
+            # spec: SPEC-METRICS-001
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM playbook_executions
+                WHERE status = 'running'
+                  AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at < NOW()
+                """
+            )
+            stale_running_count = int(cur.fetchone()[0])
+
         payload: dict[str, Any] = {
             "total_executions": total_executions,
             "by_status": by_status,
@@ -201,6 +213,7 @@ def playbook_execution_metrics_route():
                 "awaiting_approval": awaiting,
                 "with_linked_approval": with_linked_approval,
             },
+            "stale_running_count": stale_running_count,
         }
         if unknown_statuses:
             payload["unknown_statuses"] = unknown_statuses
