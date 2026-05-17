@@ -1,4 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Bar,
+  BarChart,
+  Cell,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { getDeadLetterMetrics } from "../services/deadLetterService";
 import {
   getApprovalMetrics,
@@ -10,6 +19,96 @@ import { loadSoarQueueStatus } from "../services/soarQueueService";
 
 // spec: SPEC-METRICS-001
 export const REFRESH_INTERVAL_MS = 60_000;
+
+// --- Domain constants ---
+
+const PLAYBOOK_STATUSES = [
+  "pending",
+  "running",
+  "awaiting_approval",
+  "success",
+  "failed",
+  "abandoned",
+];
+const DL_STATUSES = ["open", "retrying", "retried", "dismissed"];
+const INCIDENT_STATUSES = ["open", "investigating", "resolved", "closed"];
+const INCIDENT_SEVERITIES = ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
+const APPROVAL_STATUSES = ["pending", "approved", "denied", "expired"];
+const QUEUE_STATUSES = [
+  "pending",
+  "running",
+  "awaiting_approval",
+  "success",
+  "failed",
+  "skipped",
+];
+const CB_STATES = ["closed", "open", "half_open"];
+const NOTIF_MODES = ["simulation", "real"];
+const NOTIF_RECENT_BUCKETS = ["success", "failed", "timeout", "blocked"];
+
+const SIMULATION_NOTICE =
+  "Simulation only: these playbook metrics reflect simulated executions and visibility data. No real remediation or live integration execution is active.";
+
+// spec: SPEC-NOTIFY-001
+const NOTIFICATION_METRICS_NOTICE =
+  "Operational evidence only: delivery metrics count recorded attempts (simulation and real mode). They do not prove a human received a message at Slack, Teams, or any other provider.";
+
+const STATUS_COLOR = {
+  success: "#3fb950",
+  resolved: "#3fb950",
+  retried: "#3fb950",
+  approved: "#3fb950",
+  closed: "#8b949e",
+  failed: "#f85149",
+  open: "#f85149",
+  denied: "#f85149",
+  awaiting_approval: "#d29922",
+  retrying: "#d29922",
+  pending: "#d29922",
+  investigating: "#d29922",
+  running: "#388bfd",
+  skipped: "#8b949e",
+  abandoned: "#8b949e",
+  dismissed: "#8b949e",
+  expired: "#8b949e",
+};
+
+const SEVERITY_COLOR = {
+  CRITICAL: "#f85149",
+  HIGH: "#db6d28",
+  MEDIUM: "#d29922",
+  LOW: "#8b949e",
+};
+
+const QUEUE_COLOR = {
+  pending: "#d29922",
+  running: "#388bfd",
+  awaiting_approval: "#bc8cff",
+  success: "#3fb950",
+  failed: "#f85149",
+  skipped: "#8b949e",
+};
+
+// --- Helpers ---
+
+function toCount(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+export function formatRelativeTime(isoString) {
+  if (!isoString) return null;
+  const then = new Date(isoString);
+  if (isNaN(then.getTime())) return String(isoString);
+  const diffMs = Date.now() - then.getTime();
+  const diffMins = Math.floor(diffMs / 60_000);
+  if (diffMins < 2) return "just now";
+  if (diffMins < 60) return `${diffMins} minutes ago`;
+  const diffHrs = Math.floor(diffMins / 60);
+  if (diffHrs < 24) return `${diffHrs} hour${diffHrs !== 1 ? "s" : ""} ago`;
+  const diffDays = Math.floor(diffHrs / 24);
+  return `${diffDays} day${diffDays !== 1 ? "s" : ""} ago`;
+}
 
 function formatRefreshTime(date) {
   if (!date) return null;
@@ -23,6 +122,57 @@ function formatRefreshTime(date) {
     }) + " UTC"
   );
 }
+
+function toChartData(obj, keys) {
+  if (!obj || typeof obj !== "object") return keys.map((k) => ({ name: k, count: 0 }));
+  return keys.map((key) => ({ name: key, count: toCount(obj[key]) }));
+}
+
+function toChartDataDynamic(obj) {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return [];
+  return Object.entries(obj)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, count]) => ({ name, count: toCount(count) }));
+}
+
+function hasNonZero(data) {
+  return Array.isArray(data) && data.some((d) => d.count > 0);
+}
+
+function sortedTopN(obj, n = 5) {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return [];
+  return Object.entries(obj)
+    .sort(([, a], [, b]) => toCount(b) - toCount(a))
+    .slice(0, n)
+    .map(([key, count]) => ({ key, count: toCount(count) }));
+}
+
+function normalizePlaybookRows(rawRows) {
+  if (!Array.isArray(rawRows)) return [];
+  return rawRows.map((row, index) => {
+    const playbookId =
+      row &&
+      row.playbook_id !== null &&
+      row.playbook_id !== undefined &&
+      row.playbook_id !== ""
+        ? String(row.playbook_id)
+        : `unknown-${index + 1}`;
+    return {
+      playbook_id: playbookId,
+      total: toCount(row?.total),
+      by_status: PLAYBOOK_STATUSES.reduce((acc, s) => {
+        acc[s] = toCount(row?.by_status?.[s]);
+        return acc;
+      }, {}),
+    };
+  });
+}
+
+function initSection() {
+  return { data: null, loading: true, error: null };
+}
+
+// --- Presentational sub-components ---
 
 function SectionLoading({ label }) {
   return <div aria-label={`Loading ${label}`}>Loading…</div>;
@@ -39,9 +189,127 @@ function SectionError({ message, onRetry }) {
   );
 }
 
-function initSection() {
-  return { data: null, loading: true, error: null };
+function MetricCard({ label, value, accent }) {
+  return (
+    <div
+      style={{
+        ...summaryCardStyle,
+        ...(accent ? { borderColor: accent + "55" } : {}),
+      }}
+    >
+      <span style={summaryLabelStyle}>{label}</span>
+      <span
+        style={{
+          ...summaryValueStyle,
+          ...(accent ? { color: accent } : {}),
+        }}
+      >
+        {value ?? 0}
+      </span>
+    </div>
+  );
 }
+
+function MetricBarChart({ data, colorMap, height = 200 }) {
+  if (!hasNonZero(data)) return null;
+  return (
+    <div style={{ marginTop: 14 }} data-testid="chart-container">
+      <ResponsiveContainer width="100%" height={height}>
+        <BarChart data={data} style={{ backgroundColor: "transparent" }}>
+          <XAxis dataKey="name" stroke="#8b949e" tick={{ fontSize: 11 }} />
+          <YAxis stroke="#8b949e" allowDecimals={false} />
+          <Tooltip
+            contentStyle={{
+              backgroundColor: "#161b22",
+              border: "1px solid #30363d",
+              color: "#e6edf3",
+            }}
+            labelStyle={{ color: "#c9d1d9" }}
+            cursor={{ fill: "rgba(88, 166, 255, 0.08)" }}
+            wrapperStyle={{ outline: "none" }}
+          />
+          <Bar dataKey="count">
+            {data.map((entry) => (
+              <Cell key={entry.name} fill={colorMap?.[entry.name] || "#8b949e"} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+function MetricBarChartH({ data, colorMap, height = 180 }) {
+  if (!hasNonZero(data)) return null;
+  return (
+    <div style={{ marginTop: 14 }} data-testid="chart-container">
+      <ResponsiveContainer width="100%" height={height}>
+        <BarChart data={data} layout="vertical" style={{ backgroundColor: "transparent" }}>
+          <XAxis type="number" stroke="#8b949e" allowDecimals={false} />
+          <YAxis
+            dataKey="name"
+            type="category"
+            stroke="#8b949e"
+            width={90}
+            tick={{ fontSize: 11 }}
+          />
+          <Tooltip
+            contentStyle={{
+              backgroundColor: "#161b22",
+              border: "1px solid #30363d",
+              color: "#e6edf3",
+            }}
+            labelStyle={{ color: "#c9d1d9" }}
+            cursor={{ fill: "rgba(88, 166, 255, 0.08)" }}
+            wrapperStyle={{ outline: "none" }}
+          />
+          <Bar dataKey="count">
+            {data.map((entry) => (
+              <Cell key={entry.name} fill={colorMap?.[entry.name] || "#8b949e"} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+function PlaybookTable({ rows }) {
+  const [open, setOpen] = useState(false);
+  if (!rows || rows.length === 0) return null;
+  return (
+    <div style={sectionBlockStyle}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        style={toggleButtonStyle}
+      >
+        {open ? "▾" : "▸"} Per-Playbook Breakdown ({rows.length})
+      </button>
+      {open && (
+        <ul style={rowListStyle} aria-label="Playbook breakdown table">
+          {rows.map((row) => (
+            <li key={row.playbook_id} style={rowCardStyle}>
+              <div style={rowHeaderStyle}>
+                <span style={playbookIdStyle}>{row.playbook_id}</span>
+                <span style={totalPillStyle}>Total: {row.total}</span>
+              </div>
+              <div style={rowStatusGridStyle}>
+                {PLAYBOOK_STATUSES.map((status) => (
+                  <span key={status} style={inlineStatusStyle}>
+                    {status}: {row.by_status[status]}
+                  </span>
+                ))}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// --- Main component ---
 
 export default function SoarMetricsDashboard({
   cardStyle,
@@ -132,6 +400,50 @@ export default function SoarMetricsDashboard({
     fetchAll();
   }, [fetchAll]);
 
+  // Pre-computed chart/card values from section data
+  const playbookStatusData = toChartData(playbook.data?.by_status, PLAYBOOK_STATUSES);
+  const playbookRows = normalizePlaybookRows(playbook.data?.by_playbook_id);
+
+  const dlStatusData = toChartData(deadLetter.data?.by_status, DL_STATUSES);
+  const dlTopFailures = sortedTopN(deadLetter.data?.by_failure_class, 5);
+  const dlOldestActive = formatRelativeTime(deadLetter.data?.oldest_active_at ?? null);
+
+  const notifProviders = toChartDataDynamic(notification.data?.by_provider);
+  const notifCbData = toChartData(
+    notification.data?.circuit_breaker_state_counts,
+    CB_STATES
+  );
+  const notifRecentSuccess = toCount(notification.data?.recent?.success);
+  const notifRecentFailedBlocked =
+    toCount(notification.data?.recent?.failed) +
+    toCount(notification.data?.recent?.blocked);
+  const notifSimCount = toCount(notification.data?.by_mode?.simulation);
+  const notifRealCount = toCount(notification.data?.by_mode?.real);
+  const notifTotal = toCount(notification.data?.total_delivery_attempts);
+
+  const incidentStatusData = toChartData(incident.data?.by_status, INCIDENT_STATUSES);
+  const incidentSeverityData = toChartData(
+    incident.data?.by_severity,
+    INCIDENT_SEVERITIES
+  );
+  const incidentOpenActive =
+    toCount(incident.data?.by_status?.open) +
+    toCount(incident.data?.by_status?.investigating);
+  const incidentResolvedClosed =
+    toCount(incident.data?.by_status?.resolved) +
+    toCount(incident.data?.by_status?.closed);
+  const incidentOpenHighCritical = toCount(
+    incident.data?.open_high_critical ?? incident.data?.open_high_critical_count
+  );
+
+  const approvalStatusData = toChartData(approval.data?.by_status, APPROVAL_STATUSES);
+  const approvalPending = toCount(
+    approval.data?.pending_count ?? approval.data?.by_status?.pending
+  );
+
+  const queueStatusData = toChartData(queue.data?.counts, QUEUE_STATUSES);
+  const queueGeneratedAt = queue.data?.generated_at;
+
   return (
     <section style={cardStyle}>
       <header style={cardHeaderStyle}>
@@ -151,77 +463,571 @@ export default function SoarMetricsDashboard({
         </div>
       </header>
 
-      <section aria-label="Playbook Metrics">
-        <h3>Playbook Metrics</h3>
-        {playbook.loading && <SectionLoading label="Playbook Metrics" />}
-        {!playbook.loading && playbook.error && (
-          <SectionError
-            message={playbook.error}
-            onRetry={() => fetchSection(getPlaybookMetrics, setPlaybook)}
-          />
-        )}
-      </section>
+      <div style={panelContentStyle}>
 
-      <section aria-label="Dead Letter Metrics">
-        <h3>Dead Letter Metrics</h3>
-        {deadLetter.loading && <SectionLoading label="Dead Letter Metrics" />}
-        {!deadLetter.loading && deadLetter.error && (
-          <SectionError
-            message={deadLetter.error}
-            onRetry={() => fetchSection(getDeadLetterMetrics, setDeadLetter)}
-          />
-        )}
-      </section>
-
-      <section aria-label="Notification Delivery Metrics">
-        <h3>Notification Delivery Metrics</h3>
-        {notification.loading && (
-          <SectionLoading label="Notification Delivery Metrics" />
-        )}
-        {!notification.loading && notification.error && (
-          <SectionError
-            message={notification.error}
-            onRetry={() =>
-              fetchSection(getNotificationDeliveryMetrics, setNotification)
-            }
-          />
-        )}
-      </section>
-
-      <section aria-label="Incident Metrics">
-        <h3>Incident Metrics</h3>
-        {incident.loading && <SectionLoading label="Incident Metrics" />}
-        {!incident.loading && incident.error && (
-          <SectionError
-            message={incident.error}
-            onRetry={() => fetchSection(getIncidentMetrics, setIncident)}
-          />
-        )}
-      </section>
-
-      <section aria-label="Approval Metrics">
-        <h3>Approval Metrics</h3>
-        {approval.loading && <SectionLoading label="Approval Metrics" />}
-        {!approval.loading && approval.error && (
-          <SectionError
-            message={approval.error}
-            onRetry={() => fetchSection(getApprovalMetrics, setApproval)}
-          />
-        )}
-      </section>
-
-      {isSuperAdmin && (
-        <section aria-label="SOAR Queue Health">
-          <h3>SOAR Queue Health</h3>
-          {queue.loading && <SectionLoading label="SOAR Queue Health" />}
-          {!queue.loading && queue.error && (
+        {/* ── Section 1: Playbook Metrics ── */}
+        <section aria-label="Playbook Metrics" style={sectionWrapStyle}>
+          <h3 style={sectionHeadingStyle}>Playbook Metrics</h3>
+          {playbook.loading && <SectionLoading label="Playbook Metrics" />}
+          {!playbook.loading && playbook.error && (
             <SectionError
-              message={queue.error}
-              onRetry={() => fetchSection(loadSoarQueueStatus, setQueue)}
+              message={playbook.error}
+              onRetry={() => fetchSection(getPlaybookMetrics, setPlaybook)}
             />
           )}
+          {!playbook.loading && !playbook.error && (
+            <>
+              <div style={simulationNoticeStyle} role="note">
+                {SIMULATION_NOTICE}
+              </div>
+              <div style={summaryGridStyle}>
+                <MetricCard
+                  label="Total Executions"
+                  value={toCount(playbook.data?.total_executions)}
+                />
+                <MetricCard
+                  label="Success (24 h)"
+                  value={toCount(playbook.data?.recent?.success)}
+                  accent="#3fb950"
+                />
+                <MetricCard
+                  label="Failed (24 h)"
+                  value={toCount(playbook.data?.recent?.failed)}
+                  accent={
+                    toCount(playbook.data?.recent?.failed) > 0 ? "#f85149" : undefined
+                  }
+                />
+                <MetricCard
+                  label="Awaiting Approval"
+                  value={toCount(playbook.data?.approval_gated?.awaiting_approval)}
+                />
+                {playbook.data?.stale_running_count != null && (
+                  <MetricCard
+                    label="Stale Running"
+                    value={toCount(playbook.data.stale_running_count)}
+                    accent={
+                      toCount(playbook.data.stale_running_count) > 0
+                        ? "#f85149"
+                        : undefined
+                    }
+                  />
+                )}
+              </div>
+              {hasNonZero(playbookStatusData) ? (
+                <MetricBarChart data={playbookStatusData} colorMap={STATUS_COLOR} />
+              ) : (
+                <p style={emptyTextStyle}>No executions recorded.</p>
+              )}
+              <PlaybookTable rows={playbookRows} />
+            </>
+          )}
         </section>
-      )}
+
+        {/* ── Section 2: Dead Letter Metrics ── */}
+        <section aria-label="Dead Letter Metrics" style={sectionWrapStyle}>
+          <h3 style={sectionHeadingStyle}>Dead Letter Metrics</h3>
+          {deadLetter.loading && <SectionLoading label="Dead Letter Metrics" />}
+          {!deadLetter.loading && deadLetter.error && (
+            <SectionError
+              message={deadLetter.error}
+              onRetry={() => fetchSection(getDeadLetterMetrics, setDeadLetter)}
+            />
+          )}
+          {!deadLetter.loading && !deadLetter.error && (
+            <>
+              <div style={summaryGridStyle}>
+                <MetricCard
+                  label="Open"
+                  value={toCount(deadLetter.data?.open)}
+                  accent={toCount(deadLetter.data?.open) > 0 ? "#f85149" : undefined}
+                />
+                <MetricCard
+                  label="Retrying"
+                  value={toCount(deadLetter.data?.retrying)}
+                  accent={toCount(deadLetter.data?.retrying) > 0 ? "#d29922" : undefined}
+                />
+                <MetricCard
+                  label="Oldest Active"
+                  value={dlOldestActive ?? "None"}
+                />
+              </div>
+              {hasNonZero(dlStatusData) ? (
+                <MetricBarChart data={dlStatusData} colorMap={STATUS_COLOR} />
+              ) : (
+                <p style={emptyTextStyle}>No dead letters recorded.</p>
+              )}
+              <div style={sectionBlockStyle}>
+                <h4 style={subsectionTitleStyle}>Top Failure Classes</h4>
+                {dlTopFailures.length === 0 ? (
+                  <p style={emptyTextStyle}>No failures recorded.</p>
+                ) : (
+                  <table style={simpleTableStyle}>
+                    <thead>
+                      <tr>
+                        <th style={tableThStyle}>Failure class</th>
+                        <th style={tableThStyle}>Count</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {dlTopFailures.map(({ key, count }) => (
+                        <tr key={key}>
+                          <td style={tableTdStyle}>{key}</td>
+                          <td style={tableTdStyle}>{count}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+              <p style={operationalNoteStyle}>
+                Review and retry failed executions in the SOAR Operations tab.
+              </p>
+            </>
+          )}
+        </section>
+
+        {/* ── Section 3: Notification Delivery Metrics ── */}
+        <section aria-label="Notification Delivery Metrics" style={sectionWrapStyle}>
+          <h3 style={sectionHeadingStyle}>Notification Delivery Metrics</h3>
+          {notification.loading && (
+            <SectionLoading label="Notification Delivery Metrics" />
+          )}
+          {!notification.loading && notification.error && (
+            <SectionError
+              message={notification.error}
+              onRetry={() =>
+                fetchSection(getNotificationDeliveryMetrics, setNotification)
+              }
+            />
+          )}
+          {!notification.loading && !notification.error && (
+            <>
+              <div style={notificationNoticeStyle} role="note">
+                {NOTIFICATION_METRICS_NOTICE}
+              </div>
+              <div style={summaryGridStyle}>
+                <MetricCard label="Total Attempts" value={notifTotal} />
+                <MetricCard
+                  label="Success (24 h)"
+                  value={notifRecentSuccess}
+                  accent="#3fb950"
+                />
+                <MetricCard
+                  label="Failed + Blocked (24 h)"
+                  value={notifRecentFailedBlocked}
+                  accent={notifRecentFailedBlocked > 0 ? "#f85149" : undefined}
+                />
+                <MetricCard
+                  label="Simulation / Real"
+                  value={`${notifSimCount} / ${notifRealCount}`}
+                />
+              </div>
+              {hasNonZero(notifProviders) ? (
+                <MetricBarChartH data={notifProviders} colorMap={{}} />
+              ) : (
+                <p style={emptyTextStyle}>No provider breakdown available.</p>
+              )}
+              {hasNonZero(notifCbData) && (
+                <div style={sectionBlockStyle}>
+                  <h4 style={subsectionTitleStyle}>Circuit Breaker States</h4>
+                  <div style={inlineRowStyle}>
+                    {notifCbData.map(({ name, count }) => (
+                      <span key={name} style={cbPillStyle}>
+                        {name}: {count}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div style={summaryGridStyle}>
+                {NOTIF_MODES.map((mode) => (
+                  <MetricCard
+                    key={mode}
+                    label={`Mode: ${mode}`}
+                    value={toCount(notification.data?.by_mode?.[mode])}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+        </section>
+
+        {/* ── Section 4: Incident Metrics ── */}
+        <section aria-label="Incident Metrics" style={sectionWrapStyle}>
+          <h3 style={sectionHeadingStyle}>Incident Metrics</h3>
+          {incident.loading && <SectionLoading label="Incident Metrics" />}
+          {!incident.loading && incident.error && (
+            <SectionError
+              message={incident.error}
+              onRetry={() => fetchSection(getIncidentMetrics, setIncident)}
+            />
+          )}
+          {!incident.loading && !incident.error && (
+            <>
+              <div style={summaryGridStyle}>
+                <MetricCard
+                  label="Open + Investigating"
+                  value={incidentOpenActive}
+                  accent={incidentOpenActive > 0 ? "#d29922" : undefined}
+                />
+                <MetricCard label="Resolved + Closed" value={incidentResolvedClosed} />
+                <MetricCard
+                  label="Open Critical / High"
+                  value={incidentOpenHighCritical}
+                  accent={incidentOpenHighCritical > 0 ? "#f85149" : undefined}
+                />
+              </div>
+              <div style={dualChartGridStyle}>
+                <div>
+                  <h4 style={subsectionTitleStyle}>By Status</h4>
+                  {hasNonZero(incidentStatusData) ? (
+                    <MetricBarChart
+                      data={incidentStatusData}
+                      colorMap={STATUS_COLOR}
+                      height={180}
+                    />
+                  ) : (
+                    <p style={emptyTextStyle}>No incidents recorded.</p>
+                  )}
+                </div>
+                <div>
+                  <h4 style={subsectionTitleStyle}>By Severity</h4>
+                  {hasNonZero(incidentSeverityData) ? (
+                    <MetricBarChart
+                      data={incidentSeverityData}
+                      colorMap={SEVERITY_COLOR}
+                      height={180}
+                    />
+                  ) : (
+                    <p style={emptyTextStyle}>No severity data.</p>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </section>
+
+        {/* ── Section 5: Approval Metrics ── */}
+        <section aria-label="Approval Metrics" style={sectionWrapStyle}>
+          <h3 style={sectionHeadingStyle}>Approval Metrics</h3>
+          {approval.loading && <SectionLoading label="Approval Metrics" />}
+          {!approval.loading && approval.error && (
+            <SectionError
+              message={approval.error}
+              onRetry={() => fetchSection(getApprovalMetrics, setApproval)}
+            />
+          )}
+          {!approval.loading && !approval.error && (
+            <>
+              <div style={summaryGridStyle}>
+                <MetricCard
+                  label="Pending"
+                  value={approvalPending}
+                  accent={approvalPending > 0 ? "#d29922" : undefined}
+                />
+                <MetricCard
+                  label="Approved"
+                  value={toCount(approval.data?.by_status?.approved)}
+                  accent="#3fb950"
+                />
+                <MetricCard
+                  label="Denied"
+                  value={toCount(approval.data?.by_status?.denied)}
+                  accent={
+                    toCount(approval.data?.by_status?.denied) > 0 ? "#f85149" : undefined
+                  }
+                />
+                <MetricCard
+                  label="Expired"
+                  value={toCount(approval.data?.by_status?.expired)}
+                />
+              </div>
+              {hasNonZero(approvalStatusData) ? (
+                <MetricBarChart data={approvalStatusData} colorMap={STATUS_COLOR} />
+              ) : (
+                <p style={emptyTextStyle}>No approvals recorded.</p>
+              )}
+              <p style={operationalNoteStyle}>
+                Approve or deny pending approvals in the SOAR Approvals tab.
+              </p>
+            </>
+          )}
+        </section>
+
+        {/* ── Section 6: SOAR Queue Health (super_admin only) ── */}
+        {isSuperAdmin && (
+          <section aria-label="SOAR Queue Health" style={sectionWrapStyle}>
+            <h3 style={sectionHeadingStyle}>SOAR Queue Health</h3>
+            {queue.loading && <SectionLoading label="SOAR Queue Health" />}
+            {!queue.loading && queue.error && (
+              <SectionError
+                message={queue.error}
+                onRetry={() => fetchSection(loadSoarQueueStatus, setQueue)}
+              />
+            )}
+            {!queue.loading && !queue.error && (
+              <>
+                <div style={summaryGridStyle}>
+                  <MetricCard
+                    label="Pending"
+                    value={toCount(queue.data?.counts?.pending)}
+                    accent={
+                      toCount(queue.data?.counts?.pending) > 0 ? "#d29922" : undefined
+                    }
+                  />
+                  <MetricCard
+                    label="Running"
+                    value={toCount(queue.data?.counts?.running)}
+                    accent="#388bfd"
+                  />
+                  <MetricCard
+                    label="Awaiting Approval"
+                    value={toCount(queue.data?.counts?.awaiting_approval)}
+                    accent="#bc8cff"
+                  />
+                  <MetricCard
+                    label="Failed"
+                    value={toCount(queue.data?.counts?.failed)}
+                    accent={
+                      toCount(queue.data?.counts?.failed) > 0 ? "#f85149" : undefined
+                    }
+                  />
+                </div>
+                {hasNonZero(queueStatusData) ? (
+                  <MetricBarChart data={queueStatusData} colorMap={QUEUE_COLOR} />
+                ) : (
+                  <p style={emptyTextStyle}>No queue entries recorded.</p>
+                )}
+                {queueGeneratedAt && (
+                  <p style={mutedTextStyle} aria-label="Queue snapshot timestamp">
+                    Queue snapshot as of {queueGeneratedAt}
+                  </p>
+                )}
+              </>
+            )}
+          </section>
+        )}
+
+      </div>
     </section>
   );
 }
+
+// --- Styles ---
+
+const panelContentStyle = {
+  padding: "20px 20px 24px",
+  display: "flex",
+  flexDirection: "column",
+  gap: "0",
+};
+
+const sectionWrapStyle = {
+  paddingTop: "22px",
+  paddingBottom: "22px",
+  borderBottom: "1px solid #21262d",
+};
+
+const sectionHeadingStyle = {
+  margin: "0 0 14px 0",
+  fontSize: "16px",
+  fontWeight: "700",
+  color: "#e6edf3",
+};
+
+const subsectionTitleStyle = {
+  margin: "0 0 8px 0",
+  fontSize: "13px",
+  fontWeight: "700",
+  color: "#c9d1d9",
+};
+
+const summaryGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+  gap: "10px",
+  marginBottom: "14px",
+};
+
+const summaryCardStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "4px",
+  padding: "10px 12px",
+  borderRadius: "10px",
+  border: "1px solid #30363d",
+  backgroundColor: "#0d1117",
+};
+
+const summaryLabelStyle = {
+  color: "#8b949e",
+  fontSize: "11px",
+  fontWeight: "700",
+  letterSpacing: "0.06em",
+  textTransform: "uppercase",
+};
+
+const summaryValueStyle = {
+  color: "#e6edf3",
+  fontSize: "20px",
+  fontWeight: "700",
+};
+
+const sectionBlockStyle = {
+  marginTop: "16px",
+};
+
+const emptyTextStyle = {
+  margin: "10px 0",
+  color: "#8b949e",
+  fontSize: "13px",
+};
+
+const operationalNoteStyle = {
+  marginTop: "12px",
+  color: "#8b949e",
+  fontSize: "12px",
+  fontStyle: "italic",
+};
+
+const mutedTextStyle = {
+  margin: "10px 0 0",
+  color: "#8b949e",
+  fontSize: "12px",
+};
+
+const simulationNoticeStyle = {
+  marginBottom: "14px",
+  padding: "10px 14px",
+  borderRadius: "10px",
+  border: "1px solid rgba(210, 153, 34, 0.35)",
+  backgroundColor: "rgba(210, 153, 34, 0.10)",
+  color: "#e6c35c",
+  fontSize: "12px",
+  fontWeight: "600",
+  lineHeight: 1.45,
+};
+
+const notificationNoticeStyle = {
+  marginBottom: "14px",
+  padding: "10px 12px",
+  borderRadius: "10px",
+  border: "1px solid rgba(56, 139, 253, 0.35)",
+  backgroundColor: "rgba(56, 139, 253, 0.08)",
+  color: "#c9e1ff",
+  fontSize: "12px",
+  fontWeight: "600",
+  lineHeight: 1.45,
+};
+
+const dualChartGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+  gap: "20px",
+  marginTop: "14px",
+};
+
+const inlineRowStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "8px",
+  marginTop: "6px",
+};
+
+const cbPillStyle = {
+  fontSize: "12px",
+  color: "#c9d1d9",
+  border: "1px solid #30363d",
+  borderRadius: "8px",
+  padding: "3px 10px",
+  backgroundColor: "#161b22",
+};
+
+const simpleTableStyle = {
+  width: "100%",
+  borderCollapse: "collapse",
+  marginTop: "8px",
+};
+
+const tableThStyle = {
+  textAlign: "left",
+  color: "#8b949e",
+  fontSize: "11px",
+  fontWeight: "700",
+  letterSpacing: "0.06em",
+  textTransform: "uppercase",
+  padding: "6px 8px",
+  borderBottom: "1px solid #30363d",
+};
+
+const tableTdStyle = {
+  color: "#c9d1d9",
+  fontSize: "13px",
+  padding: "6px 8px",
+  borderBottom: "1px solid #21262d",
+};
+
+const toggleButtonStyle = {
+  background: "none",
+  border: "1px solid #30363d",
+  borderRadius: "6px",
+  color: "#c9d1d9",
+  fontSize: "13px",
+  cursor: "pointer",
+  padding: "5px 10px",
+  marginBottom: "10px",
+};
+
+const rowListStyle = {
+  listStyle: "none",
+  margin: 0,
+  padding: 0,
+  display: "flex",
+  flexDirection: "column",
+  gap: "8px",
+};
+
+const rowCardStyle = {
+  border: "1px solid #30363d",
+  borderRadius: "8px",
+  padding: "10px 12px",
+  backgroundColor: "#0d1117",
+};
+
+const rowHeaderStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: "10px",
+  marginBottom: "6px",
+  flexWrap: "wrap",
+};
+
+const playbookIdStyle = {
+  color: "#e6edf3",
+  fontWeight: "700",
+  fontSize: "13px",
+};
+
+const totalPillStyle = {
+  color: "#c9d1d9",
+  fontSize: "12px",
+  border: "1px solid #30363d",
+  borderRadius: "999px",
+  padding: "2px 8px",
+  backgroundColor: "#161b22",
+};
+
+const rowStatusGridStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "6px",
+};
+
+const inlineStatusStyle = {
+  color: "#8b949e",
+  fontSize: "11px",
+  border: "1px solid #30363d",
+  borderRadius: "6px",
+  padding: "2px 6px",
+};

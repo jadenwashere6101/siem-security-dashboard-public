@@ -134,56 +134,56 @@ Goal: Implement all metric card content, BarCharts, and section-specific sub-com
 
 ### Section 1 — Playbook Execution Health
 
-- [ ] Metric cards: Total Executions, Success (24h), Failed (24h), Awaiting Approval.
-- [ ] Metric card for Stale Running: rendered only when `playbookMetrics.stale_running_count` is present and non-null.
-- [ ] BarChart: `by_status` object transformed to `[{ name, count }]` array. Colors: green=success, red=failed, amber=awaiting_approval, gray=others. `ResponsiveContainer width="100%" height={200}`.
-- [ ] Per-playbook breakdown table: collapsible (default collapsed). Shows playbook_id, total, status breakdown per row. Reuse normalization helpers extracted from `PlaybookMetricsPanel.js`.
-- [ ] Simulation-only notice: match copy from `PlaybookMetricsPanel`.
-- [ ] Empty state: if all status values are zero, omit the BarChart and show "No executions recorded" text. Metric cards still render (zeroed).
+- [x] Metric cards: Total Executions, Success (24h), Failed (24h), Awaiting Approval.
+- [x] Metric card for Stale Running: rendered only when `playbookMetrics.stale_running_count` is present and non-null.
+- [x] BarChart: `by_status` object transformed to `[{ name, count }]` array. Colors: green=success, red=failed, amber=awaiting_approval, gray=others. `ResponsiveContainer width="100%" height={200}`.
+- [x] Per-playbook breakdown table: collapsible (default collapsed). Shows playbook_id, total, status breakdown per row. Reuse normalization helpers extracted from `PlaybookMetricsPanel.js`.
+- [x] Simulation-only notice: match copy from `PlaybookMetricsPanel`.
+- [x] Empty state: if all status values are zero, omit the BarChart and show "No executions recorded" text. Metric cards still render (zeroed).
 
 ### Section 2 — Dead Letter Health
 
-- [ ] Import `getDeadLetterMetrics` from `deadLetterService.js` (not metricsService).
-- [ ] Metric cards: Open, Retrying, Oldest Active.
+- [x] Import `getDeadLetterMetrics` from `deadLetterService.js` (not metricsService).
+- [x] Metric cards: Open, Retrying, Oldest Active.
   - Oldest Active: formatted as relative time ("3 days ago") using a `formatRelativeTime(isoString)` helper. Show "None" when null.
-- [ ] Add `formatRelativeTime` helper: converts ISO timestamp to human-readable relative label. Reuse or extend `formatAdminTimestamp` if applicable.
-- [ ] BarChart: `by_status` (open, retrying, retried, dismissed). Colors: red=open, amber=retrying, green=retried, gray=dismissed.
-- [ ] Top 5 failure classes table from `by_failure_class`: failure_class column + count column. "No failures recorded" empty state when object is empty.
-- [ ] Operational note (static text): "Review and retry failed executions in the SOAR Operations tab."
-- [ ] Empty state: omit BarChart when all status values are zero.
+- [x] Add `formatRelativeTime` helper: converts ISO timestamp to human-readable relative label. Reuse or extend `formatAdminTimestamp` if applicable.
+- [x] BarChart: `by_status` (open, retrying, retried, dismissed). Colors: red=open, amber=retrying, green=retried, gray=dismissed.
+- [x] Top 5 failure classes table from `by_failure_class`: failure_class column + count column. "No failures recorded" empty state when object is empty.
+- [x] Operational note (static text): "Review and retry failed executions in the SOAR Operations tab."
+- [x] Empty state: omit BarChart when all status values are zero.
 
 ### Section 3 — Notification Delivery
 
-- [ ] Metric cards: Total Attempts, Success (24h), Failed + Blocked (24h) (`recent.failed + recent.blocked`), Simulation/Real split (inline `by_mode.simulation` vs `by_mode.real`).
-- [ ] Horizontal BarChart: `by_provider` entries sorted alphabetically. Use `layout="vertical"` in Recharts.
-- [ ] Circuit breaker summary: inline row — "closed: N, open: N, half_open: N" from `circuit_breaker_state_counts`.
-- [ ] Evidence disclaimer: match copy from `PlaybookMetricsPanel` NOTIFICATION_METRICS_NOTICE.
-- [ ] Empty state: omit BarChart when `by_provider` is empty or all zero.
+- [x] Metric cards: Total Attempts, Success (24h), Failed + Blocked (24h) (`recent.failed + recent.blocked`), Simulation/Real split (inline `by_mode.simulation` vs `by_mode.real`).
+- [x] Horizontal BarChart: `by_provider` entries sorted alphabetically. Use `layout="vertical"` in Recharts.
+- [x] Circuit breaker summary: inline row — "closed: N, open: N, half_open: N" from `circuit_breaker_state_counts`.
+- [x] Evidence disclaimer: match copy from `PlaybookMetricsPanel` NOTIFICATION_METRICS_NOTICE.
+- [x] Empty state: omit BarChart when `by_provider` is empty or all zero.
 
 ### Section 4 — Incident Operational Counts
 
-- [ ] Metric cards: Open + Investigating (`by_status.open + by_status.investigating`), Resolved + Closed, Open Critical/High (`open_high_critical`).
-- [ ] Status BarChart: `by_status` (open, investigating, resolved, closed). Colors: red=open, amber=investigating, green=resolved, gray=closed.
-- [ ] Severity BarChart: `by_severity` (CRITICAL, HIGH, MEDIUM, LOW). Colors: red=CRITICAL, orange=HIGH, amber=MEDIUM, gray=LOW.
-- [ ] Render both charts side-by-side in a two-column inline grid when viewport permits; stack vertically on narrow viewports.
-- [ ] Empty state: omit both charts when all counts are zero.
+- [x] Metric cards: Open + Investigating (`by_status.open + by_status.investigating`), Resolved + Closed, Open Critical/High (`open_high_critical`).
+- [x] Status BarChart: `by_status` (open, investigating, resolved, closed). Colors: red=open, amber=investigating, green=resolved, gray=closed.
+- [x] Severity BarChart: `by_severity` (CRITICAL, HIGH, MEDIUM, LOW). Colors: red=CRITICAL, orange=HIGH, amber=MEDIUM, gray=LOW.
+- [x] Render both charts side-by-side in a two-column inline grid when viewport permits; stack vertically on narrow viewports.
+- [x] Empty state: omit both charts when all counts are zero.
 
 ### Section 5 — Approval Operational Counts
 
-- [ ] Metric cards: Pending (`pending_count`), Approved, Denied, Expired.
-- [ ] BarChart: `by_status` (pending, approved, denied, expired). Colors: amber=pending, green=approved, red=denied, gray=expired.
-- [ ] Operational note (static text): "Approve or deny pending approvals in the SOAR Approvals tab."
-- [ ] Empty state: omit BarChart when all status values are zero.
+- [x] Metric cards: Pending (`pending_count`), Approved, Denied, Expired.
+- [x] BarChart: `by_status` (pending, approved, denied, expired). Colors: amber=pending, green=approved, red=denied, gray=expired.
+- [x] Operational note (static text): "Approve or deny pending approvals in the SOAR Approvals tab."
+- [x] Empty state: omit BarChart when all status values are zero.
 
 ### Section 6 — SOAR Queue Health (super_admin only)
 
-- [ ] Entire section not rendered when `userRole !== "super_admin"`. No placeholder, no loading state visible to analysts.
-- [ ] Metric cards: Pending (`counts.pending`), Running (`counts.running`), Awaiting Approval (`counts.awaiting_approval`), Failed (`counts.failed`).
-- [ ] BarChart: all six statuses from `counts`. Colors: amber=pending, blue=running, purple=awaiting_approval, green=success, red=failed, gray=skipped.
-- [ ] Generated-at timestamp: "Queue snapshot as of `generated_at`" rendered below chart.
-- [ ] Empty state: omit BarChart when all counts are zero.
+- [x] Entire section not rendered when `userRole !== "super_admin"`. No placeholder, no loading state visible to analysts.
+- [x] Metric cards: Pending (`counts.pending`), Running (`counts.running`), Awaiting Approval (`counts.awaiting_approval`), Failed (`counts.failed`).
+- [x] BarChart: all six statuses from `counts`. Colors: amber=pending, blue=running, purple=awaiting_approval, green=success, red=failed, gray=skipped.
+- [x] Generated-at timestamp: "Queue snapshot as of `generated_at`" rendered below chart.
+- [x] Empty state: omit BarChart when all counts are zero.
 
-**Verification:** All six sections render with correct data. Charts appear only when data has at least one non-zero value. Section 6 absent for analyst `userRole`. No existing tests broken.
+**Verification:** 64/64 tests pass. `npm run build` clean. Section 6 absent in DOM for analyst. No existing tests broken.
 
 ---
 
