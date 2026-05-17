@@ -1,9 +1,85 @@
 ## 1. Discovery and Safety Baseline
 
-- [ ] 1.1 Audit the existing manual executor script, playbook execution store, lease fields, stale recovery helpers, dead-letter store, retry flows, metrics routes, and SOAR UI assumptions.
-- [ ] 1.2 Document current execution states, legal transitions, retry limits, lease ownership checks, and simulation-mode guardrails.
-- [ ] 1.3 Identify whether worker heartbeat visibility can use existing data or requires an additive persistence change.
-- [ ] 1.4 Define default worker configuration values for polling cadence, batch size, lease duration, heartbeat interval, recovery interval, idle backoff, and max in-flight work.
+- [x] 1.1 Audit the existing manual executor script, playbook execution store, lease fields, stale recovery helpers, dead-letter store, retry flows, metrics routes, and SOAR UI assumptions.
+- [x] 1.2 Document current execution states, legal transitions, retry limits, lease ownership checks, and simulation-mode guardrails.
+- [x] 1.3 Identify whether worker heartbeat visibility can use existing data or requires an additive persistence change.
+- [x] 1.4 Define default worker configuration values for polling cadence, batch size, lease duration, heartbeat interval, recovery interval, idle backoff, and max in-flight work.
+
+### Slice 1 audit findings (2026-05-17)
+
+**Execution entry points today (all one-shot; no daemon):**
+
+| Path | What it runs | Commit model |
+|------|----------------|--------------|
+| `scripts/run_playbook_executor_once.py` | `process_playbook_execution_batch()` or `recover_stale_playbook_executions()` | Single `conn.commit()` per invocation |
+| `scripts/soar_worker_run.py` | `engines.soar_action_worker.process_batch()` on `response_actions_queue` | Per-action commits inside worker |
+| `POST /admin/soar/worker/run-once` | Same as `soar_worker_run` (response queue only, simulation-only) | Request-scoped DB connection |
+| `engines/soar_playbook_orchestrator.py` | Creates `pending` `playbook_executions` post-commit only | Called from ingest post-commit path |
+
+There is **no** HTTP or daemon entry point for playbook batch execution; operators use the CLI script only.
+
+**Playbook executor call chain (safe to wrap in a daemon loop):**
+
+1. `generate_playbook_worker_id()` → stable `hostname:pid:uuid` per process.
+2. `process_playbook_execution_batch(conn, limit, worker_id=…)`:
+   - Pending: `claim_next_pending_playbook_execution_with_lease` (`FOR UPDATE SKIP LOCKED`, oldest-first).
+   - Then `_process_running_execution` → `_process_steps` with per-step `_heartbeat_lease`.
+   - Remaining batch slots: `list_awaiting_approval_playbook_executions` + `process_playbook_execution` per row (resume path uses `acquire_awaiting_approval_resume_lease`).
+3. Stale recovery (manual today): `list_stale_running_executions` → `mark_stale_execution_for_recovery` → optional `capture_failed_execution_dead_letter` when recovery marks `failed` (implemented in script, not in store).
+
+**Response-action queue worker is separate.** `soar_worker_run.py` / admin run-once do not execute playbooks. Design open question (design.md): unify in one daemon later vs. playbook daemon first.
+
+**Legal execution statuses:** `pending`, `running`, `awaiting_approval`, `success`, `failed`, `abandoned`, `permanently_failed` (`TERMINAL_STATUSES` in executor). Active uniqueness for scheduling: `(playbook_id, alert_id)` while `pending` / `running` / `awaiting_approval`.
+
+**Lease / idempotency (already implemented):**
+
+- Store: `acquire_execution_lease`, `claim_next_pending_playbook_execution_with_lease`, `heartbeat_execution_lease`, `release_execution_lease`, `list_stale_running_executions`, `mark_stale_execution_for_recovery`.
+- Executor: skip terminal; ownership checks on `running`; `_step_already_succeeded_in_log` after resume; lease release on success/fail and on approval pause.
+- Env: `SOAR_PLAYBOOK_LEASE_SECONDS` (default **60** via `DEFAULT_PLAYBOOK_LEASE_SECONDS`).
+
+**Dead letter / retry (worker must not bypass):**
+
+- Failure: `capture_failed_execution_dead_letter` from `_finalize_failed` (best-effort).
+- `create_retry_execution` inserts new `pending` row only; dead-letter `retry-execute` API does not run steps.
+- Store tests: `tests/test_dead_letter_store.py`, `tests/test_dead_letter_routes.py`.
+
+**Metrics / visibility today:**
+
+- `GET /metrics/playbooks` includes `stale_running_count` (expired lease on `status=running`).
+- **No** `GET /health/worker` route exists (mentioned only in `docs/soar_upgrade_roadmap.md` / archived SOAR UI design).
+- No process-level worker heartbeat table; only `playbook_executions.lease_*` columns.
+
+**1.3 — Heartbeat visibility:** Process health for a daemon **requires additive persistence** (e.g. `soar_worker_heartbeats` per design open questions) **or** derive “last activity” from logs/metrics only (weaker). Execution-level `lease_heartbeat_at` is insufficient to prove the worker process is alive when idle.
+
+**1.4 — Proposed defaults for slice 3+ (simulation VM; tune under load):**
+
+| Setting | Proposed default | Notes |
+|---------|------------------|--------|
+| Poll interval | 5s + 0–2s jitter | Avoid tight loop when idle |
+| Idle backoff cap | 30s | When no pending/awaiting work |
+| Batch size | 10 (max 50) | Match `run_playbook_executor_once` |
+| Max in-flight per worker | 1 | Current batch loop is sequential; keep until step parallelism is designed |
+| Lease duration | 60s (`SOAR_PLAYBOOK_LEASE_SECONDS`) | Must exceed longest step; renew each step today |
+| Heartbeat / renew | Each step + before claim | Already in `_process_steps` |
+| Stale recovery interval | 60s | Separate from poll; bounded `stale-limit` 50 |
+| Recovery ownership | Every worker attempts; rely on `FOR UPDATE SKIP LOCKED` on stale list | Alternative: elected owner — defer to slice 5 |
+
+**Test coverage map for daemon work:**
+
+- Leases / stale recovery: `tests/test_playbook_execution_leases.py`, `tests/test_playbook_step_executor.py`, `tests/test_run_playbook_executor_once.py`
+- Dead letters: `tests/test_dead_letter_store.py`, `tests/test_dead_letter_routes.py`
+- Metrics (no worker health): `tests/test_playbook_metrics_routes.py`
+- **Gaps:** multi-worker concurrent CLI simulation, daemon shutdown/drain, DB disconnect during loop, approval-resume races under two workers.
+
+**Safe implementation path for slice 3 (daemon skeleton):**
+
+1. New module e.g. `engines/soar_playbook_worker.py` (or `scripts/soar_playbook_worker_daemon.py`) that imports **existing** `process_playbook_execution_batch` and `recover_stale_playbook_executions` — do not fork executor logic.
+2. Loop: connect → recovery tick (bounded) → batch tick → commit → sleep; signal handlers set draining flag.
+3. Keep `run_playbook_executor_once.py` as thin CLI wrapper over the same functions for break-glass.
+4. Do **not** enable real adapters; inherit simulation-only playbook executor and separate response-queue policy.
+5. Add worker heartbeat persistence in slice 7 before relying on dashboard “healthy worker” semantics.
+
+**Ingest / detection / correlation:** Untouched. Scheduling remains `soar_playbook_orchestrator` post-commit only; `playbook_schedules` is still metadata-only.
 
 ## 2. Store-Level Concurrency Hardening
 
