@@ -44,7 +44,6 @@ const QUEUE_STATUSES = [
 ];
 const CB_STATES = ["closed", "open", "half_open"];
 const NOTIF_MODES = ["simulation", "real"];
-const NOTIF_RECENT_BUCKETS = ["success", "failed", "timeout", "blocked"];
 
 const SIMULATION_NOTICE =
   "Simulation only: these playbook metrics reflect simulated executions and visibility data. No real remediation or live integration execution is active.";

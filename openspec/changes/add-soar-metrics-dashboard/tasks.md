@@ -8,15 +8,15 @@ After every slice: run the full frontend test suite and the full backend test su
 
 ## Pre-Implementation Review
 
-- [ ] Audit `metricsService.js` — confirm existing exports (`getPlaybookMetrics`, `getNotificationDeliveryMetrics`) and their import patterns.
-- [ ] Audit `deadLetterService.js` — confirm `getDeadLetterMetrics` is already exported and usable without duplication.
-- [ ] Audit `PlaybookMetricsPanel.js` — extract the simulation-mode notice copy and the notification evidence disclaimer copy for reuse in `SoarMetricsDashboard`.
-- [ ] Audit `PlaybookMetricsPanel.js` — extract `by_playbook_id` normalization helpers for reuse in Section 1 per-playbook table.
-- [ ] Confirm `recharts` is available: `import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts"`. Verified in `SeverityChart.js`.
-- [ ] Confirm `GET /admin/soar/queue/status` response shape matches design spec: `counts.{pending,running,awaiting_approval,success,failed,skipped}`, `total`, `generated_at`.
-- [ ] Confirm App.js `soar-playbook-metrics` section ID and `<PlaybookMetricsPanel>` render block — identify the exact two lines to change.
-- [ ] Confirm `userRole` prop is passed to the component render site in App.js (already done for `ApprovalsPanel` and `PlaybooksPanel`).
-- [ ] Confirm `loadSoarQueueStatus` export from `soarQueueService.js` (or the correct service file). Identify the function name before wiring.
+- [x] Audit `metricsService.js` — confirm existing exports (`getPlaybookMetrics`, `getNotificationDeliveryMetrics`) and their import patterns.
+- [x] Audit `deadLetterService.js` — confirm `getDeadLetterMetrics` is already exported and usable without duplication.
+- [x] Audit `PlaybookMetricsPanel.js` — extract the simulation-mode notice copy and the notification evidence disclaimer copy for reuse in `SoarMetricsDashboard`.
+- [x] Audit `PlaybookMetricsPanel.js` — extract `by_playbook_id` normalization helpers for reuse in Section 1 per-playbook table.
+- [x] Confirm `recharts` is available: `import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts"`. Verified in `SeverityChart.js`.
+- [x] Confirm `GET /admin/soar/queue/status` response shape matches design spec: `counts.{pending,running,awaiting_approval,success,failed,skipped}`, `total`, `generated_at`.
+- [x] Confirm App.js `soar-playbook-metrics` section ID and `<PlaybookMetricsPanel>` render block — identify the exact two lines to change.
+- [x] Confirm `userRole` prop is passed to the component render site in App.js (already done for `ApprovalsPanel` and `PlaybooksPanel`).
+- [x] Confirm `loadSoarQueueStatus` export from `soarQueueService.js` (or the correct service file). Identify the function name before wiring.
 
 ---
 
@@ -225,40 +225,40 @@ Goal: Replace `PlaybookMetricsPanel` with `SoarMetricsDashboard` in the existing
 
 Goal: Cover all section rendering, role gating, loading/error states, refresh, and empty states.
 
-- [ ] Create `frontend/src/components/SoarMetricsDashboard.test.js`.
-- [ ] Mock all service imports: `getPlaybookMetrics`, `getNotificationDeliveryMetrics`, `getDeadLetterMetrics`, `getIncidentMetrics`, `getApprovalMetrics`, `loadSoarQueueStatus` (or equivalent).
-- [ ] **Rendering — Section visibility:**
-  - [ ] All sections 1–5 render for `userRole="analyst"`.
-  - [ ] Section 6 renders for `userRole="super_admin"`.
-  - [ ] Section 6 is absent for `userRole="analyst"` (no DOM node, not just hidden).
-- [ ] **Loading states:**
-  - [ ] Individual section shows loading indicator while its fetch is in-flight.
-  - [ ] Other sections not blocked when one section is loading.
-- [ ] **Error states:**
-  - [ ] Section renders error message + Retry button when its fetch rejects.
-  - [ ] Other sections not affected by one section's error.
-  - [ ] Retry button re-fires only that section's fetch.
-- [ ] **Data rendering:**
-  - [ ] Section 1 renders Total Executions, Success 24h, Failed 24h, Awaiting Approval cards.
-  - [ ] Section 1 Stale Running card is absent when `stale_running_count` not in response.
-  - [ ] Section 1 Stale Running card renders when `stale_running_count` is present.
-  - [ ] Section 1 per-playbook table is collapsed by default; expands on toggle.
-  - [ ] Section 2 Oldest Active shows "None" when `oldest_active_at` is null.
-  - [ ] Section 2 failure class table shows "No failures recorded" when `by_failure_class` is empty.
-  - [ ] Section 3 Sim/Real metric card displays both counts.
-  - [ ] Section 3 circuit breaker summary row renders all three states.
-  - [ ] Section 4 dual BarCharts (status + severity) render when data non-zero.
-  - [ ] Section 5 pending_count shown in Pending metric card.
-  - [ ] Section 6 generated_at timestamp rendered below chart.
-- [ ] **Empty states:**
-  - [ ] BarChart is omitted when all values in the chart data are zero (one test per section).
-  - [ ] Metric cards still render with zero values when data is empty.
-- [ ] **Auto-refresh:**
-  - [ ] `setInterval` is set on mount with `REFRESH_INTERVAL_MS`.
-  - [ ] Interval is cleared on unmount.
-  - [ ] "Refresh now" button triggers `fetchAll` and resets interval.
-- [ ] **Queue not fetched for analyst:**
-  - [ ] `loadSoarQueueStatus` is never called when `userRole="analyst"`.
+- [x] Create `frontend/src/components/SoarMetricsDashboard.test.js`.
+- [x] Mock all service imports: `getPlaybookMetrics`, `getNotificationDeliveryMetrics`, `getDeadLetterMetrics`, `getIncidentMetrics`, `getApprovalMetrics`, `loadSoarQueueStatus` (or equivalent).
+- [x] **Rendering — Section visibility:**
+  - [x] All sections 1–5 render for `userRole="analyst"`.
+  - [x] Section 6 renders for `userRole="super_admin"`.
+  - [x] Section 6 is absent for `userRole="analyst"` (no DOM node, not just hidden).
+- [x] **Loading states:**
+  - [x] Individual section shows loading indicator while its fetch is in-flight.
+  - [x] Other sections not blocked when one section is loading.
+- [x] **Error states:**
+  - [x] Section renders error message + Retry button when its fetch rejects.
+  - [x] Other sections not affected by one section's error.
+  - [x] Retry button re-fires only that section's fetch.
+- [x] **Data rendering:**
+  - [x] Section 1 renders Total Executions, Success 24h, Failed 24h, Awaiting Approval cards.
+  - [x] Section 1 Stale Running card is absent when `stale_running_count` not in response.
+  - [x] Section 1 Stale Running card renders when `stale_running_count` is present.
+  - [x] Section 1 per-playbook table is collapsed by default; expands on toggle.
+  - [x] Section 2 Oldest Active shows "None" when `oldest_active_at` is null.
+  - [x] Section 2 failure class table shows "No failures recorded" when `by_failure_class` is empty.
+  - [x] Section 3 Sim/Real metric card displays both counts.
+  - [x] Section 3 circuit breaker summary row renders all three states.
+  - [x] Section 4 dual BarCharts (status + severity) render when data non-zero.
+  - [x] Section 5 pending_count shown in Pending metric card.
+  - [x] Section 6 generated_at timestamp rendered below chart.
+- [x] **Empty states:**
+  - [x] BarChart is omitted when all values in the chart data are zero (one test per section).
+  - [x] Metric cards still render with zero values when data is empty.
+- [x] **Auto-refresh:**
+  - [x] `setInterval` is set on mount with `REFRESH_INTERVAL_MS`.
+  - [x] Interval is cleared on unmount.
+  - [x] "Refresh now" button triggers `fetchAll` and resets interval.
+- [x] **Queue not fetched for analyst:**
+  - [x] `loadSoarQueueStatus` is never called when `userRole="analyst"`.
 
 **Verification:** All `SoarMetricsDashboard.test.js` tests pass. Full suite (`npm test`) passes.
 
@@ -268,30 +268,30 @@ Goal: Cover all section rendering, role gating, loading/error states, refresh, a
 
 Before marking this OpenSpec complete:
 
-- [ ] All backend routes return correct shapes with zero-data input.
-- [ ] All backend routes have `# spec: SPEC-METRICS-001` traceability tags.
-- [ ] `SoarMetricsDashboard.js` passes JSX linting (`npm run lint` or equivalent).
-- [ ] Full frontend test suite passes with no regressions.
-- [ ] Full backend test suite passes with no regressions.
-- [ ] Section 6 is confirmed absent in DOM for analyst role (not just visually hidden).
-- [ ] No `GET /admin/soar/queue/status` call is made for analyst users.
-- [ ] `PlaybookMetricsPanel.js` and `PlaybookMetricsPanel.test.js` are byte-for-byte unchanged.
-- [ ] `oldest_active_at` relative time helper handles null without throwing.
-- [ ] Auto-refresh interval is confirmed cleared on component unmount (no leak in StrictMode).
-- [ ] `stale_running_count` card is conditionally rendered — no failure when field is absent.
-- [ ] All BarCharts use `ResponsiveContainer width="100%" height={200}` (or `height={180}` for dual-chart sections).
+- [x] All backend routes return correct shapes with zero-data input.
+- [x] All backend routes have `# spec: SPEC-METRICS-001` traceability tags.
+- [x] `SoarMetricsDashboard.js` passes JSX linting (`npm run lint` or equivalent).
+- [x] Full frontend test suite passes with no regressions.
+- [x] Full backend test suite passes with no regressions.
+- [x] Section 6 is confirmed absent in DOM for analyst role (not just visually hidden).
+- [x] No `GET /admin/soar/queue/status` call is made for analyst users.
+- [x] `PlaybookMetricsPanel.js` and `PlaybookMetricsPanel.test.js` are byte-for-byte unchanged.
+- [x] `oldest_active_at` relative time helper handles null without throwing.
+- [x] Auto-refresh interval is confirmed cleared on component unmount (no leak in StrictMode).
+- [x] `stale_running_count` card is conditionally rendered — no failure when field is absent.
+- [x] All BarCharts use `ResponsiveContainer width="100%" height={200}` (or `height={180}` for dual-chart sections).
 
 ---
 
 ## Safety Boundaries
 
-- [ ] No execution triggers of any kind. Dashboard is strictly read-only.
-- [ ] No raw event data, IP addresses, webhook URLs, or tokens in any API response or chart.
-- [ ] `GET /metrics/incidents` and `GET /metrics/approvals` are additive routes only. No schema changes, no new tables.
-- [ ] Simulation-mode notice preserved in Section 1. Evidence-only disclaimer preserved in Section 3.
-- [ ] `PlaybookMetricsPanel.js` is preserved unchanged — it is simply no longer imported in App.js.
-- [ ] Recharts is already installed. No new frontend dependencies are added.
-- [ ] All charts receive pre-aggregated counts from API responses. No raw record passthrough.
-- [ ] No real Slack, Teams, firewall, email, or webhook execution.
-- [ ] No changes to ingest, detection, or correlation internals.
-- [ ] No changes to approval semantics, dead letter lifecycle, incident status transitions, or queue execution behavior.
+- [x] No execution triggers of any kind. Dashboard is strictly read-only.
+- [x] No raw event data, IP addresses, webhook URLs, or tokens in any API response or chart.
+- [x] `GET /metrics/incidents` and `GET /metrics/approvals` are additive routes only. No schema changes, no new tables.
+- [x] Simulation-mode notice preserved in Section 1. Evidence-only disclaimer preserved in Section 3.
+- [x] `PlaybookMetricsPanel.js` is preserved unchanged — it is simply no longer imported in App.js.
+- [x] Recharts is already installed. No new frontend dependencies are added.
+- [x] All charts receive pre-aggregated counts from API responses. No raw record passthrough.
+- [x] No real Slack, Teams, firewall, email, or webhook execution.
+- [x] No changes to ingest, detection, or correlation internals.
+- [x] No changes to approval semantics, dead letter lifecycle, incident status transitions, or queue execution behavior.
