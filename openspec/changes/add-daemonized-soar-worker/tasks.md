@@ -184,15 +184,30 @@ There is **no** HTTP or daemon entry point for playbook batch execution; operato
 
 ## 10. Load and Failure Validation
 
-- [ ] 10.1 Add multi-worker simulation tests proving no duplicate execution under concurrent claims.
-- [ ] 10.2 Add queue pressure tests for batch limits, backpressure, starvation prevention, and metrics accuracy.
-- [ ] 10.3 Add stale recovery simulations for expired leases, active leases, and workers that crash mid-step.
-- [ ] 10.4 Add failure injection for DB disconnect, transaction rollback, dead-letter write failure, and retry exhaustion.
-- [ ] 10.5 Run existing ingest, detection, correlation, SOAR Operations, and SOAR Metrics regression suites to prove contracts remain unchanged.
+- [x] 10.1 Add multi-worker simulation tests proving no duplicate execution under concurrent claims.
+- [x] 10.2 Add queue pressure tests for batch limits, backpressure, starvation prevention, and metrics accuracy.
+- [x] 10.3 Add stale recovery simulations for expired leases, active leases, and workers that crash mid-step.
+- [x] 10.4 Add failure injection for DB disconnect, transaction rollback, dead-letter write failure, and retry exhaustion.
+- [x] 10.5 Run existing ingest, detection, correlation, SOAR Operations, and SOAR Metrics regression suites to prove contracts remain unchanged.
+
+### Slice 7 final validation notes (2026-05-17)
+
+- Backend daemon, lease/concurrency, executor, and dead-letter validation passed: `python3 -m pytest tests/test_soar_playbook_worker.py tests/test_playbook_execution_leases.py tests/test_playbook_step_executor.py tests/test_dead_letter_store.py tests/test_dead_letter_routes.py -v` returned 117 passed.
+- Backend metrics validation passed: `python3 -m pytest tests/test_playbook_metrics_routes.py tests/test_metrics_routes.py tests/test_notification_delivery_metrics_routes.py -v` returned 43 passed.
+- Ingest, detection, and correlation regression validation passed: `python3 -m pytest tests/test_ingest_api_contracts.py tests/test_failed_login_detection.py tests/test_correlated_activity.py tests/test_targeted_correlation.py -v` returned 21 passed.
+- Frontend SOAR Metrics validation passed: `CI=true npm test -- --runInBand SoarMetricsDashboard` returned 73 passed; `CI=true npm test -- --runInBand metricsService` returned 13 passed.
+- Frontend App and SOAR Operations validation passed: `CI=true npm test -- --runInBand App` returned 46 passed; `CI=true npm test -- --runInBand DeadLettersPanel` returned 25 passed.
+- Production frontend build passed with the existing `src/App.js` `checkAuth` hook dependency warning.
 
 ## 11. Final Verification and Archive
 
-- [ ] 11.1 Verify daemonized worker remains simulation-safe by default and real Slack/Teams/firewall execution remains disabled.
-- [ ] 11.2 Verify no schema rewrites, ingest changes, detection changes, correlation changes, or autonomous remediation broadening were introduced.
-- [ ] 11.3 Complete final backend, frontend, concurrency, load, and build verification.
+- [x] 11.1 Verify daemonized worker remains simulation-safe by default and real Slack/Teams/firewall execution remains disabled.
+- [x] 11.2 Verify no schema rewrites, ingest changes, detection changes, correlation changes, or autonomous remediation broadening were introduced.
+- [x] 11.3 Complete final backend, frontend, concurrency, load, and build verification.
 - [ ] 11.4 Update OpenSpec tasks with evidence and archive the change after implementation is complete.
+
+### Archive readiness notes (2026-05-17)
+
+- Final validation evidence is recorded above and all implementation, visibility, deployment-doc, load, failure, and regression tasks are complete.
+- No schema, migration, ingest, detection, correlation, runtime service, VM, systemd, or real integration changes were made in the final validation slice.
+- `11.4` remains open only for the explicit archive action; do not archive until the user requests the archive step.
