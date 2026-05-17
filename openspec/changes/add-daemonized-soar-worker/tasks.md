@@ -97,31 +97,44 @@ There is **no** HTTP or daemon entry point for playbook batch execution; operato
 
 ## 3. Worker Daemon Skeleton
 
-- [ ] 3.1 Introduce a dedicated worker entrypoint with configuration parsing, stable worker identity, DB connectivity check, and simulation-safe startup validation.
-- [ ] 3.2 Add signal handling for graceful shutdown and draining mode.
-- [ ] 3.3 Add structured logging for worker lifecycle events, `worker_id`, `execution_id`, lease owner, and failure class.
-- [ ] 3.4 Verify the worker can start and exit without claiming or executing work in a smoke test.
+- [x] 3.1 Introduce a dedicated worker entrypoint with configuration parsing, stable worker identity, DB connectivity check, and simulation-safe startup validation.
+- [x] 3.2 Add signal handling for graceful shutdown and draining mode.
+- [x] 3.3 Add structured logging for worker lifecycle events, `worker_id`, `execution_id`, lease owner, and failure class.
+- [x] 3.4 Verify the worker can start and exit without claiming or executing work in a smoke test.
+
+### Slice 3 daemon backend core notes (2026-05-17)
+
+- Added `engines/soar_playbook_worker.py` as a simulation-safe daemon loop around existing playbook batch and stale recovery primitives.
+- Added `scripts/soar_playbook_worker_daemon.py` as the CLI entrypoint with config parsing and signal-driven shutdown.
+- Loop opens a fresh DB connection per iteration, rolls back on failure, closes connections, and reconnects on the next loop.
+- Structured logs include worker id, loop counts, batch counts, stale recovery counts, error type, and shutdown reason without logging DB URLs or passwords.
 
 ## 4. Continuous Execution Loop
 
-- [ ] 4.1 Implement bounded polling with batch size, oldest-first eligibility, idle backoff, and jitter.
-- [ ] 4.2 Implement max in-flight work controls and queue starvation prevention.
-- [ ] 4.3 Integrate lease acquisition before execution and ownership validation after execution.
-- [ ] 4.4 Add tests for empty queue, large queue, mixed statuses, shutdown during idle, and shutdown during active work.
+- [x] 4.1 Implement bounded polling with batch size, oldest-first eligibility, idle backoff, and jitter.
+- [x] 4.2 Implement max in-flight work controls and queue starvation prevention.
+- [x] 4.3 Integrate lease acquisition before execution and ownership validation after execution.
+- [x] 4.4 Add tests for empty queue, large queue, mixed statuses, shutdown during idle, and shutdown during active work.
 
 ## 5. Stale Recovery Loop
 
-- [ ] 5.1 Implement bounded stale recovery cadence using existing lease timeout semantics.
-- [ ] 5.2 Ensure active heartbeat or lease renewal prevents premature recovery.
-- [ ] 5.3 Add tests for stale leased executions, active leased executions, repeated stale failures, and recovery race conditions.
-- [ ] 5.4 Confirm manual recovery behavior remains available for break-glass use.
+- [x] 5.1 Implement bounded stale recovery cadence using existing lease timeout semantics.
+- [x] 5.2 Ensure active heartbeat or lease renewal prevents premature recovery.
+- [x] 5.3 Add tests for stale leased executions, active leased executions, repeated stale failures, and recovery race conditions.
+- [x] 5.4 Confirm manual recovery behavior remains available for break-glass use.
 
 ## 6. Failure and Dead-Letter Handling
 
-- [ ] 6.1 Harden DB disconnect handling so the worker fails closed and does not mark success without persisted completion.
-- [ ] 6.2 Add poison execution handling with retry exhaustion and dead-letter escalation.
-- [ ] 6.3 Add tests for crash after lease, crash during step execution, failure before dead-letter write, and failure after dead-letter write.
-- [ ] 6.4 Confirm retry-execute continues to create a new pending execution only and does not run steps immediately.
+- [x] 6.1 Harden DB disconnect handling so the worker fails closed and does not mark success without persisted completion.
+- [x] 6.2 Add poison execution handling with retry exhaustion and dead-letter escalation.
+- [x] 6.3 Add tests for crash after lease, crash during step execution, failure before dead-letter write, and failure after dead-letter write.
+- [x] 6.4 Confirm retry-execute continues to create a new pending execution only and does not run steps immediately.
+
+### Slice 3 validation notes (2026-05-17)
+
+- Added focused daemon tests for one-batch processing, idle backoff, max-loop exit, stale recovery cadence, dry-run recovery rollback, DB failure rollback/close/retry, graceful shutdown, generated worker identity, safe logs, and two daemon instances not duplicating an execution.
+- Stale recovery continues to call the existing manual recovery helper, preserving break-glass behavior in `scripts/run_playbook_executor_once.py`.
+- Response-action execution remains separate; no real integrations are enabled.
 
 ## 7. Operational Visibility APIs and Metrics
 
