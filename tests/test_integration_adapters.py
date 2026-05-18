@@ -11,6 +11,7 @@ from unittest.mock import patch
 import pytest
 
 from core.integration_audit import build_integration_attempt_audit_details
+from integrations.adapter_rate_limiter import check_adapter_rate_limit, reset_adapter_rate_limiters
 from integrations.base_integration import (
     CIRCUIT_STATE_CLOSED,
     CIRCUIT_STATE_HALF_OPEN,
@@ -20,6 +21,7 @@ from integrations.base_integration import (
     FAILURE_CLASSIFICATION_CREDENTIAL_MISSING,
     FAILURE_CLASSIFICATION_GUARD_FAILED,
     FAILURE_CLASSIFICATION_NON_TRANSIENT,
+    FAILURE_CLASSIFICATION_PROVIDER_RATE_LIMITED,
     FAILURE_CLASSIFICATION_TRANSIENT,
     SimulatedCircuitBreakerControlError,
     configure_simulated_circuit_breaker,
@@ -59,7 +61,9 @@ EXPECTED_RESULT_KEYS = {
 @pytest.fixture(autouse=True)
 def _reset_integration_circuits():
     reset_simulated_circuit_breakers()
+    reset_adapter_rate_limiters()
     yield
+    reset_adapter_rate_limiters()
     reset_simulated_circuit_breakers()
 
 
@@ -709,6 +713,70 @@ def test_slack_real_mode_failure_audit_redacts_webhook(monkeypatch):
     assert details["alert_id"] == 101
     assert "hooks.slack.com/services" not in rendered_details
     assert "SECRET" not in rendered_details
+
+
+def test_slack_rate_limiter_allows_under_threshold(monkeypatch):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_SLACK_ENABLED", "true")
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T000/B000/SECRET")
+    monkeypatch.setenv("SLACK_MAX_SENDS_PER_MINUTE", "2")
+
+    with patch(
+        "integrations.slack_adapter._post_slack_webhook",
+        return_value={"status_code": 200},
+    ) as post_mock, patch("core.integration_audit.log_audit_event"):
+        first = get_integration_adapter("slack").execute("send_message")
+        second = get_integration_adapter("slack").execute("send_message")
+
+    assert first["success"] is True
+    assert second["success"] is True
+    assert post_mock.call_count == 2
+
+
+def test_adapter_rate_limit_helper_blocks_over_threshold(monkeypatch):
+    monkeypatch.setenv("SLACK_MAX_SENDS_PER_MINUTE", "2")
+
+    assert check_adapter_rate_limit("slack", now=100.0)["allowed"] is True
+    assert check_adapter_rate_limit("slack", now=101.0)["allowed"] is True
+
+    blocked = check_adapter_rate_limit("slack", now=102.0)
+
+    assert blocked["allowed"] is False
+    assert blocked["failure_classification"] == FAILURE_CLASSIFICATION_PROVIDER_RATE_LIMITED
+    assert blocked["retry_eligible"] is True
+    assert blocked["limit"] == 2
+
+
+def test_slack_rate_limiter_blocks_over_threshold_without_circuit_increment(monkeypatch):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_SLACK_ENABLED", "true")
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T000/B000/SECRET")
+    monkeypatch.setenv("SLACK_MAX_SENDS_PER_MINUTE", "2")
+
+    with patch(
+        "integrations.slack_adapter._post_slack_webhook",
+        return_value={"status_code": 200},
+    ) as post_mock, patch("core.integration_audit.log_audit_event") as audit_mock:
+        get_integration_adapter("slack").execute("send_message")
+        get_integration_adapter("slack").execute("send_message")
+        blocked = get_integration_adapter("slack").execute("send_message")
+
+    assert post_mock.call_count == 2
+    assert blocked["success"] is False
+    assert blocked["executed"] is False
+    assert blocked["metadata"]["failure_classification"] == FAILURE_CLASSIFICATION_PROVIDER_RATE_LIMITED
+    assert blocked["metadata"]["retry_eligible"] is True
+    assert blocked["metadata"]["rate_limited"] is True
+    assert blocked["metadata"]["rate_limit"]["limit"] == 2
+    assert audit_mock.call_count == 3
+    rendered_audit = json.dumps(audit_mock.call_args.kwargs["details"], sort_keys=True)
+    assert "hooks.slack.com/services" not in rendered_audit
+    assert "SECRET" not in rendered_audit
+    circuit = get_simulated_circuit_breaker_dict("slack")
+    assert circuit["state"] == CIRCUIT_STATE_CLOSED
+    assert circuit["consecutive_failures"] == 0
 
 
 def test_simulation_mode_does_not_write_real_adapter_audit(monkeypatch, no_network):

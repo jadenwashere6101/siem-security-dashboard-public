@@ -8,10 +8,12 @@ import urllib.request
 from typing import Any
 
 from core.integration_audit import log_integration_execution_attempt
+from integrations.adapter_rate_limiter import check_adapter_rate_limit
 from integrations.base_integration import (
     FAILURE_CLASSIFICATION_NON_TRANSIENT,
     FAILURE_CLASSIFICATION_TIMEOUT,
     FAILURE_CLASSIFICATION_TRANSIENT,
+    FAILURE_CLASSIFICATION_PROVIDER_RATE_LIMITED,
     REAL_MODE,
     SIMULATION_MODE,
     BaseIntegration,
@@ -177,6 +179,30 @@ class SlackSimulationAdapter(BaseIntegration):
                 },
                 mode=REAL_MODE,
                 simulated=True,
+                executed=False,
+            ), context)
+
+        rate_limit = check_adapter_rate_limit(self.adapter_name)
+        if not rate_limit["allowed"]:
+            return self._audit_real_attempt(self._result(
+                action,
+                params,
+                context,
+                success=False,
+                message="Slack real-mode send blocked safely by adapter rate limit.",
+                metadata={
+                    **base_metadata,
+                    "failure_classification": FAILURE_CLASSIFICATION_PROVIDER_RATE_LIMITED,
+                    "retry_eligible": True,
+                    "rate_limited": True,
+                    "rate_limit": {
+                        "limit": rate_limit["limit"],
+                        "window_seconds": rate_limit["window_seconds"],
+                        "reset_after_seconds": rate_limit["reset_after_seconds"],
+                    },
+                },
+                mode=REAL_MODE,
+                simulated=False,
                 executed=False,
             ), context)
 

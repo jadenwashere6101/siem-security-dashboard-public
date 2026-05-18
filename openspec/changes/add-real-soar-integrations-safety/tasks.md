@@ -90,7 +90,7 @@ filtering (`GET /dead-letters?retryable=true`) is meaningful.
   - [x] Dead letter captured after circuit-open failure has `retryable=True`.
   - [x] `GET /dead-letters?retryable=true` returns only correctly flagged rows.
   - [x] Existing dead letter tests pass unchanged.
-- [x] Run canonical regression suite.
+- [ ] Run canonical regression suite.
 
 ---
 
@@ -123,26 +123,26 @@ log entry.
 Goal: Add per-adapter in-process rate limiting so alert bursts cannot exhaust provider rate
 limits or flood dead letters.
 
-- [ ] Add `integrations/adapter_rate_limiter.py` implementing a per-adapter sliding-window
+- [x] Add `integrations/adapter_rate_limiter.py` implementing a per-adapter sliding-window
       token bucket or fixed-window counter with configurable max sends and window in seconds.
-- [ ] Rate limiter state is in-process; document that it resets on restart.
-- [ ] Wire rate limiter into `SlackAdapter.execute()`: check before real outbound call; return
-      `failure_classification: rate_limited`, `retry_eligible: True` if cap exceeded.
-- [ ] Wire rate limiter into `TeamsAdapter.execute()` equivalently.
-- [ ] Add stub wiring points in email and webhook adapters.
-- [ ] Rate-limited results must not increment the circuit breaker failure counter.
-- [ ] Add configurable env vars: `SLACK_MAX_SENDS_PER_MINUTE`, `TEAMS_MAX_SENDS_PER_MINUTE`,
+- [x] Rate limiter state is in-process; document that it resets on restart.
+- [x] Wire rate limiter into `SlackAdapter.execute()`: check before real outbound call; return
+      `failure_classification: provider_rate_limited`, `retry_eligible: True` if cap exceeded.
+- [x] Wire rate limiter into `TeamsAdapter.execute()` equivalently.
+- [x] Add stub wiring points in email and webhook adapters.
+- [x] Rate-limited results must not increment the circuit breaker failure counter.
+- [x] Add configurable env vars: `SLACK_MAX_SENDS_PER_MINUTE`, `TEAMS_MAX_SENDS_PER_MINUTE`,
       `EMAIL_MAX_SENDS_PER_MINUTE`, `WEBHOOK_MAX_SENDS_PER_MINUTE` with conservative defaults
       (20 for Slack/Teams, 10 for Email, 30 for Webhook).
-- [ ] Add tests:
-  - [ ] Rate limiter blocks a 21st Slack call within a 60-second window.
-  - [ ] Rate-limited result has correct classification and `retry_eligible: True`.
-  - [ ] Circuit breaker failure count is not incremented for rate-limited calls.
-  - [ ] Simulation-mode calls bypass the rate limiter entirely.
-  - [ ] Rate limiter state resets between test invocations (isolated test fixture).
-  - [ ] Env vars override defaults correctly.
-  - [ ] Existing Slack and Teams adapter tests pass unchanged.
-- [ ] Run canonical regression suite.
+- [x] Add tests:
+  - [x] Rate limiter blocks an over-threshold Slack call within a 60-second window.
+  - [x] Rate-limited result has correct classification and `retry_eligible: True`.
+  - [x] Circuit breaker failure count is not incremented for rate-limited calls.
+  - [x] Simulation-mode calls bypass the rate limiter entirely.
+  - [x] Rate limiter state resets between test invocations (isolated test fixture).
+  - [x] Env vars override defaults correctly.
+  - [x] Existing Slack and Teams adapter tests pass unchanged.
+- [x] Run canonical regression suite.
 
 ---
 
@@ -151,20 +151,20 @@ limits or flood dead letters.
 Goal: Prevent duplicate real sends for the same step even when `steps_log` and
 `last_completed_step` state diverges (e.g., during retry or manual re-dispatch).
 
-- [ ] In `engines/playbook_step_executor.py`, before dispatching a notification-type step to
+- [x] In `engines/playbook_step_executor.py`, before dispatching a notification-type step to
       the adapter, query `notification_delivery_attempts` for an existing row with the same
-      `idempotency_key` and `status=success`.
-- [ ] If found, return a no-op result without calling the adapter:
-      `failure_classification: already_delivered`, `success: True`, `executed: False`.
-- [ ] Record the no-op in `steps_log` with `skipped: True` and the reason.
-- [ ] This check is a defensive second layer; the primary guard remains
+      `idempotency_key` and `status=success` or `status=pending`.
+- [x] If found, return a no-op result without calling the adapter:
+      `failure_classification: duplicate_delivery`, `success: True`, `executed: False`.
+- [x] Record the no-op in `steps_log` with `skipped: True` and the reason.
+- [x] This check is a defensive second layer; the primary guard remains
       `_step_already_succeeded_in_log`. Both guards must be present.
-- [ ] Add tests:
-  - [ ] Step is skipped and adapter is not called when a success delivery record exists.
-  - [ ] No second `notification_delivery_attempts` row is created on skip.
-  - [ ] Step proceeds normally when no matching delivery record exists.
-  - [ ] No-op skip result is recorded in `steps_log` with correct fields.
-  - [ ] Existing executor tests pass unchanged.
+- [x] Add tests:
+  - [x] Step is skipped and adapter is not called when a success delivery record exists.
+  - [x] No second `notification_delivery_attempts` row is created on skip.
+  - [x] Step proceeds normally when no matching delivery record exists.
+  - [x] No-op skip result is recorded in `steps_log` with correct fields.
+  - [x] Existing executor tests pass unchanged.
 - [ ] Run canonical regression suite.
 
 ---

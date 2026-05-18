@@ -23,6 +23,7 @@ from engines.playbook_registry import SUPPORTED_ACTIONS
 from integrations.base_integration import (
     FAILURE_CLASSIFICATION_CIRCUIT_OPEN,
     FAILURE_CLASSIFICATION_CIRCUIT_STATE_INVALID,
+    FAILURE_CLASSIFICATION_PROVIDER_RATE_LIMITED,
     FAILURE_CLASSIFICATION_TIMEOUT,
     get_simulated_circuit_breaker_dict,
 )
@@ -57,7 +58,11 @@ def _delivery_status_from_adapter_result(adapter_result: dict[str, Any]) -> str:
     fc = str(meta.get("failure_classification") or "").strip().lower()
     if fc == FAILURE_CLASSIFICATION_TIMEOUT:
         return "timeout"
-    if fc in (FAILURE_CLASSIFICATION_CIRCUIT_OPEN, FAILURE_CLASSIFICATION_CIRCUIT_STATE_INVALID):
+    if fc in (
+        FAILURE_CLASSIFICATION_CIRCUIT_OPEN,
+        FAILURE_CLASSIFICATION_CIRCUIT_STATE_INVALID,
+        FAILURE_CLASSIFICATION_PROVIDER_RATE_LIMITED,
+    ):
         return "blocked"
     return "failed"
 
@@ -71,6 +76,19 @@ def _make_delivery_idempotency_key(
 ) -> str:
     raw = f"{provider}:{action}:{execution_id}:{step_index}"
     return hashlib.sha256(raw.encode()).hexdigest()[:64]
+
+
+def _existing_active_delivery(conn, provider: str, action: str, execution_id: int, step_index: int):
+    idempotency_key = _make_delivery_idempotency_key(provider, action, execution_id, step_index)
+    rows = notification_delivery_store.list_notification_delivery_attempts(
+        conn,
+        idempotency_key=idempotency_key,
+        limit=10,
+    )
+    for row in rows:
+        if row.get("status") in ("success", "pending"):
+            return row
+    return None
 
 
 def _record_notification_delivery_attempt(
@@ -750,7 +768,7 @@ def _process_steps(
             )
 
         try:
-            entry = _simulate_step(step, index, timestamp, execution)
+            entry = _simulate_step(conn, step, index, timestamp, execution)
         except Exception as error:
             logger.exception(
                 "[PLAYBOOK SIMULATION] step simulation failed execution_id=%s playbook_id=%s step_index=%s",
@@ -768,7 +786,11 @@ def _process_steps(
 
         steps_log.append(entry)
 
-        if isinstance(step, dict) and step.get("action") in _NOTIFICATION_ACTIONS:
+        if (
+            isinstance(step, dict)
+            and step.get("action") in _NOTIFICATION_ACTIONS
+            and entry.get("skipped") is not True
+        ):
             _record_notification_delivery_attempt(conn, execution, step, index, entry, timestamp)
 
         if entry["status"] == "success":
@@ -859,6 +881,7 @@ def _resume_progress(
 
 
 def _simulate_step(
+    conn,
     step: dict[str, Any],
     step_index: int,
     now: datetime,
@@ -884,7 +907,7 @@ def _simulate_step(
         )
 
     if action in ADAPTER_ACTIONS:
-        return _simulate_adapter_step(step, step_index, now, execution)
+        return _simulate_adapter_step(conn, step, step_index, now, execution)
 
     if action not in SUPPORTED_ACTIONS:
         return _failure_entry(
@@ -917,6 +940,7 @@ def _simulate_step(
 
 
 def _simulate_adapter_step(
+    conn,
     step: dict[str, Any],
     step_index: int,
     now: datetime,
@@ -924,6 +948,41 @@ def _simulate_adapter_step(
 ) -> dict[str, Any]:
     action = step["action"]
     adapter_name, adapter_action = ADAPTER_ACTIONS[action]
+    # spec: SPEC-INTEG-005
+    if action in _NOTIFICATION_ACTIONS:
+        provider = _PROVIDER_FOR_ACTION[action]
+        existing_delivery = _existing_active_delivery(
+            conn,
+            provider,
+            action,
+            execution["id"],
+            step_index,
+        )
+        if existing_delivery is not None:
+            return {
+                "step_index": step_index,
+                "action": action,
+                "status": "success",
+                "event": "notification_delivery_already_delivered",
+                "mode": "simulation",
+                "simulated": True,
+                "executed": False,
+                "skipped": True,
+                "started_at": _iso(now),
+                "completed_at": _iso(now),
+                "message": "Notification delivery already succeeded; adapter call skipped.",
+                "output": {
+                    "simulated": True,
+                    "executed": False,
+                    "skipped": True,
+                    "skip_reason": f"delivery_{existing_delivery.get('status')}",
+                    "failure_classification": "duplicate_delivery",
+                    "existing_delivery_id": existing_delivery.get("id"),
+                    "existing_delivery_status": existing_delivery.get("status"),
+                    "idempotency_key": existing_delivery.get("idempotency_key"),
+                },
+                "error": None,
+            }
     params = step.get("params") if isinstance(step.get("params"), dict) else {}
     context = {
         "execution_id": execution["id"],

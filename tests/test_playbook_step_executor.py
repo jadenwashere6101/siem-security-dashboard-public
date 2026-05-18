@@ -15,11 +15,13 @@ from integrations.base_integration import (
     CIRCUIT_STATE_CLOSED,
     CIRCUIT_STATE_HALF_OPEN,
     CIRCUIT_STATE_OPEN,
+    FAILURE_CLASSIFICATION_PROVIDER_RATE_LIMITED,
     FAILURE_CLASSIFICATION_TRANSIENT,
     configure_simulated_circuit_breaker,
     get_simulated_circuit_breaker_dict,
     reset_simulated_circuit_breakers,
 )
+from integrations.adapter_rate_limiter import reset_adapter_rate_limiters
 from integrations.slack_adapter import SlackSimulationAdapter
 
 
@@ -133,7 +135,9 @@ def _set_expired_running_progress(cur, execution_id, *, steps_log, last_complete
 @pytest.fixture(autouse=True)
 def _reset_playbook_integration_circuits():
     reset_simulated_circuit_breakers()
+    reset_adapter_rate_limiters()
     yield
+    reset_adapter_rate_limiters()
     reset_simulated_circuit_breakers()
 
 
@@ -1162,6 +1166,142 @@ def test_failed_notify_slack_step_creates_failed_delivery_record(postgres_db, no
     assert rows[0][2] == "failed"
 
 
+def test_rate_limited_notify_slack_creates_blocked_delivery_record(
+    postgres_db, monkeypatch
+):
+    conn, cur = postgres_db
+    eid = _create_execution(
+        conn,
+        cur,
+        "pb_slack_rate_limited_delivery",
+        steps=[
+            {"action": "notify_slack", "params": {"message": "first"}},
+            {"action": "notify_slack", "params": {"message": "second"}},
+        ],
+    )
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_SLACK_ENABLED", "true")
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T000/B000/SECRET")
+    monkeypatch.setenv("SLACK_MAX_SENDS_PER_MINUTE", "1")
+
+    with patch(
+        "integrations.slack_adapter._post_slack_webhook",
+        return_value={"status_code": 200},
+    ) as post_mock, patch("core.integration_audit.log_audit_event"):
+        result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "failed"
+    assert post_mock.call_count == 1
+    cur.execute(
+        """
+        SELECT status, failure_code, failure_message, metadata
+        FROM notification_delivery_attempts
+        WHERE playbook_execution_id = %s
+        ORDER BY playbook_step_index
+        """,
+        (eid,),
+    )
+    rows = cur.fetchall()
+    assert len(rows) == 2
+    assert rows[0][0] == "success"
+    blocked_status, failure_code, failure_message, metadata = rows[1]
+    assert blocked_status == "blocked"
+    assert failure_code == "adapter_simulation_failed"
+    assert metadata["failure_classification"] == FAILURE_CLASSIFICATION_PROVIDER_RATE_LIMITED
+    assert metadata["rate_limited"] is True
+    assert "hooks.slack.com/services" not in str(metadata)
+    assert "SECRET" not in str(metadata)
+    assert "hooks.slack.com/services" not in (failure_message or "")
+
+
+def test_duplicate_successful_delivery_skips_adapter_and_dead_letter(postgres_db, no_network):
+    conn, cur = postgres_db
+    eid = _create_execution(
+        conn,
+        cur,
+        "pb_slack_delivery_dedup",
+        steps=[{"action": "notify_slack", "params": {"message": "already sent"}}],
+    )
+    cur.execute("SELECT alert_id FROM playbook_executions WHERE id = %s", (eid,))
+    alert_id = cur.fetchone()[0]
+    notification_delivery_store.create_notification_delivery_attempt(
+        conn,
+        correlation_id=f"existing-success-{eid}-0",
+        idempotency_key=playbook_step_executor._make_delivery_idempotency_key(
+            "slack", "notify_slack", eid, 0
+        ),
+        provider="slack",
+        mode="simulation",
+        status="success",
+        adapter_name="slack",
+        action="send_message",
+        metadata={"adapter_mode": "simulation"},
+        playbook_execution_id=eid,
+        playbook_step_index=0,
+        alert_id=alert_id,
+        circuit_breaker_state="closed",
+    )
+    conn.commit()
+
+    with patch(
+        "engines.playbook_step_executor.execute_playbook_simulated_adapter",
+        side_effect=AssertionError("duplicate delivery must not execute adapter"),
+    ):
+        result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "success"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    entry = row["steps_log"][0]
+    assert entry["status"] == "success"
+    assert entry["skipped"] is True
+    assert entry["output"]["skip_reason"] == "delivery_success"
+    assert entry["output"]["failure_classification"] == "duplicate_delivery"
+    assert _count_deliveries(cur, eid) == 1
+    assert dead_letter_store.list_dead_letters(conn, execution_id=eid) == []
+
+
+def test_duplicate_in_flight_delivery_skips_adapter(postgres_db, no_network):
+    conn, cur = postgres_db
+    eid = _create_execution(
+        conn,
+        cur,
+        "pb_slack_delivery_pending_dedup",
+        steps=[{"action": "notify_slack", "params": {"message": "already pending"}}],
+    )
+    cur.execute("SELECT alert_id FROM playbook_executions WHERE id = %s", (eid,))
+    alert_id = cur.fetchone()[0]
+    notification_delivery_store.create_notification_delivery_attempt(
+        conn,
+        correlation_id=f"existing-pending-{eid}-0",
+        idempotency_key=playbook_step_executor._make_delivery_idempotency_key(
+            "slack", "notify_slack", eid, 0
+        ),
+        provider="slack",
+        mode="simulation",
+        status="pending",
+        adapter_name="slack",
+        action="send_message",
+        metadata={"adapter_mode": "simulation"},
+        playbook_execution_id=eid,
+        playbook_step_index=0,
+        alert_id=alert_id,
+        circuit_breaker_state="closed",
+    )
+    conn.commit()
+
+    with patch(
+        "engines.playbook_step_executor.execute_playbook_simulated_adapter",
+        side_effect=AssertionError("in-flight duplicate must not execute adapter"),
+    ):
+        result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "success"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["steps_log"][0]["output"]["skip_reason"] == "delivery_pending"
+    assert _count_deliveries(cur, eid) == 1
+
+
 @pytest.fixture
 def utc_db(postgres_db):
     conn, cur = postgres_db
@@ -1356,9 +1496,9 @@ def test_recovered_pending_execution_resumes_after_last_completed_step(utc_db, m
     calls = []
     original = playbook_step_executor._simulate_step
 
-    def _record_step(step, step_index, now, execution):
+    def _record_step(conn_arg, step, step_index, now, execution):
         calls.append(step_index)
-        return original(step, step_index, now, execution)
+        return original(conn_arg, step, step_index, now, execution)
 
     monkeypatch.setattr(playbook_step_executor, "_simulate_step", _record_step)
 
@@ -1390,9 +1530,9 @@ def test_execution_without_completed_step_starts_at_step_zero(utc_db, monkeypatc
     calls = []
     original = playbook_step_executor._simulate_step
 
-    def _record_step(step, step_index, now, execution):
+    def _record_step(conn_arg, step, step_index, now, execution):
         calls.append(step_index)
-        return original(step, step_index, now, execution)
+        return original(conn_arg, step, step_index, now, execution)
 
     monkeypatch.setattr(playbook_step_executor, "_simulate_step", _record_step)
 
@@ -1426,9 +1566,9 @@ def test_running_owned_execution_resumes_without_replaying_success_step(utc_db, 
     calls = []
     original = playbook_step_executor._simulate_step
 
-    def _record_step(step, step_index, now, execution):
+    def _record_step(conn_arg, step, step_index, now, execution):
         calls.append(step_index)
-        return original(step, step_index, now, execution)
+        return original(conn_arg, step, step_index, now, execution)
 
     monkeypatch.setattr(playbook_step_executor, "_simulate_step", _record_step)
 
@@ -1658,9 +1798,9 @@ def test_recovered_stale_execution_later_resumes_after_completed_step(utc_db, mo
     calls = []
     original = playbook_step_executor._simulate_step
 
-    def _record_step(step, step_index, now, execution):
+    def _record_step(conn_arg, step, step_index, now, execution):
         calls.append(step_index)
-        return original(step, step_index, now, execution)
+        return original(conn_arg, step, step_index, now, execution)
 
     monkeypatch.setattr(playbook_step_executor, "_simulate_step", _record_step)
     result = playbook_step_executor.process_playbook_execution(
@@ -1831,9 +1971,9 @@ def test_completed_block_ip_remediation_step_skipped_on_resume(utc_db, monkeypat
     steps_executed = []
     original_simulate = playbook_step_executor._simulate_step
 
-    def _record_and_run(step, step_index, now, execution):
+    def _record_and_run(conn_arg, step, step_index, now, execution):
         steps_executed.append(step_index)
-        return original_simulate(step, step_index, now, execution)
+        return original_simulate(conn_arg, step, step_index, now, execution)
 
     monkeypatch.setattr(playbook_step_executor, "_simulate_step", _record_and_run)
 
@@ -1908,9 +2048,9 @@ def test_steps_log_success_guard_prevents_reexecution_when_last_completed_step_m
     steps_executed = []
     original_simulate = playbook_step_executor._simulate_step
 
-    def _record_and_run(step, step_index, now, execution):
+    def _record_and_run(conn_arg, step, step_index, now, execution):
         steps_executed.append(step_index)
-        return original_simulate(step, step_index, now, execution)
+        return original_simulate(conn_arg, step, step_index, now, execution)
 
     monkeypatch.setattr(playbook_step_executor, "_simulate_step", _record_and_run)
 

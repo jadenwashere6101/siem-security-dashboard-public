@@ -38,6 +38,7 @@ FAILURE_CLASSIFICATION_CIRCUIT_OPEN = "circuit_open"
 FAILURE_CLASSIFICATION_CIRCUIT_STATE_INVALID = "circuit_state_invalid"
 FAILURE_CLASSIFICATION_GUARD_FAILED = "guard_failed"
 FAILURE_CLASSIFICATION_CREDENTIAL_MISSING = "credential_missing"
+FAILURE_CLASSIFICATION_PROVIDER_RATE_LIMITED = "provider_rate_limited"
 
 
 @dataclass
@@ -491,6 +492,10 @@ def _integrate_circuit_after_simulation(
     if success:
         _reset_to_closed_success(st)
         meta["circuit_state"] = CIRCUIT_STATE_CLOSED
+        meta["retry_eligible"] = True
+        return
+    if classification == FAILURE_CLASSIFICATION_PROVIDER_RATE_LIMITED:
+        meta["circuit_state"] = st.state
         meta["retry_eligible"] = True
         return
 
