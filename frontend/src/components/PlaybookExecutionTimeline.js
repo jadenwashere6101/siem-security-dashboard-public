@@ -25,7 +25,7 @@ const MAX_MESSAGE_LENGTH = 220;
 
 function titleCase(value) {
   return String(value || "unknown")
-    .replace(/_/g, " ")
+    .replaceAll("_", " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 

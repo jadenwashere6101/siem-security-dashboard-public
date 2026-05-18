@@ -114,8 +114,11 @@ function BlocklistManagerPanel({
         <form onSubmit={handleAddBlockedIp} style={formStyle}>
           <div style={formGridStyle}>
             <div style={fieldStyle}>
-              <label style={filterLabelStyle}>IP Address</label>
+              <label htmlFor="blocklist-ip-address" style={filterLabelStyle}>
+                IP Address
+              </label>
               <input
+                id="blocklist-ip-address"
                 type="text"
                 value={ipAddress}
                 onChange={(e) => setIpAddress(e.target.value)}
@@ -125,8 +128,11 @@ function BlocklistManagerPanel({
             </div>
 
             <div style={fieldStyle}>
-              <label style={filterLabelStyle}>Expires At (optional)</label>
+              <label htmlFor="blocklist-expires-at" style={filterLabelStyle}>
+                Expires At (optional)
+              </label>
               <input
+                id="blocklist-expires-at"
                 type="datetime-local"
                 value={expiresAt}
                 onChange={(e) => setExpiresAt(e.target.value)}
@@ -139,8 +145,11 @@ function BlocklistManagerPanel({
           </div>
 
           <div style={fieldStyle}>
-            <label style={filterLabelStyle}>Reason (optional)</label>
+            <label htmlFor="blocklist-reason" style={filterLabelStyle}>
+              Reason (optional)
+            </label>
             <input
+              id="blocklist-reason"
               type="text"
               value={reason}
               onChange={(e) => setReason(e.target.value)}

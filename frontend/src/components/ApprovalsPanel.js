@@ -547,7 +547,7 @@ function ApprovalsPanel({
 }
 
 const formatLabel = (value) =>
-  String(value || "unknown").replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+  String(value || "unknown").replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
 
 const formatTimestamp = (value) => formatAdminTimestamp(value, "N/A");
 

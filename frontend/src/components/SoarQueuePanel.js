@@ -72,7 +72,7 @@ function SoarQueuePanel({
       setIsRunningBatch(true);
       setLastRunResult(null);
 
-      let batchSize = parseInt(runBatchSize, 10);
+      let batchSize = Number.parseInt(runBatchSize, 10);
       if (Number.isNaN(batchSize) || batchSize < 1) {
         batchSize = 10;
       }
@@ -474,7 +474,7 @@ function SoarQueuePanel({
 }
 
 const formatQueueLabel = (value) =>
-  String(value || "unknown").replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+  String(value || "unknown").replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
 
 const formatAlertReference = (item) => {
   if (item?.alert_reference?.label) return item.alert_reference.label;

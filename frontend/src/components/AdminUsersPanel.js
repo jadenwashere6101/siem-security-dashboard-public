@@ -191,8 +191,11 @@ function AdminUsersPanel({
         <form onSubmit={handleCreateUser} style={formSectionStyle}>
           <div style={formInputsRowStyle}>
             <div style={formFieldStyle}>
-              <label style={filterLabelStyle}>Username</label>
+              <label htmlFor="admin-user-username" style={filterLabelStyle}>
+                Username
+              </label>
               <input
+                id="admin-user-username"
                 className="admin-users-input"
                 type="text"
                 value={username}
@@ -210,8 +213,11 @@ function AdminUsersPanel({
             </div>
 
             <div style={formFieldStyle}>
-              <label style={filterLabelStyle}>Password</label>
+              <label htmlFor="admin-user-password" style={filterLabelStyle}>
+                Password
+              </label>
               <input
+                id="admin-user-password"
                 className="admin-users-input"
                 type="password"
                 value={password}
@@ -229,8 +235,11 @@ function AdminUsersPanel({
             </div>
 
             <div style={roleFieldStyle}>
-              <label style={filterLabelStyle}>Role</label>
+              <label htmlFor="admin-user-role" style={filterLabelStyle}>
+                Role
+              </label>
               <select
+                id="admin-user-role"
                 value={role}
                 onChange={(e) => setRole(e.target.value)}
                 style={{

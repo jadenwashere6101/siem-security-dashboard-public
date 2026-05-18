@@ -93,7 +93,7 @@ function valueOrFallback(value, fallback = "Unavailable") {
 
 function titleCase(value) {
   return valueOrFallback(value, "Unknown")
-    .replace(/_/g, " ")
+    .replaceAll("_", " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 

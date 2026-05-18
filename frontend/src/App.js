@@ -341,10 +341,14 @@ function App() {
             Sign in to access alerts and response actions.
           </p>
 
-          <label style={{ display: "block", marginBottom: "6px", fontSize: "14px" }}>
+          <label
+            htmlFor="login-username"
+            style={{ display: "block", marginBottom: "6px", fontSize: "14px" }}
+          >
             Username
           </label>
           <input
+            id="login-username"
             type="text"
             value={loginUsername}
             onChange={(e) => setLoginUsername(e.target.value)}
@@ -360,10 +364,14 @@ function App() {
             }}
           />
 
-          <label style={{ display: "block", marginBottom: "6px", fontSize: "14px" }}>
+          <label
+            htmlFor="login-password"
+            style={{ display: "block", marginBottom: "6px", fontSize: "14px" }}
+          >
             Password
           </label>
           <input
+            id="login-password"
             type="password"
             value={loginPassword}
             onChange={(e) => setLoginPassword(e.target.value)}

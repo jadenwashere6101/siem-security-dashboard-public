@@ -30,7 +30,7 @@ function toCount(value) {
 
 function formatLabel(value) {
   return String(value || "unknown")
-    .replace(/_/g, " ")
+    .replaceAll("_", " ")
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
@@ -174,7 +174,7 @@ function DeadLettersPanel({
   const canExecuteDeadLetterRetry = userRole === "super_admin";
 
   const failureClassOptions = useMemo(() => {
-    const keys = Object.keys(metrics?.by_failure_class || {}).sort();
+    const keys = Object.keys(metrics?.by_failure_class || {}).sort((a, b) => a.localeCompare(b));
     return ["all", ...keys];
   }, [metrics?.by_failure_class]);
 

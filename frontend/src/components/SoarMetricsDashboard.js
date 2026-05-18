@@ -103,7 +103,7 @@ function toCount(value) {
 export function formatRelativeTime(isoString) {
   if (!isoString) return null;
   const then = new Date(isoString);
-  if (isNaN(then.getTime())) return String(isoString);
+  if (Number.isNaN(then.getTime())) return String(isoString);
   const diffMs = Date.now() - then.getTime();
   const diffMins = Math.floor(diffMs / 60_000);
   if (diffMins < 2) return "just now";

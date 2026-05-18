@@ -128,8 +128,11 @@ function ThreatHuntPanel({
         <form onSubmit={handleSearch} style={formStyle}>
           <div style={filtersGridStyle}>
             <div style={filterFieldStyle}>
-              <label style={filterLabelStyle}>Source IP</label>
+              <label htmlFor="threat-hunt-source-ip" style={filterLabelStyle}>
+                Source IP
+              </label>
               <input
+                id="threat-hunt-source-ip"
                 ref={sourceIpInputRef}
                 type="text"
                 value={sourceIp}
@@ -143,8 +146,11 @@ function ThreatHuntPanel({
             </div>
 
             <div style={filterFieldStyle}>
-              <label style={filterLabelStyle}>Source</label>
+              <label htmlFor="threat-hunt-source" style={filterLabelStyle}>
+                Source
+              </label>
               <select
+                id="threat-hunt-source"
                 value={source}
                 onChange={(e) => setSource(e.target.value)}
                 style={selectStyle}
@@ -158,8 +164,11 @@ function ThreatHuntPanel({
             </div>
 
             <div style={filterFieldStyle}>
-              <label style={filterLabelStyle}>Event Type</label>
+              <label htmlFor="threat-hunt-event-type" style={filterLabelStyle}>
+                Event Type
+              </label>
               <select
+                id="threat-hunt-event-type"
                 value={eventType}
                 onChange={(e) => setEventType(e.target.value)}
                 style={selectStyle}
@@ -178,8 +187,11 @@ function ThreatHuntPanel({
             </div>
 
             <div style={filterFieldStyle}>
-              <label style={filterLabelStyle}>Start Time (optional)</label>
+              <label htmlFor="threat-hunt-start-time" style={filterLabelStyle}>
+                Start Time (optional)
+              </label>
               <input
+                id="threat-hunt-start-time"
                 type="datetime-local"
                 value={startTime}
                 onChange={(e) => setStartTime(e.target.value)}
@@ -189,8 +201,11 @@ function ThreatHuntPanel({
             </div>
 
             <div style={filterFieldStyle}>
-              <label style={filterLabelStyle}>End Time (optional)</label>
+              <label htmlFor="threat-hunt-end-time" style={filterLabelStyle}>
+                End Time (optional)
+              </label>
               <input
+                id="threat-hunt-end-time"
                 type="datetime-local"
                 value={endTime}
                 onChange={(e) => setEndTime(e.target.value)}
