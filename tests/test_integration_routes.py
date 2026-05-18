@@ -137,6 +137,9 @@ def _assert_status_shape(data):
     assert "real_mode_allowed" in adapters["teams"]
     assert "real_mode_ready" in adapters["teams"]
     assert "webhook_configured" in adapters["teams"]
+    assert adapters["firewall"]["real_mode_available"] is False
+    assert adapters["firewall"]["real_mode_allowed"] is False
+    assert adapters["firewall"]["real_mode_ready"] is False
 
 
 def test_integration_status_without_session_returns_401(client):
@@ -434,6 +437,30 @@ def test_integration_status_webhook_invalid_target_not_ready(client, mock_db, mo
     assert adapters["webhook"]["webhook_url_configured"] is True
     assert adapters["webhook"]["real_mode_ready"] is False
     assert "127.0.0.1" not in rendered
+
+
+def test_integration_status_firewall_never_implies_real_mode(
+    client, mock_db, monkeypatch
+):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_FIREWALL_ENABLED", "true")
+    monkeypatch.setenv("FIREWALL_API_TOKEN", "firewall-secret")
+    _deny_network(monkeypatch)
+    _login_super_admin(client)
+
+    resp = client.get("/integrations/status")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    adapters = {adapter["name"]: adapter for adapter in data["adapters"]}
+    assert adapters["firewall"]["mode"] == "simulation"
+    assert adapters["firewall"]["real_client"] is False
+    assert adapters["firewall"]["real_mode_available"] is False
+    assert adapters["firewall"]["real_mode_allowed"] is False
+    assert adapters["firewall"]["real_mode_ready"] is False
+    assert "separate approved OpenSpec" in adapters["firewall"]["real_mode_status"]
+    assert "firewall-secret" not in json.dumps(data, sort_keys=True)
 
 
 def test_integration_status_slack_and_teams_config_are_independent(

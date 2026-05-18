@@ -234,6 +234,18 @@ def get_integration_status(mode: str | None = None) -> dict:
                 ),
                 **(
                     {
+                        "real_mode_available": False,
+                        "real_mode_allowed": False,
+                        "real_mode_ready": False,
+                        "real_mode_status": (
+                            "blocked: firewall real mode requires a separate approved OpenSpec"
+                        ),
+                    }
+                    if name == "firewall"
+                    else {}
+                ),
+                **(
+                    {
                         "webhook_url_configured": webhook_readiness["webhook_url_configured"],
                         "webhook_real_enabled": webhook_readiness["webhook_real_enabled"],
                         "real_mode_allowed": webhook_readiness["real_mode_allowed"],

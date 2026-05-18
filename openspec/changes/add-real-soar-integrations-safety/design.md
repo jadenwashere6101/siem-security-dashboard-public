@@ -50,10 +50,12 @@ closed and log a structured warning without raising an unhandled exception.
 Implemented current state:
 - Slack: four-guard complete (`SOAR_REAL_SLACK_ENABLED`, `SLACK_WEBHOOK_URL`). Smoke test done.
 - Teams: four-guard complete (`SOAR_REAL_TEAMS_ENABLED`, `TEAMS_WEBHOOK_URL`). Smoke test pending.
-- Email: no real-mode guard path exists. Simulation-only until this spec's implementation.
+- Email: four-guard complete (`SOAR_REAL_EMAIL_ENABLED`, `SMTP_HOST`, `SMTP_USERNAME`).
+  Staging smoke test pending.
 - Firewall: no real-mode guard path. Simulation-only; real promotion permanently blocked by this
   spec until a separate approved design explicitly overrides this constraint.
-- Webhook: no real-mode guard path. Simulation-only until this spec's implementation.
+- Webhook: four-guard complete (`SOAR_REAL_WEBHOOK_ENABLED`, `WEBHOOK_URL` or
+  `WEBHOOK_BASE_URL`). Staging smoke test pending.
 
 ### 1.3 Credential Validation
 
@@ -193,19 +195,20 @@ Teams smoke test is a prerequisite for enabling Teams real mode in any deploymen
 
 ### 2.7 Email Adapter
 
-Current state: simulation-only (`EmailSimulationAdapter`). No real-mode guard path exists.
+Current state: guarded real-mode path implemented in `EmailSimulationAdapter`; simulation remains
+the default and staging smoke test evidence is still required before operational enablement.
 
-Required implementation for real-mode readiness:
+Implemented real-mode readiness:
 - Add four-guard pattern: `INTEGRATION_MODE=real`, `SOAR_ENV=staging`,
   `SOAR_REAL_EMAIL_ENABLED=true`, non-empty `SMTP_HOST` and `SMTP_USERNAME`.
 - Add timeout (`EMAIL_TIMEOUT_SECONDS`, default 10s).
-- Add retry classification: SMTP connection refused or 4xx → `non_transient`; SMTP 5xx or
-  timeout → `transient`.
-- Add circuit breaker wiring.
-- Add rate limiting (see section 3).
-- Add credential validation without exposing SMTP password or host in results or logs.
-- Add structured audit log entry for every real outbound attempt.
-- Add allowlisted payload construction: recipient address, subject line, and body must use bounded
+- Safe failure classification: timeout, invalid credentials, provider rate limiting,
+  transient network error, malformed payload, and temporary provider failure.
+- Circuit breaker wiring.
+- Rate limiting (see section 3).
+- Credential validation without exposing SMTP password or host in results or logs.
+- Structured audit log entry for every real outbound attempt.
+- Allowlisted payload construction: recipient address, subject line, and body must use bounded
   safe fields only. Raw event payloads, credentials, and alert raw data are forbidden.
 - Secret redaction: `SMTP_HOST` may be logged as a boolean `smtp_configured`. `SMTP_PASSWORD`
   must never appear in logs, audit records, steps_log, or status API responses.
@@ -236,18 +239,20 @@ Dry-run safety gates (required before any future real-mode promotion):
 
 ### 2.9 Webhook Adapter
 
-Current state: simulation-only (`WebhookSimulationAdapter`). No real-mode guard path exists.
+Current state: guarded real-mode path implemented in `WebhookSimulationAdapter`; simulation
+remains the default and staging smoke test evidence is still required before operational enablement.
 
-Required implementation for real-mode readiness (lower priority than Email):
-- Add four-guard pattern: `INTEGRATION_MODE=real`, `SOAR_ENV=staging`,
+Implemented real-mode readiness:
+- Four-guard pattern: `INTEGRATION_MODE=real`, `SOAR_ENV=staging`,
   `SOAR_REAL_WEBHOOK_ENABLED=true`, non-empty `WEBHOOK_URL`.
 - `WEBHOOK_URL` must be `https://` scheme; `http://` fails closed.
-- Add timeout (`WEBHOOK_TIMEOUT_SECONDS`, default 5s).
-- Add retry classification: connection refused or timeout → `transient`; 4xx → `non_transient`.
-- Add circuit breaker wiring.
-- Add rate limiting (see section 3).
-- Add credential validation without exposing `WEBHOOK_URL` or authentication headers.
-- Add structured audit log entry for every real outbound attempt.
+- Timeout (`WEBHOOK_TIMEOUT_SECONDS`, default 5s).
+- Safe failure classification for timeout, invalid target/credential, provider rate limiting,
+  transient network errors, malformed payloads, and temporary provider failures.
+- Circuit breaker wiring.
+- Rate limiting (see section 3).
+- Credential validation without exposing `WEBHOOK_URL` or authentication headers.
+- Structured audit log entry for every real outbound attempt.
 - Webhook payloads must be allowlisted. Raw alert payloads, credentials, and internal DB IDs
   beyond safe reference fields are forbidden.
 
@@ -413,9 +418,10 @@ Real-mode enablement must follow this order. No step may be skipped.
 1. **Slack** — Complete. Smoke test done 2026-05-15. System in simulation.
 2. **Teams** — Guards in place. Smoke test pending environment availability.
    Use `docs/soar_teams_staging_smoke_test_runbook.md`.
-3. **Email** — Guards not yet implemented. Implement guards, run automated tests, then execute
-   staging smoke test following a new `docs/soar_email_staging_smoke_test_runbook.md`.
-4. **Webhook** — Guards not yet implemented. Lower priority than Email. Same runbook pattern.
+3. **Email** — Guards implemented. Staging smoke test pending.
+   Use `docs/soar_email_staging_smoke_test_runbook.md`.
+4. **Webhook** — Guards implemented. Staging smoke test pending.
+   Use `docs/soar_webhook_staging_smoke_test_runbook.md`.
 5. **Firewall** — Permanently blocked by this spec. Requires a separate future approved design.
 
 ### 5.3 Firewall Dry-Run Constraint

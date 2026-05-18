@@ -3,7 +3,9 @@ from __future__ import annotations
 from integrations.base_integration import BaseIntegration
 
 
-# spec: SPEC-INTEG-005 - real firewall execution permanently blocked until separate approved design.
+# spec: SPEC-INTEG-005 - firewall remains simulation/dry-run only in this spec.
+# No promotion path exists here; any real firewall execution requires a separate
+# future approved OpenSpec before API calls, subprocesses, or blocklist mutation.
 class FirewallSimulationAdapter(BaseIntegration):
     adapter_name = "firewall"
     supported_actions = frozenset({"block_ip", "unblock_ip", "tag_ip"})

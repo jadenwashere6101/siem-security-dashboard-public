@@ -381,6 +381,30 @@ Emergency response:
 
 4. Preserve logs and inspect dead letters before restarting anything.
 
+## Firewall Real-Mode Safety Boundary
+
+`SPEC-INTEG-005` intentionally keeps firewall behavior simulation/dry-run only. The
+playbook-facing `FirewallSimulationAdapter` never performs live firewall calls, subprocess
+execution, cloud security-group mutation, or `blocked_ips` writes. The lower-level
+`LinuxFirewallDryRunAdapter` may build a command plan after protected-target validation, but
+it returns that plan as dry-run evidence with `executed: false`.
+
+This is a deliberate rollback and blast-radius control. A daemonized worker can process many
+executions unattended; allowing live firewall mutation from this path would require stronger
+operator controls than this spec grants. Any future firewall promotion must come from a
+separate approved OpenSpec and must define, at minimum:
+
+- Protected-target policy enforced before any command or API call.
+- A dual approval gate for live remediation.
+- Durable idempotency keys for each firewall action.
+- A staging smoke test with explicit rollback evidence.
+- No autonomous retries for live firewall mutation.
+- Audit and dead-letter behavior that exposes no secrets or protected target details.
+
+If `/integrations/status` is called with real-mode firewall env vars present, the firewall
+adapter must still report simulation mode and `real_mode_available: false`. Treat any status
+or log output implying live firewall availability as a stop condition.
+
 ## Stop Conditions Before Broader Rollout
 
 Do not proceed from one-worker simulation to multi-worker simulation, or from

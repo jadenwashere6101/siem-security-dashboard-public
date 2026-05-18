@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 SUPPORTED_FIREWALL_TOOLS = {"ufw", "iptables", "nft"}
 
 
+# spec: SPEC-INTEG-005 - dry-run only. This adapter builds a command plan but
+# does not execute it. Real firewall execution requires a separate future
+# approved OpenSpec with approval, idempotency, and smoke-test evidence.
 class LinuxFirewallDryRunAdapter(BaseSoarActionAdapter):
     adapter_name = "linux_firewall_dry_run"
     supported_actions = {"block_ip"}
@@ -106,4 +109,3 @@ def _build_command_plan(firewall_tool: str, source_ip: str) -> List[str]:
     if firewall_tool == "nft":
         return ["nft", "add", "rule", "inet", "filter", "input", "ip", "saddr", source_ip, "drop"]
     return []
-

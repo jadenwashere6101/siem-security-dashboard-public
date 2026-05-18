@@ -13,6 +13,7 @@ tested. Active changes at time of writing:
 - `openspec/changes/add-soar-real-teams-smoke-test-checklist/`
 - `openspec/changes/add-soar-real-teams-readiness/`
 - `openspec/changes/add-soar-real-notification-delivery-tracking/`
+- `openspec/changes/add-real-soar-integrations-safety/`
 
 ---
 
@@ -576,26 +577,28 @@ rollback for post-rollback state items). Store all evidence without any secrets.
 
 ---
 
-## 10. Out-of-Scope Integrations
+## 10. Teams-Only Isolation Requirements
 
-The following integrations remain **simulation-only** and are out of scope for this runbook
-and for any test session following it. They must not be real-enabled, connected to live
-endpoints, or invoked with live credentials regardless of what `INTEGRATION_MODE` is set to.
+The following integrations are out of scope for a Teams-only smoke test. They must not be
+real-enabled, connected to live endpoints, or invoked with live credentials during this
+Teams test session, regardless of their separate adapter readiness in other SPEC-INTEG-005
+slices.
 
 | Integration | Status | Constraint |
 |---|---|---|
-| Real firewall / `block_ip` (live) | Out of scope | `LinuxFirewallDryRunAdapter` is dry-run only; no subprocess, no real firewall API |
-| Email (SMTP / SendGrid) | Out of scope | `email_adapter.py` simulation-only; no SMTP host or credentials configured |
-| Generic webhook | Out of scope | `webhook_adapter.py` simulation-only regardless of `INTEGRATION_MODE` |
+| Real firewall / `block_ip` (live) | Permanently out of scope for SPEC-INTEG-005 | `LinuxFirewallDryRunAdapter` is dry-run only; no subprocess, no real firewall API |
+| Email (SMTP) | Out of scope for this Teams test | Do not enable `SOAR_REAL_EMAIL_ENABLED`, SMTP env vars, or `notify_email` steps during this Teams runbook |
+| Generic webhook | Out of scope for this Teams test | Do not enable `SOAR_REAL_WEBHOOK_ENABLED`, webhook env vars, or `notify_webhook` steps during this Teams runbook |
 | PagerDuty | Out of scope | Not implemented; no adapter or credentials exist |
 | Microsoft Slack | Not applicable | See separate Slack runbook (`docs/soar_slack_staging_smoke_test_runbook.md`); Slack and Teams readiness are independent; this runbook must not trigger a Slack send |
 
-Enabling any of the above for real execution requires a separate approved design and its own
-staged runbook. They must not be enabled as a side effect of this Teams smoke test.
+Enabling Email or generic Webhook real mode requires their separate SPEC-INTEG-005 staging
+runbooks and must not be combined with this Teams smoke test. Enabling any real firewall
+execution requires a separate future approved OpenSpec.
 
-The `integration_registry.py` module enforces simulation-only mode for email, firewall, and
-webhook adapters at the code level, regardless of `INTEGRATION_MODE`. This is a code-level
-safety constraint, not just operational policy.
+The `integration_registry.py` module enforces simulation-only mode for firewall regardless
+of `INTEGRATION_MODE` or firewall env vars. This is a code-level safety constraint, not just
+operational policy.
 
 ---
 
