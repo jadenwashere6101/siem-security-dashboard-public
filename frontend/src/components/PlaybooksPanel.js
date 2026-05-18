@@ -16,6 +16,7 @@ import {
 import { listDeadLetters } from "../services/deadLetterService";
 import { listNotificationDeliveries } from "../services/notificationDeliveryService";
 import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
+import PlaybookExecutionTimeline from "./PlaybookExecutionTimeline";
 
 const PAGE_LIMIT = 50;
 const EXEC_STATUSES = ["pending", "running", "awaiting_approval", "success", "failed", "abandoned"];
@@ -100,85 +101,6 @@ function getExecutionStatusSummary(status) {
   }
 }
 
-function getEmptyTimelineText(status) {
-  switch (status) {
-    case "pending":
-      return "No simulated steps have run yet.";
-    case "running":
-      return "No step output has been recorded yet.";
-    case "awaiting_approval":
-      return "No approval gate output has been recorded yet.";
-    case "success":
-      return "Playbook completed with no defined steps.";
-    case "failed":
-      return "Execution failed before step output was recorded.";
-    default:
-      return "No step output is available.";
-  }
-}
-
-function formatStepLabel(step, index) {
-  const rawIndex =
-    step.step_index !== null && step.step_index !== undefined ? step.step_index : index;
-  return `Step ${Number.isFinite(Number(rawIndex)) ? Number(rawIndex) + 1 : index + 1}`;
-}
-
-function getStepAction(step) {
-  return step.action || step.step_action || step.action_type || step.step?.action || "unspecified";
-}
-
-function getStepMessage(step) {
-  return step.message || step.summary || step.result?.message || step.output?.message || "";
-}
-
-function getStepFlag(step, flagName) {
-  if (step[flagName] !== undefined) {
-    return step[flagName];
-  }
-  return step.output?.[flagName];
-}
-
-function getStepApprovalValue(step, fieldName) {
-  if (step[fieldName] !== null && step[fieldName] !== undefined && step[fieldName] !== "") {
-    return step[fieldName];
-  }
-  return step.output?.[fieldName];
-}
-
-function getStepSkipReason(step) {
-  return getStepApprovalValue(step, "skip_reason") || step.reason || "";
-}
-
-function getStepEventLabel(step) {
-  switch (step.event) {
-    case "approval_requested":
-      return "Approval requested";
-    case "approval_approved":
-      return "Approval approved";
-    case "approval_resumed":
-      return "Simulation resumed";
-    case "approval_denied":
-      return "Approval denied";
-    case "approval_expired":
-      return "Approval expired";
-    case "skipped_after_approval_gate":
-      return "Skipped after approval gate";
-    default:
-      break;
-  }
-
-  if (step.status === "skipped") {
-    return "Skipped";
-  }
-  if (step.status === "aborted") {
-    return "Aborted";
-  }
-  if (getStepAction(step) === "require_approval" && step.status === "failed") {
-    return "Approval gate failed";
-  }
-  return formatDetailValue(step.status, "unknown");
-}
-
 function isAwaitingApproval(detailRecord) {
   if (detailRecord?.status === "awaiting_approval") {
     return true;
@@ -199,43 +121,6 @@ function getExecutionControls(status, isSuperAdmin) {
     canAbandon: status === "pending" || status === "running" || status === "awaiting_approval",
     canResume: status === "awaiting_approval",
   };
-}
-
-function getStepErrorText(step) {
-  if (!step.error) {
-    return "";
-  }
-  if (typeof step.error === "string") {
-    return step.error;
-  }
-  return step.error.message || JSON.stringify(step.error);
-}
-
-function getStepResultText(step) {
-  const result = step.result || step.output;
-  if (!result) {
-    return "";
-  }
-  if (typeof result === "string") {
-    return result;
-  }
-  return JSON.stringify(result, null, 2);
-}
-
-function getStepAdapterResult(step) {
-  const adapterResult = step?.output?.adapter_result;
-  if (!adapterResult || typeof adapterResult !== "object" || Array.isArray(adapterResult)) {
-    return null;
-  }
-  return adapterResult;
-}
-
-function getAdapterMetadataEntries(adapterResult) {
-  const metadata = adapterResult?.metadata;
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
-    return [];
-  }
-  return Object.entries(metadata);
 }
 
 function getSafeScheduleMetadataEntries(schedule) {
@@ -1359,6 +1244,7 @@ function PlaybooksPanel({
                   {isAwaitingApproval(detailRecord) ? (
                     <div style={approvalNoticeStyle}>{APPROVAL_PAUSED_MESSAGE}</div>
                   ) : null}
+                  <PlaybookExecutionTimeline execution={detailRecord} />
                   {hasWorkerLeaseRecoveryFields(detailRecord) ? (
                     <div style={detailSubsectionStyle}>
                       <div style={timelineHeaderStyle}>Worker Lease / Recovery</div>
@@ -1578,156 +1464,6 @@ function PlaybooksPanel({
                       })}
                     </div>
                   ) : null}
-                  <div style={timelineHeaderStyle}>Step Timeline</div>
-                  {normalizeStepsLog(detailRecord.steps_log).length === 0 ? (
-                    <p style={emptyTextStyle}>{getEmptyTimelineText(detailRecord.status)}</p>
-                  ) : (
-                    <div style={timelineListStyle}>
-                      {normalizeStepsLog(detailRecord.steps_log).map((step, index) => {
-                        const adapterResult = getStepAdapterResult(step);
-                        const adapterMetadata = getAdapterMetadataEntries(adapterResult);
-
-                        return (
-                          <div key={`${step.step_id || step.step_index || index}`} style={timelineCardStyle}>
-                            <div style={timelineCardHeaderStyle}>
-                              <span style={timelineStepLabelStyle}>{formatStepLabel(step, index)}</span>
-                              <span style={timelineActionStyle}>{getStepAction(step)}</span>
-                              <span style={timelineStatusStyle}>{getStepEventLabel(step)}</span>
-                            </div>
-                            <div style={timelineMetaGridStyle}>
-                              <div style={detailFieldStyle}>
-                                <span style={detailLabelStyle}>Mode</span>
-                                <span style={detailValueStyle}>
-                                  {formatDetailValue(step.mode || step.execution_mode || "simulation")}
-                                </span>
-                              </div>
-                              <div style={detailFieldStyle}>
-                                <span style={detailLabelStyle}>Simulated</span>
-                                <span style={detailValueStyle}>
-                                  {formatFlagValue(getStepFlag(step, "simulated"))}
-                                </span>
-                              </div>
-                              <div style={detailFieldStyle}>
-                                <span style={detailLabelStyle}>Executed</span>
-                                <span style={detailValueStyle}>
-                                  {formatFlagValue(getStepFlag(step, "executed"))}
-                                </span>
-                              </div>
-                              {getStepApprovalValue(step, "approval_request_id") ? (
-                                <div style={detailFieldStyle}>
-                                  <span style={detailLabelStyle}>Approval Request ID</span>
-                                  <span style={detailValueStyle}>
-                                    {getStepApprovalValue(step, "approval_request_id")}
-                                  </span>
-                                </div>
-                              ) : null}
-                              {getStepApprovalValue(step, "approval_status") ? (
-                                <div style={detailFieldStyle}>
-                                  <span style={detailLabelStyle}>Approval Status</span>
-                                  <span style={detailValueStyle}>
-                                    {getStepApprovalValue(step, "approval_status")}
-                                  </span>
-                                </div>
-                              ) : null}
-                              {getStepApprovalValue(step, "risk_level") ? (
-                                <div style={detailFieldStyle}>
-                                  <span style={detailLabelStyle}>Risk Level</span>
-                                  <span style={detailValueStyle}>
-                                    {getStepApprovalValue(step, "risk_level")}
-                                  </span>
-                                </div>
-                              ) : null}
-                              {getStepSkipReason(step) ? (
-                                <div style={detailFieldStyle}>
-                                  <span style={detailLabelStyle}>Skip Reason</span>
-                                  <span style={detailValueStyle}>{getStepSkipReason(step)}</span>
-                                </div>
-                              ) : null}
-                              <div style={detailFieldStyle}>
-                                <span style={detailLabelStyle}>Started</span>
-                                <span style={detailValueStyle}>
-                                  {formatAdminTimestamp(step.started_at, "—")}
-                                </span>
-                              </div>
-                              <div style={detailFieldStyle}>
-                                <span style={detailLabelStyle}>Completed</span>
-                                <span style={detailValueStyle}>
-                                  {formatAdminTimestamp(step.completed_at, "—")}
-                                </span>
-                              </div>
-                            </div>
-                            {getStepMessage(step) ? (
-                              <p style={timelineTextStyle}>{getStepMessage(step)}</p>
-                            ) : null}
-                            {adapterResult ? (
-                              <div style={adapterResultStyle}>
-                                <div style={adapterResultTitleStyle}>Simulated adapter output</div>
-                                <div style={timelineMetaGridStyle}>
-                                  <div style={detailFieldStyle}>
-                                    <span style={detailLabelStyle}>Adapter</span>
-                                    <span style={detailValueStyle}>
-                                      {formatAdapterFieldValue(adapterResult.adapter)}
-                                    </span>
-                                  </div>
-                                  <div style={detailFieldStyle}>
-                                    <span style={detailLabelStyle}>Adapter Action</span>
-                                    <span style={detailValueStyle}>
-                                      {formatAdapterFieldValue(adapterResult.action)}
-                                    </span>
-                                  </div>
-                                  <div style={detailFieldStyle}>
-                                    <span style={detailLabelStyle}>Success</span>
-                                    <span style={detailValueStyle}>
-                                      {formatAdapterFieldValue(adapterResult.success)}
-                                    </span>
-                                  </div>
-                                  <div style={detailFieldStyle}>
-                                    <span style={detailLabelStyle}>Simulated</span>
-                                    <span style={detailValueStyle}>
-                                      {formatAdapterFieldValue(adapterResult.simulated)}
-                                    </span>
-                                  </div>
-                                  <div style={detailFieldStyle}>
-                                    <span style={detailLabelStyle}>Executed</span>
-                                    <span style={detailValueStyle}>
-                                      {formatAdapterFieldValue(adapterResult.executed)}
-                                    </span>
-                                  </div>
-                                </div>
-                                {adapterResult.message ? (
-                                  <p style={timelineTextStyle}>{adapterResult.message}</p>
-                                ) : null}
-                                {adapterMetadata.length > 0 ? (
-                                  <div style={adapterMetadataStyle}>
-                                    <div style={adapterMetadataTitleStyle}>Metadata</div>
-                                    <div style={timelineMetaGridStyle}>
-                                      {adapterMetadata.map(([key, value]) => (
-                                        <div key={key} style={detailFieldStyle}>
-                                          <span style={detailLabelStyle}>{key}</span>
-                                          <span style={detailValueStyle}>
-                                            {formatAdapterFieldValue(value)}
-                                          </span>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </div>
-                                ) : null}
-                              </div>
-                            ) : null}
-                            {step.error_code ? (
-                              <p style={timelineTextStyle}>Error code: {step.error_code}</p>
-                            ) : null}
-                            {getStepErrorText(step) ? (
-                              <p style={timelineErrorTextStyle}>{getStepErrorText(step)}</p>
-                            ) : null}
-                            {getStepResultText(step) ? (
-                              <pre style={timelineResultStyle}>{getStepResultText(step)}</pre>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
                 </>
               )}
               {detailKind === "definition" ? (
@@ -1736,10 +1472,9 @@ function PlaybooksPanel({
                   <pre style={jsonPreStyle}>{JSON.stringify(detailRecord.trigger_config, null, 2)}</pre>
                 </div>
               ) : detailKind === "execution" ? (
-                <details style={jsonBlockWrapStyle}>
-                  <summary style={jsonBlockTitleStyle}>Raw steps_log JSON</summary>
-                  <pre style={jsonPreStyle}>{JSON.stringify(detailRecord.steps_log, null, 2)}</pre>
-                </details>
+                <p style={emptyTextStyle}>
+                  Raw step payloads are intentionally hidden; the visualization renders safe execution metadata only.
+                </p>
               ) : null}
               {detailKind === "schedule" ? (
                 <p style={emptyTextStyle}>
@@ -2181,42 +1916,6 @@ const timelineTextStyle = {
   fontSize: "13px",
   lineHeight: 1.45,
   overflowWrap: "anywhere",
-};
-
-const timelineErrorTextStyle = {
-  ...timelineTextStyle,
-  color: "#fecaca",
-};
-
-const timelineResultStyle = {
-  margin: "10px 0 0",
-  padding: "10px",
-  borderRadius: "6px",
-  border: "1px solid #30363d",
-  backgroundColor: "#0b1020",
-  color: "#c9d1d9",
-  fontSize: "12px",
-  lineHeight: 1.45,
-  maxHeight: "180px",
-  overflow: "auto",
-  whiteSpace: "pre-wrap",
-  wordBreak: "break-word",
-};
-
-const adapterResultStyle = {
-  margin: "10px 0 0",
-  padding: "10px",
-  borderRadius: "6px",
-  border: "1px solid rgba(88, 166, 255, 0.35)",
-  backgroundColor: "rgba(88, 166, 255, 0.08)",
-};
-
-const adapterResultTitleStyle = {
-  color: "#bfdbfe",
-  fontSize: "12px",
-  fontWeight: "800",
-  marginBottom: "8px",
-  textTransform: "uppercase",
 };
 
 const adapterMetadataStyle = {

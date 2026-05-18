@@ -1,5 +1,5 @@
 import React from "react";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import PlaybooksPanel from "./PlaybooksPanel";
@@ -356,7 +356,7 @@ test("execution detail shows context fields and pending empty timeline", async (
   await userEvent.click(viewButtons[viewButtons.length - 1]);
 
   expect(await screen.findByText(/pending simulation; no steps have been consumed yet/i)).toBeInTheDocument();
-  expect(screen.getByText(/no simulated steps have run yet/i)).toBeInTheDocument();
+  expect(screen.getByText(/No step events are available for this execution yet/i)).toBeInTheDocument();
   expect(screen.getAllByText(/^playbook id$/i).length).toBeGreaterThan(0);
   expect(screen.getAllByText("pb_one").length).toBeGreaterThan(0);
   expect(screen.getByText(/^alert id$/i)).toBeInTheDocument();
@@ -684,20 +684,15 @@ test("execution detail renders simulated steps_log as timeline cards", async () 
   await userEvent.click(viewButtons[viewButtons.length - 1]);
 
   expect(await screen.findByText(/simulation completed successfully/i)).toBeInTheDocument();
-  expect(screen.getByText(/step timeline/i)).toBeInTheDocument();
-  expect(screen.getByText("Step 1")).toBeInTheDocument();
-  expect(screen.getByText("enrich_alert")).toBeInTheDocument();
+  expect(screen.getByText(/execution visualization/i)).toBeInTheDocument();
+  expect(screen.getAllByText("Step 1").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("enrich_alert").length).toBeGreaterThan(0);
   expect(screen.getByText("Simulated enrichment completed.")).toBeInTheDocument();
-  expect(screen.getByText("Step 2")).toBeInTheDocument();
-  expect(screen.getByText("notify_owner")).toBeInTheDocument();
+  expect(screen.getAllByText("Step 2").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("notify_owner").length).toBeGreaterThan(0);
   expect(screen.getAllByText(/notification suppressed in simulation/i).length).toBeGreaterThan(0);
 
-  const firstStep = screen.getByText("enrich_alert").closest("div");
-  expect(firstStep).toBeTruthy();
-  expect(within(firstStep.parentElement).getByText(/^simulated$/i)).toBeInTheDocument();
-  expect(within(firstStep.parentElement).getAllByText(/^yes$/i).length).toBeGreaterThan(0);
-  expect(within(firstStep.parentElement).getByText(/^executed$/i)).toBeInTheDocument();
-  expect(within(firstStep.parentElement).getAllByText(/^no$/i).length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/^simulation$/i).length).toBeGreaterThan(0);
 });
 
 test("execution detail renders adapter-backed simulated output", async () => {
@@ -764,7 +759,7 @@ test("execution detail renders adapter-backed simulated output", async () => {
   const viewButtons = screen.getAllByRole("button", { name: /^view$/i });
   await userEvent.click(viewButtons[viewButtons.length - 1]);
 
-  expect(await screen.findAllByText(/simulated adapter output/i)).toHaveLength(2);
+  expect(await screen.findByText(/execution visualization/i)).toBeInTheDocument();
   expect(screen.getAllByText(/^adapter$/i).length).toBeGreaterThan(0);
   expect(screen.getByText("slack")).toBeInTheDocument();
   expect(screen.getByText("firewall")).toBeInTheDocument();
@@ -772,13 +767,9 @@ test("execution detail renders adapter-backed simulated output", async () => {
   expect(screen.getByText("send_message")).toBeInTheDocument();
   expect(screen.getAllByText("block_ip").length).toBeGreaterThan(0);
   expect(screen.getAllByText(/^success$/i).length).toBeGreaterThan(0);
-  expect(screen.getAllByText(/^simulated$/i).length).toBeGreaterThan(0);
-  expect(screen.getAllByText(/^executed$/i).length).toBeGreaterThan(0);
   expect(screen.getAllByText(/^yes$/i).length).toBeGreaterThan(0);
-  expect(screen.getAllByText(/^no$/i).length).toBeGreaterThan(0);
-  expect(screen.getByText("Simulated slack action.")).toBeInTheDocument();
-  expect(screen.getByText("Simulated firewall action.")).toBeInTheDocument();
-  expect(screen.getAllByText(/^metadata$/i).length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/^adapter$/i).length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/^safe metadata$/i).length).toBeGreaterThan(0);
   expect(screen.getByText(/^delivery$/i)).toBeInTheDocument();
   expect(screen.getByText("not_sent")).toBeInTheDocument();
   expect(screen.getByText(/^mutation$/i)).toBeInTheDocument();
@@ -816,8 +807,8 @@ test("execution detail shows failed step errors without mutation controls", asyn
   await userEvent.click(viewButtons[viewButtons.length - 1]);
 
   expect(await screen.findByText(/simulation failed before completing all steps/i)).toBeInTheDocument();
-  expect(screen.getByText("unsupported_action")).toBeInTheDocument();
-  expect(screen.getByText(/error code: unsupported_action/i)).toBeInTheDocument();
+  expect(screen.getAllByText("unsupported_action").length).toBeGreaterThan(0);
+  expect(screen.getByText(/^failure class$/i)).toBeInTheDocument();
   expect(screen.getAllByText(/unsupported simulated step action/i).length).toBeGreaterThan(0);
   expect(screen.queryByRole("button", { name: /run|retry|cancel/i })).not.toBeInTheDocument();
 });
@@ -861,18 +852,15 @@ test("execution detail highlights awaiting approval gate context", async () => {
       "Approval-gated simulation paused; no later steps will run until approval."
     )
   ).toBeInTheDocument();
-  expect(screen.getByText("Approval requested")).toBeInTheDocument();
-  expect(screen.getByText("require_approval")).toBeInTheDocument();
-  expect(screen.getByText(/^approval request id$/i)).toBeInTheDocument();
+  expect(screen.getAllByText("Approval requested").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("require_approval").length).toBeGreaterThan(0);
+  expect(screen.getByText(/^approval request$/i)).toBeInTheDocument();
   expect(screen.getAllByText("901").length).toBeGreaterThan(0);
   expect(screen.getByText(/^approval status$/i)).toBeInTheDocument();
   expect(screen.getAllByText("pending").length).toBeGreaterThan(0);
   expect(screen.getByText(/^risk level$/i)).toBeInTheDocument();
   expect(screen.getAllByText("high").length).toBeGreaterThan(0);
-  expect(screen.getByText(/^simulated$/i)).toBeInTheDocument();
-  expect(screen.getAllByText(/^yes$/i).length).toBeGreaterThan(0);
-  expect(screen.getByText(/^executed$/i)).toBeInTheDocument();
-  expect(screen.getAllByText(/^no$/i).length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/^simulation$/i).length).toBeGreaterThan(0);
   expect(screen.queryByRole("button", { name: /approve|deny|resume|run|retry|cancel/i })).not.toBeInTheDocument();
 });
 
@@ -918,8 +906,8 @@ test("execution detail labels approval resume timeline events", async () => {
   const viewButtons = screen.getAllByRole("button", { name: /^view$/i });
   await userEvent.click(viewButtons[viewButtons.length - 1]);
 
-  expect(await screen.findByText("Approval approved")).toBeInTheDocument();
-  expect(screen.getByText("Simulation resumed")).toBeInTheDocument();
+  expect((await screen.findAllByText("Approval approved")).length).toBeGreaterThan(0);
+  expect(screen.getAllByText("Simulation resumed").length).toBeGreaterThan(0);
   expect(screen.getAllByText("approved").length).toBeGreaterThan(0);
   expect(screen.queryByText(/no later steps will run until approval/i)).not.toBeInTheDocument();
 });
@@ -981,14 +969,13 @@ test("execution detail labels denied expired skipped and aborted approval outcom
   const viewButtons = screen.getAllByRole("button", { name: /^view$/i });
   await userEvent.click(viewButtons[viewButtons.length - 1]);
 
-  expect(await screen.findByText("Approval denied")).toBeInTheDocument();
-  expect(screen.getByText("Skipped after approval gate")).toBeInTheDocument();
-  expect(screen.getByText("Approval expired")).toBeInTheDocument();
-  expect(screen.getByText("Aborted")).toBeInTheDocument();
+  expect((await screen.findAllByText("Approval denied")).length).toBeGreaterThan(0);
+  expect(screen.getAllByText("Skipped after approval gate").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("Approval expired").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("Aborted").length).toBeGreaterThan(0);
   expect(screen.getAllByText(/^skip reason$/i).length).toBeGreaterThan(0);
   expect(screen.getAllByText("approval_denied").length).toBeGreaterThan(0);
   expect(screen.getAllByText("expired").length).toBeGreaterThan(0);
-  expect(screen.getAllByText(/^no$/i).length).toBeGreaterThan(0);
 });
 
 test("refresh triggers additional read-only GET calls", async () => {
