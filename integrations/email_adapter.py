@@ -7,6 +7,7 @@ from integrations.base_integration import BaseIntegration
 class EmailSimulationAdapter(BaseIntegration):
     adapter_name = "email"
     supported_actions = frozenset({"send_email", "notify_owner"})
+    # Future real-mode path must call core.integration_audit.log_integration_execution_attempt.
 
     def _simulate(self, action, params, context):
         return self._result(

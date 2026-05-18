@@ -99,22 +99,22 @@ filtering (`GET /dead-letters?retryable=true`) is meaningful.
 Goal: Every real outbound call — success or failure — writes a structured, secret-free audit
 log entry.
 
-- [ ] Define the `soar_real_adapter_attempt` audit event format in a constants file or in
+- [x] Define the `soar_real_adapter_attempt` audit event format in a constants file or in
       `core/audit_helpers.py` comments.
-- [ ] Add `_log_real_adapter_attempt(conn, result, context)` helper that calls
+- [x] Add `_log_real_adapter_attempt(conn, result, context)` helper that calls
       `log_audit_event()` with the safe fields defined in design section 4.4.
-- [ ] Wire the helper into `integrations/slack_adapter.py` after real-mode path execution
+- [x] Wire the helper into `integrations/slack_adapter.py` after real-mode path execution
       (success and failure).
-- [ ] Wire the helper into `integrations/teams_adapter.py` equivalently.
-- [ ] Add stub wiring points in `integrations/email_adapter.py` and
+- [x] Wire the helper into `integrations/teams_adapter.py` equivalently.
+- [x] Add stub wiring points in `integrations/email_adapter.py` and
       `integrations/webhook_adapter.py` for when those adapters gain real-mode paths.
-- [ ] Add tests:
-  - [ ] Real Slack execution (mocked HTTP) writes exactly one audit event with safe fields.
-  - [ ] Audit event contains no webhook URL, token, header, or raw response.
-  - [ ] Audit event is not written for simulation-mode adapter calls.
-  - [ ] Audit event is written on both success and failure paths.
-  - [ ] Existing Slack and Teams tests pass unchanged.
-- [ ] Run canonical regression suite.
+- [x] Add tests:
+  - [x] Real Slack execution (mocked HTTP) writes exactly one audit event with safe fields.
+  - [x] Audit event contains no webhook URL, token, header, or raw response.
+  - [x] Audit event is not written for simulation-mode adapter calls.
+  - [x] Audit event is written on both success and failure paths.
+  - [x] Existing Slack and Teams tests pass unchanged.
+- [x] Run canonical regression suite.
 
 ---
 

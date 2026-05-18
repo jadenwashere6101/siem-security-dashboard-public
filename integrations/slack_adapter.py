@@ -7,6 +7,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+from core.integration_audit import log_integration_execution_attempt
 from integrations.base_integration import (
     FAILURE_CLASSIFICATION_NON_TRANSIENT,
     FAILURE_CLASSIFICATION_TIMEOUT,
@@ -145,6 +146,11 @@ class SlackSimulationAdapter(BaseIntegration):
             return self._simulate(action, params, context)
         return self._execute_real_slack(action, params, context)
 
+    # spec: SPEC-INTEG-005
+    def _audit_real_attempt(self, result, context):
+        log_integration_execution_attempt(result, context)
+        return result
+
     def _execute_real_slack(self, action, params, context):
         readiness = get_slack_real_mode_readiness(REAL_MODE)
         timeout_seconds = _get_timeout_seconds()
@@ -158,7 +164,7 @@ class SlackSimulationAdapter(BaseIntegration):
             "max_adapter_attempts": 1,
         }
         if not readiness["real_mode_ready"]:
-            return self._result(
+            return self._audit_real_attempt(self._result(
                 action,
                 params,
                 context,
@@ -172,7 +178,7 @@ class SlackSimulationAdapter(BaseIntegration):
                 mode=REAL_MODE,
                 simulated=True,
                 executed=False,
-            )
+            ), context)
 
         webhook_url = os.getenv(SLACK_WEBHOOK_ENV, "").strip()
         payload = _format_slack_payload(action, params, context)
@@ -181,7 +187,7 @@ class SlackSimulationAdapter(BaseIntegration):
             response = _post_slack_webhook(webhook_url, payload, timeout_seconds)
         except TimeoutError:
             elapsed_ms = int((time.monotonic() - started) * 1000)
-            return self._result(
+            return self._audit_real_attempt(self._result(
                 action,
                 params,
                 context,
@@ -197,11 +203,11 @@ class SlackSimulationAdapter(BaseIntegration):
                 mode=REAL_MODE,
                 simulated=False,
                 executed=False,
-            )
+            ), context)
         except urllib.error.HTTPError as exc:
             status_code = int(getattr(exc, "code", 0) or 0)
             transient = status_code >= 500 or status_code == 429
-            return self._result(
+            return self._audit_real_attempt(self._result(
                 action,
                 params,
                 context,
@@ -220,9 +226,9 @@ class SlackSimulationAdapter(BaseIntegration):
                 mode=REAL_MODE,
                 simulated=False,
                 executed=False,
-            )
+            ), context)
         except urllib.error.URLError:
-            return self._result(
+            return self._audit_real_attempt(self._result(
                 action,
                 params,
                 context,
@@ -236,10 +242,10 @@ class SlackSimulationAdapter(BaseIntegration):
                 mode=REAL_MODE,
                 simulated=False,
                 executed=False,
-            )
+            ), context)
 
         status_code = int(response.get("status_code") or 0)
-        return self._result(
+        return self._audit_real_attempt(self._result(
             action,
             params,
             context,
@@ -255,4 +261,4 @@ class SlackSimulationAdapter(BaseIntegration):
             mode=REAL_MODE,
             simulated=False,
             executed=True,
-        )
+        ), context)

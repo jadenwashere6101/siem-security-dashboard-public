@@ -3,12 +3,14 @@ import json
 import logging
 import smtplib
 import socket
+import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
 
+from core.integration_audit import build_integration_attempt_audit_details
 from integrations.base_integration import (
     CIRCUIT_STATE_CLOSED,
     CIRCUIT_STATE_HALF_OPEN,
@@ -170,6 +172,50 @@ def test_real_mode_guard_helper_does_not_log_credentials(monkeypatch, caplog):
     assert result["real_mode_allowed"] is True
     assert secret not in caplog.text
     assert "VERYSECRET" not in json.dumps(result, sort_keys=True)
+
+
+def test_integration_attempt_audit_details_redact_secrets():
+    secret_url = "https://hooks.slack.com/services/T000/B000/SECRET"
+    details = build_integration_attempt_audit_details(
+        {
+            "adapter": "slack",
+            "action": "send_message",
+            "mode": "real",
+            "success": False,
+            "simulated": False,
+            "executed": False,
+            "metadata": {
+                "failure_classification": "transient",
+                "retry_eligible": True,
+                "webhook_url": secret_url,
+                "authorization": "Bearer token-secret",
+                "raw_payload": {"message": "do not log"},
+            },
+        },
+        {
+            "execution_id": 44,
+            "incident_id": 5,
+            "alert_id": 99,
+            "correlation_id": "corr-1",
+            "idempotency_key": "idem-1",
+            "headers": {"Authorization": "Bearer token-secret"},
+            "raw_payload": {"text": secret_url},
+        },
+    )
+
+    rendered = json.dumps(details, sort_keys=True)
+    assert details["adapter"] == "slack"
+    assert details["action"] == "send_message"
+    assert details["playbook_execution_id"] == 44
+    assert details["incident_id"] == 5
+    assert details["alert_id"] == 99
+    assert details["correlation_id"] == "corr-1"
+    assert details["idempotency_key"] == "idem-1"
+    assert details["failure_class"] == "transient"
+    assert secret_url not in rendered
+    assert "token-secret" not in rendered
+    assert "raw_payload" not in rendered
+    assert "authorization" not in rendered.lower()
 
 
 def test_registry_startup_logs_circuit_reset_without_secrets(monkeypatch, caplog):
@@ -584,11 +630,18 @@ def test_slack_real_mode_staging_uses_mocked_outbound_call(monkeypatch):
     with patch(
         "integrations.slack_adapter._post_slack_webhook",
         return_value={"status_code": 200},
-    ) as post_mock:
+    ) as post_mock, patch("core.integration_audit.log_audit_event") as audit_mock:
         result = get_integration_adapter("slack").execute(
             "send_message",
             params={"message": "Staging notification"},
-            context={"execution_id": 44, "playbook_id": "pb_slack", "alert_id": 99},
+            context={
+                "execution_id": 44,
+                "playbook_id": "pb_slack",
+                "alert_id": 99,
+                "incident_id": 5,
+                "correlation_id": "corr-slack",
+                "idempotency_key": "idem-slack",
+            },
         )
 
     assert result["success"] is True
@@ -597,9 +650,81 @@ def test_slack_real_mode_staging_uses_mocked_outbound_call(monkeypatch):
     assert result["executed"] is True
     assert result["metadata"]["delivery"] == "sent"
     post_mock.assert_called_once()
+    audit_mock.assert_called_once()
+    event_type = audit_mock.call_args.args[0]
+    details = audit_mock.call_args.kwargs["details"]
+    assert event_type == "SOAR_REAL_ADAPTER_ATTEMPT"
+    assert details["adapter"] == "slack"
+    assert details["action"] == "send_message"
+    assert details["mode"] == "real"
+    assert details["success"] is True
+    assert details["executed"] is True
+    assert details["result_status"] == "success"
+    assert details["playbook_execution_id"] == 44
+    assert details["incident_id"] == 5
+    assert details["alert_id"] == 99
+    assert details["correlation_id"] == "corr-slack"
+    assert details["idempotency_key"] == "idem-slack"
     rendered = json.dumps(result, sort_keys=True)
+    rendered_details = json.dumps(details, sort_keys=True)
     assert "hooks.slack.com/services" not in rendered
     assert "SECRET" not in rendered
+    assert "hooks.slack.com/services" not in rendered_details
+    assert "SECRET" not in rendered_details
+
+
+def test_slack_real_mode_failure_audit_redacts_webhook(monkeypatch):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_SLACK_ENABLED", "true")
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T000/B000/SECRET")
+
+    with patch(
+        "integrations.slack_adapter._post_slack_webhook",
+        side_effect=urllib.error.URLError("temporary provider failure"),
+    ) as post_mock, patch("core.integration_audit.log_audit_event") as audit_mock:
+        result = get_integration_adapter("slack").execute(
+            "send_message",
+            params={
+                "message": "Staging notification",
+                "slack_webhook_url": "https://hooks.slack.com/services/T000/B000/SECRET",
+            },
+            context={"execution_id": 45, "alert_id": 101},
+        )
+
+    assert result["success"] is False
+    assert result["executed"] is False
+    post_mock.assert_called_once()
+    audit_mock.assert_called_once()
+    details = audit_mock.call_args.kwargs["details"]
+    rendered_details = json.dumps(details, sort_keys=True)
+    assert details["adapter"] == "slack"
+    assert details["action"] == "send_message"
+    assert details["mode"] == "real"
+    assert details["success"] is False
+    assert details["executed"] is False
+    assert details["result_status"] == "failed"
+    assert details["failure_class"] == FAILURE_CLASSIFICATION_TRANSIENT
+    assert details["playbook_execution_id"] == 45
+    assert details["alert_id"] == 101
+    assert "hooks.slack.com/services" not in rendered_details
+    assert "SECRET" not in rendered_details
+
+
+def test_simulation_mode_does_not_write_real_adapter_audit(monkeypatch, no_network):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+
+    with patch("core.integration_audit.log_audit_event") as audit_mock:
+        result = get_integration_adapter("slack").execute(
+            "send_message",
+            params={"message": "simulation only"},
+            context={"execution_id": 44, "alert_id": 99},
+        )
+
+    assert result["mode"] == "simulation"
+    assert result["simulated"] is True
+    assert result["executed"] is False
+    audit_mock.assert_not_called()
 
 
 def test_real_mode_does_not_apply_to_non_slack_adapters(monkeypatch, no_network):
