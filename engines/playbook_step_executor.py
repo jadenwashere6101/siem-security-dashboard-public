@@ -45,11 +45,14 @@ ADAPTER_ACTIONS = {
     "notify_webhook": ("webhook", "post_event"),
 }
 
-_NOTIFICATION_ACTIONS = frozenset({"notify_slack", "notify_teams", "notify_email"})
+_NOTIFICATION_ACTIONS = frozenset(
+    {"notify_slack", "notify_teams", "notify_email", "notify_webhook"}
+)
 _PROVIDER_FOR_ACTION: dict[str, str] = {
     "notify_slack": "slack",
     "notify_teams": "teams",
     "notify_email": "email",
+    "notify_webhook": "webhook",
 }
 
 

@@ -21,6 +21,7 @@ from integrations.base_integration import (
     FAILURE_CLASSIFICATION_CREDENTIAL_MISSING,
     FAILURE_CLASSIFICATION_GUARD_FAILED,
     FAILURE_CLASSIFICATION_INVALID_CREDENTIALS,
+    FAILURE_CLASSIFICATION_INVALID_TARGET,
     FAILURE_CLASSIFICATION_MALFORMED_PAYLOAD,
     FAILURE_CLASSIFICATION_NON_TRANSIENT,
     FAILURE_CLASSIFICATION_PROVIDER_RATE_LIMITED,
@@ -1023,29 +1024,24 @@ def test_email_real_mode_open_circuit_blocks_before_smtp(monkeypatch, fake_smtp)
     audit_mock.assert_not_called()
 
 
-def test_real_mode_does_not_apply_to_non_slack_adapters(monkeypatch, no_network):
+def test_real_mode_does_not_apply_to_firewall_adapter(monkeypatch, no_network):
     monkeypatch.setenv("INTEGRATION_MODE", "real")
     monkeypatch.setenv("SOAR_ENV", "staging")
     monkeypatch.setenv("SOAR_REAL_SLACK_ENABLED", "true")
     monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T000/B000/SECRET")
 
-    for adapter_name, action in [
-        ("firewall", "block_ip"),
-        ("webhook", "post_event"),
-    ]:
-        adapter = get_integration_adapter(adapter_name)
-        result = adapter.execute(action)
-        assert adapter.mode == "simulation"
-        assert result["mode"] == "simulation"
-        assert result["simulated"] is True
-        assert result["executed"] is False
+    adapter = get_integration_adapter("firewall")
+    result = adapter.execute("block_ip")
+    assert adapter.mode == "simulation"
+    assert result["mode"] == "simulation"
+    assert result["simulated"] is True
+    assert result["executed"] is False
 
 
 @pytest.mark.parametrize(
     ("adapter_name", "action"),
     [
         ("firewall", "block_ip"),
-        ("webhook", "post_event"),
     ],
 )
 def test_real_mode_without_adapter_flag_fails_closed_for_simulation_only_adapters(
@@ -1189,16 +1185,227 @@ def test_real_mode_does_not_apply_to_non_teams_adapters(monkeypatch, no_network)
     monkeypatch.setenv("SOAR_REAL_TEAMS_ENABLED", "true")
     monkeypatch.setenv("TEAMS_WEBHOOK_URL", "https://contoso.webhook.office.com/webhookb2/SECRET")
 
-    for adapter_name, action in [
-        ("firewall", "block_ip"),
-        ("webhook", "post_event"),
-    ]:
-        adapter = get_integration_adapter(adapter_name)
-        result = adapter.execute(action)
-        assert adapter.mode == "simulation"
-        assert result["mode"] == "simulation"
-        assert result["simulated"] is True
-        assert result["executed"] is False
+    adapter = get_integration_adapter("firewall")
+    result = adapter.execute("block_ip")
+    assert adapter.mode == "simulation"
+    assert result["mode"] == "simulation"
+    assert result["simulated"] is True
+    assert result["executed"] is False
+
+
+def _set_webhook_real_mode_env(monkeypatch, *, url="https://events.staging.example/hooks/soar"):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_WEBHOOK_ENABLED", "true")
+    monkeypatch.setenv("WEBHOOK_URL", url)
+    monkeypatch.setenv("WEBHOOK_AUTH_TOKEN", "webhook-token-secret")
+
+
+def test_webhook_simulation_mode_skips_http_call(monkeypatch, no_network):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+
+    result = get_integration_adapter("webhook").execute(
+        "post_event",
+        params={"payload": {"event": "safe"}},
+    )
+
+    assert result["success"] is True
+    assert result["mode"] == "simulation"
+    assert result["simulated"] is True
+    assert result["executed"] is False
+
+
+def test_webhook_real_mode_missing_guards_fails_closed(monkeypatch, no_network):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+
+    with patch("core.integration_audit.log_audit_event") as audit_mock:
+        result = get_integration_adapter("webhook").execute("post_event")
+
+    assert result["success"] is False
+    assert result["mode"] == "real"
+    assert result["simulated"] is True
+    assert result["executed"] is False
+    assert result["metadata"]["failure_classification"] == FAILURE_CLASSIFICATION_CREDENTIAL_MISSING
+    audit_mock.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "blocked_url",
+    [
+        "http://events.staging.example/hooks/soar",
+        "https://127.0.0.1/hooks/soar",
+        "https://localhost/hooks/soar",
+        "https://10.0.0.8/hooks/soar",
+        "file:///tmp/secret",
+    ],
+)
+def test_webhook_real_mode_invalid_target_blocked_without_http(
+    monkeypatch,
+    no_network,
+    blocked_url,
+):
+    _set_webhook_real_mode_env(monkeypatch, url=blocked_url)
+
+    with patch(
+        "integrations.webhook_adapter._post_webhook_request",
+        side_effect=AssertionError("blocked target must not call HTTP"),
+    ):
+        result = get_integration_adapter("webhook").execute(
+            "post_event",
+            params={"payload": {"event": "safe"}},
+        )
+
+    rendered = json.dumps(result, sort_keys=True)
+    assert result["success"] is False
+    assert result["executed"] is False
+    assert result["metadata"]["failure_classification"] in {
+        FAILURE_CLASSIFICATION_INVALID_TARGET,
+        FAILURE_CLASSIFICATION_INVALID_CREDENTIALS,
+        FAILURE_CLASSIFICATION_MALFORMED_PAYLOAD,
+    }
+    assert blocked_url not in rendered
+    assert "webhook-token-secret" not in rendered
+
+
+def test_webhook_real_mode_staging_uses_mocked_http_once(monkeypatch):
+    _set_webhook_real_mode_env(monkeypatch)
+
+    with patch("core.integration_audit.log_audit_event") as audit_mock:
+        with patch(
+            "integrations.webhook_adapter._post_webhook_request",
+            return_value={"status_code": 204},
+        ) as post_mock:
+            result = get_integration_adapter("webhook").execute(
+                "post_event",
+                params={"payload": {"event": "staging-smoke", "summary": "safe"}},
+                context={"execution_id": 91, "idempotency_key": "idem-webhook"},
+            )
+
+    assert result["success"] is True
+    assert result["mode"] == "real"
+    assert result["simulated"] is False
+    assert result["executed"] is True
+    post_mock.assert_called_once()
+    audit_mock.assert_called_once()
+    details = audit_mock.call_args.kwargs["details"]
+    assert details["adapter"] == "webhook"
+    assert details["idempotency_key"] == "idem-webhook"
+    assert "webhook-token-secret" not in json.dumps(details, sort_keys=True)
+    assert "events.staging.example" not in json.dumps(details, sort_keys=True)
+
+
+def test_webhook_real_mode_redacts_secrets_from_result_and_audit(monkeypatch):
+    secret_url = "https://events.staging.example/hooks/SECRET_PATH"
+    secret_token = "webhook-bearer-secret"
+    _set_webhook_real_mode_env(monkeypatch, url=secret_url)
+    monkeypatch.setenv("WEBHOOK_AUTH_TOKEN", secret_token)
+
+    with patch("core.integration_audit.log_audit_event") as audit_mock:
+        with patch(
+            "integrations.webhook_adapter._post_webhook_request",
+            return_value={"status_code": 200},
+        ):
+            result = get_integration_adapter("webhook").execute(
+                "post_event",
+                params={
+                    "payload": {"event": "safe"},
+                    "webhook_url": secret_url,
+                    "authorization": secret_token,
+                },
+            )
+
+    rendered_result = json.dumps(result, sort_keys=True)
+    rendered_audit = json.dumps(audit_mock.call_args.kwargs["details"], sort_keys=True)
+    assert result["params"]["webhook_url"] == "[redacted]"
+    assert secret_url not in rendered_result
+    assert secret_token not in rendered_result
+    assert secret_url not in rendered_audit
+    assert secret_token not in rendered_audit
+
+
+def test_webhook_real_mode_malformed_payload_rejected_before_http(monkeypatch):
+    _set_webhook_real_mode_env(monkeypatch)
+
+    with patch(
+        "integrations.webhook_adapter._post_webhook_request",
+        side_effect=AssertionError("malformed payload must not call HTTP"),
+    ):
+        result = get_integration_adapter("webhook").execute(
+            "post_event",
+            params={"path": "//disallowed"},
+        )
+
+    assert result["success"] is False
+    assert result["executed"] is False
+    assert result["metadata"]["failure_classification"] == FAILURE_CLASSIFICATION_MALFORMED_PAYLOAD
+
+
+def test_webhook_rate_limiter_blocks_before_request(monkeypatch):
+    _set_webhook_real_mode_env(monkeypatch)
+    monkeypatch.setenv("WEBHOOK_MAX_SENDS_PER_MINUTE", "1")
+
+    with patch("core.integration_audit.log_audit_event"):
+        with patch(
+            "integrations.webhook_adapter._post_webhook_request",
+            return_value={"status_code": 200},
+        ) as post_mock:
+            first = get_integration_adapter("webhook").execute("post_event")
+            blocked = get_integration_adapter("webhook").execute("post_event")
+
+    assert first["success"] is True
+    assert blocked["success"] is False
+    assert blocked["executed"] is False
+    assert blocked["metadata"]["failure_classification"] == FAILURE_CLASSIFICATION_PROVIDER_RATE_LIMITED
+    assert post_mock.call_count == 1
+
+
+def test_webhook_real_mode_timeout_classified_safely(monkeypatch):
+    _set_webhook_real_mode_env(monkeypatch)
+
+    with patch("core.integration_audit.log_audit_event"):
+        with patch(
+            "integrations.webhook_adapter._post_webhook_request",
+            side_effect=TimeoutError("timed out"),
+        ):
+            result = get_integration_adapter("webhook").execute("post_event")
+
+    assert result["success"] is False
+    assert result["metadata"]["failure_classification"] == FAILURE_CLASSIFICATION_TIMEOUT
+    assert result["metadata"]["retry_eligible"] is True
+
+
+def test_webhook_real_mode_open_circuit_blocks_before_http(monkeypatch, no_network):
+    _set_webhook_real_mode_env(monkeypatch)
+    configure_simulated_circuit_breaker("webhook", state=CIRCUIT_STATE_OPEN, consecutive_failures=3)
+
+    with patch(
+        "integrations.webhook_adapter._post_webhook_request",
+        side_effect=AssertionError("HTTP must not run when circuit is open"),
+    ):
+        result = get_integration_adapter("webhook").execute("post_event")
+
+    assert result["success"] is False
+    assert result["metadata"]["failure_classification"] == FAILURE_CLASSIFICATION_CIRCUIT_OPEN
+
+
+def test_webhook_real_mode_accepts_webhook_base_url_env(monkeypatch):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_WEBHOOK_ENABLED", "true")
+    monkeypatch.delenv("WEBHOOK_URL", raising=False)
+    monkeypatch.setenv("WEBHOOK_BASE_URL", "https://events.staging.example/hooks/soar")
+
+    with patch(
+        "integrations.webhook_adapter._post_webhook_request",
+        return_value={"status_code": 200},
+    ) as post_mock:
+        result = get_integration_adapter("webhook").execute(
+            "post_event",
+            params={"payload": {"event": "safe"}},
+        )
+
+    assert result["success"] is True
+    post_mock.assert_called_once()
 
 
 def test_teams_real_mode_open_circuit_blocks_before_network(monkeypatch, no_network):

@@ -1052,7 +1052,6 @@ def test_non_notification_steps_do_not_create_delivery_records(postgres_db, no_n
         [
             {"action": "monitor"},
             {"action": "block_ip", "params": {"source_ip": "203.0.113.10"}},
-            {"action": "notify_webhook", "params": {"payload": {}}},
         ],
     )
 
@@ -1363,6 +1362,53 @@ def test_duplicate_email_delivery_skips_smtp_send(postgres_db, monkeypatch, no_n
     conn.commit()
 
     result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "success"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    entry = row["steps_log"][0]
+    assert entry["skipped"] is True
+    assert entry["output"]["skip_reason"] == "delivery_success"
+    assert _count_deliveries(cur, eid) == 1
+
+
+def test_duplicate_webhook_delivery_skips_http_call(postgres_db, monkeypatch, no_network):
+    conn, cur = postgres_db
+    eid = _create_execution(
+        conn,
+        cur,
+        "pb_webhook_delivery_dedup",
+        steps=[{"action": "notify_webhook", "params": {"payload": {"event": "already sent"}}}],
+    )
+    cur.execute("SELECT alert_id FROM playbook_executions WHERE id = %s", (eid,))
+    alert_id = cur.fetchone()[0]
+    notification_delivery_store.create_notification_delivery_attempt(
+        conn,
+        correlation_id=f"existing-webhook-{eid}-0",
+        idempotency_key=playbook_step_executor._make_delivery_idempotency_key(
+            "webhook", "notify_webhook", eid, 0
+        ),
+        provider="webhook",
+        mode="real",
+        status="success",
+        adapter_name="webhook",
+        action="post_event",
+        metadata={"adapter_mode": "real"},
+        playbook_execution_id=eid,
+        playbook_step_index=0,
+        alert_id=alert_id,
+        circuit_breaker_state="closed",
+    )
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_WEBHOOK_ENABLED", "true")
+    monkeypatch.setenv("WEBHOOK_URL", "https://events.staging.example/hooks/soar")
+    conn.commit()
+
+    with patch(
+        "integrations.webhook_adapter._post_webhook_request",
+        side_effect=AssertionError("duplicate delivery must not execute HTTP"),
+    ):
+        result = playbook_step_executor.process_playbook_execution(conn, eid)
 
     assert result["outcome"] == "success"
     row = playbook_store.get_playbook_execution(conn, eid)

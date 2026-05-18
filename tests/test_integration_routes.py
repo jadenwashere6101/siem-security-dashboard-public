@@ -389,6 +389,53 @@ def test_integration_status_email_missing_smtp_host_not_ready(
     assert adapters["email"]["real_mode_ready"] is False
 
 
+def test_integration_status_webhook_real_readiness_uses_safe_booleans(
+    client, mock_db, monkeypatch
+):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_WEBHOOK_ENABLED", "true")
+    monkeypatch.setenv("WEBHOOK_URL", "https://events.staging.example/hooks/soar")
+    monkeypatch.setenv("WEBHOOK_AUTH_TOKEN", "webhook-secret")
+    _deny_network(monkeypatch)
+    _login_super_admin(client)
+
+    resp = client.get("/integrations/status")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    rendered = json.dumps(data, sort_keys=True)
+    assert data["configured_mode"] == "real"
+    assert data["real_mode_enabled"] is True
+    adapters = {adapter["name"]: adapter for adapter in data["adapters"]}
+    assert adapters["webhook"]["mode"] == "real"
+    assert adapters["webhook"]["real_client"] is True
+    assert adapters["webhook"]["webhook_url_configured"] is True
+    assert adapters["webhook"]["webhook_real_enabled"] is True
+    assert adapters["slack"]["mode"] == "simulation"
+    assert "events.staging.example" not in rendered
+    assert "webhook-secret" not in rendered
+
+
+def test_integration_status_webhook_invalid_target_not_ready(client, mock_db, monkeypatch):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_WEBHOOK_ENABLED", "true")
+    monkeypatch.setenv("WEBHOOK_URL", "https://127.0.0.1/hooks/soar")
+    _deny_network(monkeypatch)
+    _login_super_admin(client)
+
+    resp = client.get("/integrations/status")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    rendered = json.dumps(data, sort_keys=True)
+    adapters = {adapter["name"]: adapter for adapter in data["adapters"]}
+    assert adapters["webhook"]["webhook_url_configured"] is True
+    assert adapters["webhook"]["real_mode_ready"] is False
+    assert "127.0.0.1" not in rendered
+
+
 def test_integration_status_slack_and_teams_config_are_independent(
     client, mock_db, monkeypatch
 ):

@@ -21,7 +21,10 @@ from integrations.teams_adapter import (
     TeamsSimulationAdapter,
     get_teams_real_mode_readiness,
 )
-from integrations.webhook_adapter import WebhookSimulationAdapter
+from integrations.webhook_adapter import (
+    WebhookSimulationAdapter,
+    get_webhook_real_mode_readiness,
+)
 
 _ADAPTERS: dict[str, type[BaseIntegration]] = {
     "slack": SlackSimulationAdapter,
@@ -72,7 +75,7 @@ def _adapter_guard_readiness(adapter_name: str, configured_mode: str) -> dict[st
 def _safe_adapter_mode_decision(adapter_name: str, configured_mode: str) -> str:
     if configured_mode != REAL_MODE:
         return SIMULATION_MODE
-    if adapter_name in {"slack", "teams", "email"}:
+    if adapter_name in {"slack", "teams", "email", "webhook"}:
         return REAL_MODE
     return SIMULATION_MODE
 
@@ -152,16 +155,19 @@ def get_integration_status(mode: str | None = None) -> dict:
     slack_readiness = get_slack_real_mode_readiness(configured_mode)
     teams_readiness = get_teams_real_mode_readiness(configured_mode)
     email_readiness = get_email_real_mode_readiness(configured_mode)
+    webhook_readiness = get_webhook_real_mode_readiness(configured_mode)
     real_mode_requested = configured_mode == REAL_MODE
     real_mode_ready = bool(
         slack_readiness["real_mode_ready"]
         or teams_readiness["real_mode_ready"]
         or email_readiness["real_mode_ready"]
+        or webhook_readiness["real_mode_ready"]
     )
     real_mode_allowed = bool(
         slack_readiness["real_mode_allowed"]
         or teams_readiness["real_mode_allowed"]
         or email_readiness["real_mode_allowed"]
+        or webhook_readiness["real_mode_allowed"]
     )
     real_mode_status = "disabled"
     if real_mode_requested:
@@ -172,7 +178,8 @@ def get_integration_status(mode: str | None = None) -> dict:
                 "disabled: no real notification adapter ready; "
                 f"slack={slack_readiness['real_mode_status']}; "
                 f"teams={teams_readiness['real_mode_status']}; "
-                f"email={email_readiness['real_mode_status']}"
+                f"email={email_readiness['real_mode_status']}; "
+                f"webhook={webhook_readiness['real_mode_status']}"
             )
     adapter_rows = []
     for name, adapter_cls in sorted(_ADAPTERS.items()):
@@ -180,6 +187,7 @@ def get_integration_status(mode: str | None = None) -> dict:
             (name == "slack" and slack_readiness["real_mode_ready"])
             or (name == "teams" and teams_readiness["real_mode_ready"])
             or (name == "email" and email_readiness["real_mode_ready"])
+            or (name == "webhook" and webhook_readiness["real_mode_ready"])
         ) else SIMULATION_MODE
         _log_adapter_registry_startup(name, configured_mode, mode_decision)
         adapter_rows.append(
@@ -222,6 +230,16 @@ def get_integration_status(mode: str | None = None) -> dict:
                         "webhook_configured": teams_readiness["webhook_configured"],
                     }
                     if name == "teams"
+                    else {}
+                ),
+                **(
+                    {
+                        "webhook_url_configured": webhook_readiness["webhook_url_configured"],
+                        "webhook_real_enabled": webhook_readiness["webhook_real_enabled"],
+                        "real_mode_allowed": webhook_readiness["real_mode_allowed"],
+                        "real_mode_ready": webhook_readiness["real_mode_ready"],
+                    }
+                    if name == "webhook"
                     else {}
                 ),
             }
