@@ -41,6 +41,35 @@
 
   ---
 
+  ## SOAR Demo and Productization Docs
+
+  Current portfolio/demo guidance lives in:
+
+  - SOAR docs index: `docs/soar_docs_index.md`
+  - Demo walkthrough: `docs/soar_demo_walkthrough.md`
+  - Demo reset guide: `docs/soar_demo_reset_guide.md`
+  - Architecture summary: `docs/soar_architecture_summary.md`
+  - Security boundaries: `docs/soar_security_boundaries.md`
+  - Interview talking points: `docs/soar_interview_talking_points.md`
+  - Final validation checklist: `docs/soar_final_validation_checklist.md`
+
+  Operational references:
+
+  - Worker daemon runbook: `docs/soar_playbook_worker_daemon_runbook.md`
+  - Dead-letter validation: `docs/soar_dead_letter_validation.md`
+  - Execution locking validation: `docs/soar_execution_locking_validation.md`
+  - Slack smoke test: `docs/soar_slack_staging_smoke_test_runbook.md`
+  - Teams smoke test: `docs/soar_teams_staging_smoke_test_runbook.md`
+  - Email smoke test: `docs/soar_email_staging_smoke_test_runbook.md`
+  - Webhook smoke test: `docs/soar_webhook_staging_smoke_test_runbook.md`
+
+  Local Mac workflow is for development, tests, frontend build, and
+  simulation-safe demos. VM deployment and runtime service changes are separate
+  operator actions documented in the deployment/runbook references and should
+  not be performed during a normal demo.
+
+  ---
+
   ## Real-World Integration
 
   This SIEM is designed to integrate with external applications that stream real-time
