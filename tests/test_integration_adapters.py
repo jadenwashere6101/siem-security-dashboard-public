@@ -20,9 +20,14 @@ from integrations.base_integration import (
     FAILURE_CLASSIFICATION_CIRCUIT_STATE_INVALID,
     FAILURE_CLASSIFICATION_CREDENTIAL_MISSING,
     FAILURE_CLASSIFICATION_GUARD_FAILED,
+    FAILURE_CLASSIFICATION_INVALID_CREDENTIALS,
+    FAILURE_CLASSIFICATION_MALFORMED_PAYLOAD,
     FAILURE_CLASSIFICATION_NON_TRANSIENT,
     FAILURE_CLASSIFICATION_PROVIDER_RATE_LIMITED,
+    FAILURE_CLASSIFICATION_TEMPORARY_PROVIDER_FAILURE,
+    FAILURE_CLASSIFICATION_TIMEOUT,
     FAILURE_CLASSIFICATION_TRANSIENT,
+    FAILURE_CLASSIFICATION_TRANSIENT_NETWORK_ERROR,
     SimulatedCircuitBreakerControlError,
     configure_simulated_circuit_breaker,
     get_simulated_circuit_breaker_dict,
@@ -795,6 +800,229 @@ def test_simulation_mode_does_not_write_real_adapter_audit(monkeypatch, no_netwo
     audit_mock.assert_not_called()
 
 
+def _set_email_real_mode_env(monkeypatch, *, password="smtp-secret"):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_EMAIL_ENABLED", "true")
+    monkeypatch.setenv("SMTP_HOST", "smtp.staging.local")
+    monkeypatch.setenv("SMTP_USERNAME", "smtp-user")
+    monkeypatch.setenv("SMTP_PASSWORD", password)
+    monkeypatch.setenv("SMTP_FROM_EMAIL", "soar@example.com")
+    monkeypatch.setenv("SMTP_TO_EMAIL", "analyst@example.com")
+    monkeypatch.setenv("SMTP_PORT", "2525")
+
+
+class _FakeSMTP:
+    instances = []
+    send_side_effect = None
+    login_side_effect = None
+
+    def __init__(self, host, port, timeout):
+        self.host = host
+        self.port = port
+        self.timeout = timeout
+        self.messages = []
+        _FakeSMTP.instances.append(self)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def starttls(self):
+        return None
+
+    def login(self, username, password):
+        if _FakeSMTP.login_side_effect is not None:
+            raise _FakeSMTP.login_side_effect
+        self.username = username
+        self.password = password
+
+    def send_message(self, message):
+        if _FakeSMTP.send_side_effect is not None:
+            raise _FakeSMTP.send_side_effect
+        self.messages.append(message)
+        return {}
+
+
+@pytest.fixture
+def fake_smtp(monkeypatch):
+    _FakeSMTP.instances = []
+    _FakeSMTP.send_side_effect = None
+    _FakeSMTP.login_side_effect = None
+    monkeypatch.setattr("integrations.email_adapter.smtplib.SMTP", _FakeSMTP)
+    yield _FakeSMTP
+    _FakeSMTP.instances = []
+    _FakeSMTP.send_side_effect = None
+    _FakeSMTP.login_side_effect = None
+
+
+def test_email_simulation_mode_does_not_call_smtp(monkeypatch, no_network):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+
+    result = get_integration_adapter("email").execute(
+        "send_email",
+        params={"subject": "safe", "body": "simulation"},
+    )
+
+    assert result["success"] is True
+    assert result["mode"] == "simulation"
+    assert result["simulated"] is True
+    assert result["executed"] is False
+
+
+def test_email_real_mode_missing_guards_fails_closed(monkeypatch, no_network):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+
+    with patch("core.integration_audit.log_audit_event") as audit_mock:
+        result = get_integration_adapter("email").execute("send_email")
+
+    assert result["success"] is False
+    assert result["mode"] == "real"
+    assert result["simulated"] is True
+    assert result["executed"] is False
+    assert result["metadata"]["failure_classification"] == FAILURE_CLASSIFICATION_CREDENTIAL_MISSING
+    audit_mock.assert_called_once()
+
+
+def test_email_real_mode_staging_uses_mocked_smtp_once(monkeypatch, fake_smtp):
+    _set_email_real_mode_env(monkeypatch)
+
+    with patch("core.integration_audit.log_audit_event") as audit_mock:
+        result = get_integration_adapter("email").execute(
+            "send_email",
+            params={"subject": "SOAR staging", "body": "safe body"},
+            context={"execution_id": 77, "alert_id": 88, "idempotency_key": "idem-email"},
+        )
+
+    assert result["success"] is True
+    assert result["mode"] == "real"
+    assert result["simulated"] is False
+    assert result["executed"] is True
+    assert len(fake_smtp.instances) == 1
+    assert len(fake_smtp.instances[0].messages) == 1
+    audit_mock.assert_called_once()
+    details = audit_mock.call_args.kwargs["details"]
+    assert details["adapter"] == "email"
+    assert details["action"] == "send_email"
+    assert details["idempotency_key"] == "idem-email"
+
+
+def test_email_real_mode_redacts_credentials_from_result_and_audit(monkeypatch, fake_smtp):
+    secret_password = "smtp-password-secret"
+    _set_email_real_mode_env(monkeypatch, password=secret_password)
+
+    with patch("core.integration_audit.log_audit_event") as audit_mock:
+        result = get_integration_adapter("email").execute(
+            "send_email",
+            params={"subject": "SOAR", "body": "safe body", "password": secret_password},
+            context={"execution_id": 78},
+        )
+
+    rendered_result = json.dumps(result, sort_keys=True)
+    rendered_audit = json.dumps(audit_mock.call_args.kwargs["details"], sort_keys=True)
+    assert result["success"] is True
+    assert secret_password not in rendered_result
+    assert secret_password not in rendered_audit
+    assert "smtp.staging.local" not in rendered_result
+    assert "smtp.staging.local" not in rendered_audit
+    assert "smtp-user" not in rendered_result
+    assert "smtp-user" not in rendered_audit
+
+
+@pytest.mark.parametrize(
+    ("side_effect", "classification", "retry_eligible"),
+    [
+        (TimeoutError("timeout"), FAILURE_CLASSIFICATION_TIMEOUT, True),
+        (
+            smtplib.SMTPAuthenticationError(535, b"bad auth"),
+            FAILURE_CLASSIFICATION_INVALID_CREDENTIALS,
+            False,
+        ),
+        (
+            smtplib.SMTPResponseException(421, b"rate limited"),
+            FAILURE_CLASSIFICATION_PROVIDER_RATE_LIMITED,
+            True,
+        ),
+        (
+            smtplib.SMTPResponseException(550, b"temporary provider failure"),
+            FAILURE_CLASSIFICATION_TEMPORARY_PROVIDER_FAILURE,
+            True,
+        ),
+        (
+            smtplib.SMTPServerDisconnected("disconnect"),
+            FAILURE_CLASSIFICATION_TRANSIENT_NETWORK_ERROR,
+            True,
+        ),
+    ],
+)
+def test_email_real_mode_smtp_failures_are_classified(
+    monkeypatch,
+    fake_smtp,
+    side_effect,
+    classification,
+    retry_eligible,
+):
+    _set_email_real_mode_env(monkeypatch)
+    fake_smtp.send_side_effect = side_effect
+
+    with patch("core.integration_audit.log_audit_event"):
+        result = get_integration_adapter("email").execute(
+            "send_email",
+            params={"subject": "SOAR", "body": "safe"},
+        )
+
+    assert result["success"] is False
+    assert result["executed"] is False
+    assert result["metadata"]["failure_classification"] == classification
+    assert result["metadata"]["retry_eligible"] is retry_eligible
+
+
+def test_email_real_mode_malformed_payload_rejected_before_smtp(monkeypatch, fake_smtp):
+    _set_email_real_mode_env(monkeypatch)
+
+    with patch("core.integration_audit.log_audit_event"):
+        result = get_integration_adapter("email").execute(
+            "send_email",
+            params={"to": "not-an-address", "subject": "bad recipient"},
+        )
+
+    assert result["success"] is False
+    assert result["executed"] is False
+    assert result["metadata"]["failure_classification"] == FAILURE_CLASSIFICATION_MALFORMED_PAYLOAD
+    assert len(fake_smtp.instances) == 0
+
+
+def test_email_rate_limiter_blocks_before_smtp(monkeypatch, fake_smtp):
+    _set_email_real_mode_env(monkeypatch)
+    monkeypatch.setenv("EMAIL_MAX_SENDS_PER_MINUTE", "1")
+
+    with patch("core.integration_audit.log_audit_event"):
+        first = get_integration_adapter("email").execute("send_email")
+        blocked = get_integration_adapter("email").execute("send_email")
+
+    assert first["success"] is True
+    assert blocked["success"] is False
+    assert blocked["executed"] is False
+    assert blocked["metadata"]["failure_classification"] == FAILURE_CLASSIFICATION_PROVIDER_RATE_LIMITED
+    assert len(fake_smtp.instances) == 1
+
+
+def test_email_real_mode_open_circuit_blocks_before_smtp(monkeypatch, fake_smtp):
+    _set_email_real_mode_env(monkeypatch)
+    configure_simulated_circuit_breaker("email", state=CIRCUIT_STATE_OPEN, consecutive_failures=3)
+
+    with patch("core.integration_audit.log_audit_event") as audit_mock:
+        result = get_integration_adapter("email").execute("send_email")
+
+    assert result["success"] is False
+    assert result["executed"] is False
+    assert result["metadata"]["failure_classification"] == FAILURE_CLASSIFICATION_CIRCUIT_OPEN
+    assert len(fake_smtp.instances) == 0
+    audit_mock.assert_not_called()
+
+
 def test_real_mode_does_not_apply_to_non_slack_adapters(monkeypatch, no_network):
     monkeypatch.setenv("INTEGRATION_MODE", "real")
     monkeypatch.setenv("SOAR_ENV", "staging")
@@ -802,7 +1030,6 @@ def test_real_mode_does_not_apply_to_non_slack_adapters(monkeypatch, no_network)
     monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T000/B000/SECRET")
 
     for adapter_name, action in [
-        ("email", "send_email"),
         ("firewall", "block_ip"),
         ("webhook", "post_event"),
     ]:
@@ -817,7 +1044,6 @@ def test_real_mode_does_not_apply_to_non_slack_adapters(monkeypatch, no_network)
 @pytest.mark.parametrize(
     ("adapter_name", "action"),
     [
-        ("email", "send_email"),
         ("firewall", "block_ip"),
         ("webhook", "post_event"),
     ],
@@ -964,7 +1190,6 @@ def test_real_mode_does_not_apply_to_non_teams_adapters(monkeypatch, no_network)
     monkeypatch.setenv("TEAMS_WEBHOOK_URL", "https://contoso.webhook.office.com/webhookb2/SECRET")
 
     for adapter_name, action in [
-        ("email", "send_email"),
         ("firewall", "block_ip"),
         ("webhook", "post_event"),
     ]:

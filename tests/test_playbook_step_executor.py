@@ -1019,6 +1019,30 @@ def test_notify_teams_step_creates_delivery_record(postgres_db, no_network):
     assert cb_state == "closed"
 
 
+def test_notify_email_step_creates_delivery_record(postgres_db, no_network):
+    conn, cur = postgres_db
+    eid = _create_execution(conn, cur, "pb_email_delivery")
+    _set_playbook_steps(
+        cur,
+        "pb_email_delivery",
+        [{"action": "notify_email", "params": {"subject": "test alert"}}],
+    )
+
+    result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "success"
+    rows = _fetch_deliveries(cur, eid)
+    assert len(rows) == 1
+    provider, mode, status, step_idx, adapter_name, action, _alert_id, cb_state = rows[0]
+    assert provider == "email"
+    assert mode == "simulation"
+    assert status == "success"
+    assert step_idx == 0
+    assert adapter_name == "email"
+    assert action == "send_email"
+    assert cb_state == "closed"
+
+
 def test_non_notification_steps_do_not_create_delivery_records(postgres_db, no_network):
     conn, cur = postgres_db
     eid = _create_execution(conn, cur, "pb_no_delivery")
@@ -1028,7 +1052,6 @@ def test_non_notification_steps_do_not_create_delivery_records(postgres_db, no_n
         [
             {"action": "monitor"},
             {"action": "block_ip", "params": {"source_ip": "203.0.113.10"}},
-            {"action": "notify_email", "params": {"subject": "alert"}},
             {"action": "notify_webhook", "params": {"payload": {}}},
         ],
     )
@@ -1299,6 +1322,53 @@ def test_duplicate_in_flight_delivery_skips_adapter(postgres_db, no_network):
     assert result["outcome"] == "success"
     row = playbook_store.get_playbook_execution(conn, eid)
     assert row["steps_log"][0]["output"]["skip_reason"] == "delivery_pending"
+    assert _count_deliveries(cur, eid) == 1
+
+
+def test_duplicate_email_delivery_skips_smtp_send(postgres_db, monkeypatch, no_network):
+    conn, cur = postgres_db
+    eid = _create_execution(
+        conn,
+        cur,
+        "pb_email_delivery_dedup",
+        steps=[{"action": "notify_email", "params": {"subject": "already sent"}}],
+    )
+    cur.execute("SELECT alert_id FROM playbook_executions WHERE id = %s", (eid,))
+    alert_id = cur.fetchone()[0]
+    notification_delivery_store.create_notification_delivery_attempt(
+        conn,
+        correlation_id=f"existing-email-{eid}-0",
+        idempotency_key=playbook_step_executor._make_delivery_idempotency_key(
+            "email", "notify_email", eid, 0
+        ),
+        provider="email",
+        mode="real",
+        status="success",
+        adapter_name="email",
+        action="send_email",
+        metadata={"adapter_mode": "real"},
+        playbook_execution_id=eid,
+        playbook_step_index=0,
+        alert_id=alert_id,
+        circuit_breaker_state="closed",
+    )
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_EMAIL_ENABLED", "true")
+    monkeypatch.setenv("SMTP_HOST", "smtp.staging.local")
+    monkeypatch.setenv("SMTP_USERNAME", "smtp-user")
+    monkeypatch.setenv("SMTP_PASSWORD", "smtp-secret")
+    monkeypatch.setenv("SMTP_FROM_EMAIL", "soar@example.com")
+    monkeypatch.setenv("SMTP_TO_EMAIL", "analyst@example.com")
+    conn.commit()
+
+    result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "success"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    entry = row["steps_log"][0]
+    assert entry["skipped"] is True
+    assert entry["output"]["skip_reason"] == "delivery_success"
     assert _count_deliveries(cur, eid) == 1
 
 

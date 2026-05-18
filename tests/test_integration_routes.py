@@ -105,6 +105,8 @@ def _assert_status_shape(data):
     assert data["real_mode_status"]
     assert data["slack_configured"] in {True, False}
     assert data["teams_configured"] in {True, False}
+    assert data["smtp_configured"] in {True, False}
+    assert data["email_real_enabled"] in {True, False}
     assert data["real_mode_allowed"] in {True, False}
     assert data["real_mode_ready"] in {True, False}
     adapters = {adapter["name"]: adapter for adapter in data["adapters"]}
@@ -128,6 +130,8 @@ def _assert_status_shape(data):
     assert "slack_configured" in adapters["slack"]
     assert "real_mode_allowed" in adapters["slack"]
     assert "real_mode_ready" in adapters["slack"]
+    assert "smtp_configured" in adapters["email"]
+    assert "email_real_enabled" in adapters["email"]
     assert "webhook_configured" in adapters["slack"]
     assert "teams_configured" in adapters["teams"]
     assert "real_mode_allowed" in adapters["teams"]
@@ -317,6 +321,72 @@ def test_integration_status_teams_missing_webhook_not_ready(client, mock_db, mon
     adapters = {adapter["name"]: adapter for adapter in data["adapters"]}
     assert adapters["teams"]["webhook_configured"] is False
     assert adapters["teams"]["real_mode_ready"] is False
+
+
+def test_integration_status_email_real_readiness_uses_safe_booleans(
+    client, mock_db, monkeypatch
+):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_EMAIL_ENABLED", "true")
+    monkeypatch.setenv("SMTP_HOST", "smtp.staging.local")
+    monkeypatch.setenv("SMTP_USERNAME", "smtp-user")
+    monkeypatch.setenv("SMTP_PASSWORD", "smtp-secret")
+    monkeypatch.setenv("SMTP_FROM_EMAIL", "soar@example.com")
+    monkeypatch.setenv("SMTP_TO_EMAIL", "analyst@example.com")
+    _deny_network(monkeypatch)
+    _login_super_admin(client)
+
+    resp = client.get("/integrations/status")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    rendered = json.dumps(data, sort_keys=True)
+    assert data["mode"] == "real"
+    assert data["configured_mode"] == "real"
+    assert data["real_mode_enabled"] is True
+    assert data["smtp_configured"] is True
+    assert data["email_real_enabled"] is True
+    assert data["real_mode_allowed"] is True
+    assert data["real_mode_ready"] is True
+    adapters = {adapter["name"]: adapter for adapter in data["adapters"]}
+    assert adapters["email"]["mode"] == "real"
+    assert adapters["email"]["real_client"] is True
+    assert adapters["email"]["smtp_configured"] is True
+    assert adapters["email"]["email_real_enabled"] is True
+    assert adapters["slack"]["mode"] == "simulation"
+    assert adapters["teams"]["mode"] == "simulation"
+    assert adapters["firewall"]["mode"] == "simulation"
+    assert adapters["webhook"]["mode"] == "simulation"
+    assert "smtp.staging.local" not in rendered
+    assert "smtp-user" not in rendered
+    assert "smtp-secret" not in rendered
+
+
+def test_integration_status_email_missing_smtp_host_not_ready(
+    client, mock_db, monkeypatch
+):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_EMAIL_ENABLED", "true")
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+    monkeypatch.setenv("SMTP_USERNAME", "smtp-user")
+    monkeypatch.setenv("SMTP_FROM_EMAIL", "soar@example.com")
+    monkeypatch.setenv("SMTP_TO_EMAIL", "analyst@example.com")
+    _deny_network(monkeypatch)
+    _login_super_admin(client)
+
+    resp = client.get("/integrations/status")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["mode"] == "simulation"
+    assert data["smtp_configured"] is False
+    assert data["real_mode_ready"] is False
+    adapters = {adapter["name"]: adapter for adapter in data["adapters"]}
+    assert adapters["email"]["smtp_configured"] is False
+    assert adapters["email"]["smtp_host_configured"] is False
+    assert adapters["email"]["real_mode_ready"] is False
 
 
 def test_integration_status_slack_and_teams_config_are_independent(

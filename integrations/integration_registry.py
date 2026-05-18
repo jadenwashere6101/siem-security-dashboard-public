@@ -11,7 +11,7 @@ from integrations.base_integration import (
     get_simulated_circuit_breaker_dict,
     _validate_real_mode_guards,
 )
-from integrations.email_adapter import EmailSimulationAdapter
+from integrations.email_adapter import EmailSimulationAdapter, get_email_real_mode_readiness
 from integrations.firewall_adapter import FirewallSimulationAdapter
 from integrations.slack_adapter import (
     SlackSimulationAdapter,
@@ -72,7 +72,7 @@ def _adapter_guard_readiness(adapter_name: str, configured_mode: str) -> dict[st
 def _safe_adapter_mode_decision(adapter_name: str, configured_mode: str) -> str:
     if configured_mode != REAL_MODE:
         return SIMULATION_MODE
-    if adapter_name in {"slack", "teams"}:
+    if adapter_name in {"slack", "teams", "email"}:
         return REAL_MODE
     return SIMULATION_MODE
 
@@ -151,10 +151,17 @@ def get_integration_status(mode: str | None = None) -> dict:
         configured_mode = SIMULATION_MODE
     slack_readiness = get_slack_real_mode_readiness(configured_mode)
     teams_readiness = get_teams_real_mode_readiness(configured_mode)
+    email_readiness = get_email_real_mode_readiness(configured_mode)
     real_mode_requested = configured_mode == REAL_MODE
-    real_mode_ready = bool(slack_readiness["real_mode_ready"] or teams_readiness["real_mode_ready"])
+    real_mode_ready = bool(
+        slack_readiness["real_mode_ready"]
+        or teams_readiness["real_mode_ready"]
+        or email_readiness["real_mode_ready"]
+    )
     real_mode_allowed = bool(
-        slack_readiness["real_mode_allowed"] or teams_readiness["real_mode_allowed"]
+        slack_readiness["real_mode_allowed"]
+        or teams_readiness["real_mode_allowed"]
+        or email_readiness["real_mode_allowed"]
     )
     real_mode_status = "disabled"
     if real_mode_requested:
@@ -164,13 +171,15 @@ def get_integration_status(mode: str | None = None) -> dict:
             real_mode_status = (
                 "disabled: no real notification adapter ready; "
                 f"slack={slack_readiness['real_mode_status']}; "
-                f"teams={teams_readiness['real_mode_status']}"
+                f"teams={teams_readiness['real_mode_status']}; "
+                f"email={email_readiness['real_mode_status']}"
             )
     adapter_rows = []
     for name, adapter_cls in sorted(_ADAPTERS.items()):
         mode_decision = REAL_MODE if (
             (name == "slack" and slack_readiness["real_mode_ready"])
             or (name == "teams" and teams_readiness["real_mode_ready"])
+            or (name == "email" and email_readiness["real_mode_ready"])
         ) else SIMULATION_MODE
         _log_adapter_registry_startup(name, configured_mode, mode_decision)
         adapter_rows.append(
@@ -189,6 +198,20 @@ def get_integration_status(mode: str | None = None) -> dict:
                         "webhook_configured": slack_readiness["webhook_configured"],
                     }
                     if name == "slack"
+                    else {}
+                ),
+                **(
+                    {
+                        "smtp_configured": email_readiness["smtp_configured"],
+                        "smtp_host_configured": email_readiness["smtp_host_configured"],
+                        "smtp_username_configured": email_readiness["smtp_username_configured"],
+                        "smtp_from_configured": email_readiness["smtp_from_configured"],
+                        "smtp_to_configured": email_readiness["smtp_to_configured"],
+                        "email_real_enabled": email_readiness["email_real_enabled"],
+                        "real_mode_allowed": email_readiness["real_mode_allowed"],
+                        "real_mode_ready": email_readiness["real_mode_ready"],
+                    }
+                    if name == "email"
                     else {}
                 ),
                 **(
@@ -212,6 +235,8 @@ def get_integration_status(mode: str | None = None) -> dict:
         "real_mode_status": real_mode_status,
         "slack_configured": slack_readiness["slack_configured"],
         "teams_configured": teams_readiness["teams_configured"],
+        "smtp_configured": email_readiness["smtp_configured"],
+        "email_real_enabled": email_readiness["email_real_enabled"],
         "real_mode_allowed": real_mode_allowed,
         "real_mode_ready": real_mode_ready,
         "adapters": adapter_rows,

@@ -174,35 +174,37 @@ Goal: Prevent duplicate real sends for the same step even when `steps_log` and
 Goal: Add a four-guard real-mode path to the Email adapter so it matches the Slack/Teams
 pattern. Real Email mode remains disabled by default and requires a future staging smoke test.
 
-- [ ] Create a new `EmailRealAdapter` class or extend `EmailSimulationAdapter` with the
+- [x] Create a new `EmailRealAdapter` class or extend `EmailSimulationAdapter` with the
       four-guard check: `INTEGRATION_MODE=real`, `SOAR_ENV=staging`,
       `SOAR_REAL_EMAIL_ENABLED=true`, non-empty `SMTP_HOST` and `SMTP_USERNAME`.
-- [ ] Add timeout handling: `EMAIL_TIMEOUT_SECONDS` env var, default 10s.
-- [ ] Add retry classification: SMTP 5xx / connection refused / timeout → `transient`;
-      SMTP 4xx / bad credentials / rejected recipient → `non_transient`.
-- [ ] Add circuit breaker wiring using existing `integrations/circuit_breaker.py` pattern.
-- [ ] Add credential validation: fail closed if `SMTP_HOST` or `SMTP_USERNAME` is missing.
+- [x] Add timeout handling: `EMAIL_TIMEOUT_SECONDS` env var, default 10s.
+- [x] Add retry classification: timeout → `timeout`; auth failure → `invalid_credentials`;
+      rate-limit style SMTP responses → `provider_rate_limited`; connection failures →
+      `transient_network_error`; malformed recipients/payload → `malformed_payload`;
+      SMTP 5xx provider failures → `temporary_provider_failure`.
+- [x] Add circuit breaker wiring using existing `integrations/circuit_breaker.py` pattern.
+- [x] Add credential validation: fail closed if `SMTP_HOST` or `SMTP_USERNAME` is missing.
       `SMTP_PASSWORD` must never appear in any result field, log, or test output.
-- [ ] Add rate limiter wiring (from Slice 4 stub).
-- [ ] Add audit log wiring (from Slice 3 stub).
-- [ ] Add allowlisted payload construction: recipient address, subject, safe body only.
+- [x] Add rate limiter wiring (from Slice 4 stub).
+- [x] Add audit log wiring (from Slice 3 stub).
+- [x] Add allowlisted payload construction: recipient address, subject, safe body only.
       Raw event payloads, alert raw data, and credentials are forbidden.
-- [ ] Update `GET /integrations/status` to include Email readiness fields:
+- [x] Update `GET /integrations/status` to include Email readiness fields:
       `smtp_configured`, `email_real_enabled`, `real_mode_allowed`.
-- [ ] Add `docs/soar_email_staging_smoke_test_runbook.md` (parallel to Slack runbook).
-- [ ] Add tests:
-  - [ ] Default configuration keeps Email in simulation.
-  - [ ] `INTEGRATION_MODE=real` without all four Email guards fails closed.
-  - [ ] Missing `SMTP_HOST` fails closed; `smtp_configured: False` in status.
-  - [ ] `SMTP_PASSWORD` does not appear in any test output, logs, or result fields.
-  - [ ] Staging guards + mocked SMTP produces a success result with `mode: real`.
-  - [ ] Timeout returns `failure_classification: timeout`, `retry_eligible: True`.
-  - [ ] SMTP 5xx returns `failure_classification: transient`, `retry_eligible: True`.
-  - [ ] SMTP 4xx returns `failure_classification: non_transient`, `retry_eligible: False`.
-  - [ ] Open circuit breaker blocks before SMTP call.
-  - [ ] Rate limiter blocks when cap exceeded.
-  - [ ] Slack and Teams adapters are unaffected.
-  - [ ] Firewall remains simulation-only.
+- [x] Add `docs/soar_email_staging_smoke_test_runbook.md` (parallel to Slack runbook).
+- [x] Add tests:
+  - [x] Default configuration keeps Email in simulation.
+  - [x] `INTEGRATION_MODE=real` without all four Email guards fails closed.
+  - [x] Missing `SMTP_HOST` fails closed; `smtp_configured: False` in status.
+  - [x] `SMTP_PASSWORD` does not appear in any test output, logs, or result fields.
+  - [x] Staging guards + mocked SMTP produces a success result with `mode: real`.
+  - [x] Timeout returns `failure_classification: timeout`, `retry_eligible: True`.
+  - [x] SMTP 5xx returns `failure_classification: temporary_provider_failure`, `retry_eligible: True`.
+  - [x] SMTP 4xx/rate-limit style response returns `failure_classification: provider_rate_limited`, `retry_eligible: True`.
+  - [x] Open circuit breaker blocks before SMTP call.
+  - [x] Rate limiter blocks when cap exceeded.
+  - [x] Slack and Teams adapters are unaffected.
+  - [x] Firewall remains simulation-only.
 - [ ] Run canonical regression suite.
 
 ---

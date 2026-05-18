@@ -39,6 +39,10 @@ FAILURE_CLASSIFICATION_CIRCUIT_STATE_INVALID = "circuit_state_invalid"
 FAILURE_CLASSIFICATION_GUARD_FAILED = "guard_failed"
 FAILURE_CLASSIFICATION_CREDENTIAL_MISSING = "credential_missing"
 FAILURE_CLASSIFICATION_PROVIDER_RATE_LIMITED = "provider_rate_limited"
+FAILURE_CLASSIFICATION_INVALID_CREDENTIALS = "invalid_credentials"
+FAILURE_CLASSIFICATION_TRANSIENT_NETWORK_ERROR = "transient_network_error"
+FAILURE_CLASSIFICATION_MALFORMED_PAYLOAD = "malformed_payload"
+FAILURE_CLASSIFICATION_TEMPORARY_PROVIDER_FAILURE = "temporary_provider_failure"
 
 
 @dataclass
@@ -514,7 +518,7 @@ def _integrate_circuit_after_simulation(
         if st.state == CIRCUIT_STATE_OPEN and was_half_open
         else classification
     )
-    meta["retry_eligible"] = _compute_retry_eligible(st, now)
+    meta.setdefault("retry_eligible", _compute_retry_eligible(st, now))
 
 
 class BaseIntegration:
