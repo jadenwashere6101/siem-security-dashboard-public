@@ -1,541 +1,233 @@
-# SOAR Handoff: Current Architecture and State
+# SOAR Handoff: Current Architecture and Production/Demo State
 
-Last updated: 2026-05-06
+Last updated: 2026-05-18
 
-This document describes the current SOAR implementation as-built. It is
-intended for engineers or AI agents continuing work on this codebase. For
-the long-term phased roadmap, see `docs/soar_upgrade_roadmap.md`.
+This is the current onboarding handoff for future contributors. It summarizes
+the completed SIEM/SOAR platform state, the operational workflows that matter,
+and the boundaries that should not be crossed without a new approved spec.
 
----
+For demo scripts and interview framing, see [SOAR Docs Index](soar_docs_index.md).
 
-## 1. Architecture Overview
+## Current Platform Summary
 
-The SOAR layer is a deferred post-commit queue-based system. The core design
-principle is: **detection and correlation are not touched**. SOAR runs after
-the ingest transaction commits.
+The project is now a mature simulation-first SIEM/SOAR console:
 
-```
-[ingest route]
-  → detection_engine creates alerts
-  → correlation_engine may correlate
-  → conn.commit()  ← ingest transaction closes here
-  → enqueue_committed_alerts(alerts_created, conn)   ← SOAR wiring point
-       ↓
-  [response_actions_queue table rows, status=pending]
-       ↓ (later, triggered manually or via UI)
-  [process_batch(conn, limit, executor)]
-       ↓
-  [SimulationExecutor or AdapterBackedExecutor]
-       ↓
-  [response_actions_log row written per terminal outcome]
-```
+- SIEM ingest, detection, correlation, alerts, incidents, reports, and RBAC.
+- SOC Command Center for high-level operational pressure and safety state.
+- SOAR Playbooks with read-only execution detail and visual execution timeline.
+- SOAR Operations for dead letters, retryability, and safe recovery workflows.
+- SOAR Metrics for worker, queue, execution, dead-letter, and notification health.
+- Daemonized SOAR playbook worker with lease ownership and stale recovery.
+- Approval gates for human-in-the-loop pauses.
+- Guarded integration adapters for Slack, Teams, email, and generic webhooks.
+- Firewall remains simulation/dry-run only.
+- Integration audit logging, redaction, rate limiting, and notification dedup.
+- Productization docs for demos, reset guidance, security boundaries, and final validation.
 
-The worker is not a daemon. It runs on demand — either from the CLI script,
-the admin UI, or a future scheduler.
+## Current Architecture
 
----
-
-## 2. Implemented Components
-
-### 2.1 Queue Store — `core/response_action_queue_store.py`
-
-DB-backed queue using `response_actions_queue` table.
-
-Key functions:
-
-| Function | Description |
-|---|---|
-| `claim_next_pending_action(conn, now)` | Atomically claims a pending row using `FOR UPDATE SKIP LOCKED` |
-| `mark_action_success(conn, queue_id, now)` | Transitions `running → success` |
-| `mark_action_skipped(conn, queue_id, reason, now)` | Transitions `running → skipped` |
-| `mark_action_failed(conn, queue_id, error, now)` | Transitions `running → failed`, increments retry_count |
-| `requeue_failed_action(conn, queue_id, now)` | Transitions `failed → pending` when retry budget remains |
-| `record_action_failure(conn, queue_id, error, retryable, now)` | Combined fail + conditional requeue |
-| `recover_stale_running_actions(conn, now, stale_after, limit)` | Recovers stuck `running` rows older than 15 minutes |
-| `get_queue_action(conn, queue_id)` | Single row lookup by ID |
-| `get_queue_status_counts(conn)` | `SELECT COUNT(*) GROUP BY status` — read-only |
-| `list_recent_queue_actions(conn, limit, status)` | Ordered list with optional status filter |
-
-Queue row statuses: `pending`, `running`, `success`, `failed`, `skipped`.
-
-Terminal states: `success`, `skipped`. `failed` is terminal when retry budget
-is exhausted.
-
-Stale running timeout: 15 minutes. Recovery transitions to `pending` if
-retries remain, otherwise to `failed`.
-
-### 2.2 Enqueue Orchestrator — `engines/soar_enqueue_orchestrator.py`
-
-Called post-commit from every ingest route.
-
-```python
-enqueue_committed_alerts(alerts_created, conn)
+```text
+Telemetry ingestion
+  -> detection/correlation
+  -> alerts/incidents
+  -> SOAR playbook queue/executions
+  -> daemonized worker with leases
+  -> guarded adapter registry
+  -> audit, metrics, notification delivery, approvals, dead letters
+  -> SOC Command Center / Playbooks / SOAR Operations / SOAR Metrics
 ```
 
-Iterates the list of alert dicts returned by the detection engine. For each
-alert with `alert_id`, `source_ip`, and `response_action` fields set, calls
-`enqueue_response_action()` from `core/ip_helpers.py`. Idempotent — duplicate
-enqueue via the `idempotency_key` constraint returns `None` rather than raising.
+Important boundary: SOAR starts after alerts/incidents exist. Ingest,
+detection, and correlation are not the place to add response execution behavior.
 
-Logs every enqueue, skip, and error at INFO/WARNING level. Enqueue failures
-do not roll back the committed ingest — they log and continue.
+## Backend and SOAR Components
 
-**Currently enqueued actions are only generated by detection alerts.** Correlation
-alerts are not enqueued.
+- `siem_backend.py` creates the Flask app and keeps compatibility for tests and deployment imports.
+- `routes/*` expose alert, incident, playbook, approval, dead-letter, metrics,
+  notification delivery, integration, and admin surfaces.
+- `core/*` owns stores and shared safety helpers: approvals, dead letters,
+  notification delivery, playbook storage, protected targets, audit helpers,
+  DB access, and auth helpers.
+- `engines/playbook_step_executor.py` executes playbook steps through safe
+  simulation/default behavior and guarded adapter calls.
+- `scripts/soar_playbook_worker_daemon.py` is the daemon entrypoint for
+  lease-safe playbook execution.
+- `integrations/*` contains adapter implementations, registry behavior,
+  circuit breaker logic, real-mode guard helpers, rate limiting, and redacted
+  integration audit behavior.
 
-### 2.3 Worker — `engines/soar_action_worker.py`
+## Frontend Architecture and Deployment
 
-Two entry points:
+The frontend is a Create React App application under `frontend/`.
 
-- `process_next_action(conn, now, executor)` — claims and executes one row.
-- `process_batch(conn, limit, now, executor)` — calls `process_next_action`
-  up to `limit` times, stopping when the queue is empty.
+- Development uses the CRA dev server only for local development.
+- Production/demo deployment uses `npm run build`.
+- CRA outputs static files into `frontend/build/`.
+- Flask serves the built frontend assets as static files for the deployed app.
+- nginx sits in front of Flask as the reverse proxy in the deployed VM workflow.
+- Production is not a localhost dev-server workflow.
+- The frontend artifact deployment model is build plus sync of `frontend/build/`
+  to the configured remote static path.
 
-Executor defaults to `SimulationExecutor()` if not passed.
+Operational references:
 
-Each result dict carries:
+- Frontend build:
 
-```python
-{
-    "queue_id": int,
-    "prior_status": str,
-    "new_status": str,
-    "outcome": str,   # "success" | "failed" | "skipped" | "requeued"
-    "retryable": bool,
-    "retry_count": int,
-    "max_retries": int,
-    "error_code": str | None,
-    "reason": str | None,
-    "message": str,
-}
-```
+  ```bash
+  cd frontend
+  npm run build
+  ```
 
-After execution, `engines/soar_log_writer.py` writes one row to
-`response_actions_log` per terminal outcome.
+- Frontend artifact helper: `deploy.sh`. It builds CRA output and rsyncs build
+  artifacts after operator review.
+- Backend/VM deployment reference: `scripts/deploy_backend_vm.sh` plus
+  [Schema Migration Workflow](schema_migration_workflow.md).
+- Worker operations reference:
+  [SOAR Playbook Worker Daemon Runbook](soar_playbook_worker_daemon_runbook.md).
 
-### 2.4 Executor Layer — `engines/soar_executor.py`
+Do not run VM deployment or service restart commands as part of ordinary docs or
+frontend polish work.
 
-**`SimulationExecutor`** (default):
-- Validates action and IP safety.
-- Logs with `[SIMULATED BLOCK]`, `[SIMULATED ESCALATION]`, `[SIMULATED MONITOR]`
-  prefixes.
-- Returns structured result dict.
-- No external calls, no DB mutations beyond queue state.
-- Does not write to `response_actions_log` directly — the worker does.
+## Completed Roadmap Items
 
-**`AdapterBackedExecutor`**:
-- Delegates to an adapter from `SoarAdapterRegistry`.
-- Only active when `SOAR_EXECUTION_MODE=real` is configured.
-- The registry rejects calls in simulation mode before reaching any adapter.
+The following formerly planned items are complete:
 
-Both executors share validation via `_validate_action()`. Validation failures
-raise `SkippedAction`. Invalid IPs raise `SkippedAction` with specific codes
-(`validation_private_ip`, `validation_invalid_ip_format`, etc.).
+- Daemonized SOAR playbook worker.
+- Lease-safe execution ownership.
+- Stale running execution recovery.
+- Durable playbook execution history and step logs.
+- Human approval gates.
+- Dead-letter creation, duplicate safety, retryability classification, and UI.
+- SOAR Operations UI.
+- SOAR Metrics dashboard.
+- SOC Command Center.
+- Playbook execution visualization/timeline.
+- Guarded Slack, Teams, email, and webhook real-mode paths.
+- Firewall simulation/dry-run boundary.
+- Integration status APIs and safety logging.
+- Redacted integration audit logging.
+- Adapter rate limiting/flood protection.
+- Notification delivery deduplication/idempotency guard.
+- Email and webhook staging smoke-test docs.
+- Slack and Teams staging smoke-test docs.
+- Final demo, reset, architecture, security-boundary, interview, and validation docs.
 
-### 2.5 Errors — `engines/soar_errors.py`
+Do not re-add these as future roadmap items.
 
-Two exception classes:
+## Current Safe Production State
 
-- `SkippedAction(message, code)` — non-retryable, marks row `skipped`.
-- `RetryableActionError(message, code)` — retryable, marks row `failed` then
-  requeues if budget remains.
+- Simulation-first by default.
+- Real Slack/Teams/email/webhook execution is possible only when all real-mode
+  guards pass.
+- Real-mode guard model:
+  - `INTEGRATION_MODE=real`
+  - approved `SOAR_ENV`, normally staging for smoke tests
+  - `SOAR_REAL_<ADAPTER>_ENABLED=true`
+  - required credential env vars present and non-empty
+- Missing guards fail closed to simulation or blocked/skipped safe results.
+- Firewall remains dry-run only; no real firewall execution path exists.
+- Approval-paused playbooks remain gated by human review.
+- There is no autonomous destructive remediation path.
+- Audit/log output must never expose credential values, webhook URLs, auth
+  headers, SMTP passwords, or raw payloads.
+- Rate limiting and idempotency guards protect notification delivery from floods
+  and duplicate sends.
 
-All SOAR modules import exceptions from here. No cross-module exception import.
+## Operational Workflows
 
-### 2.6 Adapter Interface — `integrations/soar_adapters/base.py`
+### Demo / Interview
 
-```python
-class BaseSoarActionAdapter:
-    adapter_name = "base"
-    supported_actions: Set[str] = set()
+Use:
 
-    def execute(self, row: dict, context: dict | None = None) -> dict: ...
-    def can_handle(self, action: str) -> bool: ...
-    def test_connection(self) -> dict: ...
-```
+- [SOAR Demo Walkthrough](soar_demo_walkthrough.md)
+- [SOAR Demo Reset Guide](soar_demo_reset_guide.md)
+- [SOAR Interview Talking Points](soar_interview_talking_points.md)
 
-Shared helper: `validate_public_ip_target(source_ip)` — raises `SkippedAction`
-for private, loopback, link-local, multicast, reserved, and unspecified IPs.
+Recommended demo order:
 
-Result dataclass: `AdapterExecutionResult(code, message, details)`.
+1. SOC Command Center.
+2. One incident or playbook execution.
+3. Playbook execution timeline.
+4. SOAR Operations dead letters/retryability.
+5. SOAR Metrics worker and queue health.
+6. Integration safety status and real-mode guard explanation.
 
-### 2.7 Adapter Registry — `integrations/soar_adapters/registry.py`
+### Worker Operations
 
-`SoarAdapterRegistry` maps action names to adapter instances. Loaded via
-`SoarAdapterConfig` (env vars). Registry raises `SkippedAction` for:
+Use [SOAR Playbook Worker Daemon Runbook](soar_playbook_worker_daemon_runbook.md).
 
-- Simulation mode (refuses to dispatch to real adapters).
-- Missing adapter configuration for an action.
-- Unknown adapter name.
-- Disabled adapter.
-- Adapter that cannot handle the given action.
+Key points:
 
-### 2.8 Adapter Config — `integrations/soar_adapters/config.py`
+- Start with one worker unless explicitly validating multi-worker behavior.
+- Leases prevent two workers from completing the same execution.
+- Stale recovery is explicit and should not move `awaiting_approval` executions.
+- Worker logs and metrics must not contain secrets or raw payloads.
 
-Loaded from environment variables at startup:
+### Integration Smoke Tests
 
-| Env Var | Purpose |
-|---|---|
-| `SOAR_EXECUTION_MODE` | `simulation` (default) or `real` |
-| `SOAR_ADAPTER_<ACTION>` | Maps action name to adapter name (e.g. `SOAR_ADAPTER_BLOCK_IP=linux_firewall_dry_run`) |
-| `SOAR_ADAPTER_<ADAPTER_NAME>_ENABLED` | Enables/disables a named adapter |
-| `SOAR_ACTION_TIMEOUT_SECONDS` | Per-adapter timeout (default: 5s) |
-| `SOAR_LINUX_FIREWALL_TOOL` | `ufw` (default), `iptables`, or `nft` |
-| `SOAR_PROTECTED_IPS` | Comma-separated protected targets (exact IPs and/or CIDRs), e.g. `8.8.8.8,1.1.1.0/24` |
+Use adapter-specific runbooks only:
 
-### 2.9 Linux Firewall Dry-Run Adapter — `integrations/soar_adapters/linux_firewall.py`
+- [Slack staging smoke test](soar_slack_staging_smoke_test_runbook.md)
+- [Teams staging smoke test](soar_teams_staging_smoke_test_runbook.md)
+- [Email staging smoke test](soar_email_staging_smoke_test_runbook.md)
+- [Webhook staging smoke test](soar_webhook_staging_smoke_test_runbook.md)
 
-`LinuxFirewallDryRunAdapter`:
-- Supports `block_ip` only.
-- Validates IP safety (same rules as `validate_public_ip_target`).
-- Returns a command plan (list of args) — never executes any subprocess.
-- Requires `SOAR_LINUX_FIREWALL_DRY_RUN_ENABLED=true` to be enabled.
-- Enforces protected-target policy from `SOAR_PROTECTED_IPS` before command-plan construction.
-- Invalid `SOAR_PROTECTED_IPS` config fails closed (skips `block_ip` safely; no plan returned).
-- Returns `{"code": "linux_firewall_dry_run_plan", "details": {"executed": False, "dry_run": True, "simulated": True, ...}}`.
-- Never imports `subprocess`, `os.system`, `requests`, or any cloud SDK.
+Do not combine smoke tests. Do not enable unrelated adapters during a smoke test.
 
-### 2.10 CLI Runner — `scripts/soar_worker_run.py`
+### Validation
 
-Manually invoked batch runner. Runs one batch and exits.
+Use [SOAR Final Validation Checklist](soar_final_validation_checklist.md).
+
+Current focused checks:
 
 ```bash
-python scripts/soar_worker_run.py [--batch-size N] [--mode simulation|real] [--json] [--dry-run-info]
+cd frontend
+CI=true npm test -- --runInBand App
+CI=true npm test -- --runInBand SocCommandCenter
+CI=true npm test -- --runInBand PlaybooksPanel
+npm run build
 ```
 
-Configuration precedence: CLI arg > env var > default.
-
-| Option / Env Var | Default | Notes |
-|---|---|---|
-| `--batch-size` / `SOAR_RUNNER_BATCH_SIZE` | 10 | Max 50 (hard-coded ceiling, cannot be raised without code change) |
-| `--mode` / `SOAR_EXECUTION_MODE` | `simulation` | `real` routes through `AdapterBackedExecutor` |
-| `--json` | off | Emits all output as a single JSON object to stdout |
-| `--dry-run-info` | off | Prints queue status counts and exits without processing any rows |
-
-Safety guards:
-- Refuses to run if invoked inside a Flask request context.
-- Prints a `WARNING` header line when `--mode real` is active.
-- Batch size is clamped to 50 at the code level, not just documentation.
-- `DATABASE_URL` missing → exit 1 with clear message.
-- Configuration error → exit 1. Uncaught processing exception → exit 2.
-
-Exit summary always prints processed/success/failed/skipped/requeued counts.
-
-**Note: as of 2026-05-06, the `improve-soar-worker-runner-visibility` spec is
-complete (tasks.md checked off) but implementation has not been verified as
-merged. If `--json`, `--dry-run-info`, and proper arg precedence are not yet
-in the script, they are the next implementation step.**
-
-### 2.11 Admin API Routes — `routes/admin_routes.py`
-
-All SOAR routes require `@login_required` + `@super_admin_required`.
-
-| Route | Method | Description |
-|---|---|---|
-| `/admin/soar/queue/status` | GET | Status count summary (all five statuses + total) |
-| `/admin/soar/queue/recent` | GET | Recent queue items, `?limit=` and `?status=` params |
-| `/admin/soar/queue/<int:queue_id>` | GET | Detail for a single queue row, includes `idempotency_key` |
-| `/admin/soar/worker/run-once` | POST | Runs one simulation batch; rejects any non-simulation mode request |
-
-The `run-once` route:
-- Rejects `mode != "simulation"` with HTTP 400. Real execution is not available
-  via the admin API.
-- Capped batch size: front-end max is 25, backend applies its own parse/clamp.
-- Writes an audit log entry (`SOAR_WORKER_RUN_ONCE`) on every successful run.
-- Returns `{mode, requested_batch_size, batch_size, started_at, completed_at, summary, results}`.
-
----
-
-## 3. Safety Guarantees
-
-### What is enforced in code (not just convention)
-
-- **Simulation by default everywhere.** `SimulationExecutor` is the default in
-  the worker, the CLI runner, and the admin API. All three independently enforce
-  this default.
-- **Admin API is simulation-only.** `run-once` rejects any `mode` value other
-  than `simulation` with HTTP 400. There is no API surface for real execution.
-- **Real adapter execution requires explicit double opt-in.** `SOAR_EXECUTION_MODE=real`
-  AND a named, enabled adapter configured via env vars. The registry rejects
-  real-mode dispatch in simulation mode before reaching any adapter code.
-- **IP safety validation runs in all paths.** `SimulationExecutor`, `AdapterBackedExecutor`,
-  and `LinuxFirewallDryRunAdapter` all validate IPs independently. A private/loopback/
-  link-local/multicast/reserved/unspecified IP is rejected at every layer.
-- **No ingest/detection/correlation mutations from SOAR.** The enqueue
-  orchestrator runs post-commit. The worker runs outside the ingest transaction.
-  None of the SOAR modules import from `engines/detection_engine.py`,
-  `engines/correlation_engine.py`, or `engines/ingest_engine.py`.
-- **Queue UI is read-only except for the simulation runner.** The front-end has
-  no cancel, retry, or edit controls. The only mutating action available to the
-  analyst is "Run simulation batch."
-- **Runner cannot be invoked inside a Flask request context.** The CLI script
-  guards against this at startup.
-- **Batch size has a hard ceiling.** Admin API and CLI runner both enforce a
-  maximum that cannot be raised without code changes.
-
-### What is deferred by design (not yet implemented)
-
-- No real firewall blocking. The only real adapter (dry-run Linux firewall) does
-  not execute any subprocess.
-- No analyst approval before action execution.
-- No retry/replay/cancel controls in the UI.
-- No correlation alert enqueue — only detection alerts are enqueued.
-- No daemonized worker or systemd service.
-
----
-
-## 4. Frontend Capabilities
-
-Component: `frontend/src/components/SoarQueuePanel.js`
-Service: `frontend/src/services/soarQueueService.js`
-
-### What the UI provides
-
-**Queue status summary bar:**
-- Five count cards: Pending / Running / Success / Failed / Skipped + Total.
-- Sourced from `GET /admin/soar/queue/status`.
-
-**Queue item table:**
-- Columns: Queue ID, Action, Status (badge), Source IP, Alert reference, Retries,
-  Last Error (truncated to 140 chars with full text in tooltip), Created, Updated, View button.
-- Filter by status: all / pending / running / success / failed / skipped.
-- Row limit selector: 10 / 25 / 50 / 100.
-- Sourced from `GET /admin/soar/queue/recent`.
-- No server-side cursor pagination — limit is a fetch cap, not true pagination.
-
-**Queue item detail panel:**
-- Appears below the table when "View" is clicked for a row.
-- Shows all fields including `idempotency_key`.
-- Close button to dismiss.
-- Sourced from `GET /admin/soar/queue/<id>`.
-- Read-only — no mutation controls.
-
-**Simulation batch runner:**
-- Batch size input (1–25, capped at 25 in the UI; backend enforces its own cap).
-- "Run simulation batch" button.
-- Shows result summary (Processed / Success / Failed / Skipped / Requeued) after run.
-- Shows a note if the backend capped the requested batch size.
-- After the batch completes, the queue list refreshes quietly.
-- POST to `/admin/soar/worker/run-once`.
-
-**Refresh button:**
-- Re-fetches status counts and queue items without resetting filter/limit state.
-
-**Empty states:**
-- "No queued SOAR actions found." (unfiltered)
-- "No queued SOAR actions found for this filter." (filtered)
-- Loading and error states handled per section.
-
-### What the UI does not provide
-
-- No cancel, retry, or requeue controls for individual items.
-- No approval/escalation UI.
-- No real execution trigger — only simulation.
-- No full pagination — the limit selector is a fetch cap.
-- No detail editing of any kind.
-
----
-
-## 5. Backend Capability Summary
-
-| Capability | Implemented | Notes |
-|---|---|---|
-| Queue schema | Yes | `response_actions_queue` table |
-| Enqueue from detection alerts | Yes | Post-commit via `enqueue_committed_alerts` |
-| Enqueue from correlation alerts | No | Out of scope; detection-only |
-| Worker claim/execute/log | Yes | `process_batch`, `process_next_action` |
-| Simulation execution | Yes | `SimulationExecutor`, all three action types |
-| IP safety validation | Yes | Private/loopback/link-local/multicast blocked |
-| Retry on retryable failure | Yes | Bounded by `max_retries` per row |
-| Stale running recovery | Yes | 15-minute timeout, `recover_stale_running_actions` |
-| Audit log per terminal outcome | Yes | `response_actions_log` via `soar_log_writer` |
-| Adapter interface | Yes | `BaseSoarActionAdapter`, `AdapterExecutionResult` |
-| Adapter registry | Yes | `SoarAdapterRegistry`, config from env vars |
-| Linux firewall dry-run adapter | Yes | `block_ip` only, command plan only, never executes |
-| Real firewall execution | No | Next phase; dry-run adapter is the proving ground |
-| Queue status count API | Yes | `GET /admin/soar/queue/status` |
-| Queue list API with filter | Yes | `GET /admin/soar/queue/recent` |
-| Queue detail API | Yes | `GET /admin/soar/queue/<id>` |
-| Simulation runner API | Yes | `POST /admin/soar/worker/run-once` |
-| CLI batch runner | Yes | `scripts/soar_worker_run.py` |
-| CLI arg precedence over env vars | Spec complete | `improve-soar-worker-runner-visibility` tasks checked off; verify implementation |
-| CLI `--json` output | Spec complete | Same spec; verify implementation |
-| CLI `--dry-run-info` mode | Spec complete | Same spec; verify implementation |
-| Daemonized worker / systemd | No | Next phase after CLI runner is proven |
-| Approval workflows | No | Future |
-| Correlation alert enqueue | No | Future |
-| Real cloud adapter | No | Future |
-
----
-
-## 6. Testing Status
-
-### Backend tests
-
-| Test file | Tests | Coverage area |
-|---|---|---|
-| `test_response_action_queue.py` | 43 | Queue store: claim, transition, retry, stale recovery, counts, list |
-| `test_soar_adapter_interface.py` | 20 | Base adapter, registry, config, dry-run adapter |
-| `test_soar_worker_runner.py` | 26 | CLI runner: config, Flask guard, executor selection, aggregation, DB-backed e2e |
-| `test_soar_queue_visibility_api.py` | 20 | Admin API routes: status, recent, detail, run-once |
-| `test_soar_worker_admin_run_control.py` | 11 | Admin run-once: simulation enforcement, batch size caps, audit log |
-| `test_soar_executor.py` | 6 | SimulationExecutor: all three action types, validation paths |
-| `test_soar_log_writer.py` | 7 | `log_response_action`: valid statuses, invalid rejection |
-| `test_soar_enqueue_orchestrator.py` | 8 | Enqueue: missing fields, duplicates, exception handling |
-| **Total** | **~141** | |
-
-### Frontend tests
-
-`frontend/src/components/SoarQueuePanel.test.js` and
-`frontend/src/services/soarQueueService.test.js` exist with component-level
-tests using Jest + React Testing Library. Tests mock the service layer and
-cover loading states, empty states, filter interaction, simulation batch
-runner, and detail view.
-
-### Safety-focused test properties
-
-- No test in any SOAR test file opens a real network connection.
-- No test executes a real firewall command.
-- `test_soar_adapter_interface.py` asserts that `linux_firewall.py` does not
-  import `subprocess`, `os.system`, `pty`, or network clients.
-- All simulation paths assert `executed=False` in adapter results.
-- The `run-once` route tests assert HTTP 400 for any non-simulation mode request.
-
----
-
-## 7. Module Dependency Map
-
-```
-routes/admin_routes.py
-  └── core/response_action_queue_store  (get_queue_status_counts, list_recent, get_queue_action)
-  └── engines/soar_action_worker        (process_batch)
-  └── engines/soar_executor             (SimulationExecutor)
-
-scripts/soar_worker_run.py
-  └── engines/soar_action_worker        (process_batch)
-  └── engines/soar_executor             (SimulationExecutor, AdapterBackedExecutor)
-  └── integrations/soar_adapters/       (registry, config, linux_firewall)
-
-engines/soar_action_worker.py
-  └── core/response_action_queue_store  (claim, transitions)
-  └── engines/soar_executor             (default SimulationExecutor)
-  └── engines/soar_errors               (SkippedAction, RetryableActionError)
-  └── engines/soar_log_writer           (log_response_action)
-
-engines/soar_executor.py
-  └── engines/soar_errors               (SkippedAction)
-  └── integrations/soar_adapters/registry  (via AdapterBackedExecutor)
-
-engines/soar_enqueue_orchestrator.py
-  └── core/ip_helpers                   (enqueue_response_action)
-
-integrations/soar_adapters/registry.py
-  └── integrations/soar_adapters/config
-  └── integrations/soar_adapters/base
-
-integrations/soar_adapters/linux_firewall.py
-  └── integrations/soar_adapters/base   (BaseSoarActionAdapter, validate_public_ip_target)
-  └── engines/soar_errors               (SkippedAction)
-
-engines/soar_errors.py
-  └── (no SOAR imports — safe shared exception home)
+```bash
+python3 -m pytest tests/test_playbook_execution_leases.py \
+  tests/test_playbook_step_executor.py \
+  tests/test_dead_letter_store.py \
+  tests/test_playbook_metrics_routes.py -v
 ```
 
-No SOAR module imports from:
-- `engines/detection_engine.py`
-- `engines/correlation_engine.py`
-- `engines/ingest_engine.py`
-- `routes/ingest_routes.py`
-- Any Flask `request` context object
+## Frontend Surfaces
 
----
+- **Dashboard:** SIEM alert/incident entry point.
+- **SOC Command Center:** high-level SOC pressure, activity feed, attention
+  panel, incident workspace, worker health, notification health, and integration safety.
+- **SOAR Playbooks:** playbook definitions, execution list, execution detail,
+  and read-only execution timeline.
+- **SOAR Operations:** dead-letter operations and retry/dismiss visibility.
+- **SOAR Metrics:** execution, worker, queue, stale recovery, dead-letter, and
+  notification metrics.
+- **SOAR Integrations:** adapter readiness, guard decisions, and circuit/safety state.
 
-## 8. Wiring Points in Ingest Routes
+Viewer/auditor roles should not see analyst-only or super-admin-only operational controls.
 
-`enqueue_committed_alerts` is called post-commit in all four ingest handlers in
-`routes/ingest_routes.py`. The pattern is consistent across all handlers:
+## Intentionally Deferred / Future Work
 
-```python
-conn.commit()  # ingest transaction closes
-try:
-    enqueue_committed_alerts(alerts_created, conn)
-except Exception as enqueue_error:
-    current_app.logger.error(
-        "[SOAR ENQUEUE ERROR] Post-commit enqueue failed — ingest was committed: %s",
-        enqueue_error,
-    )
-    # Does NOT re-raise — ingest success is not contingent on enqueue success
-```
+Keep this list narrow. These are realistic future improvements, not stale
+roadmap items:
 
-Ingest commits first. Enqueue failure is logged but does not fail the ingest
-response. This is intentional — the ingest transaction boundary is preserved.
+- True heartbeat persistence for richer daemon liveness reporting.
+- Persistent circuit-breaker state across worker/process restarts.
+- Mobile and narrow-screen optimization beyond current readable layouts.
+- Advanced analytics and trend modeling over SOAR outcomes.
+- Optional future firewall OpenSpec for any live firewall path.
+- Optional scheduler/playbook cron layer for time-based playbooks.
+- Richer real-mode operational rollout with staged enablement and evidence gates.
 
----
+## Do Not Regress
 
-## 9. Current Limitations and Gaps
-
-| Gap | Status | Notes |
-|---|---|---|
-| Correlation alerts not enqueued | By design | Only detection alerts have `response_action` field populated |
-| No real firewall execution | By design | Dry-run adapter is the current ceiling; real-execution is a separate spec |
-| No approval or hold workflow | By design | Future phase |
-| No retry/requeue controls in UI | By design | Admin can only observe and run simulation batches |
-| No cancel controls in UI | By design | Same |
-| No true pagination | By design | UI limit selector is a fetch cap; cursor-based pagination is a future spec |
-| No daemonized worker | By design | CLI runner exits after one batch; scheduler wiring is next phase |
-| Stale recovery not wired to any scheduler | By design | `recover_stale_running_actions` exists but has no caller outside tests |
-
----
-
-## 10. Recommended Next Phases
-
-These are high-level only. Each requires its own spec before implementation.
-
-**Stale recovery scheduler hook:**
-- Wire `recover_stale_running_actions` to a periodic call (cron, APScheduler,
-  or systemd timer). Currently only called in tests.
-
-**Daemonized / scheduled worker:**
-- Wrap `scripts/soar_worker_run.py` in a systemd service or cron job.
-- The runner is already designed for this — it runs one batch and exits cleanly.
-- Spec: `openspec/changes/add-soar-worker-runner-command/` has the systemd
-  pattern documented.
-
-**Real adapter execution hardening:**
-- First target: real `ufw`/`iptables` execution on a disposable VM.
-- Requires: privilege model, lockout prevention, idempotency against host
-  firewall state, rollback strategy, command timeout.
-- Must be a separate change from the dry-run adapter.
-
-**Analyst workflow improvements:**
-- Queue item retry/cancel controls in the UI.
-- Requires backend routes and audit trail changes.
-
-**True pagination:**
-- Cursor-based or keyset pagination for the queue list.
-- Current limit selector is a fetch cap, not a paginator.
-
-**Approval and escalation pipeline:**
-- Requires new DB table (`approval_requests`), new routes, and notification
-  integration before real execution can be safely enabled.
-
-**Execution timeline / audit UX:**
-- Full chronological view of queue lifecycle per alert.
-- Requires joining `response_actions_queue`, `response_actions_log`,
-  and possibly `alerts`.
-
----
-
-## 11. Do Not Touch
-
-The following areas remain load-bearing for the existing ingest pipeline.
-SOAR work must route around them, not through them.
-
-| Module | Why |
-|---|---|
-| `engines/detection_engine.py` internals | Tightly coupled to ingest transaction cursor; any refactor risks silent detection regression |
-| `engines/correlation_engine.py` internals | Reads uncommitted alert state via same transaction cursor |
-| `engines/ingest_engine.py` routing map | Any change breaks every ingest adapter simultaneously |
-| `routes/ingest_routes.py` transaction flow | `conn`/`cur` pass through the full pipeline; wrong insertion point breaks atomicity |
-| `core/ip_helpers.enqueue_response_action` signature | Called by `soar_enqueue_orchestrator`; changing signature requires updating all callers |
-| pytest patch target paths | Module renames silently break existing mocks; update all patch targets atomically if ever renamed |
+- Do not add schema/migration changes from documentation-only work.
+- Do not alter backend execution semantics while updating docs.
+- Do not add new mutation controls to visualization-only UI.
+- Do not trigger real integrations during tests or demos.
+- Do not convert firewall dry-run into live execution without a new approved spec.
+- Do not commit secrets, `.env` values, webhook URLs, auth headers, SMTP
+  passwords, or raw sensitive payloads.

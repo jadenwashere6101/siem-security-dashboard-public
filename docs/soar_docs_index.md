@@ -5,6 +5,11 @@ Last updated: 2026-05-18
 This index points reviewers to the current SOAR demo, operations, safety, and
 validation docs.
 
+## Primary Handoff
+
+- [SOAR Handoff](soar_handoff.md): current platform state, architecture,
+  frontend deployment model, operational workflows, and deferred work.
+
 ## Demo and Portfolio
 
 - [SOAR Demo Walkthrough](soar_demo_walkthrough.md)
@@ -30,10 +35,6 @@ validation docs.
 
 ## Historical Context
 
-- [SOAR Handoff](soar_handoff.md) is retained as historical implementation
-  context. Prefer the productization docs above for current demo and interview
-  guidance.
 - [SIEM to SOAR Upgrade Roadmap](soar_upgrade_roadmap.md) is retained as a
   roadmap/history document. Prefer current OpenSpec changes and runbooks for
   final behavior.
-
