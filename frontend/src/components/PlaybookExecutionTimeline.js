@@ -1,5 +1,7 @@
 import React, { useMemo } from "react";
+import ExecutionSafetyModelPanel from "./ExecutionSafetyModelPanel";
 
+// spec: SPEC-UI-004 - timeline labels clarify simulation-safe execution without downplaying real workflows.
 const STATUS_TONES = {
   pending: "info",
   running: "info",
@@ -375,10 +377,14 @@ function PlaybookExecutionTimeline({ execution, compact = false }) {
             {titleCase(execution.status)}
           </Badge>
           <Badge tone={String(timeline.executionMode).toLowerCase() === "real" ? "warning" : "info"}>
-            {String(timeline.executionMode).toLowerCase() === "real" ? "Real mode" : "Simulation"}
+            {String(timeline.executionMode).toLowerCase() === "real"
+              ? "Guarded Real-Capable"
+              : "Simulation-Safe Execution"}
           </Badge>
         </div>
       </div>
+
+      {!compact ? <ExecutionSafetyModelPanel compact /> : null}
 
       {timeline.malformed ? (
         <div style={warningStyle}>steps_log is malformed or unsupported; rendering safe fallback metadata only.</div>

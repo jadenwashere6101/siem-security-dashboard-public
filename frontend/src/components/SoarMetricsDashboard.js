@@ -46,8 +46,9 @@ const QUEUE_STATUSES = [
 const CB_STATES = ["closed", "open", "half_open"];
 const NOTIF_MODES = ["simulation", "real"];
 
+// spec: SPEC-UI-004 - metrics wording keeps real workflow visibility distinct from guarded integration execution.
 const SIMULATION_NOTICE =
-  "Simulation only: these playbook metrics reflect simulated executions and visibility data. No real remediation or live integration execution is active.";
+  "Simulation-safe execution is the default for outbound actions. These metrics reflect real workflow records, worker activity, approvals, dead letters, and delivery attempts; they do not imply destructive remediation is enabled.";
 
 // spec: SPEC-NOTIFY-001
 const NOTIFICATION_METRICS_NOTICE =

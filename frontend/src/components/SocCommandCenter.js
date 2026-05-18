@@ -24,7 +24,9 @@ import {
   loadRecentSoarQueueItems,
   loadSoarQueueStatus,
 } from "../services/soarQueueService";
+import ExecutionSafetyModelPanel from "./ExecutionSafetyModelPanel";
 
+// spec: SPEC-UI-004 - SOC safety model wording separates real workflows from guarded integrations.
 const SOURCE_LIMIT = 12;
 const FEED_LIMIT = 14;
 const ATTENTION_LIMIT = 8;
@@ -697,7 +699,7 @@ function SocCommandCenter({
         </div>
         <div style={headerActionsStyle}>
           <StatusBadge tone={integrationSummary.realEnabledCount > 0 ? "warning" : "info"}>
-            {integrationSummary.realEnabledCount > 0 ? "Real-mode guarded" : "Simulation-safe"}
+            {integrationSummary.realEnabledCount > 0 ? "Guarded Real-Capable" : "Simulation-Safe Execution"}
           </StatusBadge>
           <button type="button" onClick={loadCommandData} style={secondaryButtonStyle}>
             {loading ? "Refreshing..." : "Refresh"}
@@ -879,6 +881,8 @@ function SocCommandCenter({
         </div>
 
         <aside style={rightColumnStyle}>
+          <ExecutionSafetyModelPanel />
+
           <section style={cardStyle} aria-labelledby="feed-heading">
             <div style={cardHeaderStyle}>
               <div>
@@ -921,12 +925,12 @@ function SocCommandCenter({
             <div style={safetyBodyStyle}>
               <div style={safetyModeStyle}>
                 <StatusBadge tone={integrationSummary.realEnabledCount > 0 ? "warning" : "info"}>
-                  {integrationSummary.mode === "real" ? "Real mode guarded" : "Simulation mode"}
+                  {integrationSummary.mode === "real" ? "Guarded Real-Capable" : "Simulation-Safe Execution"}
                 </StatusBadge>
                 <p style={safetyTextStyle}>
                   {integrationSummary.realEnabledCount > 0
-                    ? "Real-enabled adapters are protected by existing guard, audit, rate-limit, and dedup controls."
-                    : "No real outbound execution is implied from this console."}
+                    ? "Real-capable adapters are protected by per-adapter guard, audit, rate-limit, and dedup controls."
+                    : "Workflows remain real; outbound adapter execution stays simulation-safe until per-adapter guards pass."}
                 </p>
               </div>
               {getIntegrationAdapters(data.integrationStatus).length === 0 ? (
@@ -944,7 +948,7 @@ function SocCommandCenter({
                       </p>
                     </div>
                     <StatusBadge tone={adapter.real_enabled || adapter.real_mode_enabled ? "warning" : "info"}>
-                      {adapter.real_enabled || adapter.real_mode_enabled ? "Real-enabled" : "Simulation"}
+                      {adapter.real_enabled || adapter.real_mode_enabled ? "Guarded Real-Capable" : "Real Integration Disabled"}
                     </StatusBadge>
                   </div>
                 ))

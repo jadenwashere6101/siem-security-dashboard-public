@@ -45,7 +45,8 @@ test("renders a success execution with flow nodes and summary counts", () => {
   expect(screen.getByText("Execution Visualization")).toBeInTheDocument();
   expect(screen.getByText("pb_one #42")).toBeInTheDocument();
   expect(screen.getAllByText("Success").length).toBeGreaterThan(0);
-  expect(screen.getAllByText("Simulation").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("Simulation-Safe Execution").length).toBeGreaterThan(0);
+  expect(screen.getByText("Execution Safety Model")).toBeInTheDocument();
   expect(screen.getAllByText("Step 1").length).toBeGreaterThan(0);
   expect(screen.getAllByText("enrich_alert").length).toBeGreaterThan(0);
   expect(screen.getByText("Enrichment completed.")).toBeInTheDocument();
@@ -188,7 +189,7 @@ test("renders real-mode labels", () => {
     />
   );
 
-  expect(screen.getByText("Real mode")).toBeInTheDocument();
+  expect(screen.getAllByText("Guarded Real-Capable").length).toBeGreaterThan(0);
   expect(screen.getByText("Real")).toBeInTheDocument();
 });
 

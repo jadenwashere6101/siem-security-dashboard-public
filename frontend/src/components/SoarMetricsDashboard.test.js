@@ -903,6 +903,19 @@ describe("SoarMetricsDashboard", () => {
       expect(within(section).getByText("Recovered Executions")).toBeInTheDocument();
     });
 
+    test("playbook metrics notice separates real workflow records from remediation", async () => {
+      mockAllFixtures();
+      render(<SoarMetricsDashboard {...analystProps} />);
+      const section = await screen.findByRole("region", { name: "Playbook Metrics" });
+      expect(within(section).getByRole("note")).toHaveTextContent(
+        "Simulation-safe execution is the default"
+      );
+      expect(within(section).getByRole("note")).toHaveTextContent(
+        "real workflow records"
+      );
+      expect(within(section).getByRole("note")).not.toHaveTextContent(/simulation only/i);
+    });
+
     test("renders unknown heartbeat copy from backend", async () => {
       mockAllFixtures();
       render(<SoarMetricsDashboard {...analystProps} />);

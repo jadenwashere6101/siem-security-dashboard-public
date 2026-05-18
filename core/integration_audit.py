@@ -37,7 +37,7 @@ def _safe_text(value: Any, *, max_len: int = 256) -> str | None:
     return text[:max_len] if text else None
 
 
-# spec: SPEC-INTEG-005
+# spec: SPEC-INTEG-005 / SPEC-UI-004 - audit details expose safe metadata, never secrets.
 def build_integration_attempt_audit_details(
     result: dict[str, Any],
     context: dict[str, Any] | None = None,

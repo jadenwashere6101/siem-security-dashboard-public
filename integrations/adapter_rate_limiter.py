@@ -48,7 +48,7 @@ def _limit_for_adapter(adapter_name: str) -> int:
     return max(1, min(value, 1000))
 
 
-# spec: SPEC-INTEG-005
+# spec: SPEC-INTEG-005 / SPEC-UI-004 - real-capable adapters fail closed under flood pressure.
 def check_adapter_rate_limit(adapter_name: str, *, now: float | None = None) -> dict[str, Any]:
     """Return allow/block decision for one adapter send attempt."""
     adapter = _normalize_adapter(adapter_name)

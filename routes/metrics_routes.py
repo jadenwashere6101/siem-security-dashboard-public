@@ -352,7 +352,7 @@ def playbook_execution_metrics_route():
 @login_required
 @analyst_or_super_admin_required
 def playbook_worker_metrics_route():
-    # spec: openspec/changes/add-daemonized-soar-worker/
+    # spec: SPEC-WORKER-001 / SPEC-UI-004 - metrics expose real worker health, not integration enablement.
     conn = None
     try:
         conn = get_db_connection()

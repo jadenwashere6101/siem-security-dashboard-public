@@ -1,5 +1,5 @@
 """
-Simulation-only SOAR playbook step executor.
+Simulation-safe SOAR playbook step executor.
 
 Consumes pending playbook_executions and records simulated step outcomes. It does not
 enqueue SOAR actions, create approvals, or mutate firewalls/blocklists.
@@ -56,7 +56,7 @@ _PROVIDER_FOR_ACTION: dict[str, str] = {
 }
 
 
-# spec: SPEC-NOTIFY-001
+# spec: SPEC-NOTIFY-001 / SPEC-UI-004 - delivery status feeds real workflow visibility.
 def _delivery_status_from_adapter_result(adapter_result: dict[str, Any]) -> str:
     """Map adapter result to a delivery store status value."""
     if adapter_result.get("success") is True:
@@ -955,7 +955,7 @@ def _simulate_adapter_step(
 ) -> dict[str, Any]:
     action = step["action"]
     adapter_name, adapter_action = ADAPTER_ACTIONS[action]
-    # spec: SPEC-INTEG-005
+    # spec: SPEC-INTEG-005 / SPEC-UI-004 - dedup prevents duplicate sends before adapter execution.
     if action in _NOTIFICATION_ACTIONS:
         provider = _PROVIDER_FOR_ACTION[action]
         existing_delivery = _existing_active_delivery(

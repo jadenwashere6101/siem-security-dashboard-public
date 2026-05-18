@@ -3,7 +3,7 @@ from __future__ import annotations
 from integrations.base_integration import BaseIntegration
 
 
-# spec: SPEC-INTEG-005 - firewall remains simulation/dry-run only in this spec.
+# spec: SPEC-INTEG-005 / SPEC-UI-004 - firewall remains simulation/dry-run only in this spec.
 # No promotion path exists here; any real firewall execution requires a separate
 # future approved OpenSpec before API calls, subprocesses, or blocklist mutation.
 class FirewallSimulationAdapter(BaseIntegration):

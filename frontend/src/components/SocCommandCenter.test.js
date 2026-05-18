@@ -251,8 +251,17 @@ describe("SocCommandCenter", () => {
     expect(screen.getByText("Notification health")).toBeInTheDocument();
     expect(screen.getByText("Worker health")).toBeInTheDocument();
     expect(screen.getByText("Integration safety")).toBeInTheDocument();
-    expect(screen.getAllByText("Simulation-safe").length).toBeGreaterThan(0);
-    expect(screen.getByText("Simulation mode")).toBeInTheDocument();
+    expect(screen.getAllByText("Simulation-Safe Execution").length).toBeGreaterThan(0);
+    expect(screen.getByText("Execution Safety Model")).toBeInTheDocument();
+    expect(screen.getByText("Alert ingestion")).toBeInTheDocument();
+    expect(screen.getByText("Detection/correlation")).toBeInTheDocument();
+    expect(screen.getByText("Playbook orchestration")).toBeInTheDocument();
+    expect(screen.getByText("Approvals/retry/dead letters")).toBeInTheDocument();
+    expect(screen.getByText("Slack/Teams/Email/Webhook")).toBeInTheDocument();
+    expect(screen.getByText("Firewall/block_ip")).toBeInTheDocument();
+    expect(screen.getAllByText("Real Workflow").length).toBeGreaterThanOrEqual(4);
+    expect(screen.getByText("Guarded Real-Capable")).toBeInTheDocument();
+    expect(screen.getByText("Dry-Run Only")).toBeInTheDocument();
   });
 
   test("uses read-only services and never calls mutation endpoints", async () => {
@@ -362,10 +371,13 @@ describe("SocCommandCenter", () => {
 
     const { container } = renderPanel();
 
-    expect(await screen.findByText("Real-mode guarded")).toBeInTheDocument();
-    expect(screen.getByText("Real mode guarded")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getAllByText("Guarded Real-Capable").length).toBeGreaterThanOrEqual(3);
+    });
     expect(container).not.toHaveTextContent("super-secret-password");
     expect(container).not.toHaveTextContent("hooks.example.invalid/secret");
+    expect(container).not.toHaveTextContent(/global.*toggle/i);
+    expect(container).not.toHaveTextContent(/fake/i);
   });
 
   test("exports helper behavior for activity and attention derivation", () => {

@@ -97,7 +97,8 @@ test("shows loading state while request is in flight", async () => {
   render(<IntegrationStatusPanel {...styleProps} />);
 
   expect(screen.getByText(/loading integration status/i)).toBeInTheDocument();
-  expect(screen.getByRole("note")).toHaveTextContent(/simulation only/i);
+  expect(screen.getByRole("note")).toHaveTextContent(/adapter-specific and guard-controlled/i);
+  expect(screen.getByText("Execution Safety Model")).toBeInTheDocument();
 
   await waitFor(() => {
     expect(screen.getByText("slack")).toBeInTheDocument();
@@ -111,7 +112,7 @@ test("renders error state on API failure and allows retry", async () => {
 
   expect(await screen.findByText(/error: network down/i)).toBeInTheDocument();
   expect(screen.queryByText(/mode summary/i)).not.toBeInTheDocument();
-  expect(screen.getByRole("note")).toHaveTextContent(/simulation only/i);
+  expect(screen.getByRole("note")).toHaveTextContent(/simulation-safe execution is the default/i);
 
   getIntegrationStatus.mockResolvedValueOnce(sampleStatus);
   await userEvent.click(screen.getByRole("button", { name: /retry/i }));
@@ -156,7 +157,7 @@ test("mode summary shows mode, simulated, real mode disabled, and real_mode_stat
   expect(await screen.findByText(/mode summary/i)).toBeInTheDocument();
   expect(screen.getAllByText("simulation").length).toBeGreaterThanOrEqual(1);
   expect(screen.getAllByText("Yes").length).toBeGreaterThanOrEqual(1);
-  expect(screen.getByText("Real mode disabled")).toBeInTheDocument();
+  expect(screen.getAllByText("Real Integration Disabled").length).toBeGreaterThanOrEqual(1);
   expect(screen.getByText("disabled", { exact: true })).toBeInTheDocument();
 });
 
@@ -235,6 +236,7 @@ test("omits circuit breaker block when adapter has no circuit_breaker", async ()
   render(<IntegrationStatusPanel {...styleProps} />);
 
   expect(await screen.findByText("firewall")).toBeInTheDocument();
+  expect(screen.getByText("Dry-Run Only")).toBeInTheDocument();
   expect(screen.queryByText(/circuit breaker state is simulation-only/i)).not.toBeInTheDocument();
 });
 
@@ -245,7 +247,11 @@ test("simulation notice remains visible when data is loaded", async () => {
 
   await screen.findByText("slack");
 
-  expect(screen.getByRole("note")).toHaveTextContent(/no real outbound/i);
+  expect(screen.getByRole("note")).toHaveTextContent(/guard-controlled/i);
+  expect(screen.getByRole("note")).toHaveTextContent(/firewall remains dry-run only/i);
+  expect(screen.getByText("Per-adapter guards")).toBeInTheDocument();
+  expect(document.body).not.toHaveTextContent(/global.*toggle/i);
+  expect(document.body).not.toHaveTextContent(/fake/i);
 });
 
 test("does not render test-connection, run, or execute controls", async () => {

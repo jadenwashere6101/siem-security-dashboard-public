@@ -297,7 +297,7 @@ def _post_webhook_request(
         return {"status_code": getattr(resp, "status", None) or resp.getcode()}
 
 
-# spec: SPEC-INTEG-005 - guarded real webhook path only; simulation remains default.
+# spec: SPEC-INTEG-005 / SPEC-UI-004 - guarded real webhook path only; simulation-safe remains default.
 class WebhookSimulationAdapter(BaseIntegration):
     adapter_name = "webhook"
     supported_actions = frozenset({"post_event", "send_webhook", "notify_webhook"})

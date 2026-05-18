@@ -66,6 +66,7 @@ def _teams_real_mode_allowed() -> bool:
     return bool(readiness["real_mode_allowed"])
 
 
+# spec: SPEC-INTEG-004 / SPEC-INTEG-005 - Teams is real-capable only after adapter guards pass.
 def get_teams_real_mode_readiness(configured_mode: str | None = None) -> dict[str, Any]:
     """Return safe Teams readiness metadata. Never include the webhook value."""
     mode = str(configured_mode or os.getenv("INTEGRATION_MODE", SIMULATION_MODE)).strip().lower()

@@ -20,7 +20,7 @@ const SOURCE_TYPE_FILTERS = [
 ];
 
 const OPERATIONAL_NOTICE =
-  "Operational review: dead letters are failure records for operator triage. Retry request records intent only; it does not execute playbooks or run steps.";
+  "Real workflow review: dead letters are durable failure records for operator triage. Retry request records intent only; it does not execute playbooks, run steps, or enable destructive remediation.";
 const RETRY_EXECUTE_PHRASE = "RETRY";
 
 function toCount(value) {
@@ -510,8 +510,9 @@ function PanelTitle({ cardTitleStyle, cardSubtitleStyle }) {
     <div>
       <p style={sectionLabelStyle}>SOAR Operations</p>
       <h2 style={cardTitleStyle}>Dead Letter Queue</h2>
+      {/* spec: SPEC-UI-004 - dead-letter wording presents real retry workflows without implying remediation is enabled. */}
       <p style={cardSubtitleStyle}>
-        Read-only review of failed playbook, notification, and response work.
+        Real operational review of failed playbook, notification, and response work. Retry visibility does not enable destructive remediation.
       </p>
     </div>
   );

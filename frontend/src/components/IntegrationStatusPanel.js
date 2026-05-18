@@ -6,9 +6,11 @@ import {
   resetIntegrationCircuitBreaker,
 } from "../services/integrationService";
 import { readStoredSessionIdentity } from "../utils/sessionIdentity";
+import ExecutionSafetyModelPanel from "./ExecutionSafetyModelPanel";
 
-const SIMULATION_NOTICE =
-  "Simulation only: all integration adapters run in simulation mode. No real outbound notifications, webhooks, or firewall changes are active.";
+// spec: SPEC-UI-004 / SPEC-INTEG-005 - integration copy is adapter-specific and guard-controlled.
+const INTEGRATION_NOTICE =
+  "Integration execution is adapter-specific and guard-controlled. Simulation-safe execution is the default; Slack, Teams, email, and webhook can be real-capable only when their guards pass. Firewall remains dry-run only.";
 
 function normalizeAdapters(raw) {
   if (!Array.isArray(raw)) {
@@ -31,6 +33,16 @@ function formatCircuitScalar(value) {
     return formatFlag(value);
   }
   return String(value);
+}
+
+function adapterCapabilityLabel(adapter, name) {
+  if (adapter?.real_mode_ready || adapter?.real_enabled || adapter?.real_mode_enabled) {
+    return "Guarded Real-Capable";
+  }
+  if (String(name || "").toLowerCase() === "firewall") {
+    return "Dry-Run Only";
+  }
+  return "Real Integration Disabled";
 }
 
 function CircuitBreakerPanel({ circuit, adapterName, canManageCircuit = false, onCircuitUpdated }) {
@@ -232,7 +244,7 @@ function IntegrationStatusPanel({
           <p style={sectionLabelStyle}>SOAR</p>
           <h2 style={cardTitleStyle}>Integration adapter status</h2>
           <p style={cardSubtitleStyle}>
-            View of registered simulation adapters from the backend registry.
+            View of registered adapters, guard readiness, and circuit safety from the backend registry.
             {isSuperAdmin
               ? " Super admins can adjust simulation circuit breakers per adapter below."
               : " Analysts have read-only access to this panel."}
@@ -242,8 +254,9 @@ function IntegrationStatusPanel({
 
       <div style={panelContentStyle}>
         <div style={simulationNoticeStyle} role="note">
-          {SIMULATION_NOTICE}
+          {INTEGRATION_NOTICE}
         </div>
+        <ExecutionSafetyModelPanel compact />
 
         {error ? (
           <div style={errorStateStyle}>
@@ -263,21 +276,21 @@ function IntegrationStatusPanel({
             <h3 style={subsectionTitleStyle}>Mode summary</h3>
             <div style={summaryGridStyle}>
               <div style={summaryFieldStyle}>
-                <span style={summaryLabelStyle}>Integration mode</span>
+                <span style={summaryLabelStyle}>Configured integration posture</span>
                 <span style={summaryValueStyle}>{String(status.mode ?? "—")}</span>
               </div>
               <div style={summaryFieldStyle}>
-                <span style={summaryLabelStyle}>Simulated</span>
+                <span style={summaryLabelStyle}>Simulation-safe default</span>
                 <span style={summaryValueStyle}>{formatFlag(status.simulated)}</span>
               </div>
               <div style={summaryFieldStyle}>
-                <span style={summaryLabelStyle}>Real mode</span>
+                <span style={summaryLabelStyle}>Guarded real integration</span>
                 <span style={summaryValueStyle}>
-                  {status.real_mode_enabled === true ? "Enabled" : "Real mode disabled"}
+                  {status.real_mode_enabled === true ? "Guarded Real-Capable" : "Real Integration Disabled"}
                 </span>
               </div>
               <div style={summaryFieldStyle}>
-                <span style={summaryLabelStyle}>Real mode status</span>
+                <span style={summaryLabelStyle}>Guard status</span>
                 <span style={{ ...summaryValueStyle, ...monoValueStyle }}>
                   {String(status.real_mode_status ?? "—")}
                 </span>
@@ -306,10 +319,12 @@ function IntegrationStatusPanel({
                   <li key={key} style={adapterCardStyle}>
                     <div style={adapterHeaderRowStyle}>
                       <span style={adapterNameStyle}>{key}</span>
-                      <span style={modeBadgeStyle}>{String(adapter?.mode ?? "—")}</span>
+                      <span style={modeBadgeStyle}>
+                        {adapterCapabilityLabel(adapter, key)}
+                      </span>
                     </div>
                     <div style={adapterMetaRowStyle}>
-                      <span style={metaMutedStyle}>Simulated:</span>{" "}
+                      <span style={metaMutedStyle}>Simulation-safe:</span>{" "}
                       <span style={metaValueStyle}>{formatFlag(adapter?.simulated)}</span>
                     </div>
                     <CircuitBreakerPanel

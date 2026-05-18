@@ -15,6 +15,7 @@ from scripts.run_playbook_executor_once import recover_stale_playbook_executions
 
 logger = logging.getLogger(__name__)
 
+# spec: SPEC-WORKER-001 / SPEC-UI-004 - daemon loop is real orchestration; adapter effects stay guarded.
 DEFAULT_POLL_INTERVAL_SECONDS = 5.0
 DEFAULT_IDLE_BACKOFF_SECONDS = 30.0
 DEFAULT_JITTER_SECONDS = 2.0

@@ -128,6 +128,7 @@ test("renders loading then list", async () => {
 
   expect(screen.getByText(/loading dead letters/i)).toBeInTheDocument();
   expect(screen.getByRole("note")).toHaveTextContent(/does not execute playbooks/i);
+  expect(screen.getByRole("note")).toHaveTextContent(/Real workflow review/i);
 
   expect(await screen.findByText("99")).toBeInTheDocument();
   expect(screen.getByTitle("View dead letter 7")).toBeInTheDocument();

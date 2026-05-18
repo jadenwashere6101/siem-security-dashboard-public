@@ -116,7 +116,7 @@ def _validate_bool(value: bool, field_name: str) -> bool:
     return value
 
 
-# spec: SPEC-INTEG-005
+# spec: SPEC-INTEG-005 / SPEC-UI-004 - operator-visible retryability is explicit and fail-closed.
 def classify_dead_letter_retryable(
     failure_class: str | None,
     *,

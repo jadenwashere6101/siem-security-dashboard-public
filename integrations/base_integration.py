@@ -106,7 +106,7 @@ def _normalize_adapter_key(name: str) -> str:
     return str(name or "").strip().lower()
 
 
-# spec: SPEC-INTEG-005
+# spec: SPEC-INTEG-005 / SPEC-UI-004 - canonical per-adapter real-mode guard model.
 def _validate_real_mode_guards(
     adapter_name: str,
     *,

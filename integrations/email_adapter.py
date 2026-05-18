@@ -176,7 +176,7 @@ def _send_smtp_message(message: EmailMessage, timeout_seconds: int) -> dict[str,
     return {"refused": refused or {}, "port": port}
 
 
-# spec: SPEC-INTEG-005 - guarded real email path only; simulation remains default.
+# spec: SPEC-INTEG-005 / SPEC-UI-004 - guarded real email path only; simulation-safe remains default.
 class EmailSimulationAdapter(BaseIntegration):
     adapter_name = "email"
     supported_actions = frozenset({"send_email", "notify_owner"})
