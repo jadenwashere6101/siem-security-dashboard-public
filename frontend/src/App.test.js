@@ -30,6 +30,12 @@ jest.mock('./components/SoarMetricsDashboard', () => (props) => (
   </div>
 ));
 
+jest.mock('./components/SocCommandCenter', () => (props) => (
+  <div data-testid="soc-command-center">
+    SOC Command Center Mock {props.userRole} {props.currentUsername}
+  </div>
+));
+
 beforeEach(() => {
   jest.clearAllMocks();
   loadCurrentSession.mockResolvedValue({ authenticated: false });
@@ -64,6 +70,7 @@ test('renders SOAR Operations nav for analyst and loads panel when selected', as
 
   expect(await screen.findByRole('button', { name: /soar operations/i })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: /^dashboard$/i })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /soc command center/i })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: /soar incidents/i })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: /soar playbooks/i })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: /soar approvals/i })).toBeInTheDocument();
@@ -71,6 +78,22 @@ test('renders SOAR Operations nav for analyst and loads panel when selected', as
   await userEvent.click(screen.getByRole('button', { name: /soar operations/i }));
 
   expect(await screen.findByTestId('dead-letters-panel')).toHaveTextContent(/analyst/i);
+});
+
+test('renders SOC Command Center nav for analyst and loads command center when selected', async () => {
+  loadCurrentSession.mockResolvedValue({
+    authenticated: true,
+    user: 'analyst1',
+    role: 'analyst',
+  });
+
+  render(<App />);
+
+  expect(await screen.findByRole('button', { name: /soc command center/i })).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole('button', { name: /soc command center/i }));
+
+  expect(await screen.findByTestId('soc-command-center')).toHaveTextContent(/analyst analyst1/i);
 });
 
 test('renders SOAR Metrics nav for analyst and loads dashboard when selected', async () => {
@@ -116,8 +139,10 @@ test('does not render SOAR Operations nav for viewer', async () => {
   render(<App />);
 
   expect(await screen.findByRole('button', { name: /^dashboard$/i })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /soc command center/i })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: /soar operations/i })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: /soar metrics/i })).not.toBeInTheDocument();
   expect(screen.queryByTestId('dead-letters-panel')).not.toBeInTheDocument();
   expect(screen.queryByTestId('soar-metrics-dashboard')).not.toBeInTheDocument();
+  expect(screen.queryByTestId('soc-command-center')).not.toBeInTheDocument();
 });

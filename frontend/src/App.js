@@ -11,6 +11,7 @@ import PlaybooksPanel from "./components/PlaybooksPanel";
 import IntegrationStatusPanel from "./components/IntegrationStatusPanel";
 import SoarMetricsDashboard from "./components/SoarMetricsDashboard";
 import DeadLettersPanel from "./components/DeadLettersPanel";
+import SocCommandCenter from "./components/SocCommandCenter";
 import ThreatHuntPanel from "./components/ThreatHuntPanel";
 import BlocklistManagerPanel from "./components/BlocklistManagerPanel";
 import {
@@ -463,6 +464,20 @@ function App() {
           {canTakeAlertActions && (
             <button
               type="button"
+              onClick={() => setActiveSection("soc-command-center")}
+              style={{
+                ...sectionTabStyle,
+                ...(activeSection === "soc-command-center"
+                  ? activeSectionTabStyle
+                  : inactiveSectionTabStyle),
+              }}
+            >
+              SOC Command Center
+            </button>
+          )}
+          {canTakeAlertActions && (
+            <button
+              type="button"
               onClick={() => setActiveSection("blocklist")}
               style={{
                 ...sectionTabStyle,
@@ -646,6 +661,15 @@ function App() {
             filterLabelStyle={filterLabelStyle}
             selectStyle={selectStyle}
             onViewRelatedAlerts={handleViewRelatedAlerts}
+          />
+        )}
+
+        {canTakeAlertActions && activeSection === "soc-command-center" && (
+          <SocCommandCenter
+            alerts={alerts}
+            userRole={userRole}
+            currentUsername={currentUsername}
+            onNavigate={setActiveSection}
           />
         )}
 
