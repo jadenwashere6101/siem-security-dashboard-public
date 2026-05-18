@@ -44,6 +44,13 @@ def env_csv(*names, default=None):
     return [item.strip() for item in raw_value.split(",") if item.strip()]
 
 
+def resolve_secret_key():
+    secret_key = env_first("SIEM_SECRET_KEY", "SECRET_KEY")
+    if not secret_key and not SIEM_DEBUG:
+        raise RuntimeError("Missing SIEM_SECRET_KEY or SECRET_KEY environment variable")
+    return secret_key or "dev-secret-key-not-for-production"
+
+
 # ============================================================================
 # Constants / Validation Sets
 # ============================================================================
@@ -75,7 +82,7 @@ def create_app():
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
     limiter.init_app(app)
     app.config["FRONTEND_BUILD_DIR"] = os.path.join(app.root_path, "frontend", "build")
-    app.config["SECRET_KEY"] = env_first("SIEM_SECRET_KEY", "SECRET_KEY")
+    app.config["SECRET_KEY"] = resolve_secret_key()
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
     app.config["SESSION_COOKIE_SECURE"] = not SIEM_DEBUG
