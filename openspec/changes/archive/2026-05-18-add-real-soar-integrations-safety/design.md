@@ -49,13 +49,15 @@ closed and log a structured warning without raising an unhandled exception.
 
 Implemented current state:
 - Slack: four-guard complete (`SOAR_REAL_SLACK_ENABLED`, `SLACK_WEBHOOK_URL`). Smoke test done.
-- Teams: four-guard complete (`SOAR_REAL_TEAMS_ENABLED`, `TEAMS_WEBHOOK_URL`). Smoke test pending.
+- Teams: four-guard complete (`SOAR_REAL_TEAMS_ENABLED`, `TEAMS_WEBHOOK_URL`). Operational
+  smoke test is governed by the Teams runbook outside this archive.
 - Email: four-guard complete (`SOAR_REAL_EMAIL_ENABLED`, `SMTP_HOST`, `SMTP_USERNAME`).
-  Staging smoke test pending.
+  Operational smoke test is governed by the Email runbook outside this archive.
 - Firewall: no real-mode guard path. Simulation-only; real promotion permanently blocked by this
   spec until a separate approved design explicitly overrides this constraint.
 - Webhook: four-guard complete (`SOAR_REAL_WEBHOOK_ENABLED`, `WEBHOOK_URL` or
-  `WEBHOOK_BASE_URL`). Staging smoke test pending.
+  `WEBHOOK_BASE_URL`). Operational smoke test is governed by the Webhook runbook outside
+  this archive.
 
 ### 1.3 Credential Validation
 
@@ -416,11 +418,11 @@ pytest tests/test_dead_letter_store.py tests/test_dead_letter_routes.py
 Real-mode enablement must follow this order. No step may be skipped.
 
 1. **Slack** — Complete. Smoke test done 2026-05-15. System in simulation.
-2. **Teams** — Guards in place. Smoke test pending environment availability.
+2. **Teams** — Guards in place. Operational smoke test requires staging environment availability.
    Use `docs/soar_teams_staging_smoke_test_runbook.md`.
-3. **Email** — Guards implemented. Staging smoke test pending.
+3. **Email** — Guards implemented. Operational smoke test requires staging environment availability.
    Use `docs/soar_email_staging_smoke_test_runbook.md`.
-4. **Webhook** — Guards implemented. Staging smoke test pending.
+4. **Webhook** — Guards implemented. Operational smoke test requires staging environment availability.
    Use `docs/soar_webhook_staging_smoke_test_runbook.md`.
 5. **Firewall** — Permanently blocked by this spec. Requires a separate future approved design.
 
