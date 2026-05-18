@@ -75,18 +75,22 @@ can silently skip guard evaluation.
 Goal: Make the `retryable` field in `soar_dead_letters` accurate so that operator-facing
 filtering (`GET /dead-letters?retryable=true`) is meaningful.
 
-- [ ] In `engines/playbook_step_executor.py`, update `capture_failed_execution_dead_letter()` to
+- [x] In `engines/playbook_step_executor.py`, update `capture_failed_execution_dead_letter()` to
       derive `retryable` from the step's `failure_classification` field in `steps_log`.
-- [ ] Set `retryable=True` for: `timeout`, `transient`, `rate_limited`.
-- [ ] Set `retryable=False` for all other classes: `non_transient`, `circuit_open`,
-      `credential_missing`, `credential_invalid`, `guard_failed`, `simulation_only`, `unknown`.
-- [ ] Add tests:
-  - [ ] Dead letter captured after timeout failure has `retryable=True`.
-  - [ ] Dead letter captured after non-transient failure has `retryable=False`.
-  - [ ] Dead letter captured after circuit-open failure has `retryable=False`.
-  - [ ] `GET /dead-letters?retryable=true` returns only correctly flagged rows.
-  - [ ] Existing dead letter tests pass unchanged.
-- [ ] Run canonical regression suite.
+- [x] Set `retryable=True` for transient/operator-actionable classes: `timeout`,
+      `transient`, `rate_limited`, `adapter_timeout`, `transient_network_error`,
+      `circuit_breaker_open`, `circuit_open`, `provider_rate_limited`,
+      `adapter_simulation_failed`, and `temporary_provider_failure`.
+- [x] Set `retryable=False` for non-actionable classes: `non_transient`,
+      `credential_missing`, `credential_invalid`, `guard_failed`, `simulation_only`,
+      `approval_expired`, `unsupported_action`, `malformed_payload`, and `unknown`.
+- [x] Add tests:
+  - [x] Dead letter captured after timeout failure has `retryable=True`.
+  - [x] Dead letter captured after non-transient failure has `retryable=False`.
+  - [x] Dead letter captured after circuit-open failure has `retryable=True`.
+  - [x] `GET /dead-letters?retryable=true` returns only correctly flagged rows.
+  - [x] Existing dead letter tests pass unchanged.
+- [x] Run canonical regression suite.
 
 ---
 

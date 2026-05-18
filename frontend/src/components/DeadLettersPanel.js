@@ -814,11 +814,12 @@ function DeadLetterActions({
   }
 
   const canDismiss = item.status === "open" || item.status === "retrying";
-  const canRetryRequest = item.status === "open";
+  const canRetryRequest = item.status === "open" && item.retryable === true;
   const canRetryExecute =
     canExecuteDeadLetterRetry &&
     item.status === "retrying" &&
-    item.source_type === "playbook_execution";
+    item.source_type === "playbook_execution" &&
+    item.retryable === true;
   if (!canDismiss && !canRetryRequest && !canRetryExecute && !actionError && !actionSuccess) {
     return null;
   }

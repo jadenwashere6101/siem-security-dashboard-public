@@ -58,6 +58,72 @@ def _insert_playbook_execution(cur, alert_id=None, incident_id=None, playbook_id
     return cur.fetchone()[0], playbook_id
 
 
+@pytest.mark.parametrize(
+    "failure_class",
+    [
+        "adapter_timeout",
+        "transient_network_error",
+        "circuit_breaker_open",
+        "circuit_open",
+        "provider_rate_limited",
+        "rate_limited",
+        "adapter_simulation_failed",
+        "temporary_provider_failure",
+        "timeout",
+        "transient",
+    ],
+)
+def test_dead_letter_retryable_classifier_retryable_matrix(failure_class):
+    assert dead_letter_store.classify_dead_letter_retryable(
+        failure_class,
+        source_type="playbook_execution",
+        status="open",
+    ) is True
+
+
+@pytest.mark.parametrize(
+    "failure_class",
+    [
+        "invalid_credentials",
+        "credential_invalid",
+        "credential_missing",
+        "malformed_payload",
+        "approval_expired",
+        "approval_denied",
+        "unsupported_action",
+        "permanent_provider_rejection",
+        "non_transient",
+        "simulation_only",
+        "guard_failed",
+        "unknown",
+    ],
+)
+def test_dead_letter_retryable_classifier_non_retryable_matrix(failure_class):
+    assert dead_letter_store.classify_dead_letter_retryable(
+        failure_class,
+        source_type="playbook_execution",
+        status="open",
+    ) is False
+
+
+def test_dead_letter_retryable_classifier_unknown_and_terminal_fail_closed():
+    assert dead_letter_store.classify_dead_letter_retryable(
+        "new_provider_error",
+        source_type="playbook_execution",
+        status="open",
+    ) is False
+    assert dead_letter_store.classify_dead_letter_retryable(
+        "timeout",
+        source_type="approval",
+        status="open",
+    ) is False
+    assert dead_letter_store.classify_dead_letter_retryable(
+        "timeout",
+        source_type="playbook_execution",
+        status="dismissed",
+    ) is False
+
+
 @pytest.mark.usefixtures("postgres_db")
 def test_create_list_get_dead_letter_round_trip_and_redacts_payload(postgres_db):
     conn, cur = postgres_db
@@ -398,7 +464,51 @@ def test_repeated_playbook_failure_capture_keeps_single_active_dead_letter(postg
     assert rows[0]["status"] == "open"
     assert rows[0]["source_id"] == execution_id
     assert rows[0]["failure_class"] == "timeout"
+    assert rows[0]["retryable"] is True
     assert rows[0]["error_message"] == "second transient failure"
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_playbook_failure_capture_unknown_class_defaults_not_retryable(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    execution_id, playbook_id = _insert_playbook_execution(cur, alert_id=alert_id)
+    steps_log = [
+        {
+            "step_index": 0,
+            "action": "custom_step",
+            "status": "failed",
+            "message": "unknown failure",
+            "error": {"message": "unknown failure"},
+            "output": {"adapter_result": {"metadata": {"failure_classification": "new_error"}}},
+        }
+    ]
+    conn.commit()
+
+    playbook_step_executor.capture_failed_execution_dead_letter(
+        conn,
+        {
+            "id": execution_id,
+            "status": "failed",
+            "failure_reason": "failed",
+            "alert_id": alert_id,
+            "incident_id": None,
+            "playbook_id": playbook_id,
+        },
+        steps_log,
+        last_completed_step=None,
+        now=None,
+    )
+    conn.commit()
+
+    rows = dead_letter_store.list_dead_letters(
+        conn,
+        source_type="playbook_execution",
+        execution_id=execution_id,
+    )
+    assert len(rows) == 1
+    assert rows[0]["failure_class"] == "new_error"
+    assert rows[0]["retryable"] is False
 
 
 def test_store_validation_rejects_invalid_enums_and_inputs():

@@ -62,7 +62,7 @@ const detailRow = {
   playbook_id: "pb_test",
   step_index: 1,
   action_name: "notify_slack",
-  retryable: false,
+  retryable: true,
   error_message: "failed at [REDACTED_URL]",
   payload_json: {
     safe: "kept",
@@ -326,6 +326,20 @@ test("analyst sees dismiss and retry-request actions for open dead letter", asyn
   expect(screen.queryByRole("button", { name: /retry execute/i })).not.toBeInTheDocument();
 });
 
+test("retry actions are hidden when dead letter is not retryable", async () => {
+  getDeadLetter.mockResolvedValue({ ...detailRow, retryable: false });
+
+  render(<DeadLettersPanel {...styleProps} userRole="super_admin" />);
+
+  await screen.findByText("99");
+  await userEvent.click(screen.getByTitle("View dead letter 7"));
+  await screen.findByText(/dead letter #7/i);
+
+  expect(screen.getByRole("button", { name: /^dismiss$/i })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /retry request/i })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /retry execute/i })).not.toBeInTheDocument();
+});
+
 test("super_admin sees dismiss and retry-request actions for open dead letter", async () => {
   render(<DeadLettersPanel {...styleProps} userRole="super_admin" />);
 
@@ -513,6 +527,23 @@ test("super_admin sees retry-execute for retrying playbook_execution dead letter
     screen.getByText(/creates a new pending playbook execution only/i)
   ).toBeInTheDocument();
   expect(screen.getByText(/does not run steps immediately/i)).toBeInTheDocument();
+});
+
+test("super_admin retry-execute is hidden for non-retryable retrying dead letter", async () => {
+  getDeadLetters.mockResolvedValue({
+    items: [{ ...listRow, status: "retrying" }],
+    limit: 100,
+    offset: 0,
+  });
+  getDeadLetter.mockResolvedValue({ ...retryingPlaybookRow, retryable: false });
+
+  render(<DeadLettersPanel {...styleProps} userRole="super_admin" />);
+
+  await screen.findByText("99");
+  await userEvent.click(screen.getByTitle("View dead letter 7"));
+  await screen.findByText(/dead letter #7/i);
+
+  expect(screen.queryByRole("button", { name: /^retry execute$/i })).not.toBeInTheDocument();
 });
 
 test("analyst and viewer do not see retry-execute", async () => {

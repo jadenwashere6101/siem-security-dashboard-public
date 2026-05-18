@@ -1394,6 +1394,7 @@ def capture_failed_execution_dead_letter(
             or "Playbook execution failed."
         )
         output = entry.get("output") if isinstance(entry.get("output"), dict) else {}
+        failure_class = _dead_letter_failure_class(entry)
         dead_letter_store.create_dead_letter(
             conn,
             source_type="playbook_execution",
@@ -1404,7 +1405,7 @@ def capture_failed_execution_dead_letter(
             playbook_id=execution.get("playbook_id"),
             step_index=entry.get("step_index") if isinstance(entry.get("step_index"), int) else None,
             action_name=entry.get("action") if isinstance(entry.get("action"), str) else None,
-            failure_class=_dead_letter_failure_class(entry),
+            failure_class=failure_class,
             error_message=str(message),
             payload_json={
                 "source": "playbook_step_executor",
@@ -1420,7 +1421,11 @@ def capture_failed_execution_dead_letter(
                     "output": output,
                 },
             },
-            retryable=False,
+            retryable=dead_letter_store.classify_dead_letter_retryable(
+                failure_class,
+                source_type="playbook_execution",
+                status="open",
+            ),
             first_failed_at=now,
             last_failed_at=now,
         )

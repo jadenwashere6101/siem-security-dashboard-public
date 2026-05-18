@@ -24,6 +24,37 @@ VALID_SOURCE_TYPES = frozenset(
 )
 VALID_STATUSES = frozenset({"open", "retrying", "retried", "dismissed"})
 
+_RETRYABLE_FAILURE_CLASSES = frozenset(
+    {
+        "adapter_simulation_failed",
+        "adapter_timeout",
+        "circuit_breaker_open",
+        "circuit_open",
+        "provider_rate_limited",
+        "rate_limited",
+        "temporary_provider_failure",
+        "timeout",
+        "transient",
+        "transient_network_error",
+    }
+)
+_NON_RETRYABLE_FAILURE_CLASSES = frozenset(
+    {
+        "approval_denied",
+        "approval_expired",
+        "credential_invalid",
+        "credential_missing",
+        "guard_failed",
+        "invalid_credentials",
+        "malformed_payload",
+        "non_transient",
+        "permanent_provider_rejection",
+        "simulation_only",
+        "unsupported_action",
+        "unknown",
+    }
+)
+
 
 def _iso(dt: datetime | None) -> str | None:
     if dt is None:
@@ -83,6 +114,34 @@ def _validate_bool(value: bool, field_name: str) -> bool:
     if not isinstance(value, bool):
         raise ValueError(f"{field_name} must be a boolean")
     return value
+
+
+# spec: SPEC-INTEG-005
+def classify_dead_letter_retryable(
+    failure_class: str | None,
+    *,
+    source_type: str | None = None,
+    status: str | None = None,
+) -> bool:
+    """Central retryability policy for operator-visible dead letters."""
+    normalized_source = str(source_type or "").strip()
+    if normalized_source:
+        _validate_source_type(normalized_source)
+        if normalized_source == "approval":
+            return False
+
+    normalized_status = str(status or "open").strip()
+    if normalized_status:
+        _validate_status(normalized_status)
+        if normalized_status in {"retried", "dismissed"}:
+            return False
+
+    normalized_failure = str(failure_class or "").strip().lower()
+    if normalized_failure in _RETRYABLE_FAILURE_CLASSES:
+        return True
+    if normalized_failure in _NON_RETRYABLE_FAILURE_CLASSES:
+        return False
+    return False
 
 
 def _row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
