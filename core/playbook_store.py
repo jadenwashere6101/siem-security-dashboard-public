@@ -68,6 +68,10 @@ def _utc_naive(dt: datetime) -> datetime:
     return dt.astimezone(timezone.utc).replace(tzinfo=None)
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def playbook_execution_row_is_stale_running(row: dict[str, Any], *, now: datetime | None = None) -> bool:
     """
     True when status is running, reliability metadata defines a threshold, and the run
@@ -86,7 +90,7 @@ def playbook_execution_row_is_stale_running(row: dict[str, Any], *, now: datetim
     ref = row.get("last_attempted_at") or row.get("started_at")
     if ref is None:
         return False
-    when = now if now is not None else datetime.utcnow()
+    when = now if now is not None else _utc_now()
     elapsed = (_utc_naive(when) - _utc_naive(ref)).total_seconds()
     return elapsed >= int(threshold)
 
@@ -154,7 +158,7 @@ def acquire_execution_lease(
         raise ValueError("lease_duration_seconds must be at least 1")
 
     if now is None:
-        now = datetime.utcnow()
+        now = _utc_now()
     expires_at = now + timedelta(seconds=lease_duration_seconds)
 
     with conn.cursor() as cur:
@@ -226,7 +230,7 @@ def claim_next_pending_playbook_execution_with_lease(
     if lease_duration_seconds < 1:
         raise ValueError("lease_duration_seconds must be at least 1")
     if now is None:
-        now = datetime.utcnow()
+        now = _utc_now()
     expires_at = now + timedelta(seconds=lease_duration_seconds)
 
     with conn.cursor() as cur:
@@ -317,7 +321,7 @@ def acquire_awaiting_approval_resume_lease(
     if lease_duration_seconds < 1:
         raise ValueError("lease_duration_seconds must be at least 1")
     if now is None:
-        now = datetime.utcnow()
+        now = _utc_now()
     expires_at = now + timedelta(seconds=lease_duration_seconds)
 
     with conn.cursor() as cur:
@@ -399,7 +403,7 @@ def heartbeat_execution_lease(
         raise ValueError("lease_duration_seconds must be at least 1")
 
     if now is None:
-        now = datetime.utcnow()
+        now = _utc_now()
     expires_at = now + timedelta(seconds=lease_duration_seconds)
 
     with conn.cursor() as cur:
@@ -487,7 +491,7 @@ def list_stale_running_executions(
     if limit < 0:
         raise ValueError("limit must be non-negative")
     if now is None:
-        now = datetime.utcnow()
+        now = _utc_now()
 
     with conn.cursor() as cur:
         cur.execute(
@@ -520,7 +524,7 @@ def mark_stale_execution_for_recovery(
     awaiting_approval or non-expired leases. Increments recovery_count. Caller commits.
     """
     if now is None:
-        now = datetime.utcnow()
+        now = _utc_now()
 
     with conn.cursor() as cur:
         cur.execute(
@@ -597,7 +601,7 @@ def count_expired_awaiting_approval_leases(
 ) -> int:
     """Diagnostic count only; awaiting_approval is never recovered as stale-running."""
     if now is None:
-        now = datetime.utcnow()
+        now = _utc_now()
 
     with conn.cursor() as cur:
         cur.execute(
@@ -628,7 +632,7 @@ def mark_playbook_execution_permanently_failed(
     Rejects success, abandoned, and pending. Caller commits. Does not call the executor.
     """
     if now is None:
-        now = datetime.utcnow()
+        now = _utc_now()
 
     current = get_playbook_execution(conn, execution_id)
     if current is None:
@@ -1379,7 +1383,7 @@ def list_awaiting_approval_playbook_executions(conn, limit: int = 10) -> list[di
 
 def claim_next_pending_playbook_execution(conn, now: datetime | None = None) -> dict[str, Any] | None:
     if now is None:
-        now = datetime.utcnow()
+        now = _utc_now()
 
     with conn.cursor() as cur:
         cur.execute(
@@ -1419,7 +1423,7 @@ def set_playbook_execution_running(
     now: datetime | None = None,
 ) -> dict[str, Any] | None:
     if now is None:
-        now = datetime.utcnow()
+        now = _utc_now()
 
     with conn.cursor() as cur:
         cur.execute(
@@ -1447,7 +1451,7 @@ def set_playbook_execution_resumed_running(
     now: datetime | None = None,
 ) -> dict[str, Any] | None:
     if now is None:
-        now = datetime.utcnow()
+        now = _utc_now()
 
     with conn.cursor() as cur:
         cur.execute(
@@ -1507,7 +1511,7 @@ def set_playbook_execution_success(
     lease_owner: str | None = None,
 ) -> dict[str, Any] | None:
     if now is None:
-        now = datetime.utcnow()
+        now = _utc_now()
 
     lease_sql, lease_params = _lease_owner_sql(lease_owner)
     with conn.cursor() as cur:
@@ -1540,7 +1544,7 @@ def set_playbook_execution_failed(
     lease_owner: str | None = None,
 ) -> dict[str, Any] | None:
     if now is None:
-        now = datetime.utcnow()
+        now = _utc_now()
 
     lease_sql, lease_params = _lease_owner_sql(lease_owner)
     with conn.cursor() as cur:
@@ -1605,7 +1609,7 @@ def update_execution_status(
         )
 
     if now is None:
-        now = datetime.utcnow()
+        now = _utc_now()
 
     if status == "running":
         with conn.cursor() as cur:
