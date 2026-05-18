@@ -1,5 +1,6 @@
 import http.client
 import json
+import logging
 import smtplib
 import socket
 import urllib.request
@@ -14,6 +15,8 @@ from integrations.base_integration import (
     CIRCUIT_STATE_OPEN,
     FAILURE_CLASSIFICATION_CIRCUIT_OPEN,
     FAILURE_CLASSIFICATION_CIRCUIT_STATE_INVALID,
+    FAILURE_CLASSIFICATION_CREDENTIAL_MISSING,
+    FAILURE_CLASSIFICATION_GUARD_FAILED,
     FAILURE_CLASSIFICATION_NON_TRANSIENT,
     FAILURE_CLASSIFICATION_TRANSIENT,
     SimulatedCircuitBreakerControlError,
@@ -26,6 +29,7 @@ from integrations.base_integration import (
     record_simulated_adapter_success,
     request_half_open_probe,
     reset_simulated_circuit_breakers,
+    _validate_real_mode_guards,
 )
 from integrations.integration_registry import (
     get_integration_adapter,
@@ -80,10 +84,117 @@ def test_non_simulation_mode_fails_closed(monkeypatch):
     monkeypatch.setenv("INTEGRATION_MODE", "real")
 
     assert resolve_integration_mode() == "real"
-    with pytest.raises(NotImplementedError, match="real integration mode is not implemented"):
-        get_integration_adapter("slack")
-    with pytest.raises(NotImplementedError, match="real integration mode is not implemented"):
-        get_integration_adapter("teams")
+    for adapter_name in ("slack", "teams"):
+        adapter = get_integration_adapter(adapter_name)
+        result = adapter.execute("send_message")
+        assert adapter.mode == "real"
+        assert result["success"] is False
+        assert result["simulated"] is True
+        assert result["executed"] is False
+        assert result["metadata"]["real_mode_ready"] is False
+
+
+def test_real_mode_guard_helper_reports_each_missing_guard(monkeypatch):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.delenv("SOAR_ENV", raising=False)
+    monkeypatch.delenv("SOAR_REAL_EMAIL_ENABLED", raising=False)
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+    monkeypatch.delenv("SMTP_USERNAME", raising=False)
+
+    result = _validate_real_mode_guards(
+        "email",
+        enabled_env="SOAR_REAL_EMAIL_ENABLED",
+        credential_envs=("SMTP_HOST", "SMTP_USERNAME"),
+    )
+
+    assert result["real_mode_allowed"] is False
+    assert result["failure_classification"] == FAILURE_CLASSIFICATION_CREDENTIAL_MISSING
+    assert result["missing_guards"] == [
+        "SOAR_ENV",
+        "SOAR_REAL_EMAIL_ENABLED",
+        "SMTP_HOST",
+        "SMTP_USERNAME",
+    ]
+    assert result["credential_envs"] == ["SMTP_HOST", "SMTP_USERNAME"]
+
+
+def test_real_mode_guard_helper_missing_mode_fails_closed(monkeypatch):
+    monkeypatch.delenv("INTEGRATION_MODE", raising=False)
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_SLACK_ENABLED", "true")
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T000/B000/SECRET")
+
+    result = _validate_real_mode_guards(
+        "slack",
+        enabled_env="SOAR_REAL_SLACK_ENABLED",
+        credential_envs=("SLACK_WEBHOOK_URL",),
+    )
+
+    assert result["real_mode_allowed"] is False
+    assert result["failure_classification"] == FAILURE_CLASSIFICATION_GUARD_FAILED
+    assert result["missing_guards"] == ["INTEGRATION_MODE"]
+
+
+def test_real_mode_guard_helper_all_guards_present(monkeypatch):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_TEAMS_ENABLED", "true")
+    monkeypatch.setenv("TEAMS_WEBHOOK_URL", "https://contoso.webhook.office.com/webhookb2/SECRET")
+
+    result = _validate_real_mode_guards(
+        "teams",
+        enabled_env="SOAR_REAL_TEAMS_ENABLED",
+        credential_envs=("TEAMS_WEBHOOK_URL",),
+    )
+
+    assert result["real_mode_allowed"] is True
+    assert result["real_mode_status"] == "ready"
+    assert result["failure_classification"] is None
+    assert result["missing_guards"] == []
+
+
+def test_real_mode_guard_helper_does_not_log_credentials(monkeypatch, caplog):
+    secret = "https://hooks.slack.com/services/T000/B000/VERYSECRET"
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_SLACK_ENABLED", "true")
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", secret)
+
+    with caplog.at_level(logging.INFO):
+        result = _validate_real_mode_guards(
+            "slack",
+            enabled_env="SOAR_REAL_SLACK_ENABLED",
+            credential_envs=("SLACK_WEBHOOK_URL",),
+        )
+
+    assert result["real_mode_allowed"] is True
+    assert secret not in caplog.text
+    assert "VERYSECRET" not in json.dumps(result, sort_keys=True)
+
+
+def test_registry_startup_logs_circuit_reset_without_secrets(monkeypatch, caplog):
+    secret = "https://hooks.slack.com/services/T000/B000/SECRET"
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_SLACK_ENABLED", "true")
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", secret)
+
+    with caplog.at_level(logging.INFO, logger="integrations.integration_registry"):
+        status = get_integration_status()
+
+    assert {adapter["name"] for adapter in status["adapters"]} == {
+        "email",
+        "firewall",
+        "slack",
+        "teams",
+        "webhook",
+    }
+    log_text = caplog.text
+    assert "integration_adapter_startup adapter=slack" in log_text
+    assert "circuit_breaker_reset_to=closed" in log_text
+    assert "SLACK_WEBHOOK_URL" in log_text
+    assert secret not in log_text
+    assert "SECRET" not in log_text
 
 
 def test_registry_returns_simulation_adapters_case_insensitive(monkeypatch):
@@ -144,7 +255,8 @@ def test_integration_status_reports_real_mode_fail_closed(monkeypatch, no_networ
     assert status["real_mode_enabled"] is False
     assert status["real_mode_allowed"] is False
     assert status["real_mode_ready"] is False
-    assert "staging allow flag" in status["real_mode_status"]
+    assert "SOAR_ENV" in status["real_mode_status"]
+    assert "SOAR_REAL_SLACK_ENABLED" in status["real_mode_status"]
 
 
 def test_unknown_adapter_fails_locally():
@@ -428,15 +540,19 @@ def test_slack_real_mode_missing_webhook_fails_closed_without_network(monkeypatc
         context={"execution_id": 1, "playbook_id": "pb"},
     )
 
+    assert adapter.mode == "real"
     assert result["mode"] == "real"
-    assert result["simulated"] is False
+    assert result["simulated"] is True
     assert result["executed"] is False
     assert result["success"] is False
-    assert result["metadata"]["slack_configured"] is False
-    assert result["metadata"]["real_mode_allowed"] is True
-    assert result["metadata"]["real_mode_ready"] is False
-    assert result["metadata"]["retry_eligible"] is False
-    assert "webhook" in result["message"].lower()
+    readiness = _validate_real_mode_guards(
+        "slack",
+        enabled_env="SOAR_REAL_SLACK_ENABLED",
+        credential_envs=("SLACK_WEBHOOK_URL",),
+    )
+    assert readiness["real_mode_allowed"] is False
+    assert readiness["failure_classification"] == FAILURE_CLASSIFICATION_CREDENTIAL_MISSING
+    assert "SLACK_WEBHOOK_URL" in readiness["missing_guards"]
 
 
 def test_slack_real_mode_invalid_webhook_redacts_value(monkeypatch, no_network):
@@ -505,6 +621,33 @@ def test_real_mode_does_not_apply_to_non_slack_adapters(monkeypatch, no_network)
         assert result["executed"] is False
 
 
+@pytest.mark.parametrize(
+    ("adapter_name", "action"),
+    [
+        ("email", "send_email"),
+        ("firewall", "block_ip"),
+        ("webhook", "post_event"),
+    ],
+)
+def test_real_mode_without_adapter_flag_fails_closed_for_simulation_only_adapters(
+    monkeypatch,
+    no_network,
+    adapter_name,
+    action,
+):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+
+    adapter = get_integration_adapter(adapter_name)
+    result = adapter.execute(action)
+
+    assert adapter.mode == "simulation"
+    assert result["mode"] == "simulation"
+    assert result["simulated"] is True
+    assert result["executed"] is False
+    assert result["success"] is True
+
+
 def test_slack_real_mode_open_circuit_blocks_before_network(monkeypatch, no_network):
     monkeypatch.setenv("INTEGRATION_MODE", "real")
     monkeypatch.setenv("SOAR_ENV", "staging")
@@ -536,15 +679,19 @@ def test_teams_real_mode_missing_webhook_fails_closed_without_network(monkeypatc
         context={"execution_id": 1, "playbook_id": "pb"},
     )
 
+    assert adapter.mode == "real"
     assert result["mode"] == "real"
-    assert result["simulated"] is False
+    assert result["simulated"] is True
     assert result["executed"] is False
     assert result["success"] is False
-    assert result["metadata"]["teams_configured"] is False
-    assert result["metadata"]["real_mode_allowed"] is True
-    assert result["metadata"]["real_mode_ready"] is False
-    assert result["metadata"]["retry_eligible"] is False
-    assert "webhook" in result["message"].lower()
+    readiness = _validate_real_mode_guards(
+        "teams",
+        enabled_env="SOAR_REAL_TEAMS_ENABLED",
+        credential_envs=("TEAMS_WEBHOOK_URL",),
+    )
+    assert readiness["real_mode_allowed"] is False
+    assert readiness["failure_classification"] == FAILURE_CLASSIFICATION_CREDENTIAL_MISSING
+    assert "TEAMS_WEBHOOK_URL" in readiness["missing_guards"]
 
 
 def test_teams_real_mode_invalid_webhook_redacts_value(monkeypatch, no_network):
@@ -603,16 +750,18 @@ def test_teams_and_slack_real_mode_configs_do_not_cross_enable(monkeypatch, no_n
     monkeypatch.delenv("SOAR_REAL_TEAMS_ENABLED", raising=False)
     monkeypatch.delenv("TEAMS_WEBHOOK_URL", raising=False)
 
-    with pytest.raises(NotImplementedError, match="real integration mode is not implemented"):
-        get_integration_adapter("teams")
+    teams_result = get_integration_adapter("teams").execute("send_message")
+    assert teams_result["success"] is False
+    assert teams_result["executed"] is False
 
     monkeypatch.delenv("SOAR_REAL_SLACK_ENABLED", raising=False)
     monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
     monkeypatch.setenv("SOAR_REAL_TEAMS_ENABLED", "true")
     monkeypatch.setenv("TEAMS_WEBHOOK_URL", "https://contoso.webhook.office.com/webhookb2/SECRET")
 
-    with pytest.raises(NotImplementedError, match="real integration mode is not implemented"):
-        get_integration_adapter("slack")
+    slack_result = get_integration_adapter("slack").execute("send_message")
+    assert slack_result["success"] is False
+    assert slack_result["executed"] is False
 
 
 def test_real_mode_does_not_apply_to_non_teams_adapters(monkeypatch, no_network):

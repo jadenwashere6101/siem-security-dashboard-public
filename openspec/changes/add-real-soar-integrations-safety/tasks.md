@@ -14,34 +14,34 @@ pytest tests/test_failed_login_detection.py tests/test_password_spraying_detecti
 
 ## Pre-Implementation Review
 
-- [ ] Audit `integrations/slack_adapter.py` — confirm four-guard, timeout, retry classification,
+- [x] Audit `integrations/slack_adapter.py` — confirm four-guard, timeout, retry classification,
       circuit breaker wiring, and delivery tracking are all present and complete.
-- [ ] Audit `integrations/teams_adapter.py` — same audit as Slack.
-- [ ] Audit `integrations/email_adapter.py` — confirm simulation-only, no real-mode path exists.
-- [ ] Audit `integrations/firewall_adapter.py` — confirm simulation-only, no real-mode path exists.
-- [ ] Audit `integrations/webhook_adapter.py` — confirm simulation-only, no real-mode path exists.
-- [ ] Audit `integrations/circuit_breaker.py` — document current state machine and confirm startup
+- [x] Audit `integrations/teams_adapter.py` — same audit as Slack.
+- [x] Audit `integrations/email_adapter.py` — confirm simulation-only, no real-mode path exists.
+- [x] Audit `integrations/firewall_adapter.py` — confirm simulation-only, no real-mode path exists.
+- [x] Audit `integrations/webhook_adapter.py` — confirm simulation-only, no real-mode path exists.
+- [x] Audit `integrations/circuit_breaker.py` — document current state machine and confirm startup
       behavior (confirm state initializes to `closed` with no persistence).
-- [ ] Audit `integrations/integration_registry.py` — confirm how circuit breaker state is
+- [x] Audit `integrations/integration_registry.py` — confirm how circuit breaker state is
       exposed and how adapters are registered.
-- [ ] Audit `engines/soar_action_worker.py` — confirm `APPROVAL_REQUIRED_ACTIONS` and check
+- [x] Audit `engines/soar_action_worker.py` — confirm `APPROVAL_REQUIRED_ACTIONS` and check
       whether remediation approval is enforced at the playbook executor layer.
-- [ ] Audit `engines/playbook_step_executor.py` — confirm `_step_already_succeeded_in_log`
+- [x] Audit `engines/playbook_step_executor.py` — confirm `_step_already_succeeded_in_log`
       and delivery dedup; identify where a pre-call idempotency check must be added for real
       remediation actions.
-- [ ] Audit `core/notification_delivery_store.py` — confirm idempotency key structure,
+- [x] Audit `core/notification_delivery_store.py` — confirm idempotency key structure,
       deterministic key derivation, and existing dedup path.
-- [ ] Audit `core/dead_letter_store.py` / `engines/playbook_step_executor.py` —
+- [x] Audit `core/dead_letter_store.py` / `engines/playbook_step_executor.py` —
       confirm `capture_failed_execution_dead_letter()` hardcodes `retryable=False`; plan the
       failure-class-to-retryable mapping fix.
-- [ ] Audit `core/audit_helpers.py` — confirm `log_audit_event()` call signature and available
+- [x] Audit `core/audit_helpers.py` — confirm `log_audit_event()` call signature and available
       field set; plan the real-adapter-attempt audit event format.
-- [ ] Audit `routes/integration_routes.py` — confirm `GET /integrations/status` response shape
+- [x] Audit `routes/integration_routes.py` — confirm `GET /integrations/status` response shape
       and which readiness booleans are already exposed.
-- [ ] Confirm current latest migration number (expected: 0010) before any schema work.
-- [ ] Confirm `SOAR_REAL_EMAIL_ENABLED`, `SOAR_REAL_FIREWALL_ENABLED`, and
+- [x] Confirm current latest migration number (expected: 0010) before any schema work.
+- [x] Confirm `SOAR_REAL_EMAIL_ENABLED`, `SOAR_REAL_FIREWALL_ENABLED`, and
       `SOAR_REAL_WEBHOOK_ENABLED` env vars are not yet referenced anywhere in the codebase.
-- [ ] Document any additional gaps found during audit that affect the design.
+- [x] Document any additional gaps found during audit that affect the design.
 
 ---
 
@@ -50,23 +50,23 @@ pytest tests/test_failed_login_detection.py tests/test_password_spraying_detecti
 Goal: Enforce that the per-adapter four-guard model is the canonical pattern and that no adapter
 can silently skip guard evaluation.
 
-- [ ] Add a `_validate_real_mode_guards(adapter_name, mode, env_flag, credential_env)` helper
+- [x] Add a `_validate_real_mode_guards(adapter_name, mode, env_flag, credential_env)` helper
       in `integrations/base_integration.py` (or a dedicated `integrations/adapter_guards.py`)
       that validates all four guards and returns a structured readiness dict with
       `real_mode_allowed`, `real_mode_status`, and `failure_classification` when failed.
-- [ ] Extend `integrations/integration_registry.py` to emit a structured startup log line when
+- [x] Extend `integrations/integration_registry.py` to emit a structured startup log line when
       any adapter's circuit breaker state is initialized, indicating a reset-to-closed event.
-- [ ] Confirm `FirewallSimulationAdapter` has no real-mode code path and add a comment
+- [x] Confirm `FirewallSimulationAdapter` has no real-mode code path and add a comment
       `# spec: SPEC-INTEG-005 — real firewall execution permanently blocked until separate
       approved design` at the class level.
-- [ ] Confirm `EmailSimulationAdapter` and `WebhookSimulationAdapter` are unconditionally
+- [x] Confirm `EmailSimulationAdapter` and `WebhookSimulationAdapter` are unconditionally
       simulation-only and add equivalent spec comments.
-- [ ] Add tests:
-  - [ ] `INTEGRATION_MODE=real` with no adapter-specific flag falls back to simulation for
+- [x] Add tests:
+  - [x] `INTEGRATION_MODE=real` with no adapter-specific flag falls back to simulation for
         email, firewall, and webhook.
-  - [ ] Registry startup logs a structured circuit breaker reset event per adapter.
-  - [ ] `_validate_real_mode_guards` returns `real_mode_allowed: False` for each missing guard.
-  - [ ] Guard validation never logs credential values.
+  - [x] Registry startup logs a structured circuit breaker reset event per adapter.
+  - [x] `_validate_real_mode_guards` returns `real_mode_allowed: False` for each missing guard.
+  - [x] Guard validation never logs credential values.
 
 ---
 

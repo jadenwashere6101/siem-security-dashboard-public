@@ -3,6 +3,7 @@ from __future__ import annotations
 from integrations.base_integration import BaseIntegration
 
 
+# spec: SPEC-INTEG-005 - simulation-only until guarded real webhook design is implemented.
 class WebhookSimulationAdapter(BaseIntegration):
     adapter_name = "webhook"
     supported_actions = frozenset({"post_event", "send_webhook", "notify_webhook"})

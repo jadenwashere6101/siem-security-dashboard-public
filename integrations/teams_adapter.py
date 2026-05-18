@@ -15,6 +15,7 @@ from integrations.base_integration import (
     REAL_MODE,
     SIMULATION_MODE,
     BaseIntegration,
+    _validate_real_mode_guards,
 )
 
 TEAMS_WEBHOOK_ENV = "TEAMS_WEBHOOK_URL"
@@ -53,22 +54,32 @@ def _teams_webhook_valid() -> bool:
 
 
 def _teams_real_mode_allowed() -> bool:
-    return os.getenv(TEAMS_ENV_ENV, "").strip().lower() == "staging" and _truthy(
-        os.getenv(TEAMS_REAL_ALLOW_ENV)
+    readiness = _validate_real_mode_guards(
+        "teams",
+        mode=REAL_MODE,
+        enabled_env=TEAMS_REAL_ALLOW_ENV,
+        credential_envs=(TEAMS_WEBHOOK_ENV,),
     )
+    return bool(readiness["real_mode_allowed"])
 
 
 def get_teams_real_mode_readiness(configured_mode: str | None = None) -> dict[str, Any]:
     """Return safe Teams readiness metadata. Never include the webhook value."""
     mode = str(configured_mode or os.getenv("INTEGRATION_MODE", SIMULATION_MODE)).strip().lower()
+    guard_readiness = _validate_real_mode_guards(
+        "teams",
+        mode=mode,
+        enabled_env=TEAMS_REAL_ALLOW_ENV,
+        credential_envs=(TEAMS_WEBHOOK_ENV,),
+    )
     configured = _teams_webhook_configured()
     webhook_valid = _teams_webhook_valid()
-    allowed = mode == REAL_MODE and _teams_real_mode_allowed()
+    allowed = bool(guard_readiness["real_mode_allowed"])
     ready = bool(allowed and configured and webhook_valid)
     if mode != REAL_MODE:
         status = "simulation"
-    elif not allowed:
-        status = "blocked: Teams real mode requires staging allow flag"
+    elif guard_readiness["missing_guards"]:
+        status = guard_readiness["real_mode_status"]
     elif not configured:
         status = "blocked: Teams webhook is not configured"
     elif not webhook_valid:
@@ -173,7 +184,7 @@ class TeamsSimulationAdapter(BaseIntegration):
                     "retry_eligible": False,
                 },
                 mode=REAL_MODE,
-                simulated=False,
+                simulated=True,
                 executed=False,
             )
 

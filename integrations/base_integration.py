@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import os
 import re
 from typing import Any
 
@@ -35,6 +36,8 @@ FAILURE_CLASSIFICATION_NON_TRANSIENT = "non_transient"
 FAILURE_CLASSIFICATION_TIMEOUT = "timeout"
 FAILURE_CLASSIFICATION_CIRCUIT_OPEN = "circuit_open"
 FAILURE_CLASSIFICATION_CIRCUIT_STATE_INVALID = "circuit_state_invalid"
+FAILURE_CLASSIFICATION_GUARD_FAILED = "guard_failed"
+FAILURE_CLASSIFICATION_CREDENTIAL_MISSING = "credential_missing"
 
 
 @dataclass
@@ -95,6 +98,72 @@ def _utc_now() -> datetime:
 
 def _normalize_adapter_key(name: str) -> str:
     return str(name or "").strip().lower()
+
+
+# spec: SPEC-INTEG-005
+def _validate_real_mode_guards(
+    adapter_name: str,
+    *,
+    mode: str | None = None,
+    enabled_env: str,
+    credential_envs: tuple[str, ...] | list[str] | set[str] = (),
+    allowed_envs: tuple[str, ...] | list[str] | set[str] = ("staging",),
+) -> dict[str, Any]:
+    """Return secret-free real-mode readiness for the canonical four-guard model."""
+    normalized_adapter = _normalize_adapter_key(adapter_name)
+    configured_mode = str(
+        mode if mode is not None else os.getenv("INTEGRATION_MODE", SIMULATION_MODE)
+    ).strip().lower()
+    soar_env = os.getenv("SOAR_ENV", "").strip().lower()
+    allowed_env_values = {str(value).strip().lower() for value in allowed_envs if str(value).strip()}
+    enabled_value = os.getenv(enabled_env, "")
+    adapter_enabled = str(enabled_value or "").strip().lower() in {"1", "true", "yes", "on"}
+    credential_names = tuple(str(name).strip() for name in credential_envs if str(name).strip())
+    credential_configured = {
+        name: bool(os.getenv(name, "").strip()) for name in credential_names
+    }
+
+    missing_guards: list[str] = []
+    if configured_mode != REAL_MODE:
+        missing_guards.append("INTEGRATION_MODE")
+    if soar_env not in allowed_env_values:
+        missing_guards.append("SOAR_ENV")
+    if not adapter_enabled:
+        missing_guards.append(enabled_env)
+    missing_guards.extend(
+        name for name, configured in credential_configured.items() if not configured
+    )
+
+    real_mode_allowed = not missing_guards
+    if real_mode_allowed:
+        status = "ready"
+        failure_classification = None
+    elif any(name in credential_configured for name in missing_guards):
+        status = (
+            f"blocked: {normalized_adapter} real mode requires guard(s): "
+            f"{', '.join(missing_guards)}"
+        )
+        failure_classification = FAILURE_CLASSIFICATION_CREDENTIAL_MISSING
+    else:
+        status = (
+            f"blocked: {normalized_adapter} real mode requires guard(s): "
+            f"{', '.join(missing_guards)}"
+        )
+        failure_classification = FAILURE_CLASSIFICATION_GUARD_FAILED
+
+    return {
+        "adapter": normalized_adapter,
+        "configured_mode": configured_mode,
+        "soar_env_allowed": soar_env in allowed_env_values,
+        "adapter_enabled": adapter_enabled,
+        "enabled_env": enabled_env,
+        "credential_envs": list(credential_names),
+        "credential_configured": credential_configured,
+        "missing_guards": missing_guards,
+        "real_mode_allowed": real_mode_allowed,
+        "real_mode_status": status if configured_mode == REAL_MODE else "simulation",
+        "failure_classification": failure_classification,
+    }
 
 
 def _get_circuit_state(adapter_name: str) -> _SimulatedCircuitBreakerState:

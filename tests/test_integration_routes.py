@@ -207,7 +207,8 @@ def test_integration_status_reports_real_mode_fail_closed(client, mock_db, monke
     assert data["real_mode_enabled"] is False
     assert data["real_mode_allowed"] is False
     assert data["real_mode_ready"] is False
-    assert "staging allow flag" in data["real_mode_status"]
+    assert "SOAR_ENV" in data["real_mode_status"]
+    assert "SOAR_REAL_SLACK_ENABLED" in data["real_mode_status"]
 
 
 def test_integration_status_slack_real_readiness_uses_safe_booleans(
@@ -257,7 +258,7 @@ def test_integration_status_slack_missing_webhook_not_ready(client, mock_db, mon
     data = resp.get_json()
     assert data["mode"] == "simulation"
     assert data["slack_configured"] is False
-    assert data["real_mode_allowed"] is True
+    assert data["real_mode_allowed"] is False
     assert data["real_mode_ready"] is False
     adapters = {adapter["name"]: adapter for adapter in data["adapters"]}
     assert adapters["slack"]["webhook_configured"] is False
@@ -311,7 +312,7 @@ def test_integration_status_teams_missing_webhook_not_ready(client, mock_db, mon
     data = resp.get_json()
     assert data["mode"] == "simulation"
     assert data["teams_configured"] is False
-    assert data["real_mode_allowed"] is True
+    assert data["real_mode_allowed"] is False
     assert data["real_mode_ready"] is False
     adapters = {adapter["name"]: adapter for adapter in data["adapters"]}
     assert adapters["teams"]["webhook_configured"] is False

@@ -353,7 +353,8 @@ def test_non_simulation_integration_mode_fails_closed(postgres_db, monkeypatch, 
     entry = row["steps_log"][0]
     assert entry["status"] == "failed"
     assert entry["error"]["code"] == "adapter_simulation_failed"
-    assert "real integration mode is not implemented" in entry["message"]
+    assert "real mode failed closed" in entry["message"]
+    assert "SOAR_ENV" in entry["message"]
     assert entry["output"]["simulated"] is True
     assert entry["output"]["executed"] is False
     assert "circuit_breaker" in entry["output"]
