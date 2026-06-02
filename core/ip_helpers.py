@@ -10,6 +10,7 @@ from core.db import create_blocked_ip_record, get_db_connection
 geo_cache = {}
 REPUTATION_CACHE = {}
 ABUSEIPDB_API_KEY = os.getenv("SIEM_ABUSEIPDB_API_KEY") or os.getenv("ABUSEIPDB_API_KEY")
+CORRELATION_BONUS_CAP = 8
 
 
 def _get_reputation_label(score):
@@ -74,6 +75,23 @@ def get_ip_reputation(source_ip, cur=None):
 
         cur.execute(
             """
+            SELECT alert_type, COUNT(*)
+            FROM alerts
+            WHERE source_ip = %s
+              AND alert_type IN (
+                  'correlated_activity',
+                  'spray_then_success_pattern',
+                  'web_to_app_attack_pattern',
+                  'cloud_app_error_pattern'
+              )
+            GROUP BY alert_type
+            """,
+            (source_ip,),
+        )
+        correlation_alert_counts = {row[0]: row[1] for row in cur.fetchall()}
+
+        cur.execute(
+            """
             SELECT COUNT(*)
             FROM blocked_ips
             WHERE ip_address = %s
@@ -115,6 +133,24 @@ def get_ip_reputation(source_ip, cur=None):
                 "summary_phrase": "High request rate",
             },
         }
+        correlation_signal_config = {
+            "correlated_activity": {
+                "weight": 4,
+                "label": "Correlated Activity",
+            },
+            "spray_then_success_pattern": {
+                "weight": 5,
+                "label": "Spray Then Success Pattern",
+            },
+            "web_to_app_attack_pattern": {
+                "weight": 6,
+                "label": "Web To App Attack Pattern",
+            },
+            "cloud_app_error_pattern": {
+                "weight": 4,
+                "label": "Cloud App Error Pattern",
+            },
+        }
 
         contributing_signals = []
         reputation_score = 0
@@ -134,6 +170,45 @@ def get_ip_reputation(source_ip, cur=None):
                     "weight": config["weight"],
                     "total": total_weight,
                     "summary_phrase": config["summary_phrase"],
+                }
+            )
+
+        correlation_alert_types = []
+        raw_correlation_bonus = 0
+
+        for signal_key, config in correlation_signal_config.items():
+            count = int(correlation_alert_counts.get(signal_key, 0) or 0)
+            if count <= 0:
+                continue
+
+            raw_total = count * config["weight"]
+            raw_correlation_bonus += raw_total
+            correlation_alert_types.append(
+                {
+                    "alert_type": signal_key,
+                    "label": config["label"],
+                    "count": count,
+                    "weight": config["weight"],
+                    "raw_total": raw_total,
+                }
+            )
+
+        if raw_correlation_bonus > 0:
+            applied_correlation_bonus = min(raw_correlation_bonus, CORRELATION_BONUS_CAP)
+            reputation_score += applied_correlation_bonus
+            contributing_signals.append(
+                {
+                    "signal": "correlation_escalation_bonus",
+                    "label": "Correlation Escalation Bonus",
+                    "count": sum(item["count"] for item in correlation_alert_types),
+                    "weight": "capped",
+                    "total": applied_correlation_bonus,
+                    "raw_total": raw_correlation_bonus,
+                    "applied_total": applied_correlation_bonus,
+                    "cap": CORRELATION_BONUS_CAP,
+                    "cap_applied": raw_correlation_bonus > applied_correlation_bonus,
+                    "correlation_alert_types": correlation_alert_types,
+                    "summary_phrase": "Correlated attack pattern activity",
                 }
             )
 
