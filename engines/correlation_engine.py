@@ -1,7 +1,64 @@
 from flask import current_app
+from psycopg2.extras import Json
 
 from engines.detection_config import CORRELATION_WINDOW_MINUTES
 from core.ip_helpers import determine_response_action, lookup_ip_reputation
+
+
+def _dedupe_preserve_order(values):
+    seen = set()
+    ordered = []
+    for value in values:
+        if value is None:
+            continue
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def _contributing_fields_from_rows(rows):
+    contributing_alert_ids = []
+    contributing_alert_types = []
+    contributing_sources = []
+    contributing_source_types = []
+    for row in rows:
+        contributing_alert_ids.append(row[0])
+        contributing_alert_types.append(row[1])
+        if row[2] is not None:
+            contributing_sources.append(row[2])
+        if row[3] is not None:
+            contributing_source_types.append(row[3])
+    return {
+        "contributing_alert_ids": contributing_alert_ids,
+        "contributing_alert_types": _dedupe_preserve_order(contributing_alert_types),
+        "contributing_sources": _dedupe_preserve_order(contributing_sources),
+        "contributing_source_types": _dedupe_preserve_order(contributing_source_types),
+    }
+
+
+def _build_correlated_activity_context(rows):
+    contributing = _contributing_fields_from_rows(rows)
+    return {
+        "correlation_type": "correlated_activity",
+        "matched_rule_id": "correlated_activity",
+        "matched_window_minutes": CORRELATION_WINDOW_MINUTES,
+        "matched_alert_count": len(rows),
+        **contributing,
+    }
+
+
+def _build_targeted_correlation_context(rule, qualifying_rows, matched_groups):
+    contributing = _contributing_fields_from_rows(qualifying_rows)
+    return {
+        "correlation_type": "targeted_correlation",
+        "matched_rule_id": rule["alert_type"],
+        "matched_window_minutes": rule["window_minutes"],
+        "matched_alert_count": len(qualifying_rows),
+        "matched_groups": list(matched_groups),
+        **contributing,
+    }
 
 
 def _alert_result(alert_id, source_ip, response_action, severity, alert_type, source, source_type):
@@ -122,6 +179,7 @@ def generate_correlated_activity_alerts(cur, conn, source_ip):
 
     alert_types_text = ", ".join(alert_types)
     message = f"Multi-source suspicious activity detected from {source_ip} involving: {alert_types_text}"
+    alert_context = _build_correlated_activity_context(rows)
 
     cur.execute(
         """
@@ -142,9 +200,10 @@ def generate_correlated_activity_alerts(cur, conn, source_ip):
             reputation_score,
             reputation_label,
             reputation_source,
-            reputation_summary
+            reputation_summary,
+            context
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             source_ip,
@@ -164,6 +223,7 @@ def generate_correlated_activity_alerts(cur, conn, source_ip):
             reputation_label,
             reputation_source,
             reputation_summary,
+            Json(alert_context),
         ),
     )
 
@@ -313,6 +373,8 @@ def generate_targeted_correlation_alerts(cur, conn, source_ip):
         reputation_source = reputation["reputation_source"]
         reputation_summary = reputation["reputation_summary"]
 
+        alert_context = _build_targeted_correlation_context(rule, qualifying_rows, matched_groups)
+
         cur.execute(
             """
             INSERT INTO alerts (
@@ -332,9 +394,10 @@ def generate_targeted_correlation_alerts(cur, conn, source_ip):
                 reputation_score,
                 reputation_label,
                 reputation_source,
-                reputation_summary
+                reputation_summary,
+                context
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 source_ip,
@@ -354,6 +417,7 @@ def generate_targeted_correlation_alerts(cur, conn, source_ip):
                 reputation_label,
                 reputation_source,
                 reputation_summary,
+                Json(alert_context),
             ),
         )
 

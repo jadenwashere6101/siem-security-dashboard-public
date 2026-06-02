@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 import siem_backend
+from psycopg2.extras import Json
 
 
 ADMIN_USER = "testadmin"
@@ -134,6 +135,104 @@ def test_get_alerts_correlation_alerts_include_correlation_contract_fields(clien
     correlation_alert = correlation_alerts[0]
     assert "is_correlation_alert" in correlation_alert
     assert "correlated_alert_types" in correlation_alert
+
+
+def test_get_alerts_prefers_structured_context_over_message_parsing(client, postgres_db):
+    conn, cur = postgres_db
+    source_ip = "198.51.100.217"
+    structured_context = {
+        "correlation_type": "correlated_activity",
+        "matched_rule_id": "correlated_activity",
+        "matched_window_minutes": 10,
+        "matched_alert_count": 2,
+        "contributing_alert_types": ["port_scan_threshold", "failed_login_threshold"],
+        "contributing_alert_ids": [901, 902],
+        "contributing_sources": ["nginx", "bank_app"],
+        "contributing_source_types": ["web_log", "custom"],
+    }
+    cur.execute(
+        """
+        INSERT INTO alerts (
+            alert_type,
+            severity,
+            source_ip,
+            source,
+            source_type,
+            message,
+            status,
+            context
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            "correlated_activity",
+            "high",
+            source_ip,
+            "bank_app",
+            "custom",
+            (
+                f"Multi-source suspicious activity detected from {source_ip} "
+                "involving: legacy_only_type"
+            ),
+            "open",
+            Json(structured_context),
+        ),
+    )
+    conn.commit()
+
+    _login_as_super_admin(client)
+    resp = _fetch_alerts_response(client, conn)
+
+    assert resp.status_code == 200
+    alert = _alert_by_type(resp.get_json(), "correlated_activity")
+    assert alert["context"] == structured_context
+    assert alert["is_correlation_alert"] is True
+    assert alert["correlated_alert_types"] == ["port_scan_threshold", "failed_login_threshold"]
+    assert alert["correlated_alert_count"] == 2
+    assert alert["correlation_context"]["contributing_alert_ids"] == [901, 902]
+
+
+def test_get_alerts_targeted_correlation_with_empty_context_does_not_fabricate_details(
+    client, postgres_db
+):
+    conn, cur = postgres_db
+    _insert_alert(
+        cur,
+        alert_type="web_to_app_attack_pattern",
+        source_ip="198.51.100.218",
+        message="Web-to-app attack pattern detected from 198.51.100.218",
+        severity="critical",
+    )
+    conn.commit()
+
+    _login_as_super_admin(client)
+    resp = _fetch_alerts_response(client, conn)
+
+    assert resp.status_code == 200
+    alert = _alert_by_type(resp.get_json(), "web_to_app_attack_pattern")
+    assert alert.get("context") == {}
+    assert "is_correlation_alert" not in alert
+    assert "correlated_alert_types" not in alert
+    assert "correlation_context" not in alert
+
+
+def test_get_alerts_non_correlation_alert_exposes_empty_context(client, postgres_db):
+    conn, cur = postgres_db
+    _insert_alert(
+        cur,
+        alert_type="failed_login_threshold",
+        source_ip="198.51.100.219",
+        message="Failed login threshold exceeded",
+    )
+    conn.commit()
+
+    _login_as_super_admin(client)
+    resp = _fetch_alerts_response(client, conn)
+
+    assert resp.status_code == 200
+    alert = _alert_by_type(resp.get_json(), "failed_login_threshold")
+    assert alert.get("context") == {}
+    assert "is_correlation_alert" not in alert
 
 
 def test_get_alerts_mitre_fields_include_expected_known_mappings(client, postgres_db):

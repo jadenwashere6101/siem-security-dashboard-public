@@ -156,7 +156,7 @@ def test_schema_snapshot_marker_matches_latest_migration():
         migrations_dir=repo_root / "migrations",
     )
 
-    assert version == 10
+    assert version == 11
 
 
 def test_schema_snapshot_validator_rejects_missing_marker(tmp_path):
@@ -539,6 +539,25 @@ def test_soar_notification_delivery_migration_scope():
         assert column in sql
     for index in expected_indexes:
         assert index in sql
+
+
+def test_alerts_context_migration_scope():
+    migration_path = (
+        Path(__file__).resolve().parent.parent / "migrations" / "0011_alerts_context.sql"
+    )
+    sql = migration_path.read_text(encoding="utf-8")
+
+    assert "ALTER TABLE alerts" in sql
+    assert "ADD COLUMN IF NOT EXISTS context JSONB NOT NULL DEFAULT '{}'::jsonb" in sql
+    assert "CREATE TABLE" not in sql.upper()
+    assert "DROP" not in sql.upper()
+
+
+def test_schema_snapshot_includes_alerts_context_column():
+    schema_path = Path(__file__).resolve().parent.parent / "schema.sql"
+    sql = schema_path.read_text(encoding="utf-8")
+
+    assert "context JSONB NOT NULL DEFAULT '{}'::jsonb" in sql
 
 
 def test_soar_dead_letters_migration_scope():

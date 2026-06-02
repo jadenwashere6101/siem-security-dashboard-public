@@ -2,9 +2,8 @@ from unittest.mock import patch
 
 import siem_backend
 import engines.correlation_engine as backend_correlation_engine
+from engines.detection_config import CORRELATION_WINDOW_MINUTES
 from helpers import enrichment_helpers
-
-
 REPUTATION = {
     "reputation_score": 65,
     "reputation_label": "medium-risk",
@@ -97,7 +96,8 @@ def fetch_correlated_alert(cur, source_ip):
             reputation_score,
             reputation_label,
             reputation_source,
-            reputation_summary
+            reputation_summary,
+            context
         FROM alerts
         WHERE source_ip = %s
           AND alert_type = 'correlated_activity'
@@ -106,6 +106,24 @@ def fetch_correlated_alert(cur, source_ip):
         (source_ip,),
     )
     return cur.fetchone()
+
+
+def fetch_open_prerequisite_alerts(cur, source_ip):
+    cur.execute(
+        """
+        SELECT id, alert_type, source, source_type
+        FROM alerts
+        WHERE source_ip = %s
+          AND status = 'open'
+          AND alert_type IN (
+              'failed_login_threshold',
+              'port_scan_threshold'
+          )
+        ORDER BY created_at DESC
+        """,
+        (source_ip,),
+    )
+    return cur.fetchall()
 
 
 def assert_no_response_action_link(cur, source_ip, alert_type):
@@ -184,6 +202,17 @@ def test_correlated_activity_fires_with_two_qualifying_open_alerts(postgres_db):
     assert alert[15] == "medium-risk"
     assert alert[16] == "test-reputation"
     assert alert[17] == "Deterministic test reputation"
+    prerequisites = fetch_open_prerequisite_alerts(cur, source_ip)
+    context = alert[18]
+    assert context["correlation_type"] == "correlated_activity"
+    assert context["matched_rule_id"] == "correlated_activity"
+    assert context["matched_window_minutes"] == CORRELATION_WINDOW_MINUTES
+    assert context["matched_alert_count"] == 2
+    assert context["contributing_alert_ids"] == [row[0] for row in prerequisites]
+    assert context["contributing_alert_types"] == ["port_scan_threshold", "failed_login_threshold"]
+    assert context["contributing_sources"] == ["nginx", "bank_app"]
+    assert context["contributing_source_types"] == ["web_log", "custom"]
+    assert "raw_payload" not in context
     assert_no_response_action_link(cur, source_ip, "correlated_activity")
 
 
@@ -244,6 +273,7 @@ def test_enrich_alert_with_correlation_context_parses_involving_message():
             "Multi-source suspicious activity detected from 198.51.100.116 "
             "involving: port_scan_threshold, failed_login_threshold"
         ),
+        "context": {},
     }
 
     enriched = enrichment_helpers.enrich_alert_with_correlation_context(alert)
@@ -254,3 +284,88 @@ def test_enrich_alert_with_correlation_context_parses_involving_message():
         "failed_login_threshold",
     ]
     assert enriched["correlated_alert_count"] == 2
+    assert "correlation_context" not in enriched
+
+
+def test_enrich_alert_with_correlation_context_prefers_structured_context():
+    alert = {
+        "alert_type": "correlated_activity",
+        "message": "Multi-source suspicious activity detected involving: legacy_type",
+        "context": {
+            "correlation_type": "correlated_activity",
+            "matched_rule_id": "correlated_activity",
+            "matched_window_minutes": 10,
+            "matched_alert_count": 2,
+            "contributing_alert_types": ["port_scan_threshold", "failed_login_threshold"],
+            "contributing_alert_ids": [11, 12],
+            "contributing_sources": ["nginx", "bank_app"],
+            "contributing_source_types": ["web_log", "custom"],
+        },
+    }
+
+    enriched = enrichment_helpers.enrich_alert_with_correlation_context(alert)
+
+    assert enriched["is_correlation_alert"] is True
+    assert enriched["correlated_alert_types"] == ["port_scan_threshold", "failed_login_threshold"]
+    assert enriched["correlated_alert_count"] == 2
+    assert enriched["correlation_context"]["matched_rule_id"] == "correlated_activity"
+    assert enriched["correlation_context"]["contributing_alert_ids"] == [11, 12]
+
+
+def test_enrich_alert_with_correlation_context_ignores_malformed_context():
+    alert = {
+        "alert_type": "correlated_activity",
+        "message": (
+            "Multi-source suspicious activity detected from 198.51.100.116 "
+            "involving: port_scan_threshold"
+        ),
+        "context": {"contributing_alert_types": "not-a-list"},
+    }
+
+    enriched = enrichment_helpers.enrich_alert_with_correlation_context(alert)
+
+    assert enriched["is_correlation_alert"] is True
+    assert enriched["correlated_alert_types"] == ["port_scan_threshold"]
+
+
+def test_non_correlation_alert_with_empty_context_has_no_correlation_fields():
+    alert = {
+        "alert_type": "failed_login_threshold",
+        "message": "Failed login threshold exceeded",
+        "context": {},
+    }
+
+    enriched = enrichment_helpers.enrich_alert_with_correlation_context(alert)
+
+    assert "is_correlation_alert" not in enriched
+    assert "correlated_alert_types" not in enriched
+    assert "correlation_context" not in enriched
+
+
+def test_alerts_context_defaults_to_empty_object(postgres_db):
+    conn, cur = postgres_db
+    cur.execute(
+        """
+        INSERT INTO alerts (
+            alert_type,
+            severity,
+            source_ip,
+            source,
+            source_type,
+            message,
+            status
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        RETURNING context
+        """,
+        (
+            "failed_login_threshold",
+            "high",
+            "198.51.100.117",
+            "bank_app",
+            "custom",
+            "Detection alert without explicit context",
+            "open",
+        ),
+    )
+    assert cur.fetchone()[0] == {}

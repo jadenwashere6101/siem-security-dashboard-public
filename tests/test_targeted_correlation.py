@@ -96,7 +96,8 @@ def fetch_targeted_alert(cur, source_ip, alert_type):
             reputation_score,
             reputation_label,
             reputation_source,
-            reputation_summary
+            reputation_summary,
+            context
         FROM alerts
         WHERE source_ip = %s
           AND alert_type = %s
@@ -105,6 +106,20 @@ def fetch_targeted_alert(cur, source_ip, alert_type):
         (source_ip, alert_type),
     )
     return cur.fetchone()
+
+
+def _assert_targeted_context(context, *, matched_rule_id, window_minutes, matched_groups):
+    assert context["correlation_type"] == "targeted_correlation"
+    assert context["matched_rule_id"] == matched_rule_id
+    assert context["matched_window_minutes"] == window_minutes
+    assert context["matched_alert_count"] >= 2
+    assert set(context["matched_groups"]) == set(matched_groups)
+    assert len(context["matched_groups"]) == len(matched_groups)
+    assert context["contributing_alert_ids"]
+    assert context["contributing_alert_types"]
+    assert context["contributing_sources"]
+    assert context["contributing_source_types"]
+    assert "raw_payload" not in context
 
 
 def assert_no_response_action_link(cur, source_ip, alert_type):
@@ -179,6 +194,12 @@ def test_targeted_correlation_web_to_app_attack_pattern(postgres_db):
     assert alert[15] == "medium-risk"
     assert alert[16] == "test-reputation"
     assert alert[17] == "Deterministic test reputation"
+    _assert_targeted_context(
+        alert[18],
+        matched_rule_id="web_to_app_attack_pattern",
+        window_minutes=10,
+        matched_groups=["nginx_web", "bank_app_custom"],
+    )
     assert_no_response_action_link(cur, source_ip, "web_to_app_attack_pattern")
 
 
@@ -227,6 +248,12 @@ def test_targeted_correlation_spray_then_success_pattern(postgres_db):
     assert alert[6] == f"Password spray followed by successful login from {source_ip}"
     assert alert[8] == "flag_high_priority"
     assert alert[9] == "pending"
+    _assert_targeted_context(
+        alert[18],
+        matched_rule_id="spray_then_success_pattern",
+        window_minutes=15,
+        matched_groups=["password_spraying_threshold", "successful_login_after_spray"],
+    )
     assert_no_response_action_link(cur, source_ip, "spray_then_success_pattern")
 
 
@@ -281,6 +308,12 @@ def test_targeted_correlation_cloud_app_error_pattern(postgres_db):
     assert alert[9] == "pending"
     assert alert[10] == "United States"
     assert alert[11] == "New York"
+    _assert_targeted_context(
+        alert[18],
+        matched_rule_id="cloud_app_error_pattern",
+        window_minutes=10,
+        matched_groups=["azure_cloud", "nginx_web"],
+    )
     assert_no_response_action_link(cur, source_ip, "cloud_app_error_pattern")
 
 

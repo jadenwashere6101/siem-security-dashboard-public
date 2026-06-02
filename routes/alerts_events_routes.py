@@ -49,7 +49,8 @@ def get_alerts():
                 response_action,
                 response_status,
                 source,
-                source_type
+                source_type,
+                context
             FROM alerts
             ORDER BY created_at DESC
         """)
@@ -87,6 +88,7 @@ def get_alerts():
                     "response_status": row[16],
                     "source": row[17] or "unknown",
                     "source_type": row[18] or "legacy",
+                    "context": row[19] if row[19] is not None else {},
                     })
                 )
             )

@@ -1,0 +1,2 @@
+ALTER TABLE alerts
+ADD COLUMN IF NOT EXISTS context JSONB NOT NULL DEFAULT '{}'::jsonb;

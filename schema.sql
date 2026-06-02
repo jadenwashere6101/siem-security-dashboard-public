@@ -1,4 +1,4 @@
--- Schema snapshot version: 0010
+-- Schema snapshot version: 0011
 
 CREATE TABLE IF NOT EXISTS events (
     id SERIAL PRIMARY KEY,
@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS alerts (
     reputation_summary TEXT,
     response_action TEXT,
     response_status TEXT,
+    context JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE TABLE IF NOT EXISTS response_actions_log (
