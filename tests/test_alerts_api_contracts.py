@@ -65,6 +65,22 @@ def _fetch_alerts_response(client, conn):
         return client.get("/alerts")
 
 
+def _alert_by_type(alerts, alert_type):
+    return next(alert for alert in alerts if alert.get("alert_type") == alert_type)
+
+
+def _assert_mitre(alert, technique_id, technique_name, tactic):
+    assert alert["mitre_technique_id"] == technique_id
+    assert alert["mitre_technique_name"] == technique_name
+    assert alert["mitre_tactic"] == tactic
+
+
+def _assert_null_mitre(alert):
+    for field in ("mitre_technique_id", "mitre_technique_name", "mitre_tactic"):
+        assert field in alert
+        assert alert[field] is None
+
+
 def test_get_alerts_without_session_returns_401(client):
     resp = client.get("/alerts")
     assert resp.status_code == 401
@@ -120,18 +136,72 @@ def test_get_alerts_correlation_alerts_include_correlation_contract_fields(clien
     assert "correlated_alert_types" in correlation_alert
 
 
-def test_get_alerts_mitre_fields_exist_and_unknown_mapping_keeps_shape(client, postgres_db):
+def test_get_alerts_mitre_fields_include_expected_known_mappings(client, postgres_db):
+    conn, cur = postgres_db
+    mapped_alerts = (
+        ("failed_login_threshold", "198.51.100.203", "T1110", "Brute Force", "Credential Access"),
+        ("port_scan_threshold", "198.51.100.204", "T1046", "Network Service Discovery", "Discovery"),
+        ("suspicious_ip_reputation", "198.51.100.205", "T1595", "Active Scanning", "Reconnaissance"),
+        ("password_spraying_threshold", "198.51.100.206", "T1110.003", "Password Spraying", "Credential Access"),
+        ("successful_login_after_spray", "198.51.100.207", "T1110.003", "Password Spraying", "Credential Access"),
+        ("spray_then_success_pattern", "198.51.100.208", "T1110.003", "Password Spraying", "Credential Access"),
+    )
+    for alert_type, source_ip, _technique_id, _technique_name, _tactic in mapped_alerts:
+        _insert_alert(
+            cur,
+            alert_type=alert_type,
+            source_ip=source_ip,
+            message=f"Known MITRE mapping alert: {alert_type}",
+        )
+    conn.commit()
+
+    _login_as_super_admin(client)
+    resp = _fetch_alerts_response(client, conn)
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert isinstance(data, list)
+
+    for alert_type, _source_ip, technique_id, technique_name, tactic in mapped_alerts:
+        _assert_mitre(_alert_by_type(data, alert_type), technique_id, technique_name, tactic)
+
+
+def test_get_alerts_intentionally_unmapped_mitre_alerts_return_null_fields(client, postgres_db):
+    conn, cur = postgres_db
+    intentionally_unmapped_alert_types = (
+        "http_error_threshold",
+        "application_exception_threshold",
+        "high_request_rate_threshold",
+        "correlated_activity",
+        "web_to_app_attack_pattern",
+        "cloud_app_error_pattern",
+    )
+    for index, alert_type in enumerate(intentionally_unmapped_alert_types, start=210):
+        _insert_alert(
+            cur,
+            alert_type=alert_type,
+            source_ip=f"198.51.100.{index}",
+            message=f"Intentionally unmapped MITRE alert: {alert_type}",
+        )
+    conn.commit()
+
+    _login_as_super_admin(client)
+    resp = _fetch_alerts_response(client, conn)
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert isinstance(data, list)
+
+    for alert_type in intentionally_unmapped_alert_types:
+        _assert_null_mitre(_alert_by_type(data, alert_type))
+
+
+def test_get_alerts_unknown_mitre_mapping_keeps_null_field_shape(client, postgres_db):
     conn, cur = postgres_db
     _insert_alert(
         cur,
-        alert_type="failed_login_threshold",
-        source_ip="198.51.100.203",
-        message="Known MITRE mapping alert",
-    )
-    _insert_alert(
-        cur,
         alert_type="custom_unmapped_alert",
-        source_ip="198.51.100.204",
+        source_ip="198.51.100.216",
         message="Unknown MITRE mapping alert",
     )
     conn.commit()
@@ -143,9 +213,4 @@ def test_get_alerts_mitre_fields_exist_and_unknown_mapping_keeps_shape(client, p
     data = resp.get_json()
     assert isinstance(data, list)
 
-    known_alert = next(alert for alert in data if alert.get("alert_type") == "failed_login_threshold")
-    unknown_alert = next(alert for alert in data if alert.get("alert_type") == "custom_unmapped_alert")
-
-    for field in ("mitre_technique_id", "mitre_technique_name", "mitre_tactic"):
-        assert field in known_alert
-        assert field in unknown_alert
+    _assert_null_mitre(_alert_by_type(data, "custom_unmapped_alert"))

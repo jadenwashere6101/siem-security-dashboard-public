@@ -24,6 +24,22 @@ MITRE_ATTACK_MAPPINGS = {
         "mitre_technique_name": "Password Spraying",
         "mitre_tactic": "Credential Access",
     },
+    "spray_then_success_pattern": {
+        "mitre_technique_id": "T1110.003",
+        "mitre_technique_name": "Password Spraying",
+        "mitre_tactic": "Credential Access",
+    },
+}
+
+# These alert types intentionally keep null MITRE fields. Their current
+# semantics are too broad to map to a specific ATT&CK technique confidently.
+INTENTIONALLY_UNMAPPED_MITRE_ALERT_TYPES = {
+    "http_error_threshold",
+    "application_exception_threshold",
+    "high_request_rate_threshold",
+    "correlated_activity",
+    "web_to_app_attack_pattern",
+    "cloud_app_error_pattern",
 }
 
 
