@@ -218,7 +218,10 @@ def test_ingest_normalized_event_runs_detection_then_correlation_on_same_cursor(
             cur,
         )
 
-    assert len(port_scan_alerts) == 1
+    assert len(port_scan_alerts) == 2
+    assert port_scan_alerts[0]["alert_id"] is not None
+    assert port_scan_alerts[0]["source_ip"] == source_ip
+    assert port_scan_alerts[1]["alert_type"] == "correlated_activity"
 
     cur.execute(
         """
@@ -285,10 +288,12 @@ def test_ingest_normalized_event_orchestration_ordering_uses_detection_before_co
     def fake_generic_correlation(_cur, _conn, source_ip):
         calls.append(("generic_correlation", source_ip))
         shared_ids.append((id(cur), id(conn), id(_cur), id(_conn)))
+        return [{"alert_id": 201, "source_ip": source_ip, "response_action": "monitor", "severity": "high"}]
 
     def fake_targeted_correlation(_cur, _conn, source_ip):
         calls.append(("targeted_correlation", source_ip))
         shared_ids.append((id(cur), id(conn), id(_cur), id(_conn)))
+        return [{"alert_id": 202, "source_ip": source_ip, "response_action": "monitor", "severity": "critical"}]
 
     with patch("engines.ingest_engine._generate_port_scan_alerts_core", side_effect=fake_port_scan), \
          patch("engines.ingest_engine.generate_correlated_activity_alerts", side_effect=fake_generic_correlation), \
@@ -299,7 +304,11 @@ def test_ingest_normalized_event_orchestration_ordering_uses_detection_before_co
             cur,
         )
 
-    assert result == [{"source_ip": "198.51.100.136"}]
+    assert result == [
+        {"source_ip": "198.51.100.136"},
+        {"alert_id": 201, "source_ip": "198.51.100.136", "response_action": "monitor", "severity": "high"},
+        {"alert_id": 202, "source_ip": "198.51.100.136", "response_action": "monitor", "severity": "critical"},
+    ]
     assert calls == [
         ("detect", "nginx", "web_log"),
         ("generic_correlation", "198.51.100.136"),

@@ -126,6 +126,55 @@ def test_enqueue_receives_empty_alerts_list(client, monkeypatch):
     assert enqueue_mock.call_args[0][0] == []
 
 
+def test_enqueue_receives_correlation_alerts_returned_by_ingest_after_commit(client, monkeypatch):
+    monkeypatch.setenv("SIEM_INGEST_API_KEY", VALID_INGEST_API_KEY)
+    mock_conn = _build_mock_connection()
+    alerts_created = [
+        {"alert_id": 61, "source_ip": "8.8.8.8", "response_action": "monitor", "severity": "medium"},
+        {
+            "alert_id": 62,
+            "source_ip": "8.8.8.8",
+            "response_action": "flag_high_priority",
+            "severity": "high",
+            "alert_type": "correlated_activity",
+        },
+    ]
+    commit_count_at_enqueue = {"value": 0}
+    commit_count_at_playbook = {"value": 0}
+
+    def enqueue_side_effect(received_alerts, conn):
+        commit_count_at_enqueue["value"] = conn.commit.call_count
+        assert received_alerts == alerts_created
+        return []
+
+    def playbook_side_effect(received_alerts, conn):
+        commit_count_at_playbook["value"] = conn.commit.call_count
+        assert received_alerts == alerts_created
+        return {"summary": {"processed_alerts": 2}, "results": []}
+
+    with patch("routes.ingest_routes.get_db_connection", return_value=mock_conn), patch(
+        "routes.ingest_routes.ingest_normalized_event",
+        return_value=alerts_created,
+    ), patch(
+        "routes.ingest_routes.enqueue_committed_alerts",
+        side_effect=enqueue_side_effect,
+    ) as enqueue_mock, patch(
+        "routes.ingest_routes.create_pending_executions_for_committed_alerts",
+        side_effect=playbook_side_effect,
+    ) as playbook_mock:
+        resp = client.post(
+            "/ingest",
+            json=_build_ingest_payload(),
+            headers={"X-API-Key": VALID_INGEST_API_KEY},
+        )
+
+    assert resp.status_code == 201
+    enqueue_mock.assert_called_once()
+    playbook_mock.assert_called_once()
+    assert commit_count_at_enqueue["value"] >= 1
+    assert commit_count_at_playbook["value"] >= 1
+
+
 def test_azure_batch_enqueue_called_once_with_full_alert_list(client, monkeypatch):
     monkeypatch.setenv("AZURE_INGEST_API_KEY", VALID_AZURE_API_KEY)
     mock_conn = _build_mock_connection()

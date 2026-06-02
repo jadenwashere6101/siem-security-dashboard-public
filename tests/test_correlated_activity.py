@@ -108,6 +108,20 @@ def fetch_correlated_alert(cur, source_ip):
     return cur.fetchone()
 
 
+def assert_no_response_action_link(cur, source_ip, alert_type):
+    cur.execute(
+        """
+        SELECT COUNT(*)
+        FROM alerts a
+        JOIN response_actions_log r ON r.alert_id = a.id
+        WHERE a.source_ip = %s
+          AND a.alert_type = %s
+        """,
+        (source_ip, alert_type),
+    )
+    assert cur.fetchone()[0] == 0
+
+
 def test_correlated_activity_fires_with_two_qualifying_open_alerts(postgres_db):
     conn, cur = postgres_db
     source_ip = "198.51.100.112"
@@ -134,10 +148,21 @@ def test_correlated_activity_fires_with_two_qualifying_open_alerts(postgres_db):
     )
 
     with siem_backend.app.app_context(), patch("engines.correlation_engine.lookup_ip_reputation", return_value=REPUTATION):
-        assert backend_correlation_engine.generate_correlated_activity_alerts(cur, conn, source_ip) is True
+        alerts_created = backend_correlation_engine.generate_correlated_activity_alerts(cur, conn, source_ip)
 
     alert = fetch_correlated_alert(cur, source_ip)
     assert alert is not None
+    assert alerts_created == [
+        {
+            "alert_id": alert[0],
+            "source_ip": source_ip,
+            "response_action": "flag_high_priority",
+            "severity": "high",
+            "alert_type": "correlated_activity",
+            "source": "nginx",
+            "source_type": "web_log",
+        }
+    ]
     assert alert[1] == "correlated_activity"
     assert alert[2] == "high"
     assert alert[3] == source_ip
@@ -150,7 +175,7 @@ def test_correlated_activity_fires_with_two_qualifying_open_alerts(postgres_db):
     assert "involving:" in alert[6]
     assert alert[7] == "open"
     assert alert[8] == "flag_high_priority"
-    assert alert[9] == "executed"
+    assert alert[9] == "pending"
     assert alert[10] == "United States"
     assert alert[11] == "New York"
     assert float(alert[12]) == 40.7128
@@ -159,30 +184,7 @@ def test_correlated_activity_fires_with_two_qualifying_open_alerts(postgres_db):
     assert alert[15] == "medium-risk"
     assert alert[16] == "test-reputation"
     assert alert[17] == "Deterministic test reputation"
-
-    cur.execute(
-        """
-        SELECT
-            a.id,
-            r.alert_id,
-            host(r.source_ip),
-            r.action,
-            r.status,
-            r.details
-        FROM alerts a
-        JOIN response_actions_log r ON r.alert_id = a.id
-        WHERE a.source_ip = %s
-          AND a.alert_type = 'correlated_activity'
-        """,
-        (source_ip,),
-    )
-    response_row = cur.fetchone()
-    assert response_row is not None
-    assert response_row[0] == response_row[1]
-    assert response_row[2] == source_ip
-    assert response_row[3] == "flag_high_priority"
-    assert response_row[4] == "executed"
-    assert response_row[5] == "Simulated escalation to SOC"
+    assert_no_response_action_link(cur, source_ip, "correlated_activity")
 
 
 def test_correlated_activity_requires_different_alert_types(postgres_db):
@@ -193,7 +195,7 @@ def test_correlated_activity_requires_different_alert_types(postgres_db):
     insert_open_alert(cur, source_ip=source_ip, alert_type="failed_login_threshold", source="nginx", seconds_ago=1)
 
     with siem_backend.app.app_context(), patch("engines.correlation_engine.lookup_ip_reputation", return_value=REPUTATION):
-        assert backend_correlation_engine.generate_correlated_activity_alerts(cur, conn, source_ip) is False
+        assert backend_correlation_engine.generate_correlated_activity_alerts(cur, conn, source_ip) == []
 
     assert fetch_correlated_alert(cur, source_ip) is None
 
@@ -206,7 +208,7 @@ def test_correlated_activity_requires_distinct_non_unknown_sources(postgres_db):
     insert_open_alert(cur, source_ip=source_ip, alert_type="port_scan_threshold", source="unknown", seconds_ago=1)
 
     with siem_backend.app.app_context(), patch("engines.correlation_engine.lookup_ip_reputation", return_value=REPUTATION):
-        assert backend_correlation_engine.generate_correlated_activity_alerts(cur, conn, source_ip) is False
+        assert backend_correlation_engine.generate_correlated_activity_alerts(cur, conn, source_ip) == []
 
     assert fetch_correlated_alert(cur, source_ip) is None
 
@@ -219,8 +221,8 @@ def test_correlated_activity_duplicate_suppression_keeps_single_open_alert(postg
     insert_open_alert(cur, source_ip=source_ip, alert_type="port_scan_threshold", source="nginx", seconds_ago=1)
 
     with siem_backend.app.app_context(), patch("engines.correlation_engine.lookup_ip_reputation", return_value=REPUTATION):
-        assert backend_correlation_engine.generate_correlated_activity_alerts(cur, conn, source_ip) is True
-        assert backend_correlation_engine.generate_correlated_activity_alerts(cur, conn, source_ip) is False
+        assert len(backend_correlation_engine.generate_correlated_activity_alerts(cur, conn, source_ip)) == 1
+        assert backend_correlation_engine.generate_correlated_activity_alerts(cur, conn, source_ip) == []
 
     cur.execute(
         """

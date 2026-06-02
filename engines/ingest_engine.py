@@ -95,7 +95,7 @@ def ingest_normalized_event(event_dict, conn, cur):
         for alert in alerts_created
         if alert.get("source_ip") is not None
     }:
-        generate_correlated_activity_alerts(cur, conn, correlated_source_ip)
-        generate_targeted_correlation_alerts(cur, conn, correlated_source_ip)
+        alerts_created.extend(generate_correlated_activity_alerts(cur, conn, correlated_source_ip))
+        alerts_created.extend(generate_targeted_correlation_alerts(cur, conn, correlated_source_ip))
 
     return alerts_created

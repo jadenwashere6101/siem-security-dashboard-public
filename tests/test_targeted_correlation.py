@@ -107,18 +107,10 @@ def fetch_targeted_alert(cur, source_ip, alert_type):
     return cur.fetchone()
 
 
-def assert_response_action_link(cur, source_ip, alert_type):
+def assert_no_response_action_link(cur, source_ip, alert_type):
     cur.execute(
         """
-        SELECT
-            a.id,
-            a.response_action,
-            a.response_status,
-            r.alert_id,
-            host(r.source_ip),
-            r.action,
-            r.status,
-            r.details
+        SELECT COUNT(*)
         FROM alerts a
         JOIN response_actions_log r ON r.alert_id = a.id
         WHERE a.source_ip = %s
@@ -126,16 +118,7 @@ def assert_response_action_link(cur, source_ip, alert_type):
         """,
         (source_ip, alert_type),
     )
-    row = cur.fetchone()
-
-    assert row is not None
-    assert row[0] == row[3]
-    assert row[1] == "flag_high_priority"
-    assert row[2] == "executed"
-    assert row[4] == source_ip
-    assert row[5] == "flag_high_priority"
-    assert row[6] == "executed"
-    assert row[7] == "Simulated escalation to SOC"
+    assert cur.fetchone()[0] == 0
 
 
 def test_targeted_correlation_web_to_app_attack_pattern(postgres_db):
@@ -164,10 +147,21 @@ def test_targeted_correlation_web_to_app_attack_pattern(postgres_db):
     )
 
     with siem_backend.app.app_context(), patch("engines.correlation_engine.lookup_ip_reputation", return_value=REPUTATION):
-        backend_correlation_engine.generate_targeted_correlation_alerts(cur, conn, source_ip)
+        alerts_created = backend_correlation_engine.generate_targeted_correlation_alerts(cur, conn, source_ip)
 
     alert = fetch_targeted_alert(cur, source_ip, "web_to_app_attack_pattern")
     assert alert is not None
+    assert alerts_created == [
+        {
+            "alert_id": alert[0],
+            "source_ip": source_ip,
+            "response_action": "flag_high_priority",
+            "severity": "critical",
+            "alert_type": "web_to_app_attack_pattern",
+            "source": "nginx",
+            "source_type": "web_log",
+        }
+    ]
     assert alert[1] == "web_to_app_attack_pattern"
     assert alert[2] == "critical"
     assert alert[3] == source_ip
@@ -176,7 +170,7 @@ def test_targeted_correlation_web_to_app_attack_pattern(postgres_db):
     assert alert[6] == f"Web-to-app attack pattern detected from {source_ip}"
     assert alert[7] == "open"
     assert alert[8] == "flag_high_priority"
-    assert alert[9] == "executed"
+    assert alert[9] == "pending"
     assert alert[10] == "United States"
     assert alert[11] == "New York"
     assert float(alert[12]) == 40.7128
@@ -185,7 +179,7 @@ def test_targeted_correlation_web_to_app_attack_pattern(postgres_db):
     assert alert[15] == "medium-risk"
     assert alert[16] == "test-reputation"
     assert alert[17] == "Deterministic test reputation"
-    assert_response_action_link(cur, source_ip, "web_to_app_attack_pattern")
+    assert_no_response_action_link(cur, source_ip, "web_to_app_attack_pattern")
 
 
 def test_targeted_correlation_spray_then_success_pattern(postgres_db):
@@ -210,10 +204,21 @@ def test_targeted_correlation_spray_then_success_pattern(postgres_db):
     )
 
     with siem_backend.app.app_context(), patch("engines.correlation_engine.lookup_ip_reputation", return_value=REPUTATION):
-        backend_correlation_engine.generate_targeted_correlation_alerts(cur, conn, source_ip)
+        alerts_created = backend_correlation_engine.generate_targeted_correlation_alerts(cur, conn, source_ip)
 
     alert = fetch_targeted_alert(cur, source_ip, "spray_then_success_pattern")
     assert alert is not None
+    assert alerts_created == [
+        {
+            "alert_id": alert[0],
+            "source_ip": source_ip,
+            "response_action": "flag_high_priority",
+            "severity": "critical",
+            "alert_type": "spray_then_success_pattern",
+            "source": "bank_app",
+            "source_type": "custom",
+        }
+    ]
     assert alert[1] == "spray_then_success_pattern"
     assert alert[2] == "critical"
     assert alert[3] == source_ip
@@ -221,8 +226,8 @@ def test_targeted_correlation_spray_then_success_pattern(postgres_db):
     assert alert[5] == "custom"
     assert alert[6] == f"Password spray followed by successful login from {source_ip}"
     assert alert[8] == "flag_high_priority"
-    assert alert[9] == "executed"
-    assert_response_action_link(cur, source_ip, "spray_then_success_pattern")
+    assert alert[9] == "pending"
+    assert_no_response_action_link(cur, source_ip, "spray_then_success_pattern")
 
 
 def test_targeted_correlation_cloud_app_error_pattern(postgres_db):
@@ -251,10 +256,21 @@ def test_targeted_correlation_cloud_app_error_pattern(postgres_db):
     )
 
     with siem_backend.app.app_context(), patch("engines.correlation_engine.lookup_ip_reputation", return_value=REPUTATION):
-        backend_correlation_engine.generate_targeted_correlation_alerts(cur, conn, source_ip)
+        alerts_created = backend_correlation_engine.generate_targeted_correlation_alerts(cur, conn, source_ip)
 
     alert = fetch_targeted_alert(cur, source_ip, "cloud_app_error_pattern")
     assert alert is not None
+    assert alerts_created == [
+        {
+            "alert_id": alert[0],
+            "source_ip": source_ip,
+            "response_action": "flag_high_priority",
+            "severity": "high",
+            "alert_type": "cloud_app_error_pattern",
+            "source": "nginx",
+            "source_type": "web_log",
+        }
+    ]
     assert alert[1] == "cloud_app_error_pattern"
     assert alert[2] == "high"
     assert alert[3] == source_ip
@@ -262,10 +278,10 @@ def test_targeted_correlation_cloud_app_error_pattern(postgres_db):
     assert alert[5] == "web_log"
     assert alert[6] == f"Cloud and web application errors correlated from {source_ip}"
     assert alert[8] == "flag_high_priority"
-    assert alert[9] == "executed"
+    assert alert[9] == "pending"
     assert alert[10] == "United States"
     assert alert[11] == "New York"
-    assert_response_action_link(cur, source_ip, "cloud_app_error_pattern")
+    assert_no_response_action_link(cur, source_ip, "cloud_app_error_pattern")
 
 
 def test_targeted_correlation_duplicate_suppression_keeps_single_open_alert(postgres_db):
@@ -290,8 +306,8 @@ def test_targeted_correlation_duplicate_suppression_keeps_single_open_alert(post
     )
 
     with siem_backend.app.app_context(), patch("engines.correlation_engine.lookup_ip_reputation", return_value=REPUTATION):
-        backend_correlation_engine.generate_targeted_correlation_alerts(cur, conn, source_ip)
-        backend_correlation_engine.generate_targeted_correlation_alerts(cur, conn, source_ip)
+        assert len(backend_correlation_engine.generate_targeted_correlation_alerts(cur, conn, source_ip)) == 1
+        assert backend_correlation_engine.generate_targeted_correlation_alerts(cur, conn, source_ip) == []
 
     cur.execute(
         """

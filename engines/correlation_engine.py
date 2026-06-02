@@ -1,7 +1,19 @@
 from flask import current_app
 
 from engines.detection_config import CORRELATION_WINDOW_MINUTES
-from core.ip_helpers import determine_response_action, execute_response_action, lookup_ip_reputation
+from core.ip_helpers import determine_response_action, lookup_ip_reputation
+
+
+def _alert_result(alert_id, source_ip, response_action, severity, alert_type, source, source_type):
+    return {
+        "alert_id": alert_id,
+        "source_ip": source_ip,
+        "response_action": response_action,
+        "severity": severity,
+        "alert_type": alert_type,
+        "source": source,
+        "source_type": source_type,
+    }
 
 
 # spec: SPEC-INGEST-001
@@ -30,7 +42,7 @@ def generate_correlated_activity_alerts(cur, conn, source_ip):
 
     if cur.fetchone():
         current_app.logger.warning("[CORRELATION] Skipped: duplicate open correlated_activity alert exists | IP: %s", source_ip)
-        return False
+        return []
 
     cur.execute(
         f"""
@@ -70,7 +82,7 @@ def generate_correlated_activity_alerts(cur, conn, source_ip):
         total_qualifying_alerts = cur.fetchone()[0]
         skip_reason = "alerts exist but not within correlation window" if total_qualifying_alerts >= 2 else "not enough qualifying alerts"
         current_app.logger.warning("[CORRELATION] Skipped: %s | IP: %s", skip_reason, source_ip)
-        return False
+        return []
 
     alert_types = []
     known_sources = []
@@ -86,11 +98,11 @@ def generate_correlated_activity_alerts(cur, conn, source_ip):
 
     if len(alert_types) < 2:
         current_app.logger.warning("[CORRELATION] Skipped: not enough distinct alert types | IP: %s", source_ip)
-        return False
+        return []
 
     if len(known_sources) < 2:
         current_app.logger.warning("[CORRELATION] Skipped: not enough distinct known sources | IP: %s", source_ip)
-        return False
+        return []
 
     newest_alert = rows[0]
     source = newest_alert[2] or "unknown"
@@ -158,22 +170,6 @@ def generate_correlated_activity_alerts(cur, conn, source_ip):
     cur.execute("SELECT currval(pg_get_serial_sequence('alerts', 'id'))")
     alert_id = cur.fetchone()[0]
 
-    execution_status = execute_response_action(
-        cur,
-        alert_id,
-        str(source_ip),
-        response_action
-    )
-
-    cur.execute(
-        """
-        UPDATE alerts
-        SET response_status = %s
-        WHERE id = %s
-        """,
-        (execution_status, alert_id)
-    )
-
     current_app.logger.info(
         "[CORRELATION] Success | IP: %s | alerts=%d | types=%s | sources=%s",
         source_ip,
@@ -182,10 +178,11 @@ def generate_correlated_activity_alerts(cur, conn, source_ip):
         ", ".join(known_sources),
     )
 
-    return True
+    return [_alert_result(alert_id, source_ip, response_action, "high", "correlated_activity", source, source_type)]
 
 
 def generate_targeted_correlation_alerts(cur, conn, source_ip):
+    alerts_created = []
     rules = (
         {
             "alert_type": "web_to_app_attack_pattern",
@@ -363,22 +360,6 @@ def generate_targeted_correlation_alerts(cur, conn, source_ip):
         cur.execute("SELECT currval(pg_get_serial_sequence('alerts', 'id'))")
         alert_id = cur.fetchone()[0]
 
-        execution_status = execute_response_action(
-            cur,
-            alert_id,
-            str(source_ip),
-            response_action
-        )
-
-        cur.execute(
-            """
-            UPDATE alerts
-            SET response_status = %s
-            WHERE id = %s
-            """,
-            (execution_status, alert_id)
-        )
-
         current_app.logger.info(
             "[TARGETED_CORRELATION] Created rule=%s | IP: %s | matched_alerts=%d | sources=%s",
             rule_alert_type,
@@ -386,3 +367,17 @@ def generate_targeted_correlation_alerts(cur, conn, source_ip):
             len(qualifying_rows),
             ", ".join(sorted({str(row[2]) for row in qualifying_rows if row[2]})),
         )
+
+        alerts_created.append(
+            _alert_result(
+                alert_id,
+                source_ip,
+                response_action,
+                rule["severity"],
+                rule_alert_type,
+                source,
+                source_type,
+            )
+        )
+
+    return alerts_created
