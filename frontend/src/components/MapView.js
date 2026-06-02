@@ -6,6 +6,11 @@ import {
   Marker,
   ZoomableGroup
 } from "react-simple-maps";
+import {
+  getBehavioralReputation,
+  getExternalReputation,
+  getReputationBadgeStyle,
+} from "../utils/alertDisplay";
 
 const geoUrl = "https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json";
 
@@ -17,6 +22,8 @@ function MapView({ alerts }) {
     coordinates: [0, 0],
     zoom: 0.7
   });
+  const selectedExternalReputation = getExternalReputation(selectedAlert);
+  const selectedBehavioralReputation = getBehavioralReputation(selectedAlert);
 
   useEffect(() => {
     const handlePointerDown = (event) => {
@@ -283,47 +290,35 @@ function MapView({ alerts }) {
             <strong>Message:</strong> {selectedAlert.message}
           </p>
           <p>
-            <strong>Reputation:</strong>{" "}
+            <strong>External Threat Intelligence Reputation:</strong>{" "}
             <span
               style={{
-                display: "inline-block",
-                padding: "4px 8px",
-                borderRadius: "999px",
-                fontSize: "11px",
-                fontWeight: "600",
-                backgroundColor:
-                  selectedAlert.reputation_label === "high-risk"
-                    ? "rgba(239, 68, 68, 0.15)"
-                    : selectedAlert.reputation_label === "medium-risk"
-                    ? "rgba(245, 158, 11, 0.15)"
-                    : selectedAlert.reputation_label === "low-risk"
-                    ? "rgba(16, 185, 129, 0.15)"
-                    : "rgba(156, 163, 175, 0.15)",
-                color:
-                  selectedAlert.reputation_label === "high-risk"
-                    ? "#ef4444"
-                    : selectedAlert.reputation_label === "medium-risk"
-                    ? "#f59e0b"
-                    : selectedAlert.reputation_label === "low-risk"
-                    ? "#10b981"
-                    : "#9ca3af",
-                border:
-                  selectedAlert.reputation_label === "high-risk"
-                    ? "1px solid rgba(239, 68, 68, 0.35)"
-                    : selectedAlert.reputation_label === "medium-risk"
-                    ? "1px solid rgba(245, 158, 11, 0.35)"
-                    : selectedAlert.reputation_label === "low-risk"
-                    ? "1px solid rgba(16, 185, 129, 0.35)"
-                    : "1px solid rgba(156, 163, 175, 0.35)",
+                ...mapReputationBadgeStyle,
+                ...getReputationBadgeStyle(selectedExternalReputation.label),
               }}
             >
-              {selectedAlert.reputation_label
-                ? `${selectedAlert.reputation_label} (${selectedAlert.reputation_score})`
-                : "No reputation data"}
+              {selectedExternalReputation.label} ({selectedExternalReputation.score ?? "n/a"})
             </span>
           </p>
           <p style={{ marginTop: "8px" }}>
-            {selectedAlert.reputation_summary || "No reputation details available"}
+            Source: {selectedExternalReputation.source}
+          </p>
+          <p style={{ marginTop: "8px" }}>
+            {selectedExternalReputation.summary}
+          </p>
+          <p>
+            <strong>Behavioral Reputation:</strong>{" "}
+            <span
+              style={{
+                ...mapReputationBadgeStyle,
+                ...getReputationBadgeStyle(selectedBehavioralReputation.label),
+              }}
+            >
+              {selectedBehavioralReputation.label} ({selectedBehavioralReputation.score})
+            </span>
+          </p>
+          <p style={{ marginTop: "8px" }}>
+            {selectedBehavioralReputation.summary}
           </p>
           <p>
             <strong>Response Action:</strong>{" "}
@@ -362,6 +357,14 @@ const zoomButtonStyle = {
   borderRadius: "8px",
   padding: "8px 12px",
   cursor: "pointer"
+};
+
+const mapReputationBadgeStyle = {
+  display: "inline-block",
+  padding: "4px 8px",
+  borderRadius: "999px",
+  fontSize: "11px",
+  fontWeight: "600",
 };
 
 export default MapView;

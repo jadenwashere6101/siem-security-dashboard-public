@@ -63,7 +63,8 @@ def get_alerts():
             source_ip = str(row[4]) if row[4] is not None else None
             if source_ip not in reputation_by_ip:
                 reputation_by_ip[source_ip] = get_ip_reputation(source_ip, cur=cur)
-            reputation = reputation_by_ip[source_ip]
+            behavioral_reputation = reputation_by_ip[source_ip]
+            behavioral_contributing_signals = behavioral_reputation.get("contributing_signals", [])
 
             alerts.append(
                 enrich_alert_with_correlation_context(
@@ -79,11 +80,18 @@ def get_alerts():
                     "city": row[8],
                     "latitude": row[9],
                     "longitude": row[10],
-                    "reputation_score": reputation["reputation_score"],
-                    "reputation_label": reputation["reputation_label"],
-                    "reputation_source": "siem_internal",
-                    "reputation_summary": reputation["reputation_summary"],
-                    "contributing_signals": reputation["contributing_signals"],
+                    "reputation_score": row[11],
+                    "reputation_label": row[12],
+                    "reputation_source": row[13],
+                    "reputation_summary": row[14],
+                    "behavioral_reputation": {
+                        "score": behavioral_reputation["reputation_score"],
+                        "label": behavioral_reputation["reputation_label"],
+                        "source": "siem_internal",
+                        "summary": behavioral_reputation["reputation_summary"],
+                        "contributing_signals": behavioral_contributing_signals,
+                    },
+                    "contributing_signals": behavioral_contributing_signals,
                     "response_action": row[15],
                     "response_status": row[16],
                     "source": row[17] or "unknown",

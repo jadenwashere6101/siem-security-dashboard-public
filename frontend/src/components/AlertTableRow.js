@@ -4,7 +4,11 @@ import {
   sourceBadgeStyle,
   sourceTypeTextStyle,
 } from "./alertsTableStyles";
-import { getReputationBadgeStyle } from "../utils/alertDisplay";
+import {
+  getBehavioralReputation,
+  getExternalReputation,
+  getReputationBadgeStyle,
+} from "../utils/alertDisplay";
 
 function AlertTableRow({
   alert,
@@ -23,6 +27,9 @@ function AlertTableRow({
   bodyCellStyle,
   monoCellStyle,
 }) {
+  const externalReputation = getExternalReputation(alert);
+  const behavioralReputation = getBehavioralReputation(alert);
+
   return (
     <tr
       style={{
@@ -83,12 +90,21 @@ function AlertTableRow({
       <td style={bodyCellStyle}>
         <div style={sourceBadgeStackStyle}>
           <span
-            style={{ ...sourceBadgeStyle, ...getReputationBadgeStyle(alert.reputation_label) }}
-            title={`Behavioral reputation: ${alert.reputation_label || "Normal"} (${alert.reputation_score ?? 0})`}
+            style={{ ...sourceBadgeStyle, ...getReputationBadgeStyle(externalReputation.label) }}
+            title={`External threat intelligence: ${externalReputation.label} (${externalReputation.score ?? "n/a"}) via ${externalReputation.source}`}
           >
-            {alert.reputation_label || "Normal"}
+            Threat Intel: {externalReputation.label}
           </span>
-          <span style={sourceTypeTextStyle}>Score {alert.reputation_score ?? 0}</span>
+          <span style={sourceTypeTextStyle}>
+            Score {externalReputation.score ?? "n/a"} · {externalReputation.source}
+          </span>
+          <span
+            style={{ ...sourceBadgeStyle, ...getReputationBadgeStyle(behavioralReputation.label) }}
+            title={`Behavioral reputation: ${behavioralReputation.label} (${behavioralReputation.score})`}
+          >
+            Behavioral: {behavioralReputation.label}
+          </span>
+          <span style={sourceTypeTextStyle}>Score {behavioralReputation.score}</span>
         </div>
       </td>
 

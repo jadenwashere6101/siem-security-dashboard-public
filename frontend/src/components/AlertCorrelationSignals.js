@@ -1,14 +1,18 @@
+import { getBehavioralReputation } from "../utils/alertDisplay";
+
 function AlertCorrelationSignals({
   alert,
   detailSectionStyle,
   signalRowStyle,
   sourceTypeTextStyle,
 }) {
+  const contributingSignals = getBehavioralReputation(alert).contributing_signals;
+
   return (
     <div style={detailSectionStyle}>
-      <strong>Contributing Signals:</strong>
-      {Array.isArray(alert.contributing_signals) && alert.contributing_signals.length > 0 ? (
-        alert.contributing_signals.map((signal) => (
+      <strong>Behavioral Contributing Signals:</strong>
+      {contributingSignals.length > 0 ? (
+        contributingSignals.map((signal) => (
           <div key={signal.signal} style={signalRowStyle}>
             <span>{signal.label}</span>
             <span style={sourceTypeTextStyle}>

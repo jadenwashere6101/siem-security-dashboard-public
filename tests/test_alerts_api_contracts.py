@@ -6,11 +6,17 @@ from psycopg2.extras import Json
 
 ADMIN_USER = "testadmin"
 ADMIN_PASS = "testpassword123!"
-REPUTATION = {
+BEHAVIORAL_REPUTATION = {
     "reputation_score": 0,
-    "reputation_label": "low-risk",
-    "reputation_summary": "Contract test reputation",
+    "reputation_label": "Normal",
+    "reputation_summary": "Contract test behavioral reputation",
     "contributing_signals": [],
+}
+EXTERNAL_REPUTATION = {
+    "reputation_score": 42,
+    "reputation_label": "external-medium",
+    "reputation_source": "contract-threat-intel",
+    "reputation_summary": "Stored external reputation snapshot",
 }
 
 
@@ -36,7 +42,9 @@ def _insert_alert(
     message,
     severity="high",
     status="open",
+    reputation=None,
 ):
+    reputation = reputation or EXTERNAL_REPUTATION
     cur.execute(
         """
         INSERT INTO alerts (
@@ -46,11 +54,27 @@ def _insert_alert(
             source,
             source_type,
             message,
-            status
+            status,
+            reputation_score,
+            reputation_label,
+            reputation_source,
+            reputation_summary
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
-        (alert_type, severity, source_ip, "bank_app", "custom", message, status),
+        (
+            alert_type,
+            severity,
+            source_ip,
+            "bank_app",
+            "custom",
+            message,
+            status,
+            reputation["reputation_score"],
+            reputation["reputation_label"],
+            reputation["reputation_source"],
+            reputation["reputation_summary"],
+        ),
     )
 
 
@@ -61,7 +85,7 @@ def _login_as_super_admin(client):
 
 def _fetch_alerts_response(client, conn):
     with patch("routes.alerts_events_routes.get_db_connection", return_value=_RouteSafeConnection(conn)), patch(
-        "routes.alerts_events_routes.get_ip_reputation", return_value=REPUTATION
+        "routes.alerts_events_routes.get_ip_reputation", return_value=BEHAVIORAL_REPUTATION
     ):
         return client.get("/alerts")
 
@@ -108,6 +132,64 @@ def test_get_alerts_authenticated_returns_200_and_json_list_with_core_fields(cli
     alert = data[0]
     for field in ("id", "alert_type", "severity", "source_ip", "status", "created_at"):
         assert field in alert
+
+
+def test_get_alerts_preserves_stored_external_reputation_and_adds_behavioral_reputation(client, postgres_db):
+    conn, cur = postgres_db
+    stored_reputation = {
+        "reputation_score": 71,
+        "reputation_label": "abuseipdb-high",
+        "reputation_source": "abuseipdb",
+        "reputation_summary": "Stored AbuseIPDB snapshot",
+    }
+    _insert_alert(
+        cur,
+        alert_type="failed_login_threshold",
+        source_ip="198.51.100.220",
+        message="Failed login threshold exceeded",
+        reputation=stored_reputation,
+    )
+    conn.commit()
+
+    _login_as_super_admin(client)
+    resp = _fetch_alerts_response(client, conn)
+
+    assert resp.status_code == 200
+    alert = _alert_by_type(resp.get_json(), "failed_login_threshold")
+    assert alert["reputation_score"] == 71
+    assert alert["reputation_label"] == "abuseipdb-high"
+    assert alert["reputation_source"] == "abuseipdb"
+    assert alert["reputation_summary"] == "Stored AbuseIPDB snapshot"
+    assert alert["reputation_source"] != "siem_internal"
+    assert alert["behavioral_reputation"] == {
+        "score": BEHAVIORAL_REPUTATION["reputation_score"],
+        "label": BEHAVIORAL_REPUTATION["reputation_label"],
+        "source": "siem_internal",
+        "summary": BEHAVIORAL_REPUTATION["reputation_summary"],
+        "contributing_signals": BEHAVIORAL_REPUTATION["contributing_signals"],
+    }
+    assert alert["contributing_signals"] == BEHAVIORAL_REPUTATION["contributing_signals"]
+
+
+def test_get_alerts_behavioral_reputation_shape_always_present(client, postgres_db):
+    conn, cur = postgres_db
+    _insert_alert(
+        cur,
+        alert_type="port_scan_threshold",
+        source_ip="198.51.100.221",
+        message="Port scan threshold exceeded",
+    )
+    conn.commit()
+
+    _login_as_super_admin(client)
+    resp = _fetch_alerts_response(client, conn)
+
+    assert resp.status_code == 200
+    alert = _alert_by_type(resp.get_json(), "port_scan_threshold")
+    behavioral = alert["behavioral_reputation"]
+    assert set(behavioral) == {"score", "label", "source", "summary", "contributing_signals"}
+    assert behavioral["source"] == "siem_internal"
+    assert isinstance(behavioral["contributing_signals"], list)
 
 
 def test_get_alerts_correlation_alerts_include_correlation_contract_fields(client, postgres_db):

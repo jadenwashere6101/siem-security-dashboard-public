@@ -1,3 +1,5 @@
+import { getBehavioralReputation, getExternalReputation } from "../utils/alertDisplay";
+
 function AlertReputationDetails({
   alert,
   expandedTextStyle,
@@ -6,22 +8,41 @@ function AlertReputationDetails({
   sourceBadgeStyle,
   getReputationBadgeStyle,
 }) {
+  const externalReputation = getExternalReputation(alert);
+  const behavioralReputation = getBehavioralReputation(alert);
+
   return (
     <>
       <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
+        <strong style={detailLabelTextStyle}>External Threat Intelligence Reputation:</strong>{" "}
+        <span
+          style={{ ...sourceBadgeStyle, ...getReputationBadgeStyle(externalReputation.label) }}
+          title={`External threat intelligence: ${externalReputation.label} (${externalReputation.score ?? "n/a"}) via ${externalReputation.source}`}
+        >
+          {externalReputation.label} ({externalReputation.score ?? "n/a"})
+        </span>
+      </p>
+      <p style={expandedSecondaryTextStyle}>
+        Provider/source: {externalReputation.source}
+      </p>
+      <p style={{ marginTop: "8px" }}>
+        {externalReputation.summary}
+      </p>
+
+      <p style={{ ...expandedTextStyle, marginBottom: "6px", marginTop: "12px" }}>
         <strong style={detailLabelTextStyle}>Behavioral Reputation:</strong>{" "}
         <span
-          style={{ ...sourceBadgeStyle, ...getReputationBadgeStyle(alert.reputation_label) }}
-          title={`Behavioral reputation: ${alert.reputation_label || "Normal"} (${alert.reputation_score ?? 0})`}
+          style={{ ...sourceBadgeStyle, ...getReputationBadgeStyle(behavioralReputation.label) }}
+          title={`Behavioral reputation: ${behavioralReputation.label} (${behavioralReputation.score})`}
         >
-          {alert.reputation_label || "Normal"} ({alert.reputation_score ?? 0})
+          {behavioralReputation.label} ({behavioralReputation.score})
         </span>
       </p>
       <p style={expandedSecondaryTextStyle}>
         Internal SIEM-generated behavioral score
       </p>
       <p style={{ marginTop: "8px" }}>
-        {alert.reputation_summary || "No reputation details available"}
+        {behavioralReputation.summary}
       </p>
     </>
   );

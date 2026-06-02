@@ -1,5 +1,6 @@
 import React from "react";
 import AlertTimeline from "./AlertTimeline";
+import { getBehavioralReputation, getExternalReputation } from "../utils/alertDisplay";
 
 function AlertDetailsPanel({
   selectedAlert,
@@ -17,6 +18,10 @@ function AlertDetailsPanel({
   signalRowStyle,
   sourceTypeTextStyle,
 }) {
+  const externalReputation = getExternalReputation(selectedAlert);
+  const behavioralReputation = getBehavioralReputation(selectedAlert);
+  const contributingSignals = behavioralReputation.contributing_signals;
+
   return (
     <div style={{ fontSize: "14px", lineHeight: "1.7" }}>
       {getTargetedAlertMeta(selectedAlert.alert_type) && (
@@ -68,13 +73,22 @@ function AlertDetailsPanel({
           ? `${selectedAlert.city}, ${selectedAlert.country}`
           : "Unknown"}
       </p>
-      <p><strong>Behavioral Reputation:</strong> {selectedAlert.reputation_label || "Normal"} ({selectedAlert.reputation_score ?? 0})</p>
+      <p>
+        <strong>External Threat Intelligence Reputation:</strong>{" "}
+        {externalReputation.label} ({externalReputation.score ?? "n/a"})
+      </p>
+      <p><strong>Threat Intel Source:</strong> {externalReputation.source}</p>
+      <p><strong>Threat Intel Summary:</strong> {externalReputation.summary}</p>
+      <p>
+        <strong>Behavioral Reputation:</strong>{" "}
+        {behavioralReputation.label} ({behavioralReputation.score})
+      </p>
       <p><strong>Score Type:</strong> Internal SIEM-generated behavioral score</p>
-      <p><strong>Reputation Summary:</strong> {selectedAlert.reputation_summary || "N/A"}</p>
+      <p><strong>Behavioral Summary:</strong> {behavioralReputation.summary}</p>
       <div>
-        <strong>Contributing Signals:</strong>
-        {Array.isArray(selectedAlert.contributing_signals) && selectedAlert.contributing_signals.length > 0 ? (
-          selectedAlert.contributing_signals.map((signal) => (
+        <strong>Behavioral Contributing Signals:</strong>
+        {contributingSignals.length > 0 ? (
+          contributingSignals.map((signal) => (
             <div key={signal.signal} style={signalRowStyle}>
               <span>{signal.label}</span>
               <span style={sourceTypeTextStyle}>

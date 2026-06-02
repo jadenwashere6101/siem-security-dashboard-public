@@ -102,6 +102,32 @@ export const getReputationBadgeStyle = (label) => {
   };
 };
 
+export const getBehavioralReputation = (alert) => {
+  const behavioral = alert?.behavioral_reputation || {};
+
+  return {
+    score: behavioral.score ?? alert?.reputation_score ?? 0,
+    label: behavioral.label || alert?.reputation_label || "Normal",
+    source: behavioral.source || "siem_internal",
+    summary:
+      behavioral.summary ||
+      alert?.reputation_summary ||
+      "No behavioral reputation details available.",
+    contributing_signals: Array.isArray(behavioral.contributing_signals)
+      ? behavioral.contributing_signals
+      : Array.isArray(alert?.contributing_signals)
+        ? alert.contributing_signals
+        : [],
+  };
+};
+
+export const getExternalReputation = (alert) => ({
+  score: alert?.reputation_score,
+  label: alert?.reputation_label || "Unknown",
+  source: alert?.reputation_source || "unknown",
+  summary: alert?.reputation_summary || "No external threat intelligence details available.",
+});
+
 export const isCorrelationAlert = (alert) =>
   alert?.is_correlation_alert || alert?.alert_type === "correlated_activity";
 
