@@ -71,6 +71,18 @@ def count_rows(cur, table_name):
     return cur.fetchone()[0]
 
 
+def port_scan_payload(destination_port):
+    return {
+        "destination_port": destination_port,
+        "location": {
+            "country": "United States",
+            "city": "New York",
+            "lat": "40.7128",
+            "lon": "-74.0060",
+        },
+    }
+
+
 def test_ingest_normalized_event_inserts_event_without_detection(postgres_db):
     conn, cur = postgres_db
     source_ip = "198.51.100.132"
@@ -111,12 +123,24 @@ def test_ingest_normalized_event_routes_into_port_scan_detection_core(postgres_d
          patch("engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION), \
          patch("engines.correlation_engine.lookup_ip_reputation", return_value=REPUTATION):
         first_result = siem_backend.ingest_normalized_event(
-            make_event(event_type="port_scan", source_ip=source_ip, source="nginx", source_type="web_log"),
+            make_event(
+                event_type="port_scan",
+                source_ip=source_ip,
+                source="nginx",
+                source_type="web_log",
+                raw_payload=port_scan_payload(22),
+            ),
             conn,
             cur,
         )
         second_result = siem_backend.ingest_normalized_event(
-            make_event(event_type="port_scan", source_ip=source_ip, source="nginx", source_type="web_log"),
+            make_event(
+                event_type="port_scan",
+                source_ip=source_ip,
+                source="nginx",
+                source_type="web_log",
+                raw_payload=port_scan_payload(443),
+            ),
             conn,
             cur,
         )
@@ -172,12 +196,24 @@ def test_ingest_normalized_event_runs_detection_then_correlation_on_same_cursor(
         assert len(failed_login_alerts) == 1
 
         siem_backend.ingest_normalized_event(
-            make_event(event_type="port_scan", source_ip=source_ip, source="nginx", source_type="web_log"),
+            make_event(
+                event_type="port_scan",
+                source_ip=source_ip,
+                source="nginx",
+                source_type="web_log",
+                raw_payload=port_scan_payload(22),
+            ),
             conn,
             cur,
         )
         port_scan_alerts = siem_backend.ingest_normalized_event(
-            make_event(event_type="port_scan", source_ip=source_ip, source="nginx", source_type="web_log"),
+            make_event(
+                event_type="port_scan",
+                source_ip=source_ip,
+                source="nginx",
+                source_type="web_log",
+                raw_payload=port_scan_payload(443),
+            ),
             conn,
             cur,
         )

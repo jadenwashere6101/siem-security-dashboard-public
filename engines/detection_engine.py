@@ -279,12 +279,34 @@ def _generate_port_scan_alerts_core(cur, conn, source=None, source_type=None):
 
     cur.execute(
         f"""
-        SELECT source_ip, COUNT(*) as attempts
-        FROM events
-        WHERE event_type = 'port_scan'
-          AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
+        WITH port_scan_events AS (
+            SELECT
+                source_ip,
+                COALESCE(
+                    raw_payload->>'destination_port',
+                    raw_payload->>'dest_port',
+                    raw_payload->>'dst_port',
+                    raw_payload->>'port'
+                ) AS destination_port_text
+            FROM events
+            WHERE event_type = 'port_scan'
+              AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
+        ),
+        normalized_ports AS (
+            SELECT
+                source_ip,
+                CASE
+                    WHEN destination_port_text ~ '^\\d{{1,5}}$'
+                    THEN destination_port_text::integer
+                    ELSE NULL
+                END AS destination_port
+            FROM port_scan_events
+        )
+        SELECT source_ip, COUNT(DISTINCT destination_port) as attempts
+        FROM normalized_ports
+        WHERE destination_port BETWEEN 1 AND 65535
         GROUP BY source_ip
-        HAVING COUNT(*) >= %s
+        HAVING COUNT(DISTINCT destination_port) >= %s
         """,
         (threshold,)
     )
