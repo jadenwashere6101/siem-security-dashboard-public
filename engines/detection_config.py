@@ -68,6 +68,36 @@ def get_detection_rule_defaults():
             "active": True,
             "description": "Triggers when failed logins target multiple distinct usernames from the same source within a time window.",
         },
+        "http_error_threshold": {
+            "rule_id": "http_error_threshold",
+            "display_name": "HTTP Error Threshold",
+            "parameters": {
+                "threshold": HTTP_ERROR_THRESHOLD,
+                "window_minutes": HTTP_ERROR_WINDOW_MINUTES,
+            },
+            "active": True,
+            "description": "Triggers when repeated HTTP error events occur from the same source within a time window.",
+        },
+        "application_exception_threshold": {
+            "rule_id": "application_exception_threshold",
+            "display_name": "Application Exception Threshold",
+            "parameters": {
+                "threshold": APPLICATION_EXCEPTION_THRESHOLD,
+                "window_minutes": APPLICATION_EXCEPTION_WINDOW_MINUTES,
+            },
+            "active": True,
+            "description": "Triggers when repeated application exception events occur from the same source within a time window.",
+        },
+        "high_request_rate_threshold": {
+            "rule_id": "high_request_rate_threshold",
+            "display_name": "High Request Rate Threshold",
+            "parameters": {
+                "threshold": HIGH_REQUEST_RATE_THRESHOLD,
+                "window_minutes": HIGH_REQUEST_RATE_WINDOW_MINUTES,
+            },
+            "active": True,
+            "description": "Triggers when high request volume occurs from the same source within a time window.",
+        },
         "successful_login_after_spray": {
             "rule_id": "successful_login_after_spray",
             "display_name": "Successful Login After Spray",

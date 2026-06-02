@@ -155,7 +155,16 @@ def test_get_admin_detection_rules_as_super_admin_returns_200_stable_shape(clien
     assert resp.status_code == 200
     data = resp.get_json()
     assert isinstance(data, list)
-    assert len(data) == 4
+    assert len(data) == 7
+    assert {rule["rule_id"] for rule in data} == {
+        "failed_login_threshold",
+        "port_scan_threshold",
+        "password_spraying_threshold",
+        "http_error_threshold",
+        "application_exception_threshold",
+        "high_request_rate_threshold",
+        "successful_login_after_spray",
+    }
     for rule in data:
         for key in (
             "rule_id",

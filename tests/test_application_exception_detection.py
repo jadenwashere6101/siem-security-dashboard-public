@@ -100,6 +100,16 @@ def fetch_one_alert(cur):
     return cur.fetchone()
 
 
+def insert_detection_config_override(cur, *, rule_id, threshold, window_minutes):
+    cur.execute(
+        """
+        INSERT INTO detection_config (rule_id, parameters, active, updated_by)
+        VALUES (%s, %s, TRUE, 'test')
+        """,
+        (rule_id, Json({"threshold": threshold, "window_minutes": window_minutes})),
+    )
+
+
 def test_application_exception_threshold_boundary_and_alert_field_fidelity(postgres_db):
     conn, cur = postgres_db
     source_ip = "198.51.100.92"
@@ -271,3 +281,31 @@ def test_application_exception_currval_sets_alert_metadata_without_sync_response
     assert row[2] == "pending"
     cur.execute("SELECT COUNT(*) FROM response_actions_log WHERE alert_id = %s", (row[0],))
     assert cur.fetchone()[0] == 0
+
+
+def test_application_exception_uses_detection_config_override(postgres_db):
+    conn, cur = postgres_db
+    source_ip = "198.51.100.96"
+    insert_detection_config_override(cur, rule_id="application_exception_threshold", threshold=2, window_minutes=1)
+
+    insert_application_event(cur, source_ip=source_ip, seconds_ago=120)
+    insert_application_event(cur, source_ip=source_ip, seconds_ago=1)
+
+    with siem_backend.app.app_context(), patch("engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION):
+        assert backend_detection_engine._generate_application_exception_alerts_core(
+            cur,
+            conn,
+            source="opentelemetry",
+            source_type="telemetry",
+        ) == []
+
+        insert_application_event(cur, source_ip=source_ip, seconds_ago=1)
+        alerts_created = backend_detection_engine._generate_application_exception_alerts_core(
+            cur,
+            conn,
+            source="opentelemetry",
+            source_type="telemetry",
+        )
+
+    assert len(alerts_created) == 1
+    assert alerts_created[0]["attempts"] == 2

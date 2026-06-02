@@ -1,12 +1,6 @@
 from flask import current_app
 
 from engines.detection_config import (
-    APPLICATION_EXCEPTION_THRESHOLD,
-    APPLICATION_EXCEPTION_WINDOW_MINUTES,
-    HIGH_REQUEST_RATE_THRESHOLD,
-    HIGH_REQUEST_RATE_WINDOW_MINUTES,
-    HTTP_ERROR_THRESHOLD,
-    HTTP_ERROR_WINDOW_MINUTES,
     get_effective_detection_rule,
 )
 from core.ip_helpers import determine_response_action, lookup_ip_reputation
@@ -151,8 +145,9 @@ def _generate_failed_login_alerts_core(cur, conn, source=None, source_type=None)
 
 
 def _generate_http_error_alerts_core(cur, conn, source=None, source_type=None):
-    threshold = HTTP_ERROR_THRESHOLD
-    window_minutes = HTTP_ERROR_WINDOW_MINUTES
+    rule_config = get_effective_detection_rule("http_error_threshold", cur=cur)
+    threshold = rule_config["parameters"]["threshold"]
+    window_minutes = rule_config["parameters"]["window_minutes"]
 
     cur.execute(
         f"""
@@ -727,8 +722,9 @@ def _generate_successful_login_after_spray_alerts_core(cur, conn, source=None, s
 
 
 def _generate_application_exception_alerts_core(cur, conn, source=None, source_type=None):
-    threshold = APPLICATION_EXCEPTION_THRESHOLD
-    window_minutes = APPLICATION_EXCEPTION_WINDOW_MINUTES
+    rule_config = get_effective_detection_rule("application_exception_threshold", cur=cur)
+    threshold = rule_config["parameters"]["threshold"]
+    window_minutes = rule_config["parameters"]["window_minutes"]
 
     cur.execute(
         f"""
@@ -854,8 +850,9 @@ def _generate_application_exception_alerts_core(cur, conn, source=None, source_t
 
 
 def _generate_high_request_rate_alerts_core(cur, conn, source=None, source_type=None):
-    threshold = HIGH_REQUEST_RATE_THRESHOLD
-    window_minutes = HIGH_REQUEST_RATE_WINDOW_MINUTES
+    rule_config = get_effective_detection_rule("high_request_rate_threshold", cur=cur)
+    threshold = rule_config["parameters"]["threshold"]
+    window_minutes = rule_config["parameters"]["window_minutes"]
 
     cur.execute(
         f"""
