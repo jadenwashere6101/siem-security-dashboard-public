@@ -83,6 +83,42 @@ run inside the ingest transaction.
 - Integration status panel with adapter readiness, circuit state, and execution
   safety model wording.
 
+## Platform Screenshots
+
+Screenshots are reserved for the production-style SIEM/SOAR console views below.
+When final images are available, place them in `screenshots/` using the reserved
+filenames and replace each placeholder with the corresponding markdown image.
+
+### Dashboard Overview
+
+[Placeholder for screenshot]
+
+Reserved filename: `screenshots/dashboard-overview.png`
+
+<!-- Future image markdown:
+![Dashboard Overview](screenshots/dashboard-overview.png)
+-->
+
+### Alert Investigation
+
+[Placeholder for screenshot]
+
+Reserved filename: `screenshots/alert-investigation.png`
+
+<!-- Future image markdown:
+![Alert Investigation](screenshots/alert-investigation.png)
+-->
+
+### Runtime Detection Rule Management
+
+[Placeholder for screenshot]
+
+Reserved filename: `screenshots/detection-rules.png`
+
+<!-- Future image markdown:
+![Runtime Detection Rule Management](screenshots/detection-rules.png)
+-->
+
 ## Execution Safety Model
 
 The platform is not a single global "real vs simulation" switch.
