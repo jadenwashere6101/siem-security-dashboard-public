@@ -85,39 +85,36 @@ run inside the ingest transaction.
 
 ## Platform Screenshots
 
-Screenshots are reserved for the production-style SIEM/SOAR console views below.
-When final images are available, place them in `screenshots/` using the reserved
-filenames and replace each placeholder with the corresponding markdown image.
+Production-style SIEM/SOAR console views showing operational monitoring,
+investigation workflow, incident response context, and runtime rule management.
 
-### Dashboard Overview
+### SOC Command Center
 
-[Placeholder for screenshot]
+Operational command view with incident pressure, active automations, pending
+approvals, worker health, integration status, and response readiness.
 
-Reserved filename: `screenshots/dashboard-overview.png`
-
-<!-- Future image markdown:
-![Dashboard Overview](screenshots/dashboard-overview.png)
--->
+![SOC Command Center](screenshots/soc-command-center.png)
 
 ### Alert Investigation
 
-[Placeholder for screenshot]
+Alert detail workflow with severity, source context, MITRE mapping, reputation
+signals, investigation metadata, and analyst action controls.
 
-Reserved filename: `screenshots/alert-investigation.png`
+![Alert Investigation](screenshots/alert-details.png)
 
-<!-- Future image markdown:
-![Alert Investigation](screenshots/alert-investigation.png)
--->
+### Incident Workspace
+
+Incident response workspace showing linked alerts, status tracking, ownership,
+SOAR timeline context, notification history, and analyst notes.
+
+![Incident Workspace](screenshots/incident-workspace.png)
 
 ### Runtime Detection Rule Management
 
-[Placeholder for screenshot]
+Admin rule-management view with runtime-configurable detection thresholds,
+time windows, severity, enablement, and audit-friendly rule metadata.
 
-Reserved filename: `screenshots/detection-rules.png`
-
-<!-- Future image markdown:
 ![Runtime Detection Rule Management](screenshots/detection-rules.png)
--->
 
 ## Execution Safety Model
 
