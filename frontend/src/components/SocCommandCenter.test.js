@@ -211,6 +211,11 @@ function mockResolvedData() {
           alert_type: "failed_login_threshold",
           severity: "HIGH",
         },
+        {
+          alert_id: 100,
+          alert_type: "application_exception_threshold",
+          severity: "MEDIUM",
+        },
       ],
     },
   });
@@ -319,6 +324,21 @@ describe("SocCommandCenter", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /webhook drift incident/i }));
     await waitFor(() => expect(loadIncidentDetail).toHaveBeenCalledWith(8));
+  });
+
+  test("wraps long linked alert names without truncating them", async () => {
+    renderPanel();
+
+    expect((await screen.findAllByText("High-risk identity incident")).length).toBeGreaterThan(0);
+    const linkedAlertName = await screen.findByText("application_exception_threshold");
+
+    expect(linkedAlertName).toBeInTheDocument();
+    expect(screen.queryByText("application_exception_threshol")).not.toBeInTheDocument();
+    expect(linkedAlertName).toHaveStyle({
+      whiteSpace: "normal",
+      overflowWrap: "anywhere",
+      wordBreak: "break-word",
+    });
   });
 
   test("opens and closes source-IP context drawer from selected incident source", async () => {

@@ -1333,11 +1333,13 @@ const sourceIpButtonStyle = {
   textDecoration: "underline",
   textUnderlineOffset: "3px",
   cursor: "pointer",
+  overflowWrap: "anywhere",
+  wordBreak: "break-word",
 };
 
 const contextGridStyle = {
   display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+  gridTemplateColumns: "repeat(auto-fit, minmax(min(150px, 100%), 1fr))",
   gap: "10px",
 };
 
@@ -1347,12 +1349,16 @@ const contextBlockStyle = {
   padding: "10px",
   backgroundColor: "#0d1117",
   minHeight: "96px",
+  minWidth: 0,
+  boxSizing: "border-box",
 };
 
 const contextBlockHeaderStyle = {
   display: "flex",
   justifyContent: "space-between",
+  alignItems: "flex-start",
   gap: "8px",
+  minWidth: 0,
 };
 
 const miniHeadingStyle = {
@@ -1360,6 +1366,8 @@ const miniHeadingStyle = {
   color: "#c9d1d9",
   fontSize: "12px",
   fontWeight: "800",
+  minWidth: 0,
+  overflowWrap: "break-word",
 };
 
 const contextEmptyStyle = {
@@ -1373,6 +1381,10 @@ const contextItemStyle = {
   color: "#e6edf3",
   fontSize: "12px",
   lineHeight: 1.35,
+  minWidth: 0,
+  whiteSpace: "normal",
+  overflowWrap: "anywhere",
+  wordBreak: "break-word",
 };
 
 const timelineBlockStyle = {
