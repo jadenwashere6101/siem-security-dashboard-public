@@ -22,6 +22,7 @@ from engines.ingest_engine import ingest_normalized_event
 from core.extensions import limiter
 from routes.ingest_routes import ingest_bp
 from routes.reporting_routes import reporting_bp
+from routes.source_ip_context_routes import source_ip_context_bp
 
 
 # ============================================================================
@@ -124,6 +125,7 @@ def create_app():
     app.register_blueprint(metrics_bp)
     app.register_blueprint(notification_delivery_bp)
     app.register_blueprint(dead_letter_bp)
+    app.register_blueprint(source_ip_context_bp)
 
     return app
 
