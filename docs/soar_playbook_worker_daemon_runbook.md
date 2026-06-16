@@ -159,41 +159,19 @@ GROUP BY status, source_type
 ORDER BY status, source_type;"
 ```
 
-## Systemd Unit Design
+## Systemd Unit
 
-Do not install this unit yet. This is the intended design for the later rollout
-slice after validation passes.
+The repo owns an installable unit at `deploy/systemd/soar-playbook-worker.service`.
+Install, enable, start, status, journal, metrics, and rollback steps are documented
+in [playbook_worker_systemd_service.md](playbook_worker_systemd_service.md).
 
-```ini
-[Unit]
-Description=SOAR Playbook Worker Daemon
-After=network-online.target postgresql.service
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=jaden
-WorkingDirectory=/home/jaden/siem-security-dashboard
-EnvironmentFile=/home/jaden/siem-security-dashboard/.env
-Environment=INTEGRATION_MODE=simulation
-Environment=SOAR_EXECUTION_MODE=simulation
-Environment=SOAR_REAL_SLACK_ENABLED=false
-Environment=SOAR_REAL_TEAMS_ENABLED=false
-ExecStart=/usr/bin/python3 scripts/soar_playbook_worker_daemon.py --batch-size 10 --poll-interval 5 --idle-backoff 30 --jitter 2 --error-backoff 10 --stale-recovery-interval 60 --stale-limit 50 --log-level INFO
-Restart=on-failure
-RestartSec=15
-KillSignal=SIGTERM
-TimeoutStopSec=60
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-```
+Do not install or start the service during ordinary repository checkout. Service
+management remains an explicit operator action. `scripts/deploy_backend_vm.sh` does
+not manage the worker service during the initial rollout.
 
 Design notes:
 
-- `SIGTERM` should trigger graceful shutdown.
+- `SIGTERM` triggers graceful shutdown.
 - `Restart=on-failure` avoids silent process loss but still exposes crash loops
   through journald and service status.
 - The unit pins simulation guards even when `.env` contains other values.
@@ -210,34 +188,34 @@ python3 scripts/soar_playbook_worker_daemon.py --batch-size 10 --log-level INFO
 Stop foreground validation with `Ctrl-C`. The worker should log
 `soar_playbook_worker_shutdown`.
 
-Future systemd commands after a later slice installs the service:
+After operator install (see [playbook_worker_systemd_service.md](playbook_worker_systemd_service.md)):
 
 ```bash
-sudo systemctl start soar-playbook-worker
-sudo systemctl status soar-playbook-worker --no-pager
-sudo systemctl restart soar-playbook-worker
-sudo systemctl stop soar-playbook-worker
+sudo systemctl start soar-playbook-worker.service
+sudo systemctl status soar-playbook-worker.service --no-pager
+sudo systemctl restart soar-playbook-worker.service
+sudo systemctl stop soar-playbook-worker.service
 ```
 
-Do not run these systemd commands until the service file has been installed by a
-separate approved deployment step.
+Do not run these systemd commands until the service file has been installed by an
+explicit operator step.
 
 ## Log Inspection
 
 Foreground validation logs appear in the terminal.
 
-Future systemd log commands:
+Systemd log commands (after install):
 
 ```bash
-journalctl -u soar-playbook-worker -n 100 --no-pager
-journalctl -u soar-playbook-worker -f
+journalctl -u soar-playbook-worker.service -n 100 --no-pager
+journalctl -u soar-playbook-worker.service -f
 ```
 
 Useful filters:
 
 ```bash
-journalctl -u soar-playbook-worker --since "15 minutes ago" --no-pager | grep 'soar_playbook_worker_loop'
-journalctl -u soar-playbook-worker --since "15 minutes ago" --no-pager | grep 'soar_playbook_worker_loop_error'
+journalctl -u soar-playbook-worker.service --since "15 minutes ago" --no-pager | grep 'soar_playbook_worker_loop'
+journalctl -u soar-playbook-worker.service --since "15 minutes ago" --no-pager | grep 'soar_playbook_worker_loop_error'
 ```
 
 Stop and investigate if logs contain adapter tokens, webhook URLs, DB passwords,
@@ -341,12 +319,12 @@ Foreground worker:
 - Confirm `soar_playbook_worker_shutdown` appears.
 - Re-run queue and stale metrics checks.
 
-Future systemd worker:
+Systemd worker rollback (see [playbook_worker_systemd_service.md](playbook_worker_systemd_service.md)):
 
 ```bash
-sudo systemctl stop soar-playbook-worker
-sudo systemctl disable soar-playbook-worker
-sudo systemctl status soar-playbook-worker --no-pager
+sudo systemctl stop soar-playbook-worker.service
+sudo systemctl disable soar-playbook-worker.service
+sudo systemctl status soar-playbook-worker.service --no-pager
 ```
 
 Manual executor fallback remains available:

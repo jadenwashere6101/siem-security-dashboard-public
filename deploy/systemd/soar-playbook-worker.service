@@ -1,0 +1,29 @@
+[Unit]
+Description=SOAR Playbook Worker Daemon (simulation-safe)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jaden
+Group=jaden
+WorkingDirectory=/home/jaden/siem-security-dashboard
+EnvironmentFile=/home/jaden/siem-security-dashboard/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=INTEGRATION_MODE=simulation
+Environment=SOAR_EXECUTION_MODE=simulation
+Environment=SOAR_REAL_SLACK_ENABLED=false
+Environment=SOAR_REAL_TEAMS_ENABLED=false
+Environment=SOAR_REAL_EMAIL_ENABLED=false
+Environment=SOAR_REAL_WEBHOOK_ENABLED=false
+Environment=SOAR_REAL_FIREWALL_ENABLED=false
+ExecStart=/home/jaden/siem-security-dashboard/venv/bin/python3 /home/jaden/siem-security-dashboard/scripts/soar_playbook_worker_daemon.py --batch-size 10 --poll-interval 5 --idle-backoff 30 --jitter 2 --error-backoff 10 --stale-recovery-interval 60 --stale-limit 50 --log-level INFO
+Restart=on-failure
+RestartSec=15
+KillSignal=SIGTERM
+TimeoutStopSec=60
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
