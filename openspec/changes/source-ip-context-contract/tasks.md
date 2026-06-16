@@ -26,17 +26,17 @@
 
 ## 4. Frontend Integration Preparation
 
-- [ ] 4.1 Add a frontend source-IP context service that calls the normalized backend contract.
-- [ ] 4.2 Add a shared source-IP context display component with explicit labels for alert status, incident status, queue execution status, blocklist status, behavioral reputation, and external reputation snapshots.
-- [ ] 4.3 Integrate the shared context display into Alert Details without duplicating frontend joins.
-- [ ] 4.4 Integrate the shared context display into the Map popup without relying only on the clicked alert object.
-- [ ] 4.5 Defer SOC Command Center source-IP enhancements unless implementation evidence justifies a later scoped change.
+- [x] 4.1 Add a frontend source-IP context service that calls the normalized backend contract.
+- [x] 4.2 Add a shared source-IP context display component with explicit labels for alert status, incident status, queue execution status, blocklist status, behavioral reputation, and external reputation snapshots.
+- [x] 4.3 Integrate the shared context display into Alert Details without duplicating frontend joins.
+- [x] 4.4 Integrate the shared context display into the Map popup without relying only on the clicked alert object.
+- [x] 4.5 Defer SOC Command Center source-IP enhancements unless implementation evidence justifies a later scoped change.
 
 ## 5. Validation Checklist
 
 - [x] 5.1 Run backend syntax checks for any changed backend modules.
 - [x] 5.2 Run source-IP context API contract tests.
-- [ ] 5.3 Run focused frontend tests for Alert Details and Map popup integrations when frontend work begins.
+- [x] 5.3 Run focused frontend tests for Alert Details and Map popup integrations when frontend work begins.
 - [x] 5.4 Confirm no alert, incident, queue, approval, playbook, SOAR orchestration, or schema lifecycle behavior changed.
 - [x] 5.5 Confirm no mutation endpoint was introduced for source-IP context.
-- [ ] 5.6 Confirm frontend source-IP context rendering consumes the backend contract rather than recomputing cross-tab joins.
+- [x] 5.6 Confirm frontend source-IP context rendering consumes the backend contract rather than recomputing cross-tab joins.

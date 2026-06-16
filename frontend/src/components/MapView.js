@@ -11,6 +11,7 @@ import {
   getExternalReputation,
   getReputationBadgeStyle,
 } from "../utils/alertDisplay";
+import SourceIpContext from "./SourceIpContext";
 
 const geoUrl = "https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json";
 
@@ -328,6 +329,7 @@ function MapView({ alerts }) {
             <strong>Response Status:</strong>{" "}
             {selectedAlert.response_status || "Not set"}
           </p>
+          <SourceIpContext sourceIp={selectedAlert.source_ip} compact />
         </div>
       )}
     </div>

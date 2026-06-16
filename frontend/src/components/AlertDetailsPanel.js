@@ -1,5 +1,6 @@
 import React from "react";
 import AlertTimeline from "./AlertTimeline";
+import SourceIpContext from "./SourceIpContext";
 import { getBehavioralReputation, getExternalReputation } from "../utils/alertDisplay";
 
 function AlertDetailsPanel({
@@ -107,6 +108,7 @@ function AlertDetailsPanel({
         selectedAlertTimeline={selectedAlertTimeline}
         getSourceBadgeMeta={getSourceBadgeMeta}
       />
+      <SourceIpContext sourceIp={selectedAlert.source_ip} />
     </div>
   );
 }

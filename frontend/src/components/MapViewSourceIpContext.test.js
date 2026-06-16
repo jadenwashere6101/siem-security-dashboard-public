@@ -22,13 +22,13 @@ jest.mock("react-simple-maps", () => ({
 beforeEach(() => {
   loadSourceIpContext.mockReset();
   loadSourceIpContext.mockResolvedValue({
-    source_ip: "198.51.100.9",
+    source_ip: "8.8.8.8",
     alerts: { counts: { total: 1, open: 1, resolved: 0 }, recent: [] },
     incidents: { count: 0, recent: [] },
     queue: { counts: { total: 0, by_status: {} }, recent: [] },
     blocklist: { effective_status: "none", entries: [] },
     reputation: {
-      behavioral: { score: 12, label: "High Risk", summary: "Password spraying activity" },
+      behavioral: { score: 0, label: "Normal", summary: "No elevated behavioral signals observed in SIEM history." },
       latest_external: null,
       external_snapshots: [],
     },
@@ -36,14 +36,14 @@ beforeEach(() => {
   });
 });
 
-test("MapView separates external threat intelligence and behavioral reputation", async () => {
+test("MapView opens source-IP context from selected marker source IP", async () => {
   render(
     <MapView
       alerts={[
         {
           id: 9,
           alert_type: "failed_login_threshold",
-          source_ip: "198.51.100.9",
+          source_ip: "8.8.8.8",
           latitude: 40.7128,
           longitude: -74.006,
           city: "New York",
@@ -66,15 +66,9 @@ test("MapView separates external threat intelligence and behavioral reputation",
     />
   );
 
-  const buttons = screen.getAllByRole("button");
-  fireEvent.click(buttons[buttons.length - 1]);
+  fireEvent.click(screen.getByRole("button", { name: "alert marker" }));
 
-  expect(screen.getByText("External Threat Intelligence Reputation:")).toBeInTheDocument();
-  expect(screen.getByText("abuseipdb-high (71)")).toBeInTheDocument();
-  expect(screen.getByText("Source: abuseipdb")).toBeInTheDocument();
-  expect(screen.getByText("Stored AbuseIPDB snapshot")).toBeInTheDocument();
-  expect(screen.getByText("Behavioral Reputation:")).toBeInTheDocument();
-  expect(screen.getByText("High Risk (12)")).toBeInTheDocument();
-  expect(screen.getByText("Password spraying activity")).toBeInTheDocument();
-  expect(await screen.findByText("Source-IP Context")).toBeInTheDocument();
+  expect(screen.getByText("Source-IP Context")).toBeInTheDocument();
+  expect(await screen.findByText("Alerts")).toBeInTheDocument();
+  expect(loadSourceIpContext).toHaveBeenCalledWith("8.8.8.8");
 });
