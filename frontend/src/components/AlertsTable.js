@@ -88,6 +88,10 @@ function AlertsTable({
   const [selectedAlert, setSelectedAlert] = useState(null);
   const [hoveredAlertId, setHoveredAlertId] = useState(null);
   const [collapsedGroups, setCollapsedGroups] = useState({});
+  const latestSelectedAlert =
+    selectedAlertId !== null && selectedAlertId !== undefined
+      ? alerts.find((alert) => alert.id === selectedAlertId) || selectedAlert
+      : null;
 
   const groupHeaderCellStyle = {
     ...bodyCellStyle,
@@ -428,7 +432,7 @@ function AlertsTable({
 
   // Timeline is built from the currently selected alert and the already-loaded
   // alert collection. No extra API request is made for this view.
-  const selectedAlertTimeline = buildSelectedAlertTimeline(selectedAlert, alerts);
+  const selectedAlertTimeline = buildSelectedAlertTimeline(latestSelectedAlert, alerts);
 
   const groupedFilteredAlerts = [];
   const groupedFilteredAlertsMap = new Map();
@@ -644,7 +648,7 @@ function AlertsTable({
         />
       )}
 
-      {selectedAlert && (
+      {latestSelectedAlert && (
         <AlertSidePanel
           onClose={() => {
             setSelectedAlert(null);
@@ -652,7 +656,7 @@ function AlertsTable({
           }}
         >
             <AlertDetailsPanel
-              selectedAlert={selectedAlert}
+              selectedAlert={latestSelectedAlert}
               selectedAlertTimeline={selectedAlertTimeline}
               getSourceBadgeMeta={getSourceBadgeMeta}
               getTargetedAlertMeta={getTargetedAlertMeta}
@@ -667,13 +671,13 @@ function AlertsTable({
               signalRowStyle={signalRowStyle}
               sourceTypeTextStyle={sourceTypeTextStyle}
             />
-            <p><strong>Response Action:</strong> {selectedAlert.response_action || "N/A"}</p>
-            <p><strong>Response Status:</strong> {selectedAlert.response_status || "N/A"}</p>
+            <p><strong>Response Action:</strong> {latestSelectedAlert.response_action || "N/A"}</p>
+            <p><strong>Response Status:</strong> {latestSelectedAlert.response_status || "N/A"}</p>
 
-            <AlertResponseLog logs={responseLogs[selectedAlert.id]} variant="panel" />
+            <AlertResponseLog logs={responseLogs[latestSelectedAlert.id]} variant="panel" />
 
             <AlertManualActions
-              alertId={selectedAlert.id}
+              alertId={latestSelectedAlert.id}
               executeAction={executeAction}
               executingActionId={null}
               canTakeAlertActions={canTakeAlertActions}
@@ -683,15 +687,15 @@ function AlertsTable({
 
             {canTakeAlertActions && (
               <AlertNotesPanel
-                alertId={selectedAlert.id}
-                noteDraft={noteDrafts[selectedAlert.id] || ""}
-                notes={alertNotes[selectedAlert.id] || []}
-                isLoadingNotes={loadingNotesForAlertId === selectedAlert.id}
-                isAddingNote={addingNoteForAlertId === selectedAlert.id}
+                alertId={latestSelectedAlert.id}
+                noteDraft={noteDrafts[latestSelectedAlert.id] || ""}
+                notes={alertNotes[latestSelectedAlert.id] || []}
+                isLoadingNotes={loadingNotesForAlertId === latestSelectedAlert.id}
+                isAddingNote={addingNoteForAlertId === latestSelectedAlert.id}
                 onDraftChange={(value) =>
                   setNoteDrafts((prev) => ({
                     ...prev,
-                    [selectedAlert.id]: value,
+                    [latestSelectedAlert.id]: value,
                   }))
                 }
                 onAddNote={addAlertNote}

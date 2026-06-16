@@ -57,11 +57,19 @@ def _login_super_admin(client):
     assert resp.status_code == 200
 
 
-def _insert_blocked_ip(cur, *, ip_address, reason="contract test block", status="active"):
+def _insert_blocked_ip(
+    cur,
+    *,
+    ip_address,
+    reason="contract test block",
+    status="active",
+    expires_interval=None,
+):
+    expires_sql = "NULL" if expires_interval is None else f"NOW() + INTERVAL '{expires_interval}'"
     cur.execute(
-        """
-        INSERT INTO blocked_ips (ip_address, reason, status, created_by)
-        VALUES (%s, %s, %s, %s)
+        f"""
+        INSERT INTO blocked_ips (ip_address, reason, status, created_by, expires_at)
+        VALUES (%s, %s, %s, %s, {expires_sql})
         RETURNING id
         """,
         (ip_address, reason, status, "testadmin"),
@@ -96,6 +104,29 @@ def test_get_blocked_ips_authenticated_returns_200_stable_shape(client, postgres
     entry = data[0]
     for field in REQUIRED_BLOCKED_IP_FIELDS:
         assert field in entry, f"Missing required field in /blocked-ips response: {field}"
+
+
+def test_get_blocked_ips_normalizes_expired_active_entry_as_expired(client, postgres_db):
+    conn, cur = postgres_db
+    block_id = _insert_blocked_ip(
+        cur,
+        ip_address=VALID_BLOCKABLE_IP,
+        status="active",
+        expires_interval="-1 hour",
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get("/blocked-ips")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    entry = next(item for item in data if item["id"] == block_id)
+    assert entry["status"] == "expired"
+
+    cur.execute("SELECT status FROM blocked_ips WHERE id = %s", (block_id,))
+    assert cur.fetchone()[0] == "active"
 
 
 # ---------------------------------------------------------------------------

@@ -21,7 +21,21 @@ def list_blocked_ips():
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT id, ip_address, reason, status, created_by, created_at, expires_at, source_alert_id
+            SELECT
+                id,
+                ip_address,
+                reason,
+                CASE
+                    WHEN status = 'active'
+                     AND expires_at IS NOT NULL
+                     AND expires_at <= NOW()
+                    THEN 'expired'
+                    ELSE status
+                END AS effective_status,
+                created_by,
+                created_at,
+                expires_at,
+                source_alert_id
             FROM blocked_ips
             ORDER BY created_at DESC
             """

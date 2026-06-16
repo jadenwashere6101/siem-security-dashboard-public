@@ -96,6 +96,7 @@ def get_ip_reputation(source_ip, cur=None):
             FROM blocked_ips
             WHERE ip_address = %s
               AND status = 'active'
+              AND (expires_at IS NULL OR expires_at > NOW())
             """,
             (source_ip,),
         )

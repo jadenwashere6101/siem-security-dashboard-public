@@ -18,11 +18,12 @@ def _insert_alert(cur, source_ip, alert_type):
     )
 
 
-def _insert_blocked_ip(cur, source_ip):
+def _insert_blocked_ip(cur, source_ip, expires_interval=None):
+    expires_sql = "NULL" if expires_interval is None else f"NOW() + INTERVAL '{expires_interval}'"
     cur.execute(
-        """
-        INSERT INTO blocked_ips (ip_address, reason, status, created_by)
-        VALUES (%s, %s, %s, %s)
+        f"""
+        INSERT INTO blocked_ips (ip_address, reason, status, created_by, expires_at)
+        VALUES (%s, %s, %s, %s, {expires_sql})
         """,
         (source_ip, "test block", "active", "pytest"),
     )
@@ -59,6 +60,33 @@ def test_base_detection_and_blocklist_scoring_is_unchanged(postgres_db):
     assert _signal_by_name(reputation, "port_scan_threshold")["total"] == 4
     assert _signal_by_name(reputation, "http_error_threshold")["total"] == 2
     assert _signal_by_name(reputation, "high_request_rate_threshold")["total"] == 3
+    assert _signal_by_name(reputation, "blocked_ips")["total"] == 6
+
+
+def test_expired_active_blocklist_entry_does_not_count_toward_reputation(postgres_db):
+    _, cur = postgres_db
+    source_ip = "198.51.100.15"
+    _insert_blocked_ip(cur, source_ip, expires_interval="-1 hour")
+
+    reputation = get_ip_reputation(source_ip, cur=cur)
+
+    assert reputation["reputation_score"] == 0
+    assert reputation["reputation_label"] == "Normal"
+    assert not any(
+        signal["signal"] == "blocked_ips"
+        for signal in reputation["contributing_signals"]
+    )
+
+
+def test_non_expired_active_blocklist_entry_still_counts_toward_reputation(postgres_db):
+    _, cur = postgres_db
+    source_ip = "198.51.100.16"
+    _insert_blocked_ip(cur, source_ip, expires_interval="1 hour")
+
+    reputation = get_ip_reputation(source_ip, cur=cur)
+
+    assert reputation["reputation_score"] == 6
+    assert reputation["reputation_label"] == "Suspicious"
     assert _signal_by_name(reputation, "blocked_ips")["total"] == 6
 
 
