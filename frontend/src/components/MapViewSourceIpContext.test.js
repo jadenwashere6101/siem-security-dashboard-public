@@ -72,3 +72,44 @@ test("MapView opens source-IP context from selected marker source IP", async () 
   expect(await screen.findByText("Alerts")).toBeInTheDocument();
   expect(loadSourceIpContext).toHaveBeenCalledWith("8.8.8.8");
 });
+
+test("MapView attack details popup is vertically scrollable for long context", async () => {
+  render(
+    <MapView
+      alerts={[
+        {
+          id: 9,
+          alert_type: "failed_login_threshold",
+          source_ip: "8.8.8.8",
+          latitude: 40.7128,
+          longitude: -74.006,
+          city: "New York",
+          country: "United States",
+          severity: "high",
+          message: "Failed login threshold exceeded",
+          reputation_score: 71,
+          reputation_label: "abuseipdb-high",
+          reputation_source: "abuseipdb",
+          reputation_summary: "Stored AbuseIPDB snapshot",
+          behavioral_reputation: {
+            score: 12,
+            label: "High Risk",
+            source: "siem_internal",
+            summary: "Password spraying activity",
+            contributing_signals: [],
+          },
+        },
+      ]}
+    />
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "alert marker" }));
+
+  const popup = screen.getByTestId("map-attack-details-popup");
+  expect(popup).toHaveStyle({
+    maxHeight: "calc(100% - 40px)",
+    overflowY: "auto",
+    overflowX: "hidden",
+  });
+  expect(await screen.findByText("Alerts")).toBeInTheDocument();
+});

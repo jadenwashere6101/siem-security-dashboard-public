@@ -239,19 +239,8 @@ function MapView({ alerts }) {
 
       {selectedAlert && (
         <div
-          style={{
-            position: "absolute",
-            top: "20px",
-            right: "20px",
-            width: "320px",
-            padding: "14px",
-            background: "#111827",
-            border: "1px solid #374151",
-            borderRadius: "10px",
-            color: "#e5e7eb",
-            boxShadow: "0 4px 12px rgba(0, 0, 0, 0.35)",
-            zIndex: 10
-          }}
+          data-testid="map-attack-details-popup"
+          style={attackDetailsPopupStyle}
         >
           <div
             style={{
@@ -359,6 +348,26 @@ const zoomButtonStyle = {
   borderRadius: "8px",
   padding: "8px 12px",
   cursor: "pointer"
+};
+
+const attackDetailsPopupStyle = {
+  position: "absolute",
+  top: "20px",
+  right: "20px",
+  width: "min(360px, calc(100% - 40px))",
+  maxWidth: "360px",
+  maxHeight: "calc(100% - 40px)",
+  overflowY: "auto",
+  overflowX: "hidden",
+  padding: "14px",
+  background: "#111827",
+  border: "1px solid #374151",
+  borderRadius: "10px",
+  color: "#e5e7eb",
+  boxShadow: "0 4px 12px rgba(0, 0, 0, 0.35)",
+  zIndex: 10,
+  boxSizing: "border-box",
+  overscrollBehavior: "contain",
 };
 
 const mapReputationBadgeStyle = {
