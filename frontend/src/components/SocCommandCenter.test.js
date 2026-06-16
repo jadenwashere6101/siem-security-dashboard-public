@@ -72,6 +72,17 @@ jest.mock("../services/soarQueueService", () => ({
   loadSoarQueueStatus: jest.fn(),
 }));
 
+jest.mock("./SourceIpContext", () => ({
+  __esModule: true,
+  default: ({ sourceIp }) => (
+    <section data-testid="source-ip-context">
+      <h3>Source-IP Context</h3>
+      <p>{sourceIp}</p>
+      <p>Mocked normalized source-IP context</p>
+    </section>
+  ),
+}));
+
 const incidentAlpha = {
   id: 7,
   title: "High-risk identity incident",
@@ -308,6 +319,30 @@ describe("SocCommandCenter", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /webhook drift incident/i }));
     await waitFor(() => expect(loadIncidentDetail).toHaveBeenCalledWith(8));
+  });
+
+  test("opens and closes source-IP context drawer from selected incident source", async () => {
+    renderPanel();
+
+    expect((await screen.findAllByText("High-risk identity incident")).length).toBeGreaterThan(0);
+    await waitFor(() => expect(loadIncidentDetail).toHaveBeenCalledWith(7));
+
+    const sourceIpButton = await screen.findByRole("button", {
+      name: "Open source-IP context for 203.0.113.10",
+    });
+    expect(sourceIpButton).toHaveTextContent("203.0.113.10");
+
+    await userEvent.click(sourceIpButton);
+
+    const drawer = screen.getByRole("dialog", { name: "Source-IP Context" });
+    expect(within(drawer).getAllByRole("heading", { name: "Source-IP Context" }).length).toBeGreaterThan(0);
+    expect(within(drawer).getByTestId("source-ip-context")).toBeInTheDocument();
+    expect(within(drawer).getByText("203.0.113.10")).toBeInTheDocument();
+    expect(within(drawer).getByText("Mocked normalized source-IP context")).toBeInTheDocument();
+
+    await userEvent.click(within(drawer).getByRole("button", { name: "Close source-IP context drawer" }));
+
+    expect(screen.queryByRole("dialog", { name: "Source-IP Context" })).not.toBeInTheDocument();
   });
 
   test("renders empty states for sparse API data", async () => {

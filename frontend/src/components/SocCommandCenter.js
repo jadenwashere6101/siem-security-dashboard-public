@@ -25,6 +25,7 @@ import {
   loadSoarQueueStatus,
 } from "../services/soarQueueService";
 import ExecutionSafetyModelPanel from "./ExecutionSafetyModelPanel";
+import SourceIpContext from "./SourceIpContext";
 
 // spec: SPEC-UI-004 - SOC safety model wording separates real workflows from guarded integrations.
 const SOURCE_LIMIT = 12;
@@ -539,6 +540,7 @@ function SocCommandCenter({
     loading: false,
     error: "",
   });
+  const [selectedSourceIp, setSelectedSourceIp] = useState(null);
   const viewportWidth = useViewportWidth();
   const useSingleColumn = viewportWidth < 980;
   const useCompactWorkspace = viewportWidth < 760;
@@ -845,7 +847,20 @@ function SocCommandCenter({
                       </div>
                       <div>
                         <dt style={detailTermStyle}>Source</dt>
-                        <dd style={detailValueStyle}>{valueOrFallback(selectedIncident.source_ip)}</dd>
+                        <dd style={detailValueStyle}>
+                          {selectedIncident.source_ip ? (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedSourceIp(selectedIncident.source_ip)}
+                              style={sourceIpButtonStyle}
+                              aria-label={`Open source-IP context for ${selectedIncident.source_ip}`}
+                            >
+                              {selectedIncident.source_ip}
+                            </button>
+                          ) : (
+                            valueOrFallback(selectedIncident.source_ip)
+                          )}
+                        </dd>
                       </div>
                     </dl>
                     <div style={contextGridStyle}>
@@ -957,6 +972,42 @@ function SocCommandCenter({
           </section>
         </aside>
       </div>
+
+      {selectedSourceIp ? (
+        <div
+          style={sourceIpDrawerOverlayStyle}
+          onClick={() => setSelectedSourceIp(null)}
+          role="presentation"
+        >
+          <aside
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="source-ip-context-drawer-title"
+            style={sourceIpDrawerStyle}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div style={sourceIpDrawerHeaderStyle}>
+              <div>
+                <p style={sectionLabelStyle}>Investigation</p>
+                <h3 id="source-ip-context-drawer-title" style={sourceIpDrawerTitleStyle}>
+                  Source-IP Context
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedSourceIp(null)}
+                style={drawerCloseButtonStyle}
+                aria-label="Close source-IP context drawer"
+              >
+                Close
+              </button>
+            </div>
+            <div style={sourceIpDrawerBodyStyle}>
+              <SourceIpContext sourceIp={selectedSourceIp} />
+            </div>
+          </aside>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -1271,6 +1322,19 @@ const detailValueStyle = {
   fontWeight: "700",
 };
 
+const sourceIpButtonStyle = {
+  margin: 0,
+  padding: 0,
+  border: "none",
+  background: "transparent",
+  color: "#93c5fd",
+  font: "inherit",
+  fontWeight: "800",
+  textDecoration: "underline",
+  textUnderlineOffset: "3px",
+  cursor: "pointer",
+};
+
 const contextGridStyle = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
@@ -1489,6 +1553,67 @@ const badgeToneStyles = {
     border: "1px solid rgba(63, 185, 80, 0.34)",
     backgroundColor: "rgba(63, 185, 80, 0.14)",
   },
+};
+
+const sourceIpDrawerOverlayStyle = {
+  position: "fixed",
+  inset: 0,
+  zIndex: 50,
+  display: "flex",
+  justifyContent: "flex-end",
+  padding: "16px",
+  backgroundColor: "rgba(13, 17, 23, 0.42)",
+  boxSizing: "border-box",
+};
+
+const sourceIpDrawerStyle = {
+  width: "min(420px, calc(100vw - 32px))",
+  maxHeight: "calc(100vh - 32px)",
+  display: "flex",
+  flexDirection: "column",
+  overflow: "hidden",
+  border: "1px solid #30363d",
+  borderRadius: "12px",
+  backgroundColor: "#0d1117",
+  boxShadow: "0 18px 48px rgba(0, 0, 0, 0.45)",
+};
+
+const sourceIpDrawerHeaderStyle = {
+  flex: "0 0 auto",
+  display: "flex",
+  alignItems: "flex-start",
+  justifyContent: "space-between",
+  gap: "12px",
+  padding: "16px",
+  borderBottom: "1px solid #30363d",
+  backgroundColor: "#161b22",
+};
+
+const sourceIpDrawerTitleStyle = {
+  margin: 0,
+  color: "#e6edf3",
+  fontSize: "18px",
+  fontWeight: "800",
+};
+
+const drawerCloseButtonStyle = {
+  border: "1px solid #30363d",
+  backgroundColor: "#0d1117",
+  color: "#e6edf3",
+  borderRadius: "999px",
+  padding: "7px 10px",
+  fontSize: "12px",
+  fontWeight: "800",
+  cursor: "pointer",
+};
+
+const sourceIpDrawerBodyStyle = {
+  flex: "1 1 auto",
+  minHeight: 0,
+  overflowY: "auto",
+  overflowX: "hidden",
+  padding: "0 16px 16px",
+  overscrollBehavior: "contain",
 };
 
 export default SocCommandCenter;
