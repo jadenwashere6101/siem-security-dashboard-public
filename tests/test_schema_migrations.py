@@ -156,7 +156,7 @@ def test_schema_snapshot_marker_matches_latest_migration():
         migrations_dir=repo_root / "migrations",
     )
 
-    assert version == 11
+    assert version == 12
 
 
 def test_schema_snapshot_validator_rejects_missing_marker(tmp_path):
@@ -625,3 +625,17 @@ def test_soar_dead_letters_migration_scope():
     for index in expected_indexes:
         assert index in sql
     assert "status IN ('open', 'retrying')" in sql
+
+
+def test_soar_response_outcomes_migration_scope():
+    migration_path = (
+        Path(__file__).resolve().parent.parent / "migrations" / "0012_soar_response_outcomes.sql"
+    )
+    sql = migration_path.read_text(encoding="utf-8")
+
+    assert "CREATE TABLE IF NOT EXISTS soar_response_decisions" in sql
+    assert "CREATE TABLE IF NOT EXISTS soar_response_outcome_events" in sql
+    assert "ADD COLUMN IF NOT EXISTS decision_id INTEGER" in sql
+    assert "ADD COLUMN IF NOT EXISTS soar_correlation_id VARCHAR(128)" in sql
+    assert "idx_soar_response_outcome_events_decision_latest" in sql
+    assert "DROP" not in sql.upper()

@@ -12,21 +12,21 @@
 
 ## 1. Phase 1 - Data Model and Schema Migration
 
-- [ ] 1.1 Draft migration for additive `soar_response_decisions` table with SOAR correlation id, related alert/incident/playbook/queue/approval ids, source IP, selected action, decision source, actor user, reason code, safe metadata, and timestamps.
-- [ ] 1.2 Draft migration for additive append-only `soar_response_outcome_events` table with decision linkage, SOAR correlation id, related entity ids, execution mode/state, `external_executed`, `tracking_recorded`, `simulated`, execution actor, summary, reason code, provider/adapter fields, idempotency key, safe metadata, and timestamps.
-- [ ] 1.3 Add database constraints for allowed `execution_mode` values: `observed`, `simulation`, `tracking_only`, `real`.
-- [ ] 1.4 Add database constraints for allowed `execution_state` values: `observed`, `selected`, `queued`, `awaiting_approval`, `running`, `skipped`, `blocked`, `succeeded`, `failed`.
-- [ ] 1.5 Add database constraints for allowed `decision_source` values: `detection_default`, `correlation`, `playbook`, `manual`, `migration`.
-- [ ] 1.6 Add database constraints for allowed `execution_actor` values: `queue_worker`, `playbook_worker`, `adapter`, `approval_service`, `manual`, `system`.
-- [ ] 1.7 Add database constraints for canonical reason codes: `approval_required`, `approval_denied`, `simulation_mode`, `tracking_only`, `adapter_unavailable`, `provider_error`, `policy_blocked`, `duplicate_suppressed`, `unsupported_action`.
-- [ ] 1.8 Add boolean compatibility constraints: only `real/succeeded` may set `external_executed=true`; only `tracking_only/succeeded` may set `tracking_recorded=true`; only `simulation` may set `simulated=true`; `observed` must set all three false.
-- [ ] 1.9 Add required indexes for `alert_id`, `incident_id`, `source_ip`, `soar_correlation_id`, `decision_id`, and `created_at`.
-- [ ] 1.10 Add secondary indexes for queue id, playbook execution/step, approval request, notification delivery, mode/state/time, and idempotency keys where useful.
-- [ ] 1.11 Decide and implement nullable linkage columns on existing tables only where needed: `soar_correlation_id`, `decision_id`, and `latest_outcome_event_id`.
-- [ ] 1.12 Avoid adding duplicated canonical outcome fields to legacy tables unless they are explicitly documented as snapshot-only.
-- [ ] 1.13 Update schema snapshot after migration.
-- [ ] 1.14 Run schema validation script and record validation output.
-- [ ] 1.15 Add migration tests for constraints, indexes, linkage fields, idempotency uniqueness, and additive compatibility.
+- [x] 1.1 Draft migration for additive `soar_response_decisions` table with SOAR correlation id, related alert/incident/playbook/queue/approval ids, source IP, selected action, decision source, actor user, reason code, safe metadata, and timestamps.
+- [x] 1.2 Draft migration for additive append-only `soar_response_outcome_events` table with decision linkage, SOAR correlation id, related entity ids, execution mode/state, `external_executed`, `tracking_recorded`, `simulated`, execution actor, summary, reason code, provider/adapter fields, idempotency key, safe metadata, and timestamps.
+- [x] 1.3 Add database constraints for allowed `execution_mode` values: `observed`, `simulation`, `tracking_only`, `real`.
+- [x] 1.4 Add database constraints for allowed `execution_state` values: `observed`, `selected`, `queued`, `awaiting_approval`, `running`, `skipped`, `blocked`, `succeeded`, `failed`.
+- [x] 1.5 Add database constraints for allowed `decision_source` values: `detection_default`, `correlation`, `playbook`, `manual`, `migration`.
+- [x] 1.6 Add database constraints for allowed `execution_actor` values: `queue_worker`, `playbook_worker`, `adapter`, `approval_service`, `manual`, `system`.
+- [x] 1.7 Add database constraints for canonical reason codes: `approval_required`, `approval_denied`, `simulation_mode`, `tracking_only`, `adapter_unavailable`, `provider_error`, `policy_blocked`, `duplicate_suppressed`, `unsupported_action`.
+- [x] 1.8 Add boolean compatibility constraints: only `real/succeeded` may set `external_executed=true`; only `tracking_only/succeeded` may set `tracking_recorded=true`; only `simulation` may set `simulated=true`; `observed` must set all three false.
+- [x] 1.9 Add required indexes for `alert_id`, `incident_id`, `source_ip`, `soar_correlation_id`, `decision_id`, and `created_at`.
+- [x] 1.10 Add secondary indexes for queue id, playbook execution/step, approval request, notification delivery, mode/state/time, and idempotency keys where useful.
+- [x] 1.11 Implement nullable `soar_correlation_id` and `decision_id` linkage columns on legacy SOAR tables; defer `latest_outcome_event_id` to a later phase to avoid circular migration dependencies.
+- [x] 1.12 Avoid adding duplicated canonical outcome fields to legacy tables unless they are explicitly documented as snapshot-only.
+- [x] 1.13 Update schema snapshot after migration.
+- [x] 1.14 Run schema validation script and record validation output.
+- [x] 1.15 Add migration tests for constraints, indexes, linkage fields, idempotency uniqueness, and additive compatibility.
 
 ## 2. Phase 2 - Backend Outcome Writer and Read Model Helpers
 
