@@ -5,6 +5,7 @@ HONEYPOT_EVENT_TYPES = frozenset({
     "admin_probe",
     "scanner_detected",
     "credential_stuffing",
+    "http_error",
 })
 
 RAW_PASSWORD_FIELD_NAMES = frozenset({
@@ -20,15 +21,20 @@ def reject_raw_password_fields(event_dict):
     if event_type not in HONEYPOT_EVENT_TYPES:
         return
 
-    for field_name in RAW_PASSWORD_FIELD_NAMES:
-        if field_name in event_dict and event_dict[field_name] not in (None, ""):
-            raise ValueError(f"Raw password field '{field_name}' is not allowed")
+    _reject_raw_password_fields_recursive(event_dict)
 
-    raw_payload = event_dict.get("raw_payload")
-    if isinstance(raw_payload, dict):
-        for field_name in RAW_PASSWORD_FIELD_NAMES:
-            if field_name in raw_payload and raw_payload[field_name] not in (None, ""):
-                raise ValueError(f"Raw password field 'raw_payload.{field_name}' is not allowed")
+
+def _reject_raw_password_fields_recursive(value, path="payload"):
+    if isinstance(value, dict):
+        for key, child_value in value.items():
+            key_text = str(key).strip().lower()
+            child_path = f"{path}.{key}" if path else str(key)
+            if key_text in RAW_PASSWORD_FIELD_NAMES:
+                raise ValueError(f"Raw password field '{child_path}' is not allowed")
+            _reject_raw_password_fields_recursive(child_value, child_path)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _reject_raw_password_fields_recursive(item, f"{path}[{index}]")
 
 
 def _safe_non_empty_string(value):

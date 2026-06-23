@@ -22,6 +22,7 @@ from helpers.ingest_normalizers import (
     _get_otel_app_name,
     _is_azure_identity_payload,
     has_valid_location,
+    reject_raw_password_fields,
 )
 from core.ip_helpers import lookup_ip_location
 
@@ -40,6 +41,20 @@ VALID_EVENT_TYPES = {
     "admin_probe",
     "scanner_detected",
     "credential_stuffing",
+}
+HONEYPOT_INGEST_EVENT_TYPES = {
+    "env_probe",
+    "admin_probe",
+    "scanner_detected",
+    "credential_stuffing",
+    "http_error",
+}
+HONEYPOT_SEVERITY_BY_EVENT_TYPE = {
+    "env_probe": "high",
+    "admin_probe": "medium",
+    "scanner_detected": "medium",
+    "credential_stuffing": "high",
+    "http_error": "medium",
 }
 INCIDENT_SEVERITIES = {"HIGH", "CRITICAL"}
 
@@ -84,6 +99,62 @@ def _create_playbook_executions_for_alerts(alerts_created, conn):
             "[PLAYBOOK ORCHESTRATION ERROR] Post-commit playbook scheduling failed — ingest was committed: %s",
             playbook_error,
         )
+
+
+def _normalize_honeypot_event(data):
+    event_type = data.get("event_type")
+    source_ip = data.get("source_ip")
+
+    if not event_type or not source_ip:
+        raise ValueError("Missing required fields")
+
+    if event_type not in HONEYPOT_INGEST_EVENT_TYPES:
+        raise ValueError("Invalid event_type")
+
+    try:
+        ipaddress.ip_address(str(source_ip))
+    except ValueError as error:
+        raise ValueError("Invalid source_ip") from error
+
+    raw_payload = dict(data)
+    normalized = {
+        "event_type": event_type,
+        "severity": HONEYPOT_SEVERITY_BY_EVENT_TYPE[event_type],
+        "source_ip": source_ip,
+        "source": "honeypot",
+        "source_type": "honeypot",
+        "event_timestamp": data.get("timestamp"),
+        "message": _build_honeypot_message(data),
+        "app_name": "flask_honeypot",
+        "environment": str(data.get("environment") or "prod").strip() or "prod",
+        "raw_payload": raw_payload,
+    }
+    reject_raw_password_fields(normalized)
+    return normalized
+
+
+def _build_honeypot_message(data):
+    event_type = data.get("event_type")
+    source_ip = data.get("source_ip")
+    method = str(data.get("method") or "UNKNOWN").strip() or "UNKNOWN"
+    path = str(data.get("path") or "/").strip() or "/"
+
+    if event_type == "env_probe":
+        return f"Honeypot sensitive path probe from {source_ip}: {method} {path}"
+    if event_type == "admin_probe":
+        return f"Honeypot admin path probe from {source_ip}: {method} {path}"
+    if event_type == "scanner_detected":
+        scanner_context = (
+            str(data.get("scanner_signature") or data.get("user_agent") or "unknown scanner").strip()
+            or "unknown scanner"
+        )
+        return f"Honeypot scanner detected from {source_ip}: {scanner_context}"
+    if event_type == "credential_stuffing":
+        username = str(data.get("username") or "unknown username").strip() or "unknown username"
+        return f"Honeypot credential stuffing attempt from {source_ip} for username {username}"
+    if event_type == "http_error":
+        return f"Honeypot HTTP error from {source_ip}: {method} {path}"
+    return f"Honeypot event from {source_ip}"
 
 
 @ingest_bp.route("/ingest", methods=["POST"])
@@ -189,6 +260,69 @@ def add_event():
         print("Error in add_event:", e)
         return jsonify({"error": "Internal server error"}), 500
 
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+
+@ingest_bp.route("/ingest/honeypot", methods=["POST"])
+def add_honeypot_event():
+    api_key_error = require_api_key()
+    if api_key_error:
+        return api_key_error
+
+    conn = None
+    cur = None
+
+    try:
+        data = request.get_json()
+        if not isinstance(data, dict):
+            return jsonify({"error": "Invalid JSON"}), 400
+
+        try:
+            normalized_event = _normalize_honeypot_event(data)
+        except ValueError as error:
+            return jsonify({"error": str(error)}), 400
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        alerts_created = ingest_normalized_event(normalized_event, conn, cur)
+
+        conn.commit()
+
+        try:
+            enqueue_committed_alerts(alerts_created, conn)
+            conn.commit()
+        except Exception as enqueue_error:
+            current_app.logger.error(
+                "[SOAR ENQUEUE ERROR] Post-commit enqueue failed — ingest was committed: %s",
+                enqueue_error,
+            )
+
+        try:
+            _create_incidents_for_alerts(alerts_created, conn)
+            conn.commit()
+        except Exception as incident_error:
+            current_app.logger.error(
+                "[SOAR INCIDENT FAILED] Post-commit incident creation failed — ingest was committed: %s | alerts=%s",
+                incident_error,
+                [(a.get("alert_id"), a.get("source_ip"), a.get("severity")) for a in alerts_created],
+            )
+
+        _create_playbook_executions_for_alerts(alerts_created, conn)
+
+        return jsonify({
+            "message": "Honeypot event ingested successfully",
+            "alerts_created": alerts_created,
+        }), 201
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        current_app.logger.error("Error in add_honeypot_event: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
     finally:
         if cur:
             cur.close()
