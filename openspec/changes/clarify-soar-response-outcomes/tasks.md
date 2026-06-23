@@ -30,20 +30,20 @@
 
 ## 2. Phase 2 - Backend Outcome Writer and Read Model Helpers
 
-- [ ] 2.1 Create canonical enum/constants module for execution modes, execution states, decision sources, execution actors, reason codes, and UI labels.
-- [ ] 2.2 Create decision model validation helper for selected action, decision source, actor user, SOAR correlation id safety, and safe metadata.
-- [ ] 2.3 Create outcome event validation helper for enum compatibility and `external_executed`/`tracking_recorded`/`simulated` boolean rules.
-- [ ] 2.4 Create safe metadata sanitizer that rejects or redacts secrets, URLs, tokens, raw payloads, raw provider responses, raw headers, and unsafe exception strings.
-- [ ] 2.5 Create SOAR correlation id generator for new response lifecycles.
-- [ ] 2.6 Create deterministic legacy SOAR correlation id helper for migration/backfill.
-- [ ] 2.7 Create decision writer helper that inserts or finds canonical decision rows.
-- [ ] 2.8 Create append-only outcome event writer helper with idempotency-key support.
-- [ ] 2.9 Create latest-outcome read helper by decision id, alert id, source IP, incident id, queue id, playbook execution id, approval request id, notification delivery id, and SOAR correlation id.
+- [x] 2.1 Create canonical enum/constants module for execution modes, execution states, decision sources, execution actors, reason codes, and UI labels.
+- [x] 2.2 Create decision model validation helper for selected action, decision source, actor user, SOAR correlation id safety, and safe metadata.
+- [x] 2.3 Create outcome event validation helper for enum compatibility and `external_executed`/`tracking_recorded`/`simulated` boolean rules.
+- [x] 2.4 Create safe metadata sanitizer that rejects or redacts secrets, URLs, tokens, raw payloads, raw provider responses, raw headers, and unsafe exception strings.
+- [x] 2.5 Create SOAR correlation id generator for new response lifecycles.
+- [x] 2.6 Create deterministic legacy SOAR correlation id helper for migration/backfill.
+- [x] 2.7 Create decision writer helper that inserts or finds canonical decision rows.
+- [x] 2.8 Create append-only outcome event writer helper with idempotency-key support.
+- [x] 2.9 Create latest-outcome read helper by decision id, alert id, source IP, incident id, queue id, playbook execution id, approval request id, notification delivery id, and SOAR correlation id.
 - [ ] 2.10 Create compatibility resolver that infers canonical latest outcome payloads when no decision/event row exists.
-- [ ] 2.11 Add unit tests for valid and invalid decision writes.
-- [ ] 2.12 Add unit tests for valid and invalid outcome event writes.
-- [ ] 2.13 Add unit tests for metadata redaction and SOAR correlation id safety.
-- [ ] 2.14 Add unit tests for latest-outcome ordering and conservative compatibility inference from legacy records.
+- [x] 2.11 Add unit tests for valid and invalid decision writes.
+- [x] 2.12 Add unit tests for valid and invalid outcome event writes.
+- [x] 2.13 Add unit tests for metadata redaction and SOAR correlation id safety.
+- [x] 2.14 Add unit tests for latest-outcome ordering and read-model defaults when no events exist.
 
 ## 3. Phase 3 - Backfill Dry-Run and Compatibility Verification
 
