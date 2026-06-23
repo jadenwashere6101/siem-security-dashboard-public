@@ -39,7 +39,7 @@
 - [x] 2.7 Create decision writer helper that inserts or finds canonical decision rows.
 - [x] 2.8 Create append-only outcome event writer helper with idempotency-key support.
 - [x] 2.9 Create latest-outcome read helper by decision id, alert id, source IP, incident id, queue id, playbook execution id, approval request id, notification delivery id, and SOAR correlation id.
-- [ ] 2.10 Create compatibility resolver that infers canonical latest outcome payloads when no decision/event row exists.
+- [x] 2.10 Create compatibility resolver that infers canonical latest outcome payloads when no decision/event row exists.
 - [x] 2.11 Add unit tests for valid and invalid decision writes.
 - [x] 2.12 Add unit tests for valid and invalid outcome event writes.
 - [x] 2.13 Add unit tests for metadata redaction and SOAR correlation id safety.
@@ -47,16 +47,16 @@
 
 ## 3. Phase 3 - Backfill Dry-Run and Compatibility Verification
 
-- [ ] 3.1 Implement dry-run scanner for observed-only alert outcomes without writing canonical rows.
-- [ ] 3.2 Implement dry-run scanner for existing queue rows by status.
-- [ ] 3.3 Implement dry-run scanner for existing response action log rows, including simulation and tracking-only inference.
-- [ ] 3.4 Implement dry-run scanner for existing playbook executions and `steps_log` entries.
-- [ ] 3.5 Implement dry-run scanner for existing approval requests and approval request events.
-- [ ] 3.6 Implement dry-run scanner for existing notification delivery attempts.
-- [ ] 3.7 Implement dry-run scanner for existing blocklist rows where source alert linkage exists.
-- [ ] 3.8 Report dry-run counts by source table, decision source, execution mode/state, reason code, `external_executed`, `tracking_recorded`, and `simulated`.
-- [ ] 3.9 Add compatibility resolver tests proving old records can answer the primary analyst question before broad UI migration.
-- [ ] 3.10 Add idempotency checks proving repeated dry-run and later write-mode backfill cannot create duplicate decisions/events.
+- [x] 3.1 Implement dry-run scanner for observed-only alert outcomes without writing canonical rows.
+- [x] 3.2 Implement dry-run scanner for existing queue rows by status.
+- [x] 3.3 Implement dry-run scanner for existing response action log rows, including simulation and tracking-only inference.
+- [x] 3.4 Implement dry-run scanner for existing playbook executions and `steps_log` entries.
+- [x] 3.5 Implement dry-run scanner for existing approval requests and approval request events.
+- [x] 3.6 Implement dry-run scanner for existing notification delivery attempts.
+- [x] 3.7 Implement dry-run scanner for existing blocklist rows where source alert linkage exists.
+- [x] 3.8 Report dry-run counts by source table, decision source, execution mode/state, reason code, `external_executed`, `tracking_recorded`, and `simulated`.
+- [x] 3.9 Add compatibility resolver tests proving old records can answer the primary analyst question before broad UI migration.
+- [x] 3.10 Add idempotency checks proving repeated dry-run and later write-mode backfill cannot create duplicate decisions/events.
 - [ ] 3.11 Review dry-run output against representative local data and update mapping rules before enabling write-mode backfill.
 
 ## 4. Phase 4 - Queue and Response Log Normalization
