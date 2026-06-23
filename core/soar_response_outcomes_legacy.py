@@ -146,10 +146,28 @@ def _details_indicates_tracking_only(details: str | None) -> bool:
     return any(hint in text for hint in _TRACKING_ONLY_HINTS)
 
 
+def _notification_metadata_has_provider_success_evidence(metadata: Any) -> bool:
+    if not isinstance(metadata, dict):
+        return False
+    http_status = metadata.get("http_status")
+    try:
+        if http_status is not None and 200 <= int(http_status) < 300:
+            return True
+    except (TypeError, ValueError):
+        pass
+    delivery = str(metadata.get("delivery") or "").strip().lower()
+    return delivery in {"sent", "delivered", "accepted", "success"}
+
+
 def _notification_metadata_confirms_execution(metadata: Any) -> bool:
     if not isinstance(metadata, dict):
         return False
-    return metadata.get("executed") is True
+    if metadata.get("executed") is not True:
+        return False
+    if metadata.get("simulated") is not False:
+        return False
+    adapter_mode = str(metadata.get("adapter_mode") or metadata.get("mode") or "").strip().lower()
+    return adapter_mode == "real" or _notification_metadata_has_provider_success_evidence(metadata)
 
 
 def _coerce_steps_log(raw_steps_log: Any) -> list[dict[str, Any]]:
@@ -323,6 +341,88 @@ def infer_alert_legacy_outcome(
         ambiguous=True,
         needs_review=True,
         ambiguity_reason="response_action_without_queue_or_log",
+    )
+
+
+def infer_alert_notification_legacy_outcome(
+    *,
+    alert_id: int,
+    source_ip: str | None,
+    response_action: str | None,
+    attempt_id: int,
+    incident_id: int | None,
+    playbook_execution_id: int | None,
+    approval_request_id: int | None,
+    approval_status: str | None,
+    action: str,
+    mode: str,
+    status: str,
+    metadata: Any,
+    failure_message: str | None,
+) -> LegacyMappingResult:
+    correlation_id = generate_legacy_soar_correlation_id("alerts", alert_id)
+    if approval_status in {"denied", "expired"}:
+        return LegacyMappingResult(
+            source_table="alerts",
+            source_id=alert_id,
+            soar_correlation_id=correlation_id,
+            selected_action=response_action or action,
+            decision_source="detection_default",
+            execution_mode="simulation",
+            execution_state="blocked",
+            external_executed=False,
+            tracking_recorded=False,
+            simulated=False,
+            execution_actor="approval_service",
+            outcome_summary=failure_message or f"Linked approval request was {approval_status}.",
+            reason_code="approval_denied",
+            alert_id=alert_id,
+            incident_id=incident_id,
+            source_ip=source_ip,
+            playbook_execution_id=playbook_execution_id,
+            approval_request_id=approval_request_id,
+            notification_delivery_attempt_id=attempt_id,
+            proposed_decision=True,
+            proposed_event_count=1,
+        )
+
+    notification_mapping = infer_notification_delivery_legacy_outcome(
+        attempt_id=attempt_id,
+        alert_id=alert_id,
+        incident_id=incident_id,
+        playbook_execution_id=playbook_execution_id,
+        approval_request_id=approval_request_id,
+        action=action,
+        mode=mode,
+        status=status,
+        metadata=metadata,
+        failure_message=failure_message,
+    )
+    return LegacyMappingResult(
+        source_table="alerts",
+        source_id=alert_id,
+        soar_correlation_id=correlation_id,
+        selected_action=response_action or notification_mapping.selected_action,
+        decision_source="detection_default",
+        execution_mode=notification_mapping.execution_mode,
+        execution_state=notification_mapping.execution_state,
+        external_executed=notification_mapping.external_executed,
+        tracking_recorded=notification_mapping.tracking_recorded,
+        simulated=notification_mapping.simulated,
+        execution_actor=notification_mapping.execution_actor,
+        outcome_summary=notification_mapping.outcome_summary,
+        reason_code=notification_mapping.reason_code,
+        ambiguous=notification_mapping.ambiguous,
+        needs_review=notification_mapping.needs_review,
+        ambiguity_reason=notification_mapping.ambiguity_reason,
+        alert_id=alert_id,
+        incident_id=incident_id,
+        source_ip=source_ip,
+        playbook_execution_id=playbook_execution_id,
+        approval_request_id=approval_request_id,
+        notification_delivery_attempt_id=attempt_id,
+        proposed_decision=True,
+        proposed_event_count=1,
     )
 
 
@@ -736,6 +836,7 @@ def infer_playbook_execution_legacy_outcome(
     status: str,
     steps_log: Any,
     failure_reason: str | None,
+    real_notification_confirmed: bool = False,
 ) -> LegacyMappingResult:
     correlation_id = generate_legacy_soar_correlation_id("playbook_executions", execution_id)
     base = dict(
@@ -801,7 +902,7 @@ def infer_playbook_execution_legacy_outcome(
             reason_code="provider_error" if status == "failed" else "unsupported_action",
         )
     if status in {"success", "completed"}:
-        if external_executed:
+        if external_executed and real_notification_confirmed:
             return LegacyMappingResult(
                 **base,
                 execution_mode="real",
@@ -811,9 +912,24 @@ def infer_playbook_execution_legacy_outcome(
                 simulated=False,
                 execution_actor="playbook_worker",
                 outcome_summary="Legacy playbook step reported real execution.",
+            )
+        if external_executed:
+            return LegacyMappingResult(
+                **base,
+                execution_mode="simulation",
+                execution_state="succeeded",
+                external_executed=False,
+                tracking_recorded=False,
+                simulated=True,
+                execution_actor="playbook_worker",
+                outcome_summary=(
+                    "Legacy playbook step reported execution in nested output, "
+                    "but no corroborating real notification delivery was found."
+                ),
+                reason_code="simulation_mode",
                 ambiguous=True,
                 needs_review=True,
-                ambiguity_reason="playbook_real_execution_requires_manual_review",
+                ambiguity_reason="playbook_real_execution_without_notification_corroboration",
             )
         if tracking_recorded:
             return LegacyMappingResult(
@@ -908,6 +1024,20 @@ def resolve_alert_outcome(conn, alert_id: int) -> dict[str, Any] | None:
             (alert_id,),
         )
         has_log = bool(cur.fetchone()[0])
+        cur.execute(
+            """
+            SELECT n.id, n.incident_id, n.playbook_execution_id, n.approval_request_id,
+                   ar.status AS approval_status, n.action, n.mode, n.status,
+                   n.metadata, n.failure_message
+            FROM notification_delivery_attempts n
+            LEFT JOIN approval_requests ar ON ar.id = n.approval_request_id
+            WHERE n.alert_id = %s
+            ORDER BY n.created_at DESC, n.id DESC
+            LIMIT 1
+            """,
+            (alert_id,),
+        )
+        notification_row = cur.fetchone()
 
     return _resolve_canonical_or_infer(
         conn,
@@ -915,12 +1045,30 @@ def resolve_alert_outcome(conn, alert_id: int) -> dict[str, Any] | None:
         source_id=alert_id,
         lookup_column="alert_id",
         lookup_value=alert_id,
-        infer_fn=lambda: infer_alert_legacy_outcome(
-            alert_id=alert_id,
-            source_ip=row[1],
-            response_action=row[2],
-            has_queue=has_queue,
-            has_log=has_log,
+        infer_fn=lambda: (
+            infer_alert_notification_legacy_outcome(
+                alert_id=alert_id,
+                source_ip=row[1],
+                response_action=row[2],
+                attempt_id=notification_row[0],
+                incident_id=notification_row[1],
+                playbook_execution_id=notification_row[2],
+                approval_request_id=notification_row[3],
+                approval_status=notification_row[4],
+                action=notification_row[5],
+                mode=notification_row[6],
+                status=notification_row[7],
+                metadata=notification_row[8],
+                failure_message=notification_row[9],
+            )
+            if notification_row is not None
+            else infer_alert_legacy_outcome(
+                alert_id=alert_id,
+                source_ip=row[1],
+                response_action=row[2],
+                has_queue=has_queue,
+                has_log=has_log,
+            )
         ),
     )
 
@@ -1107,6 +1255,31 @@ def resolve_playbook_execution_outcome(conn, playbook_execution_id: int) -> dict
             (playbook_execution_id,),
         )
         row = cur.fetchone()
+        cur.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM notification_delivery_attempts
+                WHERE playbook_execution_id = %s
+                  AND mode = 'real'
+                  AND status = 'success'
+                  AND metadata->>'executed' = 'true'
+                  AND metadata->>'simulated' = 'false'
+                  AND (
+                    metadata->>'adapter_mode' = 'real'
+                    OR metadata->>'mode' = 'real'
+                    OR metadata->>'delivery' IN ('sent', 'delivered', 'accepted', 'success')
+                    OR (
+                        metadata ? 'http_status'
+                        AND (metadata->>'http_status') ~ '^[0-9]+$'
+                        AND (metadata->>'http_status')::integer BETWEEN 200 AND 299
+                    )
+                  )
+            )
+            """,
+            (playbook_execution_id,),
+        )
+        real_notification_confirmed = bool(cur.fetchone()[0])
     if row is None:
         return None
 
@@ -1127,6 +1300,7 @@ def resolve_playbook_execution_outcome(conn, playbook_execution_id: int) -> dict
         status=row[3],
         steps_log=row[4],
         failure_reason=row[5],
+        real_notification_confirmed=real_notification_confirmed,
     ).to_read_model()
 
 
@@ -1204,15 +1378,46 @@ def plan_backfill_dry_run(conn) -> BackfillDryRunPlan:
                 (alert_id,),
             )
             has_log = bool(cur.fetchone()[0])
+            cur.execute(
+                """
+                SELECT n.id, n.incident_id, n.playbook_execution_id, n.approval_request_id,
+                       ar.status AS approval_status, n.action, n.mode, n.status,
+                       n.metadata, n.failure_message
+                FROM notification_delivery_attempts n
+                LEFT JOIN approval_requests ar ON ar.id = n.approval_request_id
+                WHERE n.alert_id = %s
+                ORDER BY n.created_at DESC, n.id DESC
+                LIMIT 1
+                """,
+                (alert_id,),
+            )
+            notification_row = cur.fetchone()
             if _find_canonical_decision_id(conn, column="alert_id", value=alert_id):
                 continue
-            mapping = infer_alert_legacy_outcome(
-                alert_id=alert_id,
-                source_ip=source_ip,
-                response_action=response_action,
-                has_queue=has_queue,
-                has_log=has_log,
-            )
+            if notification_row is not None:
+                mapping = infer_alert_notification_legacy_outcome(
+                    alert_id=alert_id,
+                    source_ip=source_ip,
+                    response_action=response_action,
+                    attempt_id=notification_row[0],
+                    incident_id=notification_row[1],
+                    playbook_execution_id=notification_row[2],
+                    approval_request_id=notification_row[3],
+                    approval_status=notification_row[4],
+                    action=notification_row[5],
+                    mode=notification_row[6],
+                    status=notification_row[7],
+                    metadata=notification_row[8],
+                    failure_message=notification_row[9],
+                )
+            else:
+                mapping = infer_alert_legacy_outcome(
+                    alert_id=alert_id,
+                    source_ip=source_ip,
+                    response_action=response_action,
+                    has_queue=has_queue,
+                    has_log=has_log,
+                )
             _record_plan_item(plan, mapping)
 
         cur.execute(
@@ -1283,6 +1488,31 @@ def plan_backfill_dry_run(conn) -> BackfillDryRunPlan:
         for row in cur.fetchall():
             if row[7] is not None:
                 continue
+            cur.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM notification_delivery_attempts
+                    WHERE playbook_execution_id = %s
+                      AND mode = 'real'
+                      AND status = 'success'
+                      AND metadata->>'executed' = 'true'
+                      AND metadata->>'simulated' = 'false'
+                      AND (
+                        metadata->>'adapter_mode' = 'real'
+                        OR metadata->>'mode' = 'real'
+                        OR metadata->>'delivery' IN ('sent', 'delivered', 'accepted', 'success')
+                        OR (
+                            metadata ? 'http_status'
+                            AND (metadata->>'http_status') ~ '^[0-9]+$'
+                            AND (metadata->>'http_status')::integer BETWEEN 200 AND 299
+                        )
+                      )
+                )
+                """,
+                (row[0],),
+            )
+            real_notification_confirmed = bool(cur.fetchone()[0])
             _record_plan_item(
                 plan,
                 infer_playbook_execution_legacy_outcome(
@@ -1293,6 +1523,7 @@ def plan_backfill_dry_run(conn) -> BackfillDryRunPlan:
                     status=row[4],
                     steps_log=row[5],
                     failure_reason=row[6],
+                    real_notification_confirmed=real_notification_confirmed,
                 ),
             )
 
@@ -1347,6 +1578,27 @@ def plan_backfill_dry_run(conn) -> BackfillDryRunPlan:
         for row in cur.fetchall():
             if row[10] is not None:
                 continue
+            if (
+                row[3] is not None
+                and row[6] == "real"
+                and row[7] == "success"
+                and _notification_metadata_confirms_execution(row[8])
+            ):
+                # Playbook-linked notification attempts are represented by the
+                # playbook execution outcome when they corroborate a real send.
+                cur.execute(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM playbook_executions
+                        WHERE id = %s
+                          AND decision_id IS NULL
+                    )
+                    """,
+                    (row[3],),
+                )
+                if bool(cur.fetchone()[0]):
+                    continue
             _record_plan_item(
                 plan,
                 infer_notification_delivery_legacy_outcome(

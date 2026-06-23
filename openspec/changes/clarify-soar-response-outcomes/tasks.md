@@ -57,7 +57,7 @@
 - [x] 3.8 Report dry-run counts by source table, decision source, execution mode/state, reason code, `external_executed`, `tracking_recorded`, and `simulated`.
 - [x] 3.9 Add compatibility resolver tests proving old records can answer the primary analyst question before broad UI migration.
 - [x] 3.10 Add idempotency checks proving repeated dry-run and later write-mode backfill cannot create duplicate decisions/events.
-- [ ] 3.11 Review dry-run output against representative local data and update mapping rules before enabling write-mode backfill.
+- [x] 3.11 Review dry-run output against representative local data and update mapping rules before enabling write-mode backfill.
 
 ## 4. Phase 4 - Queue and Response Log Normalization
 

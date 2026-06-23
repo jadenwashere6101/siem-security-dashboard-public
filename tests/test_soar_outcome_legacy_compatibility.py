@@ -1,11 +1,13 @@
 import uuid
 
 import pytest
+from psycopg2.extras import Json
 
 from core import soar_response_outcomes as outcomes
 from core.soar_response_outcomes_legacy import (
     infer_alert_legacy_outcome,
     infer_notification_delivery_legacy_outcome,
+    infer_playbook_execution_legacy_outcome,
     infer_queue_legacy_outcome,
     infer_response_log_legacy_outcome,
 )
@@ -64,6 +66,58 @@ def _insert_approval(cur, queue_id, action="block_ip", status="pending"):
     return cur.fetchone()[0]
 
 
+def _insert_incident(cur, source_ip="203.0.113.10"):
+    cur.execute(
+        """
+        INSERT INTO incidents (title, severity, source_ip)
+        VALUES ('incident', 'MEDIUM', %s::inet)
+        RETURNING id
+        """,
+        (source_ip,),
+    )
+    return cur.fetchone()[0]
+
+
+def _insert_incident_approval(cur, incident_id, action="block_ip", status="denied"):
+    decided_at = "NOW()" if status != "pending" else "NULL"
+    cur.execute(
+        f"""
+        INSERT INTO approval_requests (
+            incident_id, action, status, expires_at, decided_at, request_reason
+        )
+        VALUES (%s, %s, %s, NOW() + INTERVAL '1 hour', {decided_at}, 'approval required')
+        RETURNING id
+        """,
+        (incident_id, action, status),
+    )
+    return cur.fetchone()[0]
+
+
+def _insert_playbook_definition(cur, playbook_id="pb_test"):
+    cur.execute(
+        """
+        INSERT INTO playbook_definitions (id, name, steps)
+        VALUES (%s, 'Test Playbook', '[]'::jsonb)
+        ON CONFLICT (id) DO NOTHING
+        """,
+        (playbook_id,),
+    )
+    return playbook_id
+
+
+def _insert_playbook_execution(cur, *, playbook_id="pb_test", status="success", steps_log=None):
+    _insert_playbook_definition(cur, playbook_id)
+    cur.execute(
+        """
+        INSERT INTO playbook_executions (playbook_id, status, steps_log)
+        VALUES (%s, %s, %s::jsonb)
+        RETURNING id
+        """,
+        (playbook_id, status, Json(steps_log or [])),
+    )
+    return cur.fetchone()[0]
+
+
 def _count_table(cur, table_name):
     cur.execute(f"SELECT COUNT(*) FROM {table_name}")
     return cur.fetchone()[0]
@@ -94,6 +148,71 @@ def test_resolve_selected_alert_with_response_action_only(postgres_db):
     assert read_model["selected_action"] == "monitor"
     assert read_model["ambiguous"] is True
     assert read_model["needs_review"] is True
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_resolve_alert_direct_blocked_notification_takes_precedence(postgres_db):
+    conn, cur = postgres_db
+    from core import notification_delivery_store
+
+    alert_id = _insert_alert(cur, response_action="notify")
+    row = notification_delivery_store.create_notification_delivery_attempt(
+        conn,
+        correlation_id="provider-corr-alert-blocked",
+        idempotency_key=f"idem-{uuid.uuid4().hex}",
+        provider="slack",
+        mode="simulation",
+        status="blocked",
+        adapter_name="slack",
+        action="send_message",
+        alert_id=alert_id,
+        metadata={"simulation": True},
+        failure_code="simulation_blocked",
+        failure_message="simulated policy block only",
+    )
+    conn.commit()
+
+    read_model = outcomes.resolve_alert_outcome(conn, alert_id)
+    assert read_model["source_table"] == "alerts"
+    assert read_model["execution_mode"] == "simulation"
+    assert read_model["execution_state"] == "blocked"
+    assert read_model["outcome_label"] == "Blocked"
+    assert read_model["related"]["notification_delivery_attempt_id"] == row["id"]
+    assert read_model["ambiguous"] is False
+    assert read_model["needs_review"] is False
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_resolve_alert_notification_linked_denied_approval_is_blocked(postgres_db):
+    conn, cur = postgres_db
+    from core import notification_delivery_store
+
+    alert_id = _insert_alert(cur, response_action="notify")
+    incident_id = _insert_incident(cur)
+    approval_id = _insert_incident_approval(cur, incident_id, status="denied")
+    notification_delivery_store.create_notification_delivery_attempt(
+        conn,
+        correlation_id="provider-corr-alert-denied",
+        idempotency_key=f"idem-{uuid.uuid4().hex}",
+        provider="slack",
+        mode="simulation",
+        status="blocked",
+        adapter_name="slack",
+        action="send_message",
+        alert_id=alert_id,
+        incident_id=incident_id,
+        approval_request_id=approval_id,
+        metadata={"simulation": True},
+        failure_message="simulated policy block only",
+    )
+    conn.commit()
+
+    read_model = outcomes.resolve_alert_outcome(conn, alert_id)
+    assert read_model["execution_state"] == "blocked"
+    assert read_model["reason_code"] == "approval_denied"
+    assert read_model["related"]["incident_id"] == incident_id
+    assert read_model["related"]["approval_request_id"] == approval_id
+    assert read_model["ambiguous"] is False
 
 
 @pytest.mark.usefixtures("postgres_db")
@@ -210,7 +329,7 @@ def test_resolve_real_notification_success_requires_executed_metadata(postgres_d
         status="success",
         adapter_name="slack",
         action="send_message",
-        metadata={"executed": True},
+        metadata={"executed": True, "simulated": False, "adapter_mode": "real"},
     )
     conn.commit()
 
@@ -243,6 +362,119 @@ def test_ambiguous_real_notification_without_executed_metadata_is_not_real(postg
     assert read_model["external_executed"] is False
     assert read_model["ambiguous"] is True
     assert read_model["needs_review"] is True
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_real_notification_success_requires_simulated_false(postgres_db):
+    conn, cur = postgres_db
+    from core import notification_delivery_store
+
+    row = notification_delivery_store.create_notification_delivery_attempt(
+        conn,
+        correlation_id="provider-corr-sim-missing",
+        idempotency_key=f"idem-{uuid.uuid4().hex}",
+        provider="slack",
+        mode="real",
+        status="success",
+        adapter_name="slack",
+        action="send_message",
+        metadata={"executed": True, "adapter_mode": "real"},
+    )
+    conn.commit()
+
+    read_model = outcomes.resolve_notification_delivery_outcome(conn, row["id"])
+    assert read_model["execution_mode"] == "simulation"
+    assert read_model["external_executed"] is False
+    assert read_model["ambiguous"] is True
+    assert read_model["needs_review"] is True
+
+
+def test_playbook_nested_adapter_execution_alone_is_not_real():
+    mapping = infer_playbook_execution_legacy_outcome(
+        execution_id=1,
+        alert_id=None,
+        incident_id=None,
+        playbook_id="pb",
+        status="success",
+        failure_reason=None,
+        steps_log=[
+            {
+                "action": "notify_slack",
+                "mode": "simulation",
+                "simulated": True,
+                "executed": False,
+                "output": {
+                    "simulated": True,
+                    "executed": False,
+                    "adapter_result": {
+                        "mode": "real",
+                        "success": True,
+                        "executed": True,
+                        "simulated": False,
+                    },
+                },
+            }
+        ],
+    )
+
+    assert mapping.execution_mode == "simulation"
+    assert mapping.execution_state == "succeeded"
+    assert mapping.external_executed is False
+    assert mapping.ambiguous is True
+    assert mapping.needs_review is True
+    assert (
+        mapping.ambiguity_reason
+        == "playbook_real_execution_without_notification_corroboration"
+    )
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_playbook_real_execution_requires_notification_corroboration(postgres_db):
+    conn, cur = postgres_db
+    from core import notification_delivery_store
+
+    execution_id = _insert_playbook_execution(
+        cur,
+        steps_log=[
+            {
+                "action": "notify_slack",
+                "output": {
+                    "adapter_result": {
+                        "mode": "real",
+                        "success": True,
+                        "executed": True,
+                        "simulated": False,
+                    }
+                },
+            }
+        ],
+    )
+    notification_delivery_store.create_notification_delivery_attempt(
+        conn,
+        correlation_id="provider-corr-playbook-real",
+        idempotency_key=f"idem-{uuid.uuid4().hex}",
+        provider="slack",
+        mode="real",
+        status="success",
+        adapter_name="slack",
+        action="send_message",
+        playbook_execution_id=execution_id,
+        playbook_step_index=0,
+        metadata={
+            "executed": True,
+            "simulated": False,
+            "adapter_mode": "real",
+            "delivery": "sent",
+        },
+    )
+    conn.commit()
+
+    read_model = outcomes.resolve_playbook_execution_outcome(conn, execution_id)
+    assert read_model["execution_mode"] == "real"
+    assert read_model["execution_state"] == "succeeded"
+    assert read_model["external_executed"] is True
+    assert read_model["outcome_label"] == "Real executed"
+    assert read_model["ambiguous"] is False
 
 
 @pytest.mark.usefixtures("postgres_db")
