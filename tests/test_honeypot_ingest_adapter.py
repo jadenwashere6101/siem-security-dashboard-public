@@ -44,6 +44,7 @@ def install_route_db(monkeypatch, postgres_db):
     import routes.ingest_routes as ingest_routes
 
     monkeypatch.setattr(ingest_routes, "get_db_connection", lambda: ConnectionProxy(conn))
+    monkeypatch.setattr(ingest_routes, "lookup_ip_location", lambda _ip: {})
     monkeypatch.setattr(ingest_routes, "enqueue_committed_alerts", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(ingest_routes, "_create_incidents_for_alerts", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
@@ -68,6 +69,26 @@ def fetch_event(cur, source_ip):
             environment,
             raw_payload
         FROM events
+        WHERE source_ip = %s
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (source_ip,),
+    )
+    return cur.fetchone()
+
+
+def fetch_alert(cur, source_ip):
+    cur.execute(
+        """
+        SELECT
+            alert_type,
+            host(source_ip),
+            country,
+            city,
+            latitude,
+            longitude
+        FROM alerts
         WHERE source_ip = %s
         ORDER BY id DESC
         LIMIT 1
@@ -110,6 +131,70 @@ def test_valid_env_probe_is_accepted_and_stored_with_honeypot_source(client, mon
     assert event[4] == "honeypot"
     assert event[7] == "flask_honeypot"
     assert event[8] == "honeypot"
+
+
+def test_honeypot_ingest_adds_lookup_location_to_raw_payload(client, monkeypatch, postgres_db):
+    monkeypatch.setenv("SIEM_INGEST_API_KEY", VALID_API_KEY)
+    install_route_db(monkeypatch, postgres_db)
+    import routes.ingest_routes as ingest_routes
+
+    monkeypatch.setattr(
+        ingest_routes,
+        "lookup_ip_location",
+        lambda _ip: {
+            "country": "Netherlands",
+            "city": "Amsterdam",
+            "lat": 52.3676,
+            "lon": 4.9041,
+        },
+    )
+    _conn, cur = postgres_db
+    source_ip = "203.0.113.87"
+
+    response = post_honeypot(client, honeypot_payload(source_ip=source_ip))
+
+    assert response.status_code == 201
+    raw_payload = fetch_event(cur, source_ip)[9]
+    assert raw_payload["location"] == {
+        "country": "Netherlands",
+        "city": "Amsterdam",
+        "lat": 52.3676,
+        "lon": 4.9041,
+    }
+
+
+def test_honeypot_alert_uses_ingested_location(client, monkeypatch, postgres_db):
+    monkeypatch.setenv("SIEM_INGEST_API_KEY", VALID_API_KEY)
+    install_route_db(monkeypatch, postgres_db)
+    import engines.detection_engine as detection_engine
+    import routes.ingest_routes as ingest_routes
+
+    monkeypatch.setattr(detection_engine, "lookup_ip_reputation", lambda _ip: REPUTATION)
+    monkeypatch.setattr(
+        ingest_routes,
+        "lookup_ip_location",
+        lambda _ip: {
+            "country": "Germany",
+            "city": "Frankfurt am Main",
+            "lat": 50.1109,
+            "lon": 8.6821,
+        },
+    )
+    _conn, cur = postgres_db
+    source_ip = "203.0.113.88"
+
+    response = post_honeypot(
+        client,
+        honeypot_payload(event_type="scanner_detected", source_ip=source_ip),
+    )
+
+    assert response.status_code == 201
+    alert = fetch_alert(cur, source_ip)
+    assert alert[0] == "honeypot_scanner_detected"
+    assert alert[2] == "Germany"
+    assert alert[3] == "Frankfurt am Main"
+    assert alert[4] == 50.1109
+    assert alert[5] == 8.6821
 
 
 @pytest.mark.parametrize(

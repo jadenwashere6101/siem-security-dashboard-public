@@ -157,6 +157,16 @@ def _build_honeypot_message(data):
     return f"Honeypot event from {source_ip}"
 
 
+def _add_location_to_normalized_event(normalized_event):
+    raw_payload = normalized_event.setdefault("raw_payload", {})
+    if has_valid_location(raw_payload.get("location")):
+        return
+
+    location = lookup_ip_location(normalized_event.get("source_ip"))
+    if has_valid_location(location):
+        raw_payload["location"] = location
+
+
 @ingest_bp.route("/ingest", methods=["POST"])
 @limiter.limit("200 per minute")
 def add_event():
@@ -285,6 +295,8 @@ def add_honeypot_event():
             normalized_event = _normalize_honeypot_event(data)
         except ValueError as error:
             return jsonify({"error": str(error)}), 400
+
+        _add_location_to_normalized_event(normalized_event)
 
         conn = get_db_connection()
         cur = conn.cursor()
