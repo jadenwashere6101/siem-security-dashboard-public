@@ -999,3 +999,487 @@ def _generate_high_request_rate_alerts_core(cur, conn, source=None, source_type=
         )
 
     return alerts_created
+
+
+def _fetch_latest_honeypot_location(cur, source_ip, event_type):
+    cur.execute(
+        """
+        SELECT
+            raw_payload->'location'->>'country',
+            raw_payload->'location'->>'city',
+            NULLIF(raw_payload->'location'->>'lat', '')::double precision,
+            NULLIF(raw_payload->'location'->>'lon', '')::double precision
+        FROM events
+        WHERE source_ip = %s
+          AND event_type = %s
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (source_ip, event_type),
+    )
+    location_row = cur.fetchone()
+    if not location_row:
+        return None, None, None, None
+    return location_row[0], location_row[1], location_row[2], location_row[3]
+
+
+def _generate_env_probe_alerts_core(cur, conn, source=None, source_type=None):
+    rule_config = get_effective_detection_rule("honeypot_env_probe_threshold", cur=cur)
+    threshold = rule_config["parameters"]["threshold"]
+    window_minutes = rule_config["parameters"]["window_minutes"]
+
+    cur.execute(
+        f"""
+        WITH extracted_paths AS (
+            SELECT
+                source_ip,
+                NULLIF(LOWER(TRIM(raw_payload->>'path')), '') AS normalized_path
+            FROM events
+            WHERE event_type = 'env_probe'
+              AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
+        )
+        SELECT source_ip, COUNT(DISTINCT normalized_path) AS distinct_path_count
+        FROM extracted_paths
+        WHERE normalized_path IS NOT NULL
+        GROUP BY source_ip
+        HAVING COUNT(DISTINCT normalized_path) >= %s
+        """,
+        (threshold,),
+    )
+
+    rows = cur.fetchall()
+    alerts_created = []
+
+    for row in rows:
+        source_ip = row[0]
+        distinct_path_count = row[1]
+        reputation = lookup_ip_reputation(str(source_ip))
+        reputation_score = reputation["reputation_score"]
+        response_action = determine_response_action(reputation_score)
+        response_status = "pending"
+        reputation_label = reputation["reputation_label"]
+        reputation_source = reputation["reputation_source"]
+        reputation_summary = reputation["reputation_summary"]
+        country, city, latitude, longitude = _fetch_latest_honeypot_location(cur, source_ip, "env_probe")
+
+        message = (
+            f"Sensitive file probing detected from {source_ip}: "
+            f"{distinct_path_count} distinct paths"
+        )
+
+        cur.execute(
+            """
+            SELECT 1 FROM alerts
+            WHERE source_ip = %s
+              AND alert_type = %s
+              AND status = 'open'
+            """,
+            (source_ip, "honeypot_env_probe_threshold"),
+        )
+
+        if cur.fetchone():
+            continue
+
+        cur.execute(
+            """
+            INSERT INTO alerts (
+                source_ip,
+                alert_type,
+                severity,
+                source,
+                source_type,
+                message,
+                status,
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                source_ip,
+                "honeypot_env_probe_threshold",
+                "high",
+                source,
+                source_type,
+                message,
+                "open",
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary,
+            ),
+        )
+
+        cur.execute("SELECT currval(pg_get_serial_sequence('alerts', 'id'))")
+        alert_id = cur.fetchone()[0]
+
+        alerts_created.append(
+            {
+                "source_ip": source_ip,
+                "distinct_path_count": distinct_path_count,
+                "alert_id": alert_id,
+                "response_action": response_action,
+                "severity": "high",
+            }
+        )
+
+    return alerts_created
+
+
+def _generate_admin_probe_alerts_core(cur, conn, source=None, source_type=None):
+    rule_config = get_effective_detection_rule("honeypot_admin_probe_threshold", cur=cur)
+    threshold = rule_config["parameters"]["threshold"]
+    window_minutes = rule_config["parameters"]["window_minutes"]
+
+    cur.execute(
+        f"""
+        WITH extracted_paths AS (
+            SELECT
+                source_ip,
+                NULLIF(LOWER(TRIM(raw_payload->>'path')), '') AS normalized_path
+            FROM events
+            WHERE event_type = 'admin_probe'
+              AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
+        )
+        SELECT source_ip, COUNT(DISTINCT normalized_path) AS distinct_path_count
+        FROM extracted_paths
+        WHERE normalized_path IS NOT NULL
+        GROUP BY source_ip
+        HAVING COUNT(DISTINCT normalized_path) >= %s
+        """,
+        (threshold,),
+    )
+
+    rows = cur.fetchall()
+    alerts_created = []
+
+    for row in rows:
+        source_ip = row[0]
+        distinct_path_count = row[1]
+        reputation = lookup_ip_reputation(str(source_ip))
+        reputation_score = reputation["reputation_score"]
+        response_action = determine_response_action(reputation_score)
+        response_status = "pending"
+        reputation_label = reputation["reputation_label"]
+        reputation_source = reputation["reputation_source"]
+        reputation_summary = reputation["reputation_summary"]
+        country, city, latitude, longitude = _fetch_latest_honeypot_location(cur, source_ip, "admin_probe")
+
+        message = (
+            f"Admin panel probing detected from {source_ip}: "
+            f"{distinct_path_count} distinct paths"
+        )
+
+        cur.execute(
+            """
+            SELECT 1 FROM alerts
+            WHERE source_ip = %s
+              AND alert_type = %s
+              AND status = 'open'
+            """,
+            (source_ip, "honeypot_admin_probe_threshold"),
+        )
+
+        if cur.fetchone():
+            continue
+
+        cur.execute(
+            """
+            INSERT INTO alerts (
+                source_ip,
+                alert_type,
+                severity,
+                source,
+                source_type,
+                message,
+                status,
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                source_ip,
+                "honeypot_admin_probe_threshold",
+                "medium",
+                source,
+                source_type,
+                message,
+                "open",
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary,
+            ),
+        )
+
+        cur.execute("SELECT currval(pg_get_serial_sequence('alerts', 'id'))")
+        alert_id = cur.fetchone()[0]
+
+        alerts_created.append(
+            {
+                "source_ip": source_ip,
+                "distinct_path_count": distinct_path_count,
+                "alert_id": alert_id,
+                "response_action": response_action,
+                "severity": "medium",
+            }
+        )
+
+    return alerts_created
+
+
+def _generate_scanner_detected_alerts_core(cur, conn, source=None, source_type=None):
+    rule_config = get_effective_detection_rule("honeypot_scanner_detected", cur=cur)
+    threshold = rule_config["parameters"]["threshold"]
+    window_minutes = rule_config["parameters"]["window_minutes"]
+
+    cur.execute(
+        f"""
+        SELECT source_ip, COUNT(*) AS scanner_events
+        FROM events
+        WHERE event_type = 'scanner_detected'
+          AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
+        GROUP BY source_ip
+        HAVING COUNT(*) >= %s
+        """,
+        (threshold,),
+    )
+
+    rows = cur.fetchall()
+    alerts_created = []
+
+    for row in rows:
+        source_ip = row[0]
+        scanner_events = row[1]
+        reputation = lookup_ip_reputation(str(source_ip))
+        reputation_score = reputation["reputation_score"]
+        response_action = determine_response_action(reputation_score)
+        response_status = "pending"
+        reputation_label = reputation["reputation_label"]
+        reputation_source = reputation["reputation_source"]
+        reputation_summary = reputation["reputation_summary"]
+        country, city, latitude, longitude = _fetch_latest_honeypot_location(cur, source_ip, "scanner_detected")
+
+        message = f"Scanner activity detected from {source_ip}: {scanner_events} scanner events"
+
+        cur.execute(
+            """
+            SELECT 1 FROM alerts
+            WHERE source_ip = %s
+              AND alert_type = %s
+              AND status = 'open'
+            """,
+            (source_ip, "honeypot_scanner_detected"),
+        )
+
+        if cur.fetchone():
+            continue
+
+        cur.execute(
+            """
+            INSERT INTO alerts (
+                source_ip,
+                alert_type,
+                severity,
+                source,
+                source_type,
+                message,
+                status,
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                source_ip,
+                "honeypot_scanner_detected",
+                "medium",
+                source,
+                source_type,
+                message,
+                "open",
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary,
+            ),
+        )
+
+        cur.execute("SELECT currval(pg_get_serial_sequence('alerts', 'id'))")
+        alert_id = cur.fetchone()[0]
+
+        alerts_created.append(
+            {
+                "source_ip": source_ip,
+                "scanner_events": scanner_events,
+                "alert_id": alert_id,
+                "response_action": response_action,
+                "severity": "medium",
+            }
+        )
+
+    return alerts_created
+
+
+def _generate_credential_stuffing_alerts_core(cur, conn, source=None, source_type=None):
+    rule_config = get_effective_detection_rule("honeypot_credential_stuffing_threshold", cur=cur)
+    threshold = rule_config["parameters"]["threshold"]
+    window_minutes = rule_config["parameters"]["window_minutes"]
+
+    cur.execute(
+        f"""
+        WITH extracted_usernames AS (
+            SELECT
+                source_ip,
+                NULLIF(LOWER(TRIM(raw_payload->>'username')), '') AS normalized_username
+            FROM events
+            WHERE event_type = 'credential_stuffing'
+              AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
+        )
+        SELECT source_ip, COUNT(DISTINCT normalized_username) AS distinct_username_count
+        FROM extracted_usernames
+        WHERE normalized_username IS NOT NULL
+        GROUP BY source_ip
+        HAVING COUNT(DISTINCT normalized_username) >= %s
+        """,
+        (threshold,),
+    )
+
+    rows = cur.fetchall()
+    alerts_created = []
+
+    for row in rows:
+        source_ip = row[0]
+        distinct_username_count = row[1]
+        reputation = lookup_ip_reputation(str(source_ip))
+        reputation_score = reputation["reputation_score"]
+        response_action = determine_response_action(reputation_score)
+        response_status = "pending"
+        reputation_label = reputation["reputation_label"]
+        reputation_source = reputation["reputation_source"]
+        reputation_summary = reputation["reputation_summary"]
+        country, city, latitude, longitude = _fetch_latest_honeypot_location(
+            cur,
+            source_ip,
+            "credential_stuffing",
+        )
+
+        message = (
+            f"Credential stuffing suspected from {source_ip}: "
+            f"{distinct_username_count} distinct usernames"
+        )
+
+        cur.execute(
+            """
+            SELECT 1 FROM alerts
+            WHERE source_ip = %s
+              AND alert_type = %s
+              AND status = 'open'
+            """,
+            (source_ip, "honeypot_credential_stuffing_threshold"),
+        )
+
+        if cur.fetchone():
+            continue
+
+        cur.execute(
+            """
+            INSERT INTO alerts (
+                source_ip,
+                alert_type,
+                severity,
+                source,
+                source_type,
+                message,
+                status,
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                source_ip,
+                "honeypot_credential_stuffing_threshold",
+                "high",
+                source,
+                source_type,
+                message,
+                "open",
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary,
+            ),
+        )
+
+        cur.execute("SELECT currval(pg_get_serial_sequence('alerts', 'id'))")
+        alert_id = cur.fetchone()[0]
+
+        alerts_created.append(
+            {
+                "source_ip": source_ip,
+                "distinct_username_count": distinct_username_count,
+                "alert_id": alert_id,
+                "response_action": response_action,
+                "severity": "high",
+            }
+        )
+
+    return alerts_created

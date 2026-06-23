@@ -155,7 +155,7 @@ def test_get_admin_detection_rules_as_super_admin_returns_200_stable_shape(clien
     assert resp.status_code == 200
     data = resp.get_json()
     assert isinstance(data, list)
-    assert len(data) == 7
+    assert len(data) == 11
     assert {rule["rule_id"] for rule in data} == {
         "failed_login_threshold",
         "port_scan_threshold",
@@ -164,6 +164,10 @@ def test_get_admin_detection_rules_as_super_admin_returns_200_stable_shape(clien
         "application_exception_threshold",
         "high_request_rate_threshold",
         "successful_login_after_spray",
+        "honeypot_env_probe_threshold",
+        "honeypot_admin_probe_threshold",
+        "honeypot_scanner_detected",
+        "honeypot_credential_stuffing_threshold",
     }
     for rule in data:
         for key in (

@@ -1,5 +1,36 @@
 # spec: SPEC-INGEST-001
 # spec: SPEC-NORM-001
+HONEYPOT_EVENT_TYPES = frozenset({
+    "env_probe",
+    "admin_probe",
+    "scanner_detected",
+    "credential_stuffing",
+})
+
+RAW_PASSWORD_FIELD_NAMES = frozenset({
+    "password",
+    "passwd",
+    "pwd",
+    "user_password",
+})
+
+
+def reject_raw_password_fields(event_dict):
+    event_type = event_dict.get("event_type")
+    if event_type not in HONEYPOT_EVENT_TYPES:
+        return
+
+    for field_name in RAW_PASSWORD_FIELD_NAMES:
+        if field_name in event_dict and event_dict[field_name] not in (None, ""):
+            raise ValueError(f"Raw password field '{field_name}' is not allowed")
+
+    raw_payload = event_dict.get("raw_payload")
+    if isinstance(raw_payload, dict):
+        for field_name in RAW_PASSWORD_FIELD_NAMES:
+            if field_name in raw_payload and raw_payload[field_name] not in (None, ""):
+                raise ValueError(f"Raw password field 'raw_payload.{field_name}' is not allowed")
+
+
 def _safe_non_empty_string(value):
     if isinstance(value, str):
         stripped = value.strip()

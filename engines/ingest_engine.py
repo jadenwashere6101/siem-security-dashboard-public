@@ -3,13 +3,18 @@ from psycopg2.extras import Json
 from engines.correlation_engine import generate_correlated_activity_alerts, generate_targeted_correlation_alerts
 from engines.detection_engine import (
     _generate_application_exception_alerts_core,
+    _generate_credential_stuffing_alerts_core,
+    _generate_env_probe_alerts_core,
+    _generate_admin_probe_alerts_core,
     _generate_failed_login_alerts_core,
     _generate_high_request_rate_alerts_core,
     _generate_http_error_alerts_core,
     _generate_password_spraying_alerts_core,
     _generate_port_scan_alerts_core,
+    _generate_scanner_detected_alerts_core,
     _generate_successful_login_after_spray_alerts_core,
 )
+from helpers.ingest_normalizers import reject_raw_password_fields
 
 
 def ingest_normalized_event(event_dict, conn, cur):
@@ -27,6 +32,8 @@ def ingest_normalized_event(event_dict, conn, cur):
     app_name = event_dict["app_name"]
     environment = event_dict["environment"]
     raw_payload = event_dict["raw_payload"]
+
+    reject_raw_password_fields(event_dict)
 
     cur.execute(
         """
@@ -89,6 +96,14 @@ def ingest_normalized_event(event_dict, conn, cur):
         )
     elif event_type == "port_scan":
         alerts_created = _generate_port_scan_alerts_core(cur, conn, source=source, source_type=source_type)
+    elif event_type == "env_probe":
+        alerts_created = _generate_env_probe_alerts_core(cur, conn, source=source, source_type=source_type)
+    elif event_type == "admin_probe":
+        alerts_created = _generate_admin_probe_alerts_core(cur, conn, source=source, source_type=source_type)
+    elif event_type == "scanner_detected":
+        alerts_created = _generate_scanner_detected_alerts_core(cur, conn, source=source, source_type=source_type)
+    elif event_type == "credential_stuffing":
+        alerts_created = _generate_credential_stuffing_alerts_core(cur, conn, source=source, source_type=source_type)
 
     for correlated_source_ip in {
         str(alert.get("source_ip"))

@@ -29,6 +29,18 @@ SUCCESS_AFTER_SPRAY_FAILED_LOOKBACK_MINUTES = 30
 SUCCESS_AFTER_SPRAY_CORRELATION_WINDOW_MINUTES = 15
 SUCCESS_AFTER_SPRAY_THRESHOLD = 5
 
+HONEYPOT_ENV_PROBE_THRESHOLD = 3
+HONEYPOT_ENV_PROBE_WINDOW_MINUTES = 10
+
+HONEYPOT_ADMIN_PROBE_THRESHOLD = 3
+HONEYPOT_ADMIN_PROBE_WINDOW_MINUTES = 10
+
+HONEYPOT_SCANNER_DETECTED_THRESHOLD = 1
+HONEYPOT_SCANNER_DETECTED_WINDOW_MINUTES = 10
+
+HONEYPOT_CREDENTIAL_STUFFING_THRESHOLD = 5
+HONEYPOT_CREDENTIAL_STUFFING_WINDOW_MINUTES = 15
+
 # Shared validation bounds for admin-configurable detector settings.
 DETECTION_THRESHOLD_MIN = 1
 DETECTION_THRESHOLD_MAX = 100
@@ -109,6 +121,46 @@ def get_detection_rule_defaults():
             },
             "active": True,
             "description": "Triggers when password spraying activity is followed by a successful login from the same source.",
+        },
+        "honeypot_env_probe_threshold": {
+            "rule_id": "honeypot_env_probe_threshold",
+            "display_name": "Honeypot Env Probe Threshold",
+            "parameters": {
+                "threshold": HONEYPOT_ENV_PROBE_THRESHOLD,
+                "window_minutes": HONEYPOT_ENV_PROBE_WINDOW_MINUTES,
+            },
+            "active": True,
+            "description": "Triggers when one source IP probes multiple distinct sensitive file paths within a time window.",
+        },
+        "honeypot_admin_probe_threshold": {
+            "rule_id": "honeypot_admin_probe_threshold",
+            "display_name": "Honeypot Admin Probe Threshold",
+            "parameters": {
+                "threshold": HONEYPOT_ADMIN_PROBE_THRESHOLD,
+                "window_minutes": HONEYPOT_ADMIN_PROBE_WINDOW_MINUTES,
+            },
+            "active": True,
+            "description": "Triggers when one source IP probes multiple distinct admin paths within a time window.",
+        },
+        "honeypot_scanner_detected": {
+            "rule_id": "honeypot_scanner_detected",
+            "display_name": "Honeypot Scanner Detected",
+            "parameters": {
+                "threshold": HONEYPOT_SCANNER_DETECTED_THRESHOLD,
+                "window_minutes": HONEYPOT_SCANNER_DETECTED_WINDOW_MINUTES,
+            },
+            "active": True,
+            "description": "Triggers when scanner activity from one source IP meets the configured threshold within a time window.",
+        },
+        "honeypot_credential_stuffing_threshold": {
+            "rule_id": "honeypot_credential_stuffing_threshold",
+            "display_name": "Honeypot Credential Stuffing Threshold",
+            "parameters": {
+                "threshold": HONEYPOT_CREDENTIAL_STUFFING_THRESHOLD,
+                "window_minutes": HONEYPOT_CREDENTIAL_STUFFING_WINDOW_MINUTES,
+            },
+            "active": True,
+            "description": "Triggers when one source IP attempts logins across multiple distinct usernames within a time window.",
         },
     }
 

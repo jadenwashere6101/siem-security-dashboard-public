@@ -30,7 +30,17 @@ ingest_bp = Blueprint("ingest", __name__)
 logger = logging.getLogger(__name__)
 
 VALID_SEVERITIES = {"low", "medium", "high", "critical"}
-VALID_EVENT_TYPES = {"failed_login", "login_failure", "successful_login", "port_scan", "normal_activity"}
+VALID_EVENT_TYPES = {
+    "failed_login",
+    "login_failure",
+    "successful_login",
+    "port_scan",
+    "normal_activity",
+    "env_probe",
+    "admin_probe",
+    "scanner_detected",
+    "credential_stuffing",
+}
 INCIDENT_SEVERITIES = {"HIGH", "CRITICAL"}
 
 
