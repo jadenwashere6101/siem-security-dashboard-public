@@ -349,6 +349,60 @@ Idempotency rules:
 - Outcome event writers must include an `idempotency_key` for retries, backfill, and worker re-entry where a duplicate event would mislead analysts.
 - Re-running dry-run or write backfill must produce stable counts and must not create duplicate decisions/events.
 
+### Decision 8A: Phase 4 Queue, Response Log, and Manual Runtime Wiring
+
+Phase 4 is the first live runtime dual-write phase. It is limited to post-commit queue enqueue, queue worker transitions, `response_actions_log` linkage, and manual `/alerts/<id>/execute` outcomes. Playbook execution, approval-service event ownership, notification delivery, audit linkage, API response contracts, and write-mode backfill remain later phases unless a Phase 4 path must reference an already-created approval request or response log row.
+
+Implementation order:
+
+1. Update the response log writer to accept `decision_id` and `soar_correlation_id`, write those nullable linkage columns, and return the inserted log id.
+2. Update queue row helpers to read and return `decision_id` and `soar_correlation_id` on get/list/claim/transition/requeue/recovery paths.
+3. Update post-commit enqueue to create or link a canonical decision and append a queued event only for durable queue rows.
+4. Update worker claim handling to write running events safely before preserving the existing early-claim commit.
+5. Update worker terminal handling to append terminal outcome events and link them to response log ids.
+6. Update the manual route to write tracking-only or simulation events after the legacy side effect succeeds.
+7. Add focused tests around each slice before broader API/UI work.
+
+Queue enqueue idempotency:
+
+- `response_actions_queue` uses an idempotency key and `ON CONFLICT DO NOTHING`.
+- A duplicate enqueue result must not create another canonical decision or another queued event for the same queue lifecycle.
+- Queue decisions and queued events should use deterministic idempotency keys based on the durable queue id when the insert succeeds.
+- If duplicate suppression is represented canonically, it must use `execution_state=skipped`, `reason_code=duplicate_suppressed`, all execution booleans false, and a deterministic idempotency key so repeated enqueue attempts remain stable.
+
+Worker claim and retry behavior:
+
+- The worker currently commits immediately after claiming a queue row as `running`. Phase 4 must preserve existing queue state semantics while writing the `running` event in the same transaction as the claim and before that early commit.
+- Running events must use deterministic idempotency keys that include queue id plus claim attempt/retry context so worker restart/re-entry cannot produce misleading duplicate running evidence.
+- Retryable failures should append a failed-attempt event with sanitized summary, then append a queued/requeued event when the queue row returns to `pending`.
+- Terminal failure after retries are exhausted should append a terminal failed event and link the terminal `response_actions_log` row where one is written.
+- Non-retryable failures should append one terminal failed event and link the response log row where available.
+
+Canonical reason-code mapping:
+
+- Approval required or pending -> `approval_required`.
+- Approval denied or expired -> `approval_denied`; the summary must distinguish denied from expired.
+- Protected target, private/internal IP validation, invalid protected-target config, missing target validation, and operator/policy disabled skips -> `policy_blocked`.
+- Unsupported response action -> `unsupported_action`.
+- Adapter unavailable, retryable timeout, or provider unavailable -> `adapter_unavailable` unless positive provider failure evidence makes `provider_error` more accurate.
+- Unexpected adapter/provider exceptions -> `provider_error` with sanitized summary.
+- Duplicate enqueue suppression -> `duplicate_suppressed`.
+- Simulated executor success -> `simulation_mode`.
+- Manual SIEM-only blocklist recording -> `tracking_only`.
+
+Manual `block_ip` remains tracking-only in Phase 4:
+
+- The manual route may create a `blocked_ips` row as internal SIEM tracking state.
+- That path must not claim firewall, provider, external, or local enforcement.
+- The canonical outcome must use `execution_mode=tracking_only`, `execution_state=succeeded`, `tracking_recorded=true`, `external_executed=false`, `simulated=false`, and `reason_code=tracking_only` only after the blocklist row is durably inserted.
+- If blocklist insertion fails or is rejected as a duplicate/invalid target, no tracking-only success event should be written.
+
+Blocked IP linkage gap:
+
+- Current Phase 1 schema links canonical outcomes to alerts, queue rows, playbook executions, approval requests, notification deliveries, and response logs, but does not provide `blocked_ips.decision_id`, `blocked_ips.soar_correlation_id`, or an outcome-event `blocked_ip_id`.
+- Phase 4 explicitly defers blocked IP direct linkage unless a new additive migration is approved.
+- Until then, manual tracking-only outcomes may link through `alert_id`, `source_ip`, `decision_id`, `soar_correlation_id`, and `response_action_log_id`.
+
 ### Decision 9: Retention and Archive Strategy
 
 Canonical decisions and outcome events are audit/reporting data and should not be deleted during normal rollback.

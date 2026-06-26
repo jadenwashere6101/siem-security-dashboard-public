@@ -1,0 +1,4754 @@
+{
+  "count": 82,
+  "issue_type": "VULNERABILITY",
+  "issues": [
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_integration_adapters.py",
+      "creationDate": "2026-05-18T14:00:54+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "011a250f15de7ccf0f78358308c9ac1c",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ47ZezsnydhvRWjk2E8",
+      "lastChangeAnalysisUuid": "7e6f882e-b920-41d4-bb7a-7966b06a8b41",
+      "lastChangeSource": "ANALYSIS",
+      "line": 804,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 804,
+        "endOffset": 67,
+        "startLine": 804,
+        "startOffset": 45
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-18T14:00:54+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_playbook_metrics_routes.py",
+      "creationDate": "2026-05-17T17:58:06+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "d9c6a9698d631c27e5d38fa35224a3d7",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ43Hlh2L63nvjzRy9nY",
+      "lastChangeAnalysisUuid": "c5bebcea-e6a7-4d46-a62b-c2d42b2c19a9",
+      "lastChangeSource": "ANALYSIS",
+      "line": 131,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 131,
+        "endOffset": 74,
+        "startLine": 131,
+        "startOffset": 55
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-17T17:58:06+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_playbook_metrics_routes.py",
+      "creationDate": "2026-05-17T17:58:06+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "49ae103c9ece488e6320871c079e77ec",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ43Hlh2L63nvjzRy9nZ",
+      "lastChangeAnalysisUuid": "c5bebcea-e6a7-4d46-a62b-c2d42b2c19a9",
+      "lastChangeSource": "ANALYSIS",
+      "line": 163,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 163,
+        "endOffset": 75,
+        "startLine": 163,
+        "startOffset": 56
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-17T17:58:06+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_playbook_metrics_routes.py",
+      "creationDate": "2026-05-17T17:58:06+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "68f4ed94a5144b093c6907dd656385d3",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ43Hlh2L63nvjzRy9na",
+      "lastChangeAnalysisUuid": "c5bebcea-e6a7-4d46-a62b-c2d42b2c19a9",
+      "lastChangeSource": "ANALYSIS",
+      "line": 209,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 209,
+        "endOffset": 73,
+        "startLine": 209,
+        "startOffset": 54
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-17T17:58:06+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_playbook_metrics_routes.py",
+      "creationDate": "2026-05-17T17:58:06+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "d7ef7076734ae84447992034ead7723d",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ43Hlh2L63nvjzRy9nb",
+      "lastChangeAnalysisUuid": "c5bebcea-e6a7-4d46-a62b-c2d42b2c19a9",
+      "lastChangeSource": "ANALYSIS",
+      "line": 336,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 343,
+        "endOffset": 11,
+        "startLine": 336,
+        "startOffset": 8
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-17T17:58:06+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_metrics_routes.py",
+      "creationDate": "2026-05-17T15:51:03+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "fb4cbb5a4e8c9527371cce2adfe85065",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ42p9Y6BrFcw9uEGXN5",
+      "lastChangeAnalysisUuid": "8c2188ab-211c-4e9c-94e7-10198c754c06",
+      "lastChangeSource": "ANALYSIS",
+      "line": 195,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 195,
+        "endOffset": 101,
+        "startLine": 195,
+        "startOffset": 82
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-17T15:51:03+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_metrics_routes.py",
+      "creationDate": "2026-05-17T15:51:03+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "20348bfe6d0d958c5fdd1a59cee70dbf",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ42p9Y6BrFcw9uEGXN6",
+      "lastChangeAnalysisUuid": "8c2188ab-211c-4e9c-94e7-10198c754c06",
+      "lastChangeSource": "ANALYSIS",
+      "line": 205,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 205,
+        "endOffset": 102,
+        "startLine": 205,
+        "startOffset": 83
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-17T15:51:03+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_metrics_routes.py",
+      "creationDate": "2026-05-17T15:51:03+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "8de503c43ea0f1854388bb3765a492c6",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ42p9Y6BrFcw9uEGXN7",
+      "lastChangeAnalysisUuid": "8c2188ab-211c-4e9c-94e7-10198c754c06",
+      "lastChangeSource": "ANALYSIS",
+      "line": 218,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 218,
+        "endOffset": 100,
+        "startLine": 218,
+        "startOffset": 81
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-17T15:51:03+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_metrics_routes.py",
+      "creationDate": "2026-05-17T15:51:03+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "32ffd96e770a3586263b6ee76e2149b1",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ42p9Y6BrFcw9uEGXN8",
+      "lastChangeAnalysisUuid": "8c2188ab-211c-4e9c-94e7-10198c754c06",
+      "lastChangeSource": "ANALYSIS",
+      "line": 228,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 228,
+        "endOffset": 100,
+        "startLine": 228,
+        "startOffset": 81
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-17T15:51:03+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_metrics_routes.py",
+      "creationDate": "2026-05-17T15:51:03+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "cbcd54e309819ed50180b7d4b8aca9bf",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ42p9Y6BrFcw9uEGXN9",
+      "lastChangeAnalysisUuid": "8c2188ab-211c-4e9c-94e7-10198c754c06",
+      "lastChangeSource": "ANALYSIS",
+      "line": 258,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 258,
+        "endOffset": 101,
+        "startLine": 258,
+        "startOffset": 82
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-17T15:51:03+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_metrics_routes.py",
+      "creationDate": "2026-05-17T15:37:39+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "1f57d345668aed19598bb69e6e8cc933",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ42oAMVL63nvjzRu5Tk",
+      "lastChangeAnalysisUuid": "8c2188ab-211c-4e9c-94e7-10198c754c06",
+      "lastChangeSource": "ANALYSIS",
+      "line": 98,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 98,
+        "endOffset": 101,
+        "startLine": 98,
+        "startOffset": 82
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-17T15:37:46+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_metrics_routes.py",
+      "creationDate": "2026-05-17T15:37:39+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "b9d9776f948450828f10a6e757a8b1c7",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ42oAMVL63nvjzRu5Tl",
+      "lastChangeAnalysisUuid": "8c2188ab-211c-4e9c-94e7-10198c754c06",
+      "lastChangeSource": "ANALYSIS",
+      "line": 108,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 108,
+        "endOffset": 102,
+        "startLine": 108,
+        "startOffset": 83
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-17T15:37:46+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_metrics_routes.py",
+      "creationDate": "2026-05-17T15:37:39+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "6be5e96bbcc9a26c5120157ae2ba34dc",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ42oAMVL63nvjzRu5Tm",
+      "lastChangeAnalysisUuid": "8c2188ab-211c-4e9c-94e7-10198c754c06",
+      "lastChangeSource": "ANALYSIS",
+      "line": 122,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 122,
+        "endOffset": 100,
+        "startLine": 122,
+        "startOffset": 81
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-17T15:37:46+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_metrics_routes.py",
+      "creationDate": "2026-05-17T15:37:39+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "d514c39710dc1b0eb1e01c783670b4a7",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ42oAMVL63nvjzRu5Tn",
+      "lastChangeAnalysisUuid": "8c2188ab-211c-4e9c-94e7-10198c754c06",
+      "lastChangeSource": "ANALYSIS",
+      "line": 132,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 132,
+        "endOffset": 100,
+        "startLine": 132,
+        "startOffset": 81
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-17T15:37:46+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_metrics_routes.py",
+      "creationDate": "2026-05-17T15:37:39+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "0046e646dd8e045c2f42895eff2f12f2",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ42oAMVL63nvjzRu5To",
+      "lastChangeAnalysisUuid": "8c2188ab-211c-4e9c-94e7-10198c754c06",
+      "lastChangeSource": "ANALYSIS",
+      "line": 163,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 163,
+        "endOffset": 101,
+        "startLine": 163,
+        "startOffset": 82
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-17T15:37:46+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_dead_letter_routes.py",
+      "creationDate": "2026-05-16T22:17:01+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "ffd5052c3a1299205e2015f68a463552",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4y5cG2GVej_5Gp4nnI",
+      "lastChangeAnalysisUuid": "188dee1f-5557-4de0-9736-1916967249a0",
+      "lastChangeSource": "ANALYSIS",
+      "line": 542,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 542,
+        "endOffset": 85,
+        "startLine": 542,
+        "startOffset": 69
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-16T22:17:01+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_dead_letter_routes.py",
+      "creationDate": "2026-05-16T21:56:43+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "0a036badfa1cfe8fb38f7b9a7a641c2c",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4y0SnWg53RRSBHFLL1",
+      "lastChangeAnalysisUuid": "188dee1f-5557-4de0-9736-1916967249a0",
+      "lastChangeSource": "ANALYSIS",
+      "line": 328,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 328,
+        "endOffset": 63,
+        "startLine": 328,
+        "startOffset": 47
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-16T21:56:43+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_dead_letter_routes.py",
+      "creationDate": "2026-05-16T21:56:43+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "5387991cc4a4b8770a712683acf14525",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4y0SnWg53RRSBHFLL2",
+      "lastChangeAnalysisUuid": "188dee1f-5557-4de0-9736-1916967249a0",
+      "lastChangeSource": "ANALYSIS",
+      "line": 391,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 391,
+        "endOffset": 80,
+        "startLine": 391,
+        "startOffset": 64
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-16T21:56:43+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_dead_letter_routes.py",
+      "creationDate": "2026-05-16T21:48:11+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "08a6e7c9b84942103bf2fb1b967a1304",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4yyWv7mJyaFL6eyeaI",
+      "lastChangeAnalysisUuid": "188dee1f-5557-4de0-9736-1916967249a0",
+      "lastChangeSource": "ANALYSIS",
+      "line": 126,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 126,
+        "endOffset": 73,
+        "startLine": 126,
+        "startOffset": 57
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-16T21:48:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_dead_letter_routes.py",
+      "creationDate": "2026-05-16T21:48:11+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "944dc7da709e79e90c05ccd6ba67cb3b",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4yyWv7mJyaFL6eyeaJ",
+      "lastChangeAnalysisUuid": "188dee1f-5557-4de0-9736-1916967249a0",
+      "lastChangeSource": "ANALYSIS",
+      "line": 141,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 141,
+        "endOffset": 74,
+        "startLine": 141,
+        "startOffset": 58
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-16T21:48:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_notification_delivery_metrics_routes.py",
+      "creationDate": "2026-05-12T00:20:24+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "b377261fd10e45692627cfa2b397904f",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYqalhLVGXtYJmAM",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 103,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 103,
+        "endOffset": 98,
+        "startLine": 103,
+        "startOffset": 79
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_notification_delivery_metrics_routes.py",
+      "creationDate": "2026-05-12T00:20:24+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "f4931f78522e6fcae0d1fe7f9f9820fc",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYqalhLVGXtYJmAN",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 113,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 113,
+        "endOffset": 99,
+        "startLine": 113,
+        "startOffset": 80
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_notification_delivery_metrics_routes.py",
+      "creationDate": "2026-05-12T00:20:24+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "28c86b961d258ff57d57aa06cce4eb96",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYqalhLVGXtYJmAO",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 327,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 327,
+        "endOffset": 98,
+        "startLine": 327,
+        "startOffset": 79
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_notification_delivery_routes.py",
+      "creationDate": "2026-05-11T23:59:20+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "0bc8577244c0d4c7ee02d0ddc38e8fc4",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYtAlhLVGXtYJmDI",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 66,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 66,
+        "endOffset": 87,
+        "startLine": 66,
+        "startOffset": 68
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_notification_delivery_routes.py",
+      "creationDate": "2026-05-11T23:59:20+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "6dd6043d205affba4fa1d677888318cb",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYtAlhLVGXtYJmDJ",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 77,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 77,
+        "endOffset": 89,
+        "startLine": 77,
+        "startOffset": 69
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_notification_delivery_routes.py",
+      "creationDate": "2026-05-11T23:59:20+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "974e532e5174cf8cf8b51f20ef474d51",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYtAlhLVGXtYJmDK",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 89,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 89,
+        "endOffset": 88,
+        "startLine": 89,
+        "startOffset": 69
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_playbook_routes.py",
+      "creationDate": "2026-05-10T19:21:42+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "fa7bc20ce71a7ccfce0bdfdcec68bb5d",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYrwlhLVGXtYJmBE",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 220,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 220,
+        "endOffset": 93,
+        "startLine": 220,
+        "startOffset": 74
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_playbook_routes.py",
+      "creationDate": "2026-05-10T19:21:42+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "7c4ccf26b0df172b8bcf04195791ec86",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYrwlhLVGXtYJmBH",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 250,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 250,
+        "endOffset": 100,
+        "startLine": 250,
+        "startOffset": 81
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_playbook_routes.py",
+      "creationDate": "2026-05-10T19:21:42+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "e45a0de00a176faeaadf276e21b80cb2",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYrwlhLVGXtYJmBK",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 615,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 615,
+        "endOffset": 78,
+        "startLine": 615,
+        "startOffset": 62
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_incident_routes.py",
+      "creationDate": "2026-05-10T19:04:33+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "909c468cffeb5b5318ebdde19672a7e5",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYn_lhLVGXtYJl_q",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 364,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 364,
+        "endOffset": 29,
+        "startLine": 364,
+        "startOffset": 8
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_incident_routes.py",
+      "creationDate": "2026-05-10T19:04:33+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "1d92d1db784e174b510b58a5e159b6c1",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYn_lhLVGXtYJl_r",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 544,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 544,
+        "endOffset": 30,
+        "startLine": 544,
+        "startOffset": 8
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_incident_routes.py",
+      "creationDate": "2026-05-10T19:04:33+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "1d92d1db784e174b510b58a5e159b6c1",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYn_lhLVGXtYJl_s",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 605,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 605,
+        "endOffset": 30,
+        "startLine": 605,
+        "startOffset": 8
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_incident_routes.py",
+      "creationDate": "2026-05-10T19:04:33+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "1d92d1db784e174b510b58a5e159b6c1",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYn_lhLVGXtYJl_t",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 634,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 634,
+        "endOffset": 30,
+        "startLine": 634,
+        "startOffset": 8
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_integration_routes.py",
+      "creationDate": "2026-05-10T18:52:47+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "14526896b810a75c82cee83746ba4ea2",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYtelhLVGXtYJmDc",
+      "lastChangeAnalysisUuid": "86268ed2-42ee-4052-93fd-b2bedeaaeed7",
+      "lastChangeSource": "ANALYSIS",
+      "line": 497,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 497,
+        "endOffset": 69,
+        "startLine": 497,
+        "startOffset": 57
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_integration_routes.py",
+      "creationDate": "2026-05-10T18:52:47+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "6a6f1a797282226e41b5a5c56abb196f",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYtelhLVGXtYJmDd",
+      "lastChangeAnalysisUuid": "86268ed2-42ee-4052-93fd-b2bedeaaeed7",
+      "lastChangeSource": "ANALYSIS",
+      "line": 506,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 506,
+        "endOffset": 70,
+        "startLine": 506,
+        "startOffset": 58
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_integration_routes.py",
+      "creationDate": "2026-05-10T18:52:47+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "4548da7cbc46ca2a84e7878db9c696ba",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYtelhLVGXtYJmDe",
+      "lastChangeAnalysisUuid": "86268ed2-42ee-4052-93fd-b2bedeaaeed7",
+      "lastChangeSource": "ANALYSIS",
+      "line": 623,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 623,
+        "endOffset": 71,
+        "startLine": 623,
+        "startOffset": 59
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_playbook_routes.py",
+      "creationDate": "2026-05-10T18:29:58+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "9d34f5e743335f482b7fe9859cc6da19",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYrwlhLVGXtYJmBM",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 1085,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 1085,
+        "endOffset": 65,
+        "startLine": 1085,
+        "startOffset": 53
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_playbook_metrics_routes.py",
+      "creationDate": "2026-05-10T18:08:47+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "6d14eff96d2480f6193a4ef7a45fe5a8",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYp3lhLVGXtYJl_w",
+      "lastChangeAnalysisUuid": "c5bebcea-e6a7-4d46-a62b-c2d42b2c19a9",
+      "lastChangeSource": "ANALYSIS",
+      "line": 118,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 118,
+        "endOffset": 92,
+        "startLine": 118,
+        "startOffset": 73
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_playbook_metrics_routes.py",
+      "creationDate": "2026-05-10T18:08:47+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "5414d43099ef38451a8c2b37088853a9",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYp3lhLVGXtYJl_x",
+      "lastChangeAnalysisUuid": "c5bebcea-e6a7-4d46-a62b-c2d42b2c19a9",
+      "lastChangeSource": "ANALYSIS",
+      "line": 145,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 145,
+        "endOffset": 93,
+        "startLine": 145,
+        "startOffset": 74
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_playbook_metrics_routes.py",
+      "creationDate": "2026-05-10T18:08:47+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "1f5785ec59d9ff592405185d2475967c",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYp3lhLVGXtYJl_y",
+      "lastChangeAnalysisUuid": "c5bebcea-e6a7-4d46-a62b-c2d42b2c19a9",
+      "lastChangeSource": "ANALYSIS",
+      "line": 194,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 194,
+        "endOffset": 91,
+        "startLine": 194,
+        "startOffset": 72
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_playbook_metrics_routes.py",
+      "creationDate": "2026-05-10T18:08:47+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "46a141f503c943488358fa3cf2067f61",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYp3lhLVGXtYJl_2",
+      "lastChangeAnalysisUuid": "c5bebcea-e6a7-4d46-a62b-c2d42b2c19a9",
+      "lastChangeSource": "ANALYSIS",
+      "line": 523,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 523,
+        "endOffset": 84,
+        "startLine": 523,
+        "startOffset": 69
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_playbook_metrics_routes.py",
+      "creationDate": "2026-05-10T18:08:47+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "e1362804bd03e3459dc01ed48be15e8f",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYp3lhLVGXtYJl_3",
+      "lastChangeAnalysisUuid": "c5bebcea-e6a7-4d46-a62b-c2d42b2c19a9",
+      "lastChangeSource": "ANALYSIS",
+      "line": 539,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 539,
+        "endOffset": 85,
+        "startLine": 539,
+        "startOffset": 70
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_integration_routes.py",
+      "creationDate": "2026-05-10T04:07:17+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "a798c9eaa11a68390dd1da81f70671fb",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYtelhLVGXtYJmDa",
+      "lastChangeAnalysisUuid": "86268ed2-42ee-4052-93fd-b2bedeaaeed7",
+      "lastChangeSource": "ANALYSIS",
+      "line": 152,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 152,
+        "endOffset": 70,
+        "startLine": 152,
+        "startOffset": 58
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_integration_routes.py",
+      "creationDate": "2026-05-10T04:07:17+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "21a348935b02ea398fca60f883af4814",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYtelhLVGXtYJmDb",
+      "lastChangeAnalysisUuid": "86268ed2-42ee-4052-93fd-b2bedeaaeed7",
+      "lastChangeSource": "ANALYSIS",
+      "line": 164,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 164,
+        "endOffset": 71,
+        "startLine": 164,
+        "startOffset": 59
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_playbook_step_executor.py",
+      "creationDate": "2026-05-10T03:30:24+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "442348ec68e7fca86d1b6076cc0a8009",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYrJlhLVGXtYJmA2",
+      "lastChangeAnalysisUuid": "61850853-f8af-48f5-9219-19dd33f5a21f",
+      "lastChangeSource": "ANALYSIS",
+      "line": 240,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 240,
+        "endOffset": 90,
+        "startLine": 240,
+        "startOffset": 70
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_playbook_routes.py",
+      "creationDate": "2026-05-10T03:16:39+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "f0efb56f28b2c8bf8a5c89999b0755cf",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYrwlhLVGXtYJmBL",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 1069,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 1069,
+        "endOffset": 72,
+        "startLine": 1069,
+        "startOffset": 60
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_playbook_routes.py",
+      "creationDate": "2026-05-10T01:49:11+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "b6953d06888113ccf027983834e453e3",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYrwlhLVGXtYJmBN",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 1157,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 1157,
+        "endOffset": 72,
+        "startLine": 1157,
+        "startOffset": 58
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_playbook_routes.py",
+      "creationDate": "2026-05-10T01:49:11+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "3f40ff8502bde902fa72502e5568d4cd",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYrwlhLVGXtYJmBO",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 1173,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 1173,
+        "endOffset": 85,
+        "startLine": 1173,
+        "startOffset": 70
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_playbook_routes.py",
+      "creationDate": "2026-05-10T01:49:11+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "2b22c2047ebcf5d3da303d77ee6b8350",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYrwlhLVGXtYJmBP",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 1284,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 1284,
+        "endOffset": 66,
+        "startLine": 1284,
+        "startOffset": 54
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_playbook_routes.py",
+      "creationDate": "2026-05-10T01:49:11+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "8957b4d61476bd4fa95bf28bcf8b9ed0",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYrwlhLVGXtYJmBQ",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 1352,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 1352,
+        "endOffset": 67,
+        "startLine": 1352,
+        "startOffset": 55
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_playbook_routes.py",
+      "creationDate": "2026-05-10T01:34:24+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "748cb70ae9cfea7925a02053185f1e5c",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYrwlhLVGXtYJmBC",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 199,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 199,
+        "endOffset": 87,
+        "startLine": 199,
+        "startOffset": 68
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_playbook_routes.py",
+      "creationDate": "2026-05-10T01:34:24+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "0bfe2fd29a0783505cbd1febe53c4293",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYrwlhLVGXtYJmBD",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 210,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 210,
+        "endOffset": 92,
+        "startLine": 210,
+        "startOffset": 73
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_playbook_routes.py",
+      "creationDate": "2026-05-10T01:34:24+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "1e4f8df2420ced57efb4f29a6b78032e",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYrwlhLVGXtYJmBF",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 230,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 230,
+        "endOffset": 94,
+        "startLine": 230,
+        "startOffset": 75
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_playbook_routes.py",
+      "creationDate": "2026-05-10T01:34:24+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "3e564882af20161ffeca04768fa11f35",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYrwlhLVGXtYJmBG",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 240,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 240,
+        "endOffset": 91,
+        "startLine": 240,
+        "startOffset": 72
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_playbook_routes.py",
+      "creationDate": "2026-05-10T01:34:24+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "4f07e12ff41e34bc24bc2b518851b20b",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYrwlhLVGXtYJmBJ",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 596,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 596,
+        "endOffset": 73,
+        "startLine": 596,
+        "startOffset": 57
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_soar_worker_admin_run_control.py",
+      "creationDate": "2026-05-08T13:58:25+0000",
+      "debt": "1h",
+      "effort": "1h",
+      "flows": [],
+      "hash": "3f816d1ba4f2603e7aa44fb75ded06cb",
+      "impacts": [
+        {
+          "severity": "BLOCKER",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYqjlhLVGXtYJmAh",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 568,
+      "message": "Revoke and change this password, as it is compromised.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S6437",
+      "severity": "BLOCKER",
+      "status": "OPEN",
+      "tags": [
+        "cwe"
+      ],
+      "textRange": {
+        "endLine": 568,
+        "endOffset": 59,
+        "startLine": 568,
+        "startOffset": 45
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_approval_routes.py",
+      "creationDate": "2026-05-08T01:26:40+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "909c468cffeb5b5318ebdde19672a7e5",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYuolhLVGXtYJmEb",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 137,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 137,
+        "endOffset": 29,
+        "startLine": 137,
+        "startOffset": 8
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_approval_routes.py",
+      "creationDate": "2026-05-08T01:26:40+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "909c468cffeb5b5318ebdde19672a7e5",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYuolhLVGXtYJmEc",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 151,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 151,
+        "endOffset": 29,
+        "startLine": 151,
+        "startOffset": 8
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_approval_routes.py",
+      "creationDate": "2026-05-08T01:26:40+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "909c468cffeb5b5318ebdde19672a7e5",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYuolhLVGXtYJmEd",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 165,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 165,
+        "endOffset": 29,
+        "startLine": 165,
+        "startOffset": 8
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_approval_routes.py",
+      "creationDate": "2026-05-08T01:26:40+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "1d92d1db784e174b510b58a5e159b6c1",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYuolhLVGXtYJmEe",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 179,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 179,
+        "endOffset": 30,
+        "startLine": 179,
+        "startOffset": 8
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_approval_routes.py",
+      "creationDate": "2026-05-08T01:26:40+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "1d92d1db784e174b510b58a5e159b6c1",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYuolhLVGXtYJmEg",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 202,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 202,
+        "endOffset": 30,
+        "startLine": 202,
+        "startOffset": 8
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_approval_routes.py",
+      "creationDate": "2026-05-08T01:26:40+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "1d92d1db784e174b510b58a5e159b6c1",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYuolhLVGXtYJmEj",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 241,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 241,
+        "endOffset": 30,
+        "startLine": 241,
+        "startOffset": 8
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_incident_routes.py",
+      "creationDate": "2026-05-08T00:05:34+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "909c468cffeb5b5318ebdde19672a7e5",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYn_lhLVGXtYJl_l",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 100,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 100,
+        "endOffset": 29,
+        "startLine": 100,
+        "startOffset": 8
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_incident_routes.py",
+      "creationDate": "2026-05-08T00:05:34+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "1d92d1db784e174b510b58a5e159b6c1",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYn_lhLVGXtYJl_m",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 119,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 119,
+        "endOffset": 30,
+        "startLine": 119,
+        "startOffset": 8
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_incident_routes.py",
+      "creationDate": "2026-05-08T00:05:34+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "909c468cffeb5b5318ebdde19672a7e5",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYn_lhLVGXtYJl_n",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 209,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 209,
+        "endOffset": 29,
+        "startLine": 209,
+        "startOffset": 8
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_incident_routes.py",
+      "creationDate": "2026-05-08T00:05:34+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "1d92d1db784e174b510b58a5e159b6c1",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYn_lhLVGXtYJl_o",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 230,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 230,
+        "endOffset": 30,
+        "startLine": 230,
+        "startOffset": 8
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_incident_routes.py",
+      "creationDate": "2026-05-08T00:05:34+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "909c468cffeb5b5318ebdde19672a7e5",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYn_lhLVGXtYJl_p",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 278,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 278,
+        "endOffset": 29,
+        "startLine": 278,
+        "startOffset": 8
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_soar_worker_admin_run_control.py",
+      "creationDate": "2026-05-06T18:02:33+0000",
+      "debt": "1h",
+      "effort": "1h",
+      "flows": [],
+      "hash": "d231e4156d9e0d02daa8089744f7bb10",
+      "impacts": [
+        {
+          "severity": "BLOCKER",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYqjlhLVGXtYJmAP",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 50,
+      "message": "Revoke and change this password, as it is compromised.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S6437",
+      "severity": "BLOCKER",
+      "status": "OPEN",
+      "tags": [
+        "cwe"
+      ],
+      "textRange": {
+        "endLine": 50,
+        "endOffset": 60,
+        "startLine": 50,
+        "startOffset": 48
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_soar_worker_admin_run_control.py",
+      "creationDate": "2026-05-06T18:02:33+0000",
+      "debt": "1h",
+      "effort": "1h",
+      "flows": [],
+      "hash": "b8663ab451a56a290b372ef2dcbf692b",
+      "impacts": [
+        {
+          "severity": "BLOCKER",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYqjlhLVGXtYJmAQ",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 59,
+      "message": "Revoke and change this password, as it is compromised.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S6437",
+      "severity": "BLOCKER",
+      "status": "OPEN",
+      "tags": [
+        "cwe"
+      ],
+      "textRange": {
+        "endLine": 59,
+        "endOffset": 61,
+        "startLine": 59,
+        "startOffset": 48
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_soar_queue_visibility_api.py",
+      "creationDate": "2026-05-06T17:45:38+0000",
+      "debt": "1h",
+      "effort": "1h",
+      "flows": [],
+      "hash": "d231e4156d9e0d02daa8089744f7bb10",
+      "impacts": [
+        {
+          "severity": "BLOCKER",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYuglhLVGXtYJmEU",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 54,
+      "message": "Revoke and change this password, as it is compromised.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S6437",
+      "severity": "BLOCKER",
+      "status": "OPEN",
+      "tags": [
+        "cwe"
+      ],
+      "textRange": {
+        "endLine": 54,
+        "endOffset": 60,
+        "startLine": 54,
+        "startOffset": 48
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_soar_queue_visibility_api.py",
+      "creationDate": "2026-05-06T17:45:38+0000",
+      "debt": "1h",
+      "effort": "1h",
+      "flows": [],
+      "hash": "b8663ab451a56a290b372ef2dcbf692b",
+      "impacts": [
+        {
+          "severity": "BLOCKER",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYuglhLVGXtYJmEV",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 63,
+      "message": "Revoke and change this password, as it is compromised.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S6437",
+      "severity": "BLOCKER",
+      "status": "OPEN",
+      "tags": [
+        "cwe"
+      ],
+      "textRange": {
+        "endLine": 63,
+        "endOffset": 61,
+        "startLine": 63,
+        "startOffset": 48
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_backfill_reputation_api_contracts.py",
+      "creationDate": "2026-05-02T23:13:12+0000",
+      "debt": "1h",
+      "effort": "1h",
+      "flows": [],
+      "hash": "b8663ab451a56a290b372ef2dcbf692b",
+      "impacts": [
+        {
+          "severity": "BLOCKER",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYsRlhLVGXtYJmBY",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 51,
+      "message": "Revoke and change this password, as it is compromised.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S6437",
+      "severity": "BLOCKER",
+      "status": "OPEN",
+      "tags": [
+        "cwe"
+      ],
+      "textRange": {
+        "endLine": 51,
+        "endOffset": 61,
+        "startLine": 51,
+        "startOffset": 48
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_backfill_reputation_api_contracts.py",
+      "creationDate": "2026-05-02T23:13:12+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "6c2d3aef36065cae9dc936a0f5d307df",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYsRlhLVGXtYJmBZ",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 69,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 69,
+        "endOffset": 104,
+        "startLine": 69,
+        "startOffset": 79
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_admin_api_contracts.py",
+      "creationDate": "2026-05-02T22:09:19+0000",
+      "debt": "1h",
+      "effort": "1h",
+      "flows": [],
+      "hash": "d231e4156d9e0d02daa8089744f7bb10",
+      "impacts": [
+        {
+          "severity": "BLOCKER",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYtmlhLVGXtYJmDg",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 41,
+      "message": "Revoke and change this password, as it is compromised.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S6437",
+      "severity": "BLOCKER",
+      "status": "OPEN",
+      "tags": [
+        "cwe"
+      ],
+      "textRange": {
+        "endLine": 41,
+        "endOffset": 60,
+        "startLine": 41,
+        "startOffset": 48
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_admin_api_contracts.py",
+      "creationDate": "2026-05-02T22:09:19+0000",
+      "debt": "1h",
+      "effort": "1h",
+      "flows": [],
+      "hash": "b8663ab451a56a290b372ef2dcbf692b",
+      "impacts": [
+        {
+          "severity": "BLOCKER",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYtmlhLVGXtYJmDh",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 50,
+      "message": "Revoke and change this password, as it is compromised.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S6437",
+      "severity": "BLOCKER",
+      "status": "OPEN",
+      "tags": [
+        "cwe"
+      ],
+      "textRange": {
+        "endLine": 50,
+        "endOffset": 61,
+        "startLine": 50,
+        "startOffset": 48
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_admin_api_contracts.py",
+      "creationDate": "2026-05-02T22:09:19+0000",
+      "debt": "1h",
+      "effort": "1h",
+      "flows": [],
+      "hash": "e5677e55c0fbcacad6e167dd25fe0890",
+      "impacts": [
+        {
+          "severity": "BLOCKER",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYtmlhLVGXtYJmDi",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 91,
+      "message": "Revoke and change this password, as it is compromised.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S6437",
+      "severity": "BLOCKER",
+      "status": "OPEN",
+      "tags": [
+        "cwe"
+      ],
+      "textRange": {
+        "endLine": 91,
+        "endOffset": 48,
+        "startLine": 91,
+        "startOffset": 45
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_auth_rbac.py",
+      "creationDate": "2026-05-02T18:10:49+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "56afebbdc732a5732a94f95d68bd8b1b",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYqFlhLVGXtYJl_5",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 20,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 20,
+        "endOffset": 87,
+        "startLine": 20,
+        "startOffset": 67
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_auth_rbac.py",
+      "creationDate": "2026-05-02T18:10:49+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "c3751ad030a903357745cccccbde117a",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYqFlhLVGXtYJl_6",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 25,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 25,
+        "endOffset": 80,
+        "startLine": 25,
+        "startOffset": 65
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_auth_rbac.py",
+      "creationDate": "2026-05-02T18:10:49+0000",
+      "debt": "1h",
+      "effort": "1h",
+      "flows": [],
+      "hash": "d231e4156d9e0d02daa8089744f7bb10",
+      "impacts": [
+        {
+          "severity": "BLOCKER",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYqFlhLVGXtYJl_7",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 64,
+      "message": "Revoke and change this password, as it is compromised.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S6437",
+      "severity": "BLOCKER",
+      "status": "OPEN",
+      "tags": [
+        "cwe"
+      ],
+      "textRange": {
+        "endLine": 64,
+        "endOffset": 64,
+        "startLine": 64,
+        "startOffset": 52
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_auth_rbac.py",
+      "creationDate": "2026-05-02T18:10:49+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "7b6a30dfb945acaca0871470bcc965d7",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYqFlhLVGXtYJl_8",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 82,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 82,
+        "endOffset": 98,
+        "startLine": 82,
+        "startOffset": 74
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:tests/test_auth_rbac.py",
+      "creationDate": "2026-05-02T18:10:49+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "84e722e1c5502110615e3e69fc6fb69c",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izYqFlhLVGXtYJl_9",
+      "lastChangeAnalysisUuid": "6e5e1037-4623-4d26-86f6-9dcd342864fc",
+      "lastChangeSource": "ANALYSIS",
+      "line": 93,
+      "message": "\"password\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 93,
+        "endOffset": 90,
+        "startLine": 93,
+        "startOffset": 66
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    },
+    {
+      "actions": [
+        "set_type",
+        "set_tags",
+        "comment",
+        "set_severity",
+        "assign"
+      ],
+      "assignee": "jadenwashere6101-H7PhJ@github",
+      "author": "jadengomez067@gmail.com",
+      "cleanCodeAttribute": "TRUSTWORTHY",
+      "cleanCodeAttributeCategory": "RESPONSIBLE",
+      "comments": [],
+      "component": "jadenwashere6101_siem-security-dashboard-public:siem_backend.py",
+      "creationDate": "2026-04-27T01:57:25+0000",
+      "debt": "30min",
+      "effort": "30min",
+      "flows": [],
+      "hash": "b172732588df7e50968d2e89db93b77a",
+      "impacts": [
+        {
+          "severity": "MEDIUM",
+          "softwareQuality": "SECURITY"
+        }
+      ],
+      "internalTags": [],
+      "issueStatus": "OPEN",
+      "key": "AZ4izY8nlhLVGXtYJmTk",
+      "lastChangeAnalysisUuid": "b9b291f4-a936-4380-aeab-b2bddf383e9e",
+      "lastChangeSource": "ANALYSIS",
+      "line": 78,
+      "message": "\"SECRET_KEY\" detected here, review this potentially hard-coded credential.",
+      "organization": "jadenwashere6101",
+      "project": "jadenwashere6101_siem-security-dashboard-public",
+      "projectName": "siem-security-dashboard-public",
+      "rule": "python:S2068",
+      "severity": "MAJOR",
+      "status": "OPEN",
+      "tags": [
+        "cwe",
+        "former-hotspot"
+      ],
+      "textRange": {
+        "endLine": 78,
+        "endOffset": 27,
+        "startLine": 78,
+        "startOffset": 15
+      },
+      "transitions": [
+        "accept",
+        "confirm",
+        "resolve",
+        "falsepositive",
+        "wontfix"
+      ],
+      "type": "VULNERABILITY",
+      "updateDate": "2026-05-13T19:19:18+0000"
+    }
+  ],
+  "organization": "jadenwashere6101",
+  "project_key": "jadenwashere6101_siem-security-dashboard-public"
+}

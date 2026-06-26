@@ -58,22 +58,29 @@
 - [x] 3.9 Add compatibility resolver tests proving old records can answer the primary analyst question before broad UI migration.
 - [x] 3.10 Add idempotency checks proving repeated dry-run and later write-mode backfill cannot create duplicate decisions/events.
 - [x] 3.11 Review dry-run output against representative local data and update mapping rules before enabling write-mode backfill.
+- [ ] 3.12 Verify notification real-execution compatibility remains conservative: `execution_mode=real`, delivery `status=success`, metadata `executed=true`, metadata `simulated=false`, and provider success evidence are all required before inferring `external_executed=true`.
 
 ## 4. Phase 4 - Queue and Response Log Normalization
 
-- [ ] 4.1 Update alert ingest post-commit enqueue path to assign or propagate a SOAR correlation id for selected detection/correlation responses.
-- [ ] 4.2 Create canonical decision rows when detection, correlation, or queue creation selects a response action.
-- [ ] 4.3 Append `selected` or `queued` outcome events when `response_actions_queue` rows are created.
-- [ ] 4.4 Update queue worker claim path to append `running` outcome events without changing existing queue state transitions.
-- [ ] 4.5 Update queue approval-required path to append `awaiting_approval` events linked to queue and approval request.
-- [ ] 4.6 Update queue approval-denied/expired path to append `blocked` events with `reason_code=approval_denied` and no execution booleans set.
-- [ ] 4.7 Update queue simulation success path to append `simulation/succeeded`, `simulated=true`, `external_executed=false`, and `tracking_recorded=false`.
-- [ ] 4.8 Update queue skipped path to append `skipped` events with reason code.
-- [ ] 4.9 Update queue failed path to append `failed` events with sanitized error summary.
-- [ ] 4.10 Update `response_actions_log` writes to include SOAR correlation and decision/outcome-event linkage where schema allows.
-- [ ] 4.11 Update manual `/alerts/<id>/execute` path to create decisions/events for manual monitor, escalation, simulation, and tracking-only blocklist recording.
-- [ ] 4.12 Ensure manual tracking-only blocklist action sets `tracking_recorded=true`, `external_executed=false`, and says no firewall enforcement occurred.
-- [ ] 4.13 Add route and worker tests for all queue/manual canonical outcome cases.
+- [x] 4.1 Update `response_actions_log` writer linkage first: accept `decision_id` and `soar_correlation_id`, write them to the legacy log row where schema allows, and return the inserted log id so terminal canonical outcome events can reference `response_action_log_id`.
+- [x] 4.2 Update queue row helpers to read and return `decision_id` and `soar_correlation_id` for `get`, list, claim, approval-skip, success, skipped, failed, requeue, and stale-recovery paths without changing existing queue status transitions.
+- [x] 4.3 Update alert ingest post-commit enqueue path to assign or propagate a SOAR correlation id for selected detection/correlation responses.
+- [x] 4.4 Create canonical decision rows when detection, correlation, or queue creation selects a response action, and link the inserted queue row to `decision_id` and `soar_correlation_id`.
+- [x] 4.5 Make queue decision/event creation idempotent around `response_actions_queue` `ON CONFLICT DO NOTHING`: duplicate queue inserts MUST NOT create duplicate canonical decisions/events, and queued/duplicate-suppressed events MUST use deterministic idempotency keys when written.
+- [x] 4.6 Append `queued` outcome events when durable `response_actions_queue` rows are created; use `selected` only when a response is selected but no durable queue row exists.
+- [x] 4.7 Update queue worker claim path to append `running` outcome events in the same transaction as the `pending` or approved `awaiting_approval` to `running` claim, before preserving the existing early-claim commit behavior.
+- [x] 4.8 Make `running` event writes safe across worker restarts by using deterministic idempotency keys tied to queue id, claim attempt/retry context, and state transition so re-entry cannot create misleading duplicate running events.
+- [x] 4.9 Update queue approval-required path to append `awaiting_approval` events linked to queue and approval request when an approval request is created or reused.
+- [x] 4.10 Update queue approval-denied/expired path to append `blocked` events with `reason_code=approval_denied` and no execution booleans set; the summary MUST distinguish denied from expired even though both map to the canonical approval-denied reason code.
+- [x] 4.11 Update queue simulation success path to append `simulation/succeeded`, `simulated=true`, `external_executed=false`, and `tracking_recorded=false`, and link the event to the returned `response_action_log_id`.
+- [x] 4.12 Update queue skipped path to append `skipped` events with canonical reason-code mapping and sanitized summaries.
+- [x] 4.13 Update retry behavior to append failed-attempt outcome events for retryable failures, append queued/requeued events when work is returned to `pending`, and append terminal failed events when retries are exhausted.
+- [x] 4.14 Update queue failed path for non-retryable failures to append `failed` events with sanitized error summaries and linked response log ids where a terminal log row is written.
+- [x] 4.15 Define and apply canonical reason-code mapping for existing worker reasons: approval required/pending, approval denied/expired, protected target and validation failures, unsupported action, adapter unavailable/timeout/provider errors, duplicate suppression, simulation mode, and tracking-only outcomes.
+- [x] 4.16 Update manual `/alerts/<id>/execute` path to create decisions/events for manual monitor, escalation, simulation, and tracking-only blocklist recording.
+- [x] 4.17 Ensure manual tracking-only `block_ip` only records SIEM blocklist tracking after durable blocklist insertion, sets `tracking_recorded=true`, `external_executed=false`, `simulated=false`, and explicitly says no firewall, provider, external, or local enforcement occurred.
+- [x] 4.18 Explicitly defer `blocked_ips.decision_id`, `blocked_ips.soar_correlation_id`, and outcome `blocked_ip_id` linkage unless a new additive migration is approved; Phase 4 MAY link tracking-only manual outcomes through `alert_id`, `source_ip`, `decision_id`, `soar_correlation_id`, and `response_action_log_id`.
+- [x] 4.19 Add focused tests in implementation order: log writer linkage, queue helper linkage, enqueue decision plus queued event idempotency, worker running event/early-claim safety, worker terminal events/log linkage including retry paths, and manual route tracking-only/simulation events.
 
 ## 5. Phase 5 - Playbook, Approval, Notification, Audit, and Backfill Write Integration
 

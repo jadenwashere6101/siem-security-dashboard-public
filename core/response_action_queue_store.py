@@ -24,6 +24,8 @@ def _queue_row_from_record(record):
         idempotency_key,
         created_at,
         updated_at,
+        decision_id,
+        soar_correlation_id,
     ) = record
     return {
         "id": row_id,
@@ -37,6 +39,8 @@ def _queue_row_from_record(record):
         "idempotency_key": idempotency_key,
         "created_at": created_at,
         "updated_at": updated_at,
+        "decision_id": decision_id,
+        "soar_correlation_id": soar_correlation_id,
     }
 
 
@@ -44,7 +48,8 @@ def _returning_queue_row_sql():
     return """
         RETURNING id, alert_id, host(source_ip), action, status,
                   retry_count, max_retries, last_error,
-                  idempotency_key, created_at, updated_at
+                  idempotency_key, created_at, updated_at,
+                  decision_id, soar_correlation_id
     """
 
 
@@ -54,7 +59,8 @@ def get_queue_action(conn, queue_id):
             """
             SELECT id, alert_id, host(source_ip), action, status,
                    retry_count, max_retries, last_error,
-                   idempotency_key, created_at, updated_at
+                   idempotency_key, created_at, updated_at,
+                   decision_id, soar_correlation_id
             FROM response_actions_queue
             WHERE id = %s
             """,
@@ -96,7 +102,8 @@ def list_recent_queue_actions(conn, limit=50, status=None):
                 """
                 SELECT id, alert_id, host(source_ip), action, status,
                        retry_count, max_retries, last_error,
-                       idempotency_key, created_at, updated_at
+                       idempotency_key, created_at, updated_at,
+                       decision_id, soar_correlation_id
                 FROM response_actions_queue
                 ORDER BY id DESC
                 LIMIT %s
@@ -108,7 +115,8 @@ def list_recent_queue_actions(conn, limit=50, status=None):
                 """
                 SELECT id, alert_id, host(source_ip), action, status,
                        retry_count, max_retries, last_error,
-                       idempotency_key, created_at, updated_at
+                       idempotency_key, created_at, updated_at,
+                       decision_id, soar_correlation_id
                 FROM response_actions_queue
                 WHERE status = %s
                 ORDER BY id DESC
@@ -228,6 +236,7 @@ def skip_next_terminal_approval_action(conn, now=None):
                       queue.status, queue.retry_count, queue.max_retries,
                       queue.last_error, queue.idempotency_key,
                       queue.created_at, queue.updated_at,
+                      queue.decision_id, queue.soar_correlation_id,
                       candidate.approval_status
             """,
             (now,),
@@ -235,8 +244,8 @@ def skip_next_terminal_approval_action(conn, now=None):
         row = cur.fetchone()
         if row is None:
             return None
-        queue_row = _queue_row_from_record(row[:11])
-        queue_row["approval_status"] = row[11]
+        queue_row = _queue_row_from_record(row[:13])
+        queue_row["approval_status"] = row[13]
         return queue_row
 
 
@@ -276,6 +285,7 @@ def sweep_terminal_approval_queue_rows(conn, *, now=None, limit=100):
                       queue.status, queue.retry_count, queue.max_retries,
                       queue.last_error, queue.idempotency_key,
                       queue.created_at, queue.updated_at,
+                      queue.decision_id, queue.soar_correlation_id,
                       candidates.approval_status
             """,
             (cap, now),
@@ -283,8 +293,8 @@ def sweep_terminal_approval_queue_rows(conn, *, now=None, limit=100):
         rows = cur.fetchall()
         result = []
         for row in rows:
-            queue_row = _queue_row_from_record(row[:11])
-            queue_row["approval_status"] = row[11]
+            queue_row = _queue_row_from_record(row[:13])
+            queue_row["approval_status"] = row[13]
             result.append(queue_row)
         return result
 
@@ -381,11 +391,44 @@ def recover_stale_running_actions(conn, now=None, stale_after=STALE_RUNNING_TIME
             RETURNING queue.id, queue.alert_id, host(queue.source_ip), queue.action,
                       queue.status, queue.retry_count, queue.max_retries,
                       queue.last_error, queue.idempotency_key,
-                      queue.created_at, queue.updated_at
+                      queue.created_at, queue.updated_at,
+                      queue.decision_id, queue.soar_correlation_id
             """,
             [*params, now],
         )
         return [_queue_row_from_record(row) for row in cur.fetchall()]
+
+
+def set_queue_linkage(conn, queue_id, *, decision_id=None, soar_correlation_id=None):
+    """
+    Attach canonical outcome linkage fields to a queue row without changing its status.
+    Only columns for which a non-None value is supplied are written.
+    Returns the updated queue row, or None if the row does not exist.
+    """
+    if decision_id is None and soar_correlation_id is None:
+        return get_queue_action(conn, queue_id)
+
+    set_clauses = []
+    params = []
+    if decision_id is not None:
+        set_clauses.append("decision_id = %s")
+        params.append(decision_id)
+    if soar_correlation_id is not None:
+        set_clauses.append("soar_correlation_id = %s")
+        params.append(soar_correlation_id)
+    params.append(queue_id)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE response_actions_queue
+            SET {", ".join(set_clauses)}
+            WHERE id = %s
+            {_returning_queue_row_sql()}
+            """,
+            params,
+        )
+        return _queue_row_from_record(cur.fetchone())
 
 
 def _transition_running_action(conn, queue_id, new_status, last_error, now=None):

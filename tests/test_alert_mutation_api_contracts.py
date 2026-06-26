@@ -17,6 +17,12 @@ class _RouteSafeConnection:
     def cursor(self):
         return self._conn.cursor()
 
+    def commit(self):
+        return self._conn.commit()
+
+    def rollback(self):
+        return self._conn.rollback()
+
     def close(self):
         return None
 
@@ -53,6 +59,44 @@ def _insert_alert(cur, *, source_ip="198.51.100.250", message="Contract alert"):
         ("failed_login_threshold", "high", source_ip, "bank_app", "custom", message, "open"),
     )
     return cur.fetchone()[0]
+
+
+def _fetch_manual_outcomes(cur, alert_id):
+    cur.execute(
+        """
+        SELECT d.selected_action,
+               d.decision_source,
+               d.reason_code,
+               e.execution_mode,
+               e.execution_state,
+               e.simulated,
+               e.external_executed,
+               e.tracking_recorded,
+               e.execution_actor,
+               e.reason_code,
+               e.outcome_summary,
+               e.response_action_log_id
+        FROM soar_response_decisions d
+        JOIN soar_response_outcome_events e ON e.decision_id = d.id
+        WHERE d.alert_id = %s
+        ORDER BY e.id
+        """,
+        (alert_id,),
+    )
+    return cur.fetchall()
+
+
+def _fetch_response_log_links(cur, alert_id):
+    cur.execute(
+        """
+        SELECT id, action, status, details, decision_id, soar_correlation_id
+        FROM response_actions_log
+        WHERE alert_id = %s
+        ORDER BY id
+        """,
+        (alert_id,),
+    )
+    return cur.fetchall()
 
 
 def test_get_alert_notes_without_session_returns_401(client):
@@ -140,6 +184,205 @@ def test_post_alert_execute_nonexistent_alert_id_returns_404(client, postgres_db
 
     assert resp.status_code == 404
     assert resp.get_json()["error"] == "Alert not found"
+
+
+def test_post_alert_execute_monitor_creates_simulation_outcome_and_keeps_response_shape(
+    client, postgres_db
+):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur, source_ip="198.51.100.252")
+    conn.commit()
+    _login_super_admin(client)
+
+    with _patched_app_db(conn):
+        resp = client.post(f"/alerts/{alert_id}/execute", json={"action": "monitor"})
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {
+        "message": "Action executed successfully",
+        "alert_id": alert_id,
+        "action": "monitor",
+        "response_status": "executed",
+    }
+    logs = _fetch_response_log_links(cur, alert_id)
+    assert len(logs) == 1
+    assert logs[0][1:4] == ("monitor", "executed", "Monitoring only")
+    assert logs[0][4] is not None
+    assert logs[0][5]
+
+    outcomes = _fetch_manual_outcomes(cur, alert_id)
+    assert outcomes == [
+        (
+            "monitor",
+            "manual",
+            "simulation_mode",
+            "simulation",
+            "succeeded",
+            True,
+            False,
+            False,
+            "manual",
+            "simulation_mode",
+            "Manual monitor response completed in simulation mode.",
+            logs[0][0],
+        )
+    ]
+
+
+def test_post_alert_execute_flag_high_priority_creates_simulation_outcome(
+    client, postgres_db
+):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur, source_ip="198.51.100.253")
+    conn.commit()
+    _login_super_admin(client)
+
+    with _patched_app_db(conn):
+        resp = client.post(
+            f"/alerts/{alert_id}/execute",
+            json={"action": "flag_high_priority"},
+        )
+
+    assert resp.status_code == 200
+    outcomes = _fetch_manual_outcomes(cur, alert_id)
+    assert len(outcomes) == 1
+    assert outcomes[0][0:10] == (
+        "flag_high_priority",
+        "manual",
+        "simulation_mode",
+        "simulation",
+        "succeeded",
+        True,
+        False,
+        False,
+        "manual",
+        "simulation_mode",
+    )
+
+
+def test_post_alert_execute_block_ip_creates_tracking_only_outcome_and_log_link(
+    client, postgres_db
+):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur, source_ip="8.8.4.4")
+    conn.commit()
+    _login_super_admin(client)
+
+    with _patched_app_db(conn):
+        resp = client.post(f"/alerts/{alert_id}/execute", json={"action": "block_ip"})
+
+    assert resp.status_code == 200
+    logs = _fetch_response_log_links(cur, alert_id)
+    assert len(logs) == 1
+    assert logs[0][1:4] == (
+        "block_ip",
+        "executed",
+        "Recorded in SIEM blocklist (tracking only)",
+    )
+    assert logs[0][4] is not None
+    assert logs[0][5]
+
+    cur.execute(
+        """
+        SELECT host(ip_address), status, source_alert_id
+        FROM blocked_ips
+        WHERE source_alert_id = %s
+        """,
+        (alert_id,),
+    )
+    assert cur.fetchall() == [("8.8.4.4", "active", alert_id)]
+
+    outcomes = _fetch_manual_outcomes(cur, alert_id)
+    assert len(outcomes) == 1
+    outcome = outcomes[0]
+    assert outcome[0:10] == (
+        "block_ip",
+        "manual",
+        "tracking_only",
+        "tracking_only",
+        "succeeded",
+        False,
+        False,
+        True,
+        "manual",
+        "tracking_only",
+    )
+    assert "SIEM blocklist tracking was recorded" in outcome[10]
+    assert "no firewall" in outcome[10].lower()
+    assert outcome[11] == logs[0][0]
+
+
+def test_post_alert_execute_duplicate_block_ip_does_not_write_tracking_success(
+    client, postgres_db
+):
+    conn, cur = postgres_db
+    first_alert_id = _insert_alert(cur, source_ip="8.8.4.5")
+    duplicate_alert_id = _insert_alert(cur, source_ip="8.8.4.5")
+    cur.execute(
+        """
+        INSERT INTO blocked_ips (ip_address, status, source_alert_id)
+        VALUES ('8.8.4.5', 'active', %s)
+        """,
+        (first_alert_id,),
+    )
+    conn.commit()
+    _login_super_admin(client)
+
+    with _patched_app_db(conn):
+        resp = client.post(
+            f"/alerts/{duplicate_alert_id}/execute",
+            json={"action": "block_ip"},
+        )
+
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "An active block already exists for this IP"
+    assert _fetch_response_log_links(cur, duplicate_alert_id) == []
+    assert _fetch_manual_outcomes(cur, duplicate_alert_id) == []
+
+
+def test_post_alert_execute_invalid_block_ip_does_not_write_tracking_success(
+    client, postgres_db
+):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur, source_ip="10.0.0.1")
+    conn.commit()
+    _login_super_admin(client)
+
+    with _patched_app_db(conn):
+        resp = client.post(f"/alerts/{alert_id}/execute", json={"action": "block_ip"})
+
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "Private, loopback, and internal IPs cannot be blocked"
+    assert _fetch_response_log_links(cur, alert_id) == []
+    assert _fetch_manual_outcomes(cur, alert_id) == []
+
+
+def test_post_alert_execute_canonical_write_failure_rolls_back_legacy_success(
+    client, postgres_db
+):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur, source_ip="198.51.100.254")
+    conn.commit()
+    _login_super_admin(client)
+
+    def fail_append(*_args, **_kwargs):
+        raise RuntimeError("canonical writer unavailable")
+
+    with _patched_app_db(conn), patch(
+        "routes.alert_mutation_routes.append_outcome_event",
+        side_effect=fail_append,
+    ):
+        resp = client.post(f"/alerts/{alert_id}/execute", json={"action": "monitor"})
+
+    assert resp.status_code == 500
+    assert resp.get_json()["error"] == "Internal server error"
+    assert _fetch_response_log_links(cur, alert_id) == []
+    assert _fetch_manual_outcomes(cur, alert_id) == []
+    cur.execute(
+        "SELECT response_action, response_status FROM alerts WHERE id = %s",
+        (alert_id,),
+    )
+    assert cur.fetchone() == (None, None)
 
 
 def test_get_alert_response_log_authenticated_returns_200_stable_json_shape(client, postgres_db):

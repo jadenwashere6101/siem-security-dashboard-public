@@ -8,6 +8,7 @@ from core.response_action_queue_store import (
     QueueTransitionError,
     claim_next_approved_awaiting_action,
     claim_next_pending_action,
+    get_queue_action,
     get_queue_status_counts,
     mark_action_awaiting_approval,
     mark_action_failed,
@@ -16,11 +17,12 @@ from core.response_action_queue_store import (
     mark_awaiting_approval_skipped,
     record_action_failure,
     recover_stale_running_actions,
+    set_queue_linkage,
     sweep_terminal_approval_queue_rows,
 )
 from core.ip_helpers import _compute_idempotency_key, enqueue_response_action
 from core.ip_helpers import execute_response_action
-from engines.soar_action_worker import process_next_action
+from engines.soar_action_worker import _append_running_outcome_event, process_next_action
 from engines.soar_errors import RetryableActionError, SkippedAction
 from engines.soar_executor import SimulationExecutor
 import siem_backend
@@ -80,6 +82,60 @@ def fetch_action_logs(cur, alert_id=None):
             """,
             (alert_id,),
         )
+    return cur.fetchall()
+
+
+def fetch_action_logs_with_links(cur, alert_id=None):
+    if alert_id is None:
+        cur.execute(
+            """
+            SELECT id, alert_id, source_ip::text, action, status, details,
+                   decision_id, soar_correlation_id
+            FROM response_actions_log
+            ORDER BY id
+            """
+        )
+    else:
+        cur.execute(
+            """
+            SELECT id, alert_id, source_ip::text, action, status, details,
+                   decision_id, soar_correlation_id
+            FROM response_actions_log
+            WHERE alert_id = %s
+            ORDER BY id
+            """,
+            (alert_id,),
+        )
+    return cur.fetchall()
+
+
+def fetch_outcome_events(cur, queue_id):
+    cur.execute(
+        """
+        SELECT event_type, execution_mode, execution_state, simulated,
+               external_executed, tracking_recorded, execution_actor,
+               reason_code, idempotency_key
+        FROM soar_response_outcome_events
+        WHERE queue_id = %s
+        ORDER BY id
+        """,
+        (queue_id,),
+    )
+    return cur.fetchall()
+
+
+def fetch_detailed_outcome_events(cur, queue_id):
+    cur.execute(
+        """
+        SELECT event_type, execution_state, reason_code, idempotency_key,
+               response_action_log_id, approval_request_id, outcome_summary,
+               simulated, external_executed, tracking_recorded
+        FROM soar_response_outcome_events
+        WHERE queue_id = %s
+        ORDER BY id
+        """,
+        (queue_id,),
+    )
     return cur.fetchall()
 
 
@@ -724,6 +780,303 @@ def test_process_next_action_default_simulation_executor_logs_executed(postgres_
     assert logs[0][4] == f"Monitoring only - no action taken for queue_id={row_id}"
 
 
+def test_process_next_action_writes_running_event_for_linked_queue_row(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "monitor")
+    decision_id = insert_minimal_decision(cur, "soar-running-linked-001")
+    conn.commit()
+    set_queue_linkage(
+        conn,
+        row_id,
+        decision_id=decision_id,
+        soar_correlation_id="soar-running-linked-001",
+    )
+    conn.commit()
+
+    result = process_next_action(conn, executor=SimulationExecutor())
+
+    assert result["queue_id"] == row_id
+    assert result["outcome"] == "success"
+    events = fetch_outcome_events(cur, row_id)
+    assert events[:1] == [
+        (
+            "running",
+            "simulation",
+            "running",
+            True,
+            False,
+            False,
+            "queue_worker",
+            "simulation_mode",
+            f"queue-running-{row_id}-0",
+        )
+    ]
+    assert events[1][0:3] == ("succeeded", "simulation", "succeeded")
+
+
+def test_running_event_idempotency_prevents_duplicate_for_same_attempt(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "monitor")
+    decision_id = insert_minimal_decision(cur, "soar-running-idempotent-001")
+    conn.commit()
+    set_queue_linkage(
+        conn,
+        row_id,
+        decision_id=decision_id,
+        soar_correlation_id="soar-running-idempotent-001",
+    )
+    conn.commit()
+    claimed = claim_next_pending_action(conn)
+
+    first = _append_running_outcome_event(conn, claimed)
+    second = _append_running_outcome_event(conn, claimed)
+    conn.commit()
+
+    assert first["id"] == second["id"]
+    events = fetch_outcome_events(cur, row_id)
+    assert len(events) == 1
+    assert events[0][8] == f"queue-running-{row_id}-0"
+
+
+def test_running_event_retry_count_distinguishes_retry_attempt(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "monitor", max_retries=2)
+    decision_id = insert_minimal_decision(cur, "soar-running-retry-001")
+    conn.commit()
+    set_queue_linkage(
+        conn,
+        row_id,
+        decision_id=decision_id,
+        soar_correlation_id="soar-running-retry-001",
+    )
+    conn.commit()
+    first_claim = claim_next_pending_action(conn)
+    _append_running_outcome_event(conn, first_claim)
+    record_action_failure(conn, row_id, "temporary failure", retryable=True)
+    conn.commit()
+
+    second_claim = claim_next_pending_action(conn)
+    _append_running_outcome_event(conn, second_claim)
+    conn.commit()
+
+    events = fetch_outcome_events(cur, row_id)
+    assert [event[8] for event in events] == [
+        f"queue-running-{row_id}-0",
+        f"queue-running-{row_id}-1",
+    ]
+
+
+def test_unlinked_legacy_queue_row_processes_without_running_event(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "monitor")
+    conn.commit()
+
+    result = process_next_action(conn, executor=SimulationExecutor())
+
+    assert result["queue_id"] == row_id
+    assert result["outcome"] == "success"
+    assert fetch_queue_row(cur, row_id)[4] == "success"
+    assert fetch_outcome_events(cur, row_id) == []
+
+
+def test_running_event_write_failure_does_not_break_legacy_worker(
+    postgres_db, monkeypatch, caplog
+):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "monitor")
+    decision_id = insert_minimal_decision(cur, "soar-running-failure-001")
+    conn.commit()
+    set_queue_linkage(
+        conn,
+        row_id,
+        decision_id=decision_id,
+        soar_correlation_id="soar-running-failure-001",
+    )
+    conn.commit()
+
+    def fail_append(*_args, **_kwargs):
+        raise RuntimeError("canonical writer unavailable")
+
+    monkeypatch.setattr("engines.soar_action_worker.append_outcome_event", fail_append)
+
+    with caplog.at_level("ERROR"):
+        result = process_next_action(conn, executor=SimulationExecutor())
+
+    assert result["queue_id"] == row_id
+    assert result["outcome"] == "success"
+    assert fetch_queue_row(cur, row_id)[4] == "success"
+    assert len(fetch_action_logs(cur, alert_id)) == 1
+    assert fetch_outcome_events(cur, row_id) == []
+    assert "Failed to append canonical running outcome" in caplog.text
+
+
+def test_process_next_action_success_writes_linked_log_and_succeeded_event(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "monitor")
+    decision_id = link_queue_to_decision(
+        conn, cur, row_id, "soar-worker-success-linked-001"
+    )
+
+    result = process_next_action(conn, executor=SimulationExecutor())
+
+    assert result["outcome"] == "success"
+    logs = fetch_action_logs_with_links(cur, alert_id)
+    assert len(logs) == 1
+    log_id = logs[0][0]
+    assert logs[0][4] == "executed"
+    assert logs[0][6] == decision_id
+    assert logs[0][7] == "soar-worker-success-linked-001"
+    events = fetch_detailed_outcome_events(cur, row_id)
+    assert [event[0] for event in events] == ["running", "succeeded"]
+    succeeded = events[1]
+    assert succeeded[1:6] == (
+        "succeeded",
+        "simulation_mode",
+        f"queue-succeeded-{row_id}-0",
+        log_id,
+        None,
+    )
+    assert succeeded[7:] == (True, False, False)
+
+
+def test_process_next_action_skipped_writes_skipped_event(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "10.5.0.11", "monitor")
+    link_queue_to_decision(conn, cur, row_id, "soar-worker-skipped-001")
+
+    def skip(_row):
+        raise SkippedAction("policy disabled", code="policy_disabled")
+
+    result = process_next_action(conn, executor=skip)
+
+    assert result["outcome"] == "skipped"
+    log_id = fetch_action_logs_with_links(cur, alert_id)[0][0]
+    events = fetch_detailed_outcome_events(cur, row_id)
+    assert [event[0] for event in events] == ["running", "skipped"]
+    skipped = events[1]
+    assert skipped[1:5] == (
+        "skipped",
+        "policy_blocked",
+        f"queue-skipped-{row_id}-0",
+        log_id,
+    )
+
+
+def test_process_next_action_failed_writes_failed_event(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "monitor")
+    link_queue_to_decision(conn, cur, row_id, "soar-worker-failed-001")
+
+    def fail(_row):
+        raise Exception("unexpected failure token=secret-value")
+
+    result = process_next_action(conn, executor=fail)
+
+    assert result["outcome"] == "failed"
+    log_id = fetch_action_logs_with_links(cur, alert_id)[0][0]
+    events = fetch_detailed_outcome_events(cur, row_id)
+    assert [event[0] for event in events] == ["running", "failed"]
+    failed = events[1]
+    assert failed[1:5] == (
+        "failed",
+        "provider_error",
+        f"queue-failed-{row_id}-1",
+        log_id,
+    )
+    assert "secret-value" not in failed[6]
+
+
+def test_process_next_action_retry_writes_failed_attempt_and_requeued_events(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "10.5.0.10", "monitor", max_retries=2)
+    link_queue_to_decision(conn, cur, row_id, "soar-worker-retry-001")
+
+    def fail_retryable(_row):
+        raise RetryableActionError("adapter unavailable", code="adapter_unavailable")
+
+    result = process_next_action(conn, executor=fail_retryable)
+
+    assert result["outcome"] == "requeued"
+    assert fetch_action_logs(cur, alert_id) == []
+    events = fetch_detailed_outcome_events(cur, row_id)
+    assert [event[0] for event in events] == [
+        "running",
+        "failed_attempt",
+        "requeued",
+    ]
+    assert events[1][1:4] == (
+        "failed",
+        "adapter_unavailable",
+        f"queue-failed_attempt-{row_id}-1",
+    )
+    assert events[2][1:4] == (
+        "queued",
+        "adapter_unavailable",
+        f"queue-requeued-{row_id}-1",
+    )
+
+
+def test_process_next_action_awaiting_approval_writes_awaiting_event(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "block_ip")
+    link_queue_to_decision(conn, cur, row_id, "soar-worker-awaiting-001")
+    executor = Mock(return_value={"code": "ok", "message": "should not run"})
+
+    result = process_next_action(conn, executor=executor)
+
+    assert result["outcome"] == "awaiting_approval"
+    events = fetch_detailed_outcome_events(cur, row_id)
+    assert [event[0] for event in events] == ["running", "awaiting_approval"]
+    awaiting = events[1]
+    assert awaiting[1:4] == (
+        "awaiting_approval",
+        "approval_required",
+        f"queue-awaiting_approval-{row_id}-0",
+    )
+    assert awaiting[5] is not None
+    assert awaiting[7:] == (False, False, False)
+    executor.assert_not_called()
+
+
+def test_process_next_action_denied_approval_writes_blocked_event(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "block_ip")
+    link_queue_to_decision(conn, cur, row_id, "soar-worker-blocked-001")
+    user_id = insert_user(cur)
+    approval = create_approval_request(conn, queue_id=row_id, action="block_ip")
+    deny_request(conn, approval["id"], actor_user_id=user_id, decision_comment="too risky")
+    conn.commit()
+    executor = Mock(return_value={"code": "ok", "message": "should not run"})
+
+    result = process_next_action(conn, executor=executor)
+
+    assert result["outcome"] == "skipped"
+    log_id = fetch_action_logs_with_links(cur, alert_id)[0][0]
+    events = fetch_detailed_outcome_events(cur, row_id)
+    assert [event[0] for event in events] == ["running", "blocked"]
+    blocked = events[1]
+    assert blocked[1:6] == (
+        "blocked",
+        "approval_denied",
+        f"queue-blocked-{row_id}-0",
+        log_id,
+        approval["id"],
+    )
+    assert blocked[7:] == (False, False, False)
+    executor.assert_not_called()
+
+
 def test_process_next_action_block_ip_creates_approval_and_waits(postgres_db):
     conn, cur = postgres_db
     alert_id = insert_minimal_alert(cur)
@@ -1273,3 +1626,160 @@ def test_get_queue_status_counts_mixed_statuses_without_mutation(postgres_db):
 
     assert counts == {"awaiting_approval": 1, "success": 1, "failed": 1}
     assert before == after
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 Slice 2: canonical linkage field tests
+# ---------------------------------------------------------------------------
+
+def insert_minimal_decision(cur, correlation_id="soar-test-001"):
+    cur.execute(
+        """
+        INSERT INTO soar_response_decisions (
+            soar_correlation_id, selected_action, decision_source, outcome_summary
+        )
+        VALUES (%s, 'block_ip', 'detection_default', 'test decision')
+        RETURNING id
+        """,
+        (correlation_id,),
+    )
+    return cur.fetchone()[0]
+
+
+def link_queue_to_decision(conn, cur, row_id, correlation_id):
+    decision_id = insert_minimal_decision(cur, correlation_id)
+    conn.commit()
+    set_queue_linkage(
+        conn,
+        row_id,
+        decision_id=decision_id,
+        soar_correlation_id=correlation_id,
+    )
+    conn.commit()
+    return decision_id
+
+
+def test_queue_row_returns_null_linkage_by_default(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "10.10.0.1", "block_ip")
+    conn.commit()
+
+    row = get_queue_action(conn, row_id)
+
+    assert row["decision_id"] is None
+    assert row["soar_correlation_id"] is None
+
+
+def test_claim_next_pending_action_returns_linkage_fields(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    enqueue_response_action(cur, alert_id, "10.10.0.2", "monitor")
+    conn.commit()
+
+    claimed = claim_next_pending_action(conn)
+    conn.commit()
+
+    assert "decision_id" in claimed
+    assert "soar_correlation_id" in claimed
+    assert claimed["decision_id"] is None
+    assert claimed["soar_correlation_id"] is None
+
+
+def test_set_queue_linkage_persists_decision_id_and_correlation_id(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "10.10.0.3", "monitor")
+    decision_id = insert_minimal_decision(cur, "soar-linkage-test-001")
+    conn.commit()
+
+    updated = set_queue_linkage(
+        conn,
+        row_id,
+        decision_id=decision_id,
+        soar_correlation_id="soar-linkage-test-001",
+    )
+    conn.commit()
+
+    assert updated["id"] == row_id
+    assert updated["decision_id"] == decision_id
+    assert updated["soar_correlation_id"] == "soar-linkage-test-001"
+    assert updated["status"] == "pending"
+
+
+def test_set_queue_linkage_partial_update_correlation_id_only(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "10.10.0.4", "monitor")
+    conn.commit()
+
+    updated = set_queue_linkage(conn, row_id, soar_correlation_id="soar-partial-001")
+    conn.commit()
+
+    assert updated["soar_correlation_id"] == "soar-partial-001"
+    assert updated["decision_id"] is None
+    assert updated["status"] == "pending"
+
+
+def test_set_queue_linkage_partial_update_decision_id_only(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "10.10.0.5", "monitor")
+    decision_id = insert_minimal_decision(cur, "soar-partial-dec-001")
+    conn.commit()
+
+    updated = set_queue_linkage(conn, row_id, decision_id=decision_id)
+    conn.commit()
+
+    assert updated["decision_id"] == decision_id
+    assert updated["soar_correlation_id"] is None
+    assert updated["status"] == "pending"
+
+
+def test_set_queue_linkage_no_args_returns_row_unchanged(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "10.10.0.6", "monitor")
+    conn.commit()
+
+    result = set_queue_linkage(conn, row_id)
+
+    assert result["id"] == row_id
+    assert result["decision_id"] is None
+    assert result["soar_correlation_id"] is None
+
+
+def test_set_queue_linkage_does_not_change_status(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "10.10.0.7", "monitor")
+    conn.commit()
+    claim_next_pending_action(conn)
+    conn.commit()
+
+    updated = set_queue_linkage(conn, row_id, soar_correlation_id="soar-status-check-001")
+    conn.commit()
+
+    assert updated["status"] == "running"
+    assert updated["soar_correlation_id"] == "soar-status-check-001"
+
+
+def test_duplicate_enqueue_unaffected_by_linkage(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    decision_id = insert_minimal_decision(cur, "soar-dup-test-001")
+
+    first_id = enqueue_response_action(cur, alert_id, "10.10.0.8", "block_ip")
+    set_queue_linkage(conn, first_id, decision_id=decision_id, soar_correlation_id="soar-dup-test-001")
+    conn.commit()
+
+    duplicate_id = enqueue_response_action(cur, alert_id, "10.10.0.8", "block_ip")
+    conn.commit()
+
+    assert first_id is not None
+    assert duplicate_id is None
+    assert count_queue_rows(cur) == 1
+
+    row = get_queue_action(conn, first_id)
+    assert row["decision_id"] == decision_id
+    assert row["soar_correlation_id"] == "soar-dup-test-001"

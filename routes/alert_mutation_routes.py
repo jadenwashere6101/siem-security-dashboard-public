@@ -6,6 +6,7 @@ from core.auth import analyst_or_super_admin_required
 from core.db import get_db_connection
 from core.extensions import limiter
 from core.ip_helpers import execute_response_action
+from core.soar_response_outcomes import append_outcome_event, create_response_decision
 
 
 alert_mutation_bp = Blueprint("alert_mutation", __name__)
@@ -202,8 +203,15 @@ def manual_execute_alert(alert_id):
 
         source_ip = row[0]
 
+        decision = _create_manual_response_decision(
+            conn,
+            alert_id=alert_id,
+            source_ip=str(source_ip),
+            action=action,
+            actor_user_id=current_user.id,
+        )
         block_reason = f"Manual block recorded from alert {alert_id}" if action == "block_ip" else None
-        execution_status = execute_response_action(
+        execution_result = execute_response_action(
             cur,
             alert_id,
             str(source_ip),
@@ -212,6 +220,19 @@ def manual_execute_alert(alert_id):
             created_by=current_user.id,
             reason=block_reason,
             source_alert_id=alert_id if action == "block_ip" else None,
+            decision_id=decision["id"],
+            soar_correlation_id=decision["soar_correlation_id"],
+            return_log_id=True,
+        )
+        execution_status = execution_result["status"]
+
+        _append_manual_response_outcome(
+            conn,
+            decision=decision,
+            alert_id=alert_id,
+            source_ip=str(source_ip),
+            action=action,
+            response_action_log_id=execution_result["response_action_log_id"],
         )
 
         cur.execute(
@@ -259,6 +280,96 @@ def manual_execute_alert(alert_id):
             cur.close()
         if conn:
             conn.close()
+
+
+def _create_manual_response_decision(
+    conn,
+    *,
+    alert_id,
+    source_ip,
+    action,
+    actor_user_id,
+):
+    if action == "block_ip":
+        reason_code = "tracking_only"
+        summary = (
+            "Manual block_ip selected; SIEM blocklist tracking will be recorded "
+            "without firewall enforcement."
+        )
+    else:
+        reason_code = "simulation_mode"
+        summary = f"Manual {action} response selected for simulation."
+
+    return create_response_decision(
+        conn,
+        alert_id=alert_id,
+        source_ip=source_ip,
+        selected_action=action,
+        decision_source="manual",
+        reason_code=reason_code,
+        outcome_summary=summary,
+        created_by=_numeric_user_id_or_none(actor_user_id),
+        safe_metadata={
+            "route": "/alerts/<id>/execute",
+            "manual_action": action,
+        },
+    )
+
+
+def _numeric_user_id_or_none(user_id):
+    try:
+        return int(user_id)
+    except (TypeError, ValueError):
+        return None
+
+
+def _append_manual_response_outcome(
+    conn,
+    *,
+    decision,
+    alert_id,
+    source_ip,
+    action,
+    response_action_log_id,
+):
+    if action == "block_ip":
+        execution_mode = "tracking_only"
+        simulated = False
+        tracking_recorded = True
+        reason_code = "tracking_only"
+        summary = (
+            "SIEM blocklist tracking was recorded for this IP; no firewall, "
+            "provider, external, or local enforcement occurred."
+        )
+    else:
+        execution_mode = "simulation"
+        simulated = True
+        tracking_recorded = False
+        reason_code = "simulation_mode"
+        summary = f"Manual {action} response completed in simulation mode."
+
+    return append_outcome_event(
+        conn,
+        decision_id=decision["id"],
+        soar_correlation_id=decision["soar_correlation_id"],
+        event_type="succeeded",
+        execution_mode=execution_mode,
+        execution_state="succeeded",
+        external_executed=False,
+        tracking_recorded=tracking_recorded,
+        simulated=simulated,
+        execution_actor="manual",
+        reason_code=reason_code,
+        outcome_summary=summary,
+        alert_id=alert_id,
+        source_ip=source_ip,
+        response_action_log_id=response_action_log_id,
+        idempotency_key=f"manual-{action}-{alert_id}-{decision['id']}",
+        metadata={
+            "manual_action": action,
+            "response_action_log_id": response_action_log_id,
+        },
+    )
 
 
 @alert_mutation_bp.route("/alerts/<int:alert_id>/status", methods=["POST"])

@@ -211,6 +211,77 @@ The system SHALL centralize canonical decision creation, outcome event creation,
 - **WHEN** an API reads an older record without canonical decision/event rows
 - **THEN** the backend SHALL return a conservative inferred canonical latest outcome with `decision_source=migration` or equivalent compatibility metadata.
 
+### Requirement: Queue And Manual Runtime Outcome Wiring
+The system SHALL dual-write canonical response decisions and outcome events for live queue, response-log, and manual alert execution paths without changing existing queue, manual action, or response log side effects.
+
+#### Scenario: Idempotent queue enqueue
+- **WHEN** post-commit alert enqueue attempts to create a `response_actions_queue` row and the queue insert is suppressed by existing idempotency behavior
+- **THEN** the system SHALL NOT create duplicate canonical decisions or queued events for the same queue lifecycle.
+
+#### Scenario: Durable queue row created
+- **WHEN** post-commit alert enqueue creates a durable `response_actions_queue` row
+- **THEN** the system SHALL create or link one canonical decision, store `decision_id` and `soar_correlation_id` on the queue row where schema allows, and append a `queued` outcome event with a deterministic idempotency key.
+
+#### Scenario: Duplicate enqueue represented canonically
+- **WHEN** duplicate enqueue suppression is recorded as a canonical outcome
+- **THEN** the system SHALL use `execution_state=skipped`, `reason_code=duplicate_suppressed`, all execution booleans false, and a deterministic idempotency key.
+
+#### Scenario: Queue helper linkage
+- **WHEN** backend queue helper functions return queue rows for get, list, claim, transition, requeue, or stale-recovery paths
+- **THEN** returned queue row payloads SHALL include `decision_id` and `soar_correlation_id` where the columns exist so callers can write correctly linked canonical events.
+
+#### Scenario: Worker early-claim commit
+- **WHEN** a queue worker claims pending or approved awaiting-approval work and changes the queue row to `running`
+- **THEN** the system SHALL append the `running` outcome event in the same transaction as the claim before the existing early-claim commit is preserved.
+
+#### Scenario: Worker re-entry after claim
+- **WHEN** a worker restarts or re-enters after a claim has already written a `running` event
+- **THEN** deterministic idempotency keys SHALL prevent duplicate running events from creating misleading lifecycle evidence.
+
+#### Scenario: Retryable queue failure
+- **WHEN** a queue action fails with a retryable worker error and is returned to `pending`
+- **THEN** the system SHALL append a failed-attempt outcome event, then append a queued or requeued event, both with deterministic idempotency keys and sanitized summaries.
+
+#### Scenario: Exhausted or non-retryable queue failure
+- **WHEN** a queue action reaches terminal `failed` status because retries are exhausted or the failure is not retryable
+- **THEN** the system SHALL append a terminal `failed` outcome event with a sanitized summary and SHALL link the related response log row where one is written.
+
+#### Scenario: Queue approval required
+- **WHEN** a queue action is paused for approval
+- **THEN** the system SHALL append an `awaiting_approval` outcome event linked to the queue row and approval request where available, with all execution booleans false.
+
+#### Scenario: Queue approval denied or expired
+- **WHEN** approval denial or expiration prevents queued response execution
+- **THEN** the system SHALL append a `blocked` outcome event with `reason_code=approval_denied`, all execution booleans false, and an outcome summary that distinguishes denied from expired.
+
+#### Scenario: Queue simulation success
+- **WHEN** the queue worker completes a simulated action successfully
+- **THEN** the system SHALL append `execution_mode=simulation`, `execution_state=succeeded`, `simulated=true`, `external_executed=false`, and `tracking_recorded=false`, and SHALL link the response log row where one is written.
+
+#### Scenario: Queue skipped outcome
+- **WHEN** the queue worker skips work because of protected target policy, validation, unsupported action, duplicate prevention, or operator policy
+- **THEN** the system SHALL append a `skipped` outcome event with a canonical reason code, all execution booleans false, and a sanitized analyst-readable summary.
+
+#### Scenario: Response log linkage
+- **WHEN** runtime code writes a terminal `response_actions_log` row for a queue or manual action
+- **THEN** the log writer SHALL accept `decision_id` and `soar_correlation_id`, write those nullable linkage fields where schema allows, and return the inserted log id so outcome events can reference `response_action_log_id`.
+
+#### Scenario: Manual simulated action
+- **WHEN** an analyst manually records monitor or escalation behavior through `/alerts/<id>/execute`
+- **THEN** the system SHALL create a manual decision and append a simulation outcome event unless positive evidence proves tracking-only or real execution.
+
+#### Scenario: Manual tracking-only blocklist
+- **WHEN** an analyst manually selects `block_ip` and the system records only internal SIEM blocklist state
+- **THEN** the canonical outcome SHALL use `execution_mode=tracking_only`, `execution_state=succeeded`, `tracking_recorded=true`, `external_executed=false`, `simulated=false`, and a summary that says no firewall, provider, external, or local enforcement occurred.
+
+#### Scenario: Manual blocklist insertion failure
+- **WHEN** manual `block_ip` tracking fails validation, duplicates an active block, or otherwise does not durably insert internal blocklist state
+- **THEN** the system SHALL NOT write a tracking-only success event.
+
+#### Scenario: Deferred blocked IP direct linkage
+- **WHEN** Phase 4 records manual tracking-only blocklist outcomes without a new approved migration
+- **THEN** the system SHALL NOT require `blocked_ips.decision_id`, `blocked_ips.soar_correlation_id`, or outcome-event `blocked_ip_id`; it MAY link through `alert_id`, `source_ip`, `decision_id`, `soar_correlation_id`, and `response_action_log_id`.
+
 ### Requirement: Backend API Response Contracts
 The system SHALL expose canonical response outcome payloads from SOAR-related APIs while preserving existing legacy fields during rollout.
 
@@ -311,6 +382,10 @@ The system SHALL provide a conservative migration/backfill strategy for existing
 #### Scenario: Backfill notification deliveries
 - **WHEN** existing notification delivery attempts include `mode`, `status`, and metadata
 - **THEN** backfill SHALL map those records to canonical outcomes without changing the delivery attempt record.
+
+#### Scenario: Conservative notification real execution inference
+- **WHEN** compatibility or backfill logic infers `external_executed=true` for notification delivery history
+- **THEN** it SHALL require `mode=real`, `status=success`, metadata `executed=true`, metadata `simulated=false`, and provider success evidence.
 
 #### Scenario: Conservative unknowns
 - **WHEN** existing records are ambiguous

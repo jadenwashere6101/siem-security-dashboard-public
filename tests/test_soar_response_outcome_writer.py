@@ -4,6 +4,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from core import soar_response_outcomes as outcomes
+from core.response_action_queue_store import get_queue_action
+from engines.soar_enqueue_orchestrator import enqueue_committed_alerts
 
 
 def _insert_alert(cur, source_ip="10.20.30.40"):
@@ -450,3 +452,182 @@ def test_metadata_jsonb_round_trip_is_redacted(postgres_db):
 
     assert event["metadata"]["provider_status"] == "ok"
     assert "access_token" not in event["metadata"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 Slice 3: enqueue orchestrator canonical integration tests
+# ---------------------------------------------------------------------------
+
+def _make_alert(alert_id, source_ip="10.20.30.40", action="monitor", alert_type=None):
+    entry = {"alert_id": alert_id, "source_ip": source_ip, "response_action": action}
+    if alert_type is not None:
+        entry["alert_type"] = alert_type
+    return entry
+
+
+def test_enqueue_committed_alerts_creates_decision_linked_to_queue(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    conn.commit()
+
+    results = enqueue_committed_alerts([_make_alert(alert_id)], conn)
+    conn.commit()
+
+    assert results[0]["status"] == "enqueued"
+    queue_id = results[0]["queue_id"]
+    assert queue_id is not None
+
+    queue_row = get_queue_action(conn, queue_id)
+    assert queue_row["decision_id"] is not None
+    assert queue_row["soar_correlation_id"] is not None
+    assert queue_row["soar_correlation_id"].startswith(f"soar-{alert_id}-")
+
+    decision = outcomes._fetch_decision_by_id(conn, queue_row["decision_id"])
+    assert decision is not None
+    assert decision["alert_id"] == alert_id
+    assert decision["selected_action"] == "monitor"
+    assert decision["queue_id"] == queue_id
+
+
+def test_enqueue_committed_alerts_appends_queued_simulation_event(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    conn.commit()
+
+    results = enqueue_committed_alerts([_make_alert(alert_id)], conn)
+    conn.commit()
+
+    queue_id = results[0]["queue_id"]
+    queue_row = get_queue_action(conn, queue_id)
+
+    event = outcomes.get_latest_outcome_for_queue(conn, queue_id)
+    assert event is not None
+    assert event["execution_mode"] == "simulation"
+    assert event["execution_state"] == "queued"
+    assert event["simulated"] is True
+    assert event["external_executed"] is False
+    assert event["tracking_recorded"] is False
+    assert event["execution_actor"] == "system"
+    assert event["reason_code"] == "simulation_mode"
+    assert event["queue_id"] == queue_id
+    assert event["alert_id"] == alert_id
+    assert event["idempotency_key"] == f"queue-enqueue-{queue_id}"
+    assert event["decision_id"] == queue_row["decision_id"]
+
+
+def test_enqueue_committed_alerts_decision_source_detection_default(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    conn.commit()
+
+    enqueue_committed_alerts([_make_alert(alert_id)], conn)
+    conn.commit()
+
+    event = outcomes.get_latest_outcome_for_alert(conn, alert_id)
+    assert event is not None
+    decision = outcomes._fetch_decision_by_id(conn, event["decision_id"])
+    assert decision["decision_source"] == "detection_default"
+
+
+def test_enqueue_committed_alerts_decision_source_correlation_for_correlated_activity(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    conn.commit()
+
+    enqueue_committed_alerts(
+        [_make_alert(alert_id, action="flag_high_priority", alert_type="correlated_activity")],
+        conn,
+    )
+    conn.commit()
+
+    event = outcomes.get_latest_outcome_for_alert(conn, alert_id)
+    decision = outcomes._fetch_decision_by_id(conn, event["decision_id"])
+    assert decision["decision_source"] == "correlation"
+
+
+def test_enqueue_committed_alerts_duplicate_does_not_create_duplicate_canonical_records(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    conn.commit()
+
+    alert = _make_alert(alert_id, source_ip="10.20.30.40", action="monitor")
+    first = enqueue_committed_alerts([alert], conn)
+    conn.commit()
+
+    second = enqueue_committed_alerts([alert], conn)
+    conn.commit()
+
+    assert first[0]["status"] == "enqueued"
+    assert second[0]["status"] == "duplicate_skipped"
+    assert second[0]["queue_id"] is None
+
+    # Only one decision and one event should exist for this alert
+    cur.execute(
+        "SELECT COUNT(*) FROM soar_response_decisions WHERE alert_id = %s",
+        (alert_id,),
+    )
+    assert cur.fetchone()[0] == 1
+
+    cur.execute(
+        "SELECT COUNT(*) FROM soar_response_outcome_events WHERE alert_id = %s",
+        (alert_id,),
+    )
+    assert cur.fetchone()[0] == 1
+
+
+def test_enqueue_committed_alerts_idempotency_key_deduplicated_on_retry(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    conn.commit()
+
+    results = enqueue_committed_alerts([_make_alert(alert_id)], conn)
+    conn.commit()
+
+    queue_id = results[0]["queue_id"]
+    decision_id = get_queue_action(conn, queue_id)["decision_id"]
+
+    # Simulate retry: append again with same idempotency key
+    second_event = outcomes.append_outcome_event(
+        conn,
+        decision_id=decision_id,
+        execution_mode="simulation",
+        execution_state="queued",
+        execution_actor="system",
+        simulated=True,
+        outcome_summary="duplicate attempt",
+        queue_id=queue_id,
+        idempotency_key=f"queue-enqueue-{queue_id}",
+    )
+    conn.commit()
+
+    first_event = outcomes.get_latest_outcome_for_queue(conn, queue_id)
+    # idempotency key returns the existing row, not a new one
+    assert second_event["id"] == first_event["id"]
+    assert second_event["outcome_summary"] != "duplicate attempt"
+
+    cur.execute(
+        "SELECT COUNT(*) FROM soar_response_outcome_events WHERE queue_id = %s",
+        (queue_id,),
+    )
+    assert cur.fetchone()[0] == 1
+
+
+def test_enqueue_missing_response_action_skips_without_canonical_write(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    conn.commit()
+
+    results = enqueue_committed_alerts(
+        [{"alert_id": alert_id, "source_ip": "10.20.30.40"}],
+        conn,
+    )
+    conn.commit()
+
+    assert results[0]["status"] == "skipped"
+    assert results[0]["skip_reason"] == "missing_response_action"
+
+    cur.execute(
+        "SELECT COUNT(*) FROM soar_response_decisions WHERE alert_id = %s",
+        (alert_id,),
+    )
+    assert cur.fetchone()[0] == 0

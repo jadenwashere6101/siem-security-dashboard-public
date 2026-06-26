@@ -390,6 +390,9 @@ def execute_response_action(
     created_by=None,
     reason=None,
     source_alert_id=None,
+    decision_id=None,
+    soar_correlation_id=None,
+    return_log_id=False,
 ):
     status = "executed"
     details = None
@@ -419,12 +422,35 @@ def execute_response_action(
 
     cur.execute(
         """
-        INSERT INTO response_actions_log (alert_id, source_ip, action, status, details)
-        VALUES (%s, %s, %s, %s, %s)
+        INSERT INTO response_actions_log (
+            alert_id,
+            source_ip,
+            action,
+            status,
+            details,
+            decision_id,
+            soar_correlation_id
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
         """,
-        (alert_id, source_ip, response_action, status, details)
+        (
+            alert_id,
+            source_ip,
+            response_action,
+            status,
+            details,
+            decision_id,
+            soar_correlation_id,
+        )
     )
+    response_action_log_id = cur.fetchone()[0]
 
+    if return_log_id:
+        return {
+            "status": status,
+            "response_action_log_id": response_action_log_id,
+        }
     return status
 
 
