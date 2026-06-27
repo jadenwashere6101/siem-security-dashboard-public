@@ -93,10 +93,10 @@
 
 ### 5B. Phase 5 Runtime Integration
 
-- [ ] 5.1 Propagate alert SOAR correlation id into newly-created `playbook_executions`; write it to `playbook_executions.soar_correlation_id` once the Phase 5A migration is applied.
-- [ ] 5.2 Create one execution-level canonical decision per `playbook_execution` with `decision_source=playbook`; write `decision_id` back to `playbook_executions.decision_id`. Do NOT create per-step child decisions in Phase 5. All step outcome events attach to this single execution-level decision. Per-step child decisions are deferred and must not be implemented unless a future OpenSpec explicitly approves them.
-- [ ] 5.3 Append outcome events when a playbook execution is created, claimed, completed, failed, abandoned, resumed, retried, or permanently failed; link all events to the execution-level decision.
-- [ ] 5.4 Append step outcome events for playbook steps using step index and selected action; attach all step events to the execution-level decision, not to per-step child decisions.
+- [x] 5.1 Propagate alert SOAR correlation id into newly-created `playbook_executions`; write it to `playbook_executions.soar_correlation_id` once the Phase 5A migration is applied.
+- [x] 5.2 Create one execution-level canonical decision per `playbook_execution` with `decision_source=playbook`; write `decision_id` back to `playbook_executions.decision_id`. Do NOT create per-step child decisions in Phase 5. All step outcome events attach to this single execution-level decision. Per-step child decisions are deferred and must not be implemented unless a future OpenSpec explicitly approves them.
+- [x] 5.3 Append outcome events when a playbook execution is created, claimed, completed, failed, abandoned, resumed, retried, or permanently failed; link all events to the execution-level decision.
+- [x] 5.4 Append step outcome events for playbook steps using step index and selected action; attach all step events to the execution-level decision, not to per-step child decisions.
 - [x] 5.5 Resolve `source_ip` for playbook outcome events from the related `alerts` row when `alert_id` exists; set `source_ip=NULL` when no alert is linked; do not derive `source_ip` from playbook wrapper state, `steps_log`, or indirect paths.
 - [x] 5.6 Default `execution_mode=simulation` for Phase 5 playbook outcome events unless verified adapter metadata explicitly confirms real execution AND safety guards allow real mode; do not set `execution_mode=real` or `external_executed=true` from playbook wrapper `mode` state alone.
 - [x] 5.7 Append `awaiting_approval` events when a playbook `require_approval` step pauses execution.

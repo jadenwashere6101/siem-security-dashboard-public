@@ -36,6 +36,8 @@ from core.playbook_store import (
     update_playbook_definition,
 )
 from engines.playbook_registry import validate_playbook_steps
+from engines.soar_playbook_orchestrator import create_and_link_playbook_execution_decision
+from engines.playbook_step_executor import try_append_playbook_lifecycle_outcome_event
 
 playbook_bp = Blueprint("playbooks", __name__)
 
@@ -689,6 +691,19 @@ def retry_playbook_execution_route(execution_id):
             )
 
         new_execution_id = create_retry_execution(conn, execution_id)
+        # Create execution-level canonical decision for the new execution.
+        # parent_soar_correlation_id links to the source execution's decision chain.
+        create_and_link_playbook_execution_decision(
+            conn,
+            new_execution_id,
+            playbook_id=execution["playbook_id"],
+            alert_id=execution["alert_id"],
+            incident_id=execution.get("incident_id"),
+            parent_soar_correlation_id=execution.get("soar_correlation_id"),
+            initial_event_type="retried",
+            initial_idempotency_key=f"playbook-retried-{new_execution_id}",
+            initial_event_metadata={"retry_of_execution_id": execution_id},
+        )
         conn.commit()
         _write_playbook_execution_audit(
             "PLAYBOOK_EXECUTION_RETRY",
@@ -737,6 +752,17 @@ def abandon_playbook_execution_route(execution_id):
 
         previous_status = execution["status"]
         outcome = abandon_playbook_execution(conn, execution_id)
+        if outcome == "ok":
+            try_append_playbook_lifecycle_outcome_event(
+                conn,
+                execution,
+                event_type="abandoned",
+                execution_state="skipped",
+                summary=f"Playbook execution abandoned from status {previous_status!r} by operator.",
+                idempotency_key=f"playbook-abandoned-{execution_id}",
+                execution_actor="manual",
+                reason_code="policy_blocked",
+            )
         conn.commit()
         if outcome == "no_op":
             return jsonify({"outcome": "no_op", "execution_id": execution_id}), 200
@@ -796,8 +822,21 @@ def permanently_fail_playbook_execution_route(execution_id):
         if updated is None:
             return jsonify({"error": "playbook execution not found"}), 404
 
-        conn.commit()
         outcome = "no_op" if previous["status"] == "permanently_failed" else "permanently_failed"
+        if outcome != "no_op":
+            try_append_playbook_lifecycle_outcome_event(
+                conn,
+                previous,
+                event_type="permanently_failed",
+                execution_state="failed",
+                summary=(
+                    f"Playbook execution permanently failed from status "
+                    f"{previous['status']!r} by operator."
+                ),
+                idempotency_key=f"playbook-permanently-failed-{execution_id}",
+                execution_actor="manual",
+            )
+        conn.commit()
         if outcome != "no_op":
             _write_playbook_execution_audit(
                 "PLAYBOOK_EXECUTION_PERMANENTLY_FAIL",

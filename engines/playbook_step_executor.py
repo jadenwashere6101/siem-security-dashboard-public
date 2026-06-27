@@ -1850,6 +1850,40 @@ def _append_playbook_execution_outcome_event(
     )
 
 
+def try_append_playbook_lifecycle_outcome_event(
+    conn,
+    execution: dict[str, Any],
+    *,
+    event_type: str,
+    execution_state: str,
+    summary: str,
+    idempotency_key: str,
+    execution_actor: str = "system",
+    reason_code: str = "simulation_mode",
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """
+    Public safe wrapper: append a lifecycle outcome event (abandoned, permanently_failed,
+    retried, etc.) to a playbook execution.
+
+    No-ops silently when the execution has no decision_id. Never raises.
+    """
+    _append_playbook_execution_outcome_event(
+        conn,
+        execution,
+        event_type=event_type,
+        execution_state=execution_state,
+        summary=summary,
+        idempotency_key=idempotency_key,
+        execution_actor=execution_actor,
+        reason_code=reason_code,
+        execution_mode="simulation",
+        simulated=True,
+        external_executed=False,
+        metadata=metadata,
+    )
+
+
 def _playbook_terminal_idempotency_label(event_type: str) -> str:
     if event_type == "succeeded":
         return "success"

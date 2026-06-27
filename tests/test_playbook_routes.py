@@ -11,6 +11,7 @@ from werkzeug.security import generate_password_hash
 
 from core import approval_store
 from core import playbook_store
+from core.soar_response_outcomes import create_response_decision
 
 ADMIN_USER = "testadmin"
 ADMIN_PASS = "testpassword123!"
@@ -1401,3 +1402,176 @@ def test_mutations_do_not_create_executions_or_touch_queue_or_log(client, postgr
     assert cur.fetchone() == q_before
     cur.execute("SELECT COUNT(*) FROM response_actions_log")
     assert cur.fetchone()[0] == log0
+
+
+# ---------------------------------------------------------------------------
+# Phase 5B: lifecycle canonical outcome events via routes
+# ---------------------------------------------------------------------------
+
+def _setup_linked_execution(conn, cur, playbook_id="pb_lifecycle"):
+    """Create alert + playbook + execution + canonical decision, return (execution_id, decision)."""
+    cur.execute(
+        "INSERT INTO alerts (alert_type, severity, source_ip, message) "
+        "VALUES ('test_alert', 'LOW', '10.0.0.5'::inet, 'msg') RETURNING id"
+    )
+    alert_id = cur.fetchone()[0]
+    playbook_store.create_playbook_definition(conn, playbook_id, playbook_id, steps=_valid_steps())
+    execution_id = playbook_store.create_playbook_execution(conn, playbook_id, alert_id)
+    decision = create_response_decision(
+        conn,
+        selected_action="run_playbook",
+        decision_source="playbook",
+        outcome_summary="test lifecycle decision",
+        alert_id=alert_id,
+        playbook_id=playbook_id,
+        playbook_execution_id=execution_id,
+    )
+    playbook_store.set_playbook_execution_canonical_linkage(
+        conn, execution_id, decision["id"], decision["soar_correlation_id"]
+    )
+    conn.commit()
+    return execution_id, decision
+
+
+def test_abandon_route_appends_canonical_abandoned_event(client, postgres_db):
+    """Phase 5B: abandon route writes an 'abandoned' canonical outcome event before commit."""
+    conn, cur = postgres_db
+    execution_id, decision = _setup_linked_execution(conn, cur, "pb_abandon_canon")
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.post(f"/playbook-executions/{execution_id}/abandon")
+
+    assert resp.status_code == 200
+    assert resp.get_json()["outcome"] == "abandoned"
+
+    cur.execute(
+        "SELECT event_type, execution_state, execution_actor FROM soar_response_outcome_events "
+        "WHERE decision_id = %s ORDER BY id",
+        (decision["id"],),
+    )
+    events = cur.fetchall()
+    assert any(e[0] == "abandoned" and e[1] == "skipped" and e[2] == "manual" for e in events)
+
+
+def test_abandon_no_op_does_not_write_duplicate_event(client, postgres_db):
+    """Phase 5B: abandon no-op path (already abandoned) writes no extra canonical event."""
+    conn, cur = postgres_db
+    execution_id, decision = _setup_linked_execution(conn, cur, "pb_abandon_noop")
+    playbook_store.abandon_playbook_execution(conn, execution_id)
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.post(f"/playbook-executions/{execution_id}/abandon")
+
+    assert resp.status_code == 200
+    assert resp.get_json()["outcome"] == "no_op"
+
+    cur.execute(
+        "SELECT COUNT(*) FROM soar_response_outcome_events WHERE decision_id = %s "
+        "AND event_type = 'abandoned'",
+        (decision["id"],),
+    )
+    assert cur.fetchone()[0] == 0
+
+
+def test_permanently_fail_route_appends_canonical_event(client, postgres_db):
+    """Phase 5B: permanently-fail route writes a 'permanently_failed' canonical outcome event."""
+    conn, cur = postgres_db
+    execution_id, decision = _setup_linked_execution(conn, cur, "pb_pfail_canon")
+    playbook_store.set_playbook_execution_failed(
+        conn, execution_id, [{"step_index": 0, "status": "failed"}]
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.post(
+            f"/playbook-executions/{execution_id}/permanently-fail",
+            json={"failure_reason": "exhausted retries"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.get_json()["outcome"] == "permanently_failed"
+
+    cur.execute(
+        "SELECT event_type, execution_state, execution_actor FROM soar_response_outcome_events "
+        "WHERE decision_id = %s ORDER BY id",
+        (decision["id"],),
+    )
+    events = cur.fetchall()
+    assert any(
+        e[0] == "permanently_failed" and e[1] == "failed" and e[2] == "manual"
+        for e in events
+    )
+
+
+def test_retry_route_creates_canonical_decision_and_retried_event(client, postgres_db):
+    """
+    Phase 5B: retry route creates a new playbook-source decision for the retry execution
+    with parent_soar_correlation_id from the source execution, and appends a 'retried' event.
+    """
+    conn, cur = postgres_db
+    execution_id, decision = _setup_linked_execution(conn, cur, "pb_retry_canon")
+    playbook_store.set_playbook_execution_failed(
+        conn, execution_id, [{"step_index": 0, "status": "failed"}]
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.post(f"/playbook-executions/{execution_id}/retry")
+
+    assert resp.status_code == 201
+    new_id = resp.get_json()["new_execution_id"]
+
+    new_exec = playbook_store.get_playbook_execution(conn, new_id)
+    assert new_exec["decision_id"] is not None
+    assert new_exec["soar_correlation_id"] is not None
+    assert new_exec["soar_correlation_id"] != decision["soar_correlation_id"]
+
+    cur.execute(
+        "SELECT decision_source, parent_soar_correlation_id FROM soar_response_decisions "
+        "WHERE id = %s",
+        (new_exec["decision_id"],),
+    )
+    new_dec = cur.fetchone()
+    assert new_dec[0] == "playbook"
+    assert new_dec[1] == decision["soar_correlation_id"]
+
+    cur.execute(
+        "SELECT event_type, execution_state FROM soar_response_outcome_events "
+        "WHERE decision_id = %s ORDER BY id",
+        (new_exec["decision_id"],),
+    )
+    events = cur.fetchall()
+    assert any(e[0] == "retried" and e[1] == "selected" for e in events)
+
+
+def test_lifecycle_events_skipped_gracefully_when_no_decision(client, postgres_db):
+    """
+    Phase 5B backward compat: abandon route still succeeds for executions that
+    have no decision_id (created before Phase 5B deployment).
+    """
+    conn, cur = postgres_db
+    cur.execute(
+        "INSERT INTO alerts (alert_type, severity, source_ip, message) "
+        "VALUES ('test_alert', 'LOW', '10.0.0.6'::inet, 'msg') RETURNING id"
+    )
+    alert_id = cur.fetchone()[0]
+    playbook_store.create_playbook_definition(conn, "pb_no_decision", "no dec", steps=_valid_steps())
+    execution_id = playbook_store.create_playbook_execution(conn, "pb_no_decision", alert_id)
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.post(f"/playbook-executions/{execution_id}/abandon")
+
+    assert resp.status_code == 200
+    assert resp.get_json()["outcome"] == "abandoned"
+
+    row = playbook_store.get_playbook_execution(conn, execution_id)
+    assert row["status"] == "abandoned"
+    cur.execute("SELECT COUNT(*) FROM soar_response_outcome_events")
+    assert cur.fetchone()[0] == 0

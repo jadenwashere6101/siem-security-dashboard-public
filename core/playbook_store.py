@@ -1220,6 +1220,33 @@ def create_retry_execution(conn, source_execution_id: int) -> int:
         raise ValueError("active execution already exists for playbook and alert") from exc
 
 
+def set_playbook_execution_canonical_linkage(
+    conn,
+    execution_id: int,
+    decision_id: int,
+    soar_correlation_id: str,
+) -> dict[str, Any] | None:
+    """Write decision_id and soar_correlation_id back to a playbook_executions row.
+
+    Used after creating an execution-level canonical decision. Caller owns commit.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE playbook_executions
+            SET decision_id = %s,
+                soar_correlation_id = %s
+            WHERE id = %s
+            RETURNING {_EXECUTION_COLUMNS_SQL}
+            """,
+            (decision_id, soar_correlation_id, execution_id),
+        )
+        row = cur.fetchone()
+    if row is None:
+        return None
+    return _execution_row_to_dict(row)
+
+
 def abandon_playbook_execution(conn, execution_id: int) -> str:
     with conn.cursor() as cur:
         cur.execute(
