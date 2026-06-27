@@ -129,9 +129,13 @@ jobs:
             [[ -f "$source_file" ]] || continue
             if sudo grep -q "packages.microsoft.com/repos/azure-cli" "$source_file"; then
               echo "Disabling broken azure-cli apt source in ${source_file}"
-              sudo sed -i.bak \
-                '/packages.microsoft.com\/repos\/azure-cli/s/^/# disabled for migration validation CI: /' \
-                "$source_file"
+              if [[ "$source_file" == *.sources ]]; then
+                sudo mv "$source_file" "${source_file}.disabled"
+              else
+                sudo sed -i.bak \
+                  '/packages.microsoft.com\/repos\/azure-cli/s/^/# disabled for migration validation CI: /' \
+                  "$source_file"
+              fi
             fi
           done
 
