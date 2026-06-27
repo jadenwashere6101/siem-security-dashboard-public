@@ -301,6 +301,14 @@ The system SHALL expose canonical response outcome payloads from SOAR-related AP
 - **WHEN** an API returns a canonical latest outcome
 - **THEN** the payload SHALL include selected action, decision source, execution actor where available, execution mode, execution state, `external_executed`, `tracking_recorded`, `simulated`, summary/reason, SOAR correlation id, decision id, latest outcome event id, and related playbook/queue/approval ids where applicable.
 
+#### Scenario: response_outcome key always present
+- **WHEN** an API returns a resource that supports canonical response outcomes
+- **THEN** the response payload SHALL always include a `response_outcome` key; when no canonical decision or outcome event exists for the resource, `response_outcome` SHALL be `null`; the key SHALL NOT be omitted.
+
+#### Scenario: Alert list bulk outcome lookup
+- **WHEN** the alert list API includes `response_outcome` for multiple alert rows
+- **THEN** the backend SHALL retrieve canonical outcomes for all returned alert ids in a single query rather than issuing one outcome query per alert row.
+
 #### Scenario: Alert detail API
 - **WHEN** an authorized user reads an alert detail or alert list item
 - **THEN** the API SHALL include canonical response outcome data or an inferred observed-only outcome.
@@ -331,7 +339,7 @@ The system SHALL expose canonical response outcome payloads from SOAR-related AP
 
 #### Scenario: Metrics APIs
 - **WHEN** metrics summarize SOAR activity
-- **THEN** they SHALL distinguish observed-only, simulation, tracking-only, real, awaiting approval, blocked, skipped, failed, succeeded, external-executed, tracking-recorded, and simulated outcomes.
+- **THEN** they SHALL add canonical outcome count fields to existing metrics endpoints; counts SHALL be grouped by `execution_mode`, `execution_state`, `external_executed`, `tracking_recorded`, and `simulated`; no new dedicated metrics endpoint SHALL be created unless the existing endpoint architecture makes it structurally impossible; existing metric fields SHALL be preserved.
 
 ### Requirement: Dashboard Outcome Presentation
 The dashboard SHALL show canonical response outcomes with consistent language and avoid ambiguous standalone "executed" labels.

@@ -631,3 +631,401 @@ def test_enqueue_missing_response_action_skips_without_canonical_write(postgres_
         (alert_id,),
     )
     assert cur.fetchone()[0] == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 Slice 1: serialize_latest_outcome, serialize_outcome_timeline,
+# get_latest_outcomes_for_alerts_bulk
+# ---------------------------------------------------------------------------
+
+
+def _make_decision_with_event(
+    conn,
+    cur,
+    *,
+    source_ip="10.20.30.40",
+    decision_summary="Decision created.",
+    event_summary="Event outcome text.",
+    execution_mode="simulation",
+    execution_state="succeeded",
+    simulated=True,
+    external_executed=False,
+    tracking_recorded=False,
+    execution_actor="queue_worker",
+    reason_code="simulation_mode",
+):
+    alert_id = _insert_alert(cur, source_ip=source_ip)
+    conn.commit()
+    decision = outcomes.create_response_decision(
+        conn,
+        alert_id=alert_id,
+        selected_action="monitor",
+        decision_source="manual",
+        outcome_summary=decision_summary,
+    )
+    conn.commit()
+    event = outcomes.append_outcome_event(
+        conn,
+        decision_id=decision["id"],
+        execution_mode=execution_mode,
+        execution_state=execution_state,
+        simulated=simulated,
+        external_executed=external_executed,
+        tracking_recorded=tracking_recorded,
+        execution_actor=execution_actor,
+        outcome_summary=event_summary,
+        reason_code=reason_code,
+    )
+    conn.commit()
+    return alert_id, decision, event
+
+
+# --- serialize_latest_outcome ---
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_serialize_latest_outcome_returns_decision_6_shape(postgres_db):
+    conn, cur = postgres_db
+    alert_id, decision, event = _make_decision_with_event(conn, cur)
+
+    result = outcomes.serialize_latest_outcome(conn, decision_id=decision["id"])
+
+    assert result is not None
+    assert result["soar_correlation_id"] == decision["soar_correlation_id"]
+    assert result["decision_id"] == decision["id"]
+    assert result["latest_outcome_event_id"] == event["id"]
+    assert result["selected_action"] == "monitor"
+    assert result["decision_source"] == "manual"
+    assert result["execution_mode"] == "simulation"
+    assert result["execution_state"] == "succeeded"
+    assert result["external_executed"] is False
+    assert result["tracking_recorded"] is False
+    assert result["simulated"] is True
+    assert result["execution_actor"] == "queue_worker"
+    assert "related" in result
+    assert result["related"]["alert_id"] == alert_id
+    assert "timestamps" in result
+    assert result["timestamps"]["selected_at"] is not None
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_serialize_latest_outcome_uses_event_outcome_summary_not_decision(postgres_db):
+    conn, cur = postgres_db
+    _alert_id, decision, _event = _make_decision_with_event(
+        conn,
+        cur,
+        decision_summary="Decision-level text that must not appear at top level.",
+        event_summary="Event-level text that must appear at top level.",
+    )
+
+    result = outcomes.serialize_latest_outcome(conn, decision_id=decision["id"])
+
+    assert result is not None
+    assert result["outcome_summary"] == "Event-level text that must appear at top level."
+    assert result["outcome_summary"] != "Decision-level text that must not appear at top level."
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_serialize_latest_outcome_returns_none_when_no_decision(postgres_db):
+    conn, _cur = postgres_db
+
+    result = outcomes.serialize_latest_outcome(conn, decision_id=999999)
+
+    assert result is None
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_serialize_latest_outcome_no_events_returns_selected_state(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    conn.commit()
+    decision = outcomes.create_response_decision(
+        conn,
+        alert_id=alert_id,
+        selected_action="monitor",
+        decision_source="detection_default",
+        outcome_summary="Detection selected monitor action.",
+    )
+    conn.commit()
+
+    result = outcomes.serialize_latest_outcome(conn, decision_id=decision["id"])
+
+    assert result is not None
+    assert result["latest_outcome_event_id"] is None
+    assert result["execution_mode"] == "observed"
+    assert result["execution_state"] == "selected"
+    assert result["external_executed"] is False
+    assert result["tracking_recorded"] is False
+    assert result["simulated"] is False
+    assert result["execution_actor"] is None
+    assert result["outcome_summary"] == "Detection selected monitor action."
+    assert result["timestamps"]["occurred_at"] is None
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_serialize_latest_outcome_by_correlation_id(postgres_db):
+    conn, cur = postgres_db
+    alert_id, decision, event = _make_decision_with_event(conn, cur)
+
+    result = outcomes.serialize_latest_outcome(
+        conn, soar_correlation_id=decision["soar_correlation_id"]
+    )
+
+    assert result is not None
+    assert result["decision_id"] == decision["id"]
+    assert result["latest_outcome_event_id"] == event["id"]
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_serialize_latest_outcome_by_alert_id(postgres_db):
+    conn, cur = postgres_db
+    alert_id, decision, event = _make_decision_with_event(conn, cur)
+
+    result = outcomes.serialize_latest_outcome(conn, alert_id=alert_id)
+
+    assert result is not None
+    assert result["decision_id"] == decision["id"]
+    assert result["related"]["alert_id"] == alert_id
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_serialize_latest_outcome_alert_id_no_decision_returns_none(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    conn.commit()
+
+    result = outcomes.serialize_latest_outcome(conn, alert_id=alert_id)
+
+    assert result is None
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_serialize_latest_outcome_requires_at_least_one_lookup_arg(postgres_db):
+    conn, _cur = postgres_db
+    with pytest.raises(outcomes.SoarResponseOutcomeValidationError):
+        outcomes.serialize_latest_outcome(conn)
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_serialize_latest_outcome_includes_all_related_fields(postgres_db):
+    conn, cur = postgres_db
+    _alert_id, decision, _event = _make_decision_with_event(conn, cur)
+
+    result = outcomes.serialize_latest_outcome(conn, decision_id=decision["id"])
+
+    related = result["related"]
+    for key in (
+        "alert_id",
+        "incident_id",
+        "queue_id",
+        "playbook_id",
+        "playbook_execution_id",
+        "playbook_step_index",
+        "approval_request_id",
+        "notification_delivery_attempt_id",
+        "response_action_log_id",
+    ):
+        assert key in related, f"missing related field: {key}"
+
+
+# --- serialize_outcome_timeline ---
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_serialize_outcome_timeline_ordered_oldest_first(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    conn.commit()
+    decision = outcomes.create_response_decision(
+        conn,
+        alert_id=alert_id,
+        selected_action="monitor",
+        decision_source="manual",
+        outcome_summary="test",
+    )
+    conn.commit()
+
+    older_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+    middle_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+    newest_time = datetime.now(timezone.utc) - timedelta(minutes=1)
+
+    for summary, occurred_at in (
+        ("first event", older_time),
+        ("middle event", middle_time),
+        ("newest event", newest_time),
+    ):
+        outcomes.append_outcome_event(
+            conn,
+            decision_id=decision["id"],
+            execution_mode="simulation",
+            execution_state="queued",
+            execution_actor="queue_worker",
+            outcome_summary=summary,
+            occurred_at=occurred_at,
+        )
+    conn.commit()
+
+    timeline = outcomes.serialize_outcome_timeline(conn, decision["id"])
+
+    assert len(timeline) == 3
+    assert timeline[0]["outcome_summary"] == "first event"
+    assert timeline[1]["outcome_summary"] == "middle event"
+    assert timeline[2]["outcome_summary"] == "newest event"
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_serialize_outcome_timeline_empty_when_no_decision(postgres_db):
+    conn, _cur = postgres_db
+
+    timeline = outcomes.serialize_outcome_timeline(conn, 999999)
+
+    assert timeline == []
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_serialize_outcome_timeline_empty_when_no_events(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    conn.commit()
+    decision = outcomes.create_response_decision(
+        conn,
+        alert_id=alert_id,
+        selected_action="monitor",
+        decision_source="manual",
+        outcome_summary="no events yet",
+    )
+    conn.commit()
+
+    timeline = outcomes.serialize_outcome_timeline(conn, decision["id"])
+
+    assert timeline == []
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_serialize_outcome_timeline_limit_respected(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    conn.commit()
+    decision = outcomes.create_response_decision(
+        conn,
+        alert_id=alert_id,
+        selected_action="monitor",
+        decision_source="manual",
+        outcome_summary="test",
+    )
+    conn.commit()
+
+    for i in range(5):
+        outcomes.append_outcome_event(
+            conn,
+            decision_id=decision["id"],
+            execution_mode="simulation",
+            execution_state="queued",
+            execution_actor="system",
+            outcome_summary=f"event {i}",
+        )
+    conn.commit()
+
+    timeline = outcomes.serialize_outcome_timeline(conn, decision["id"], limit=3)
+    assert len(timeline) == 3
+
+
+# --- get_latest_outcomes_for_alerts_bulk ---
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_get_latest_outcomes_for_alerts_bulk_returns_map_by_alert_id(postgres_db):
+    conn, cur = postgres_db
+    alert_id_a, decision_a, event_a = _make_decision_with_event(
+        conn, cur, event_summary="event for alert A"
+    )
+    alert_id_b, decision_b, event_b = _make_decision_with_event(
+        conn, cur, event_summary="event for alert B"
+    )
+
+    result = outcomes.get_latest_outcomes_for_alerts_bulk(conn, [alert_id_a, alert_id_b])
+
+    assert alert_id_a in result
+    assert alert_id_b in result
+    assert result[alert_id_a]["outcome_summary"] == "event for alert A"
+    assert result[alert_id_b]["outcome_summary"] == "event for alert B"
+    assert result[alert_id_a]["alert_id"] == alert_id_a
+    assert result[alert_id_b]["alert_id"] == alert_id_b
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_get_latest_outcomes_for_alerts_bulk_returns_latest_per_alert(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    conn.commit()
+    decision = outcomes.create_response_decision(
+        conn,
+        alert_id=alert_id,
+        selected_action="monitor",
+        decision_source="manual",
+        outcome_summary="test",
+    )
+    conn.commit()
+
+    older_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+    newer_time = datetime.now(timezone.utc) - timedelta(minutes=1)
+
+    outcomes.append_outcome_event(
+        conn,
+        decision_id=decision["id"],
+        execution_mode="simulation",
+        execution_state="queued",
+        execution_actor="queue_worker",
+        outcome_summary="older event",
+        occurred_at=older_time,
+    )
+    outcomes.append_outcome_event(
+        conn,
+        decision_id=decision["id"],
+        execution_mode="simulation",
+        execution_state="succeeded",
+        simulated=True,
+        execution_actor="queue_worker",
+        outcome_summary="newer event",
+        occurred_at=newer_time,
+    )
+    conn.commit()
+
+    result = outcomes.get_latest_outcomes_for_alerts_bulk(conn, [alert_id])
+
+    assert alert_id in result
+    assert result[alert_id]["outcome_summary"] == "newer event"
+    assert result[alert_id]["execution_state"] == "succeeded"
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_get_latest_outcomes_for_alerts_bulk_empty_input_returns_empty_dict(postgres_db):
+    conn, _cur = postgres_db
+
+    result = outcomes.get_latest_outcomes_for_alerts_bulk(conn, [])
+
+    assert result == {}
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_get_latest_outcomes_for_alerts_bulk_missing_alert_absent_from_result(postgres_db):
+    conn, cur = postgres_db
+    alert_id_with_events, _decision, _event = _make_decision_with_event(conn, cur)
+    alert_id_no_events = _insert_alert(cur)
+    conn.commit()
+
+    result = outcomes.get_latest_outcomes_for_alerts_bulk(
+        conn, [alert_id_with_events, alert_id_no_events]
+    )
+
+    assert alert_id_with_events in result
+    assert alert_id_no_events not in result
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_get_latest_outcomes_for_alerts_bulk_all_missing_returns_empty_dict(postgres_db):
+    conn, _cur = postgres_db
+
+    result = outcomes.get_latest_outcomes_for_alerts_bulk(conn, [999991, 999992, 999993])
+
+    assert result == {}

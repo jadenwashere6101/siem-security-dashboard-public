@@ -837,6 +837,220 @@ def get_latest_outcome_by_correlation_id(
     return _outcome_event_row_to_dict(row) if row else None
 
 
+def get_latest_outcomes_for_alerts_bulk(
+    conn,
+    alert_ids: list[int],
+) -> dict[int, dict[str, Any]]:
+    """Return a dict mapping alert_id → latest outcome event using one query.
+
+    Uses DISTINCT ON so there is no per-alert round-trip. alert_ids absent from
+    the outcome_events table are absent from the returned dict. Callers should treat
+    absent ids as response_outcome: null.
+    """
+    if not alert_ids:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT DISTINCT ON (alert_id) {_OUTCOME_EVENT_COLUMNS}
+            FROM soar_response_outcome_events
+            WHERE alert_id = ANY(%s)
+            ORDER BY alert_id, occurred_at DESC, created_at DESC, id DESC
+            """,
+            (list(alert_ids),),
+        )
+        rows = cur.fetchall() or []
+    result: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        event = _outcome_event_row_to_dict(row)
+        if event["alert_id"] is not None:
+            result[int(event["alert_id"])] = event
+    return result
+
+
+def get_latest_decisions_for_alerts_bulk(
+    conn,
+    alert_ids: list[int],
+) -> dict[int, dict[str, Any]]:
+    """Return a dict mapping alert_id → latest decision row using one query."""
+    if not alert_ids:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT DISTINCT ON (alert_id) {_DECISION_COLUMNS}
+            FROM soar_response_decisions
+            WHERE alert_id = ANY(%s)
+            ORDER BY alert_id, created_at DESC, id DESC
+            """,
+            (list(alert_ids),),
+        )
+        rows = cur.fetchall() or []
+    result: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        decision = _decision_row_to_dict(row)
+        if decision["alert_id"] is not None:
+            result[int(decision["alert_id"])] = decision
+    return result
+
+
+def build_latest_outcome_api_shape(
+    decision: dict[str, Any],
+    latest_event: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the Design Decision 6 latest-outcome API shape from decision/event rows."""
+    if latest_event is not None:
+        execution_mode = latest_event["execution_mode"]
+        execution_state = latest_event["execution_state"]
+        external_executed = latest_event["external_executed"]
+        tracking_recorded = latest_event["tracking_recorded"]
+        simulated = latest_event["simulated"]
+        execution_actor = latest_event["execution_actor"]
+        reason_code = latest_event.get("reason_code")
+        outcome_summary = latest_event["outcome_summary"]
+        latest_outcome_event_id = latest_event["id"]
+        occurred_at = latest_event.get("occurred_at")
+        related_queue_id = latest_event.get("queue_id")
+        related_playbook_execution_id = latest_event.get("playbook_execution_id")
+        related_playbook_step_index = latest_event.get("playbook_step_index")
+        related_approval_request_id = latest_event.get("approval_request_id")
+        related_notification_delivery_attempt_id = latest_event.get(
+            "notification_delivery_attempt_id"
+        )
+        related_response_action_log_id = latest_event.get("response_action_log_id")
+    else:
+        execution_mode = "observed"
+        execution_state = "selected"
+        external_executed = False
+        tracking_recorded = False
+        simulated = False
+        execution_actor = None
+        reason_code = decision.get("reason_code")
+        outcome_summary = decision["outcome_summary"]
+        latest_outcome_event_id = None
+        occurred_at = None
+        related_queue_id = decision.get("queue_id")
+        related_playbook_execution_id = decision.get("playbook_execution_id")
+        related_playbook_step_index = decision.get("playbook_step_index")
+        related_approval_request_id = decision.get("approval_request_id")
+        related_notification_delivery_attempt_id = None
+        related_response_action_log_id = None
+
+    return {
+        "soar_correlation_id": decision["soar_correlation_id"],
+        "decision_id": decision["id"],
+        "latest_outcome_event_id": latest_outcome_event_id,
+        "selected_action": decision["selected_action"],
+        "decision_source": decision["decision_source"],
+        "execution_actor": execution_actor,
+        "execution_mode": execution_mode,
+        "execution_state": execution_state,
+        "external_executed": external_executed,
+        "tracking_recorded": tracking_recorded,
+        "simulated": simulated,
+        "outcome_summary": outcome_summary,
+        "reason_code": reason_code,
+        "related": {
+            "alert_id": decision.get("alert_id"),
+            "incident_id": decision.get("incident_id"),
+            "queue_id": related_queue_id,
+            "playbook_id": decision.get("playbook_id"),
+            "playbook_execution_id": related_playbook_execution_id,
+            "playbook_step_index": related_playbook_step_index,
+            "approval_request_id": related_approval_request_id,
+            "notification_delivery_attempt_id": related_notification_delivery_attempt_id,
+            "response_action_log_id": related_response_action_log_id,
+        },
+        "timestamps": {
+            "selected_at": decision.get("selected_at"),
+            "occurred_at": occurred_at,
+        },
+    }
+
+
+def serialize_latest_outcome(
+    conn,
+    *,
+    decision_id: int | None = None,
+    soar_correlation_id: str | None = None,
+    alert_id: int | None = None,
+) -> dict[str, Any] | None:
+    """Return the Design Decision 6 latest-outcome API shape, or None.
+
+    Returns None when no decision record exists — the caller should emit
+    response_outcome: null in the API response (never omit the key).
+
+    outcome_summary is always sourced from the latest outcome event row.
+    When a decision exists but no events have been appended yet, the fallback is
+    the decision row's own outcome_summary with execution_mode=observed/selected state.
+
+    Lookup priority: decision_id > soar_correlation_id > alert_id.
+    """
+    if decision_id is None and not soar_correlation_id and alert_id is None:
+        raise SoarResponseOutcomeValidationError(
+            "decision_id, soar_correlation_id, or alert_id is required"
+        )
+
+    decision: dict[str, Any] | None = None
+    if decision_id is not None:
+        decision = _fetch_decision_by_id(conn, int(decision_id))
+    elif soar_correlation_id:
+        decision = _fetch_decision_by_correlation_id(
+            conn, validate_soar_correlation_id(soar_correlation_id)
+        )
+    else:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT {_DECISION_COLUMNS}
+                FROM soar_response_decisions
+                WHERE alert_id = %s
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (alert_id,),
+            )
+            row = cur.fetchone()
+        decision = _decision_row_to_dict(row) if row else None
+
+    if decision is None:
+        return None
+
+    latest_event = get_latest_outcome_for_decision(conn, decision["id"])
+    return build_latest_outcome_api_shape(decision, latest_event)
+
+
+def serialize_outcome_timeline(
+    conn,
+    decision_id: int,
+    *,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """Return ordered outcome events for a decision, oldest first (chronological).
+
+    Returns [] when the decision does not exist or has no events. Never raises on
+    missing data — callers can safely use the empty list without null-checking.
+    """
+    if _fetch_decision_by_id(conn, int(decision_id)) is None:
+        return []
+
+    sql = f"""
+        SELECT {_OUTCOME_EVENT_COLUMNS}
+        FROM soar_response_outcome_events
+        WHERE decision_id = %s
+        ORDER BY occurred_at ASC, created_at ASC, id ASC
+    """
+    params: list[Any] = [decision_id]
+    if limit is not None and int(limit) > 0:
+        sql += " LIMIT %s"
+        params.append(int(limit))
+
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall() or []
+    return [_outcome_event_row_to_dict(row) for row in rows]
+
+
 def get_decision_with_latest_outcome(
     conn,
     *,
@@ -948,6 +1162,9 @@ __all__ = [
     "get_latest_outcome_for_playbook_execution",
     "get_latest_outcome_for_queue",
     "get_latest_outcome_for_source_ip",
+    "build_latest_outcome_api_shape",
+    "get_latest_decisions_for_alerts_bulk",
+    "get_latest_outcomes_for_alerts_bulk",
     "infer_alert_legacy_outcome",
     "infer_approval_request_legacy_outcome",
     "infer_blocked_ip_legacy_outcome",
@@ -964,6 +1181,8 @@ __all__ = [
     "resolve_playbook_execution_outcome",
     "resolve_queue_outcome",
     "resolve_response_log_outcome",
+    "serialize_latest_outcome",
+    "serialize_outcome_timeline",
     "validate_decision_source",
     "validate_execution_actor",
     "validate_execution_mode",

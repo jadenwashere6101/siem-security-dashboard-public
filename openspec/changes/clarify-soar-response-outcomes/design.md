@@ -315,6 +315,39 @@ Example latest outcome shape:
 
 Existing fields should remain during migration.
 
+#### Null outcome behavior
+
+When a record has no canonical decision or outcome events, the API SHALL include `response_outcome: null` as an explicit key in the response payload. The key MUST NOT be omitted. Frontend consumers must handle `null` as the expected no-history value.
+
+#### Bulk alert outcome lookup
+
+When an API route returns a list of alerts, it SHALL use a bulk outcome lookup to avoid N+1 queries. The helper `get_latest_outcomes_for_alerts_bulk(conn, alert_ids)` must issue a single query using `WHERE alert_id = ANY(%s)` and return a `dict[int, dict]` mapping `alert_id` to the latest outcome dict. This helper is part of task 6.1 and must exist before alert list APIs are updated.
+
+#### serialize_latest_outcome — field sourcing
+
+The `outcome_summary` field in the serialized latest-outcome shape must be sourced from `soar_response_outcome_events.outcome_summary` (the latest event row), not from `soar_response_decisions.decision_summary`. These are distinct fields: `decision_summary` explains why the response was selected; `outcome_summary` explains what happened during the lifecycle transition. Always prefer the event's `outcome_summary` at the top level of the API payload.
+
+#### SOC Command Center — no standalone backend route
+
+There is no dedicated SOC Command Center backend route. The SOC Command Center frontend aggregates data from multiple existing API endpoints. Task 6.11 means: add canonical outcome summary fields to the following existing routes in `metrics_routes.py` that the frontend consumes:
+
+- `GET /metrics/playbooks`
+- `GET /metrics/notifications`
+- `GET /metrics/incidents`
+- `GET /metrics/approvals`
+
+Do NOT create a new dedicated SOC Command Center route. Existing fields in all four endpoints must remain.
+
+#### Canonical outcome metrics — add fields, not new endpoints
+
+Task 6.14 adds canonical outcome count fields to the existing metrics endpoints listed above. Do NOT create a new metrics endpoint unless the existing architecture makes that structurally impossible. The new fields are additive. Counts must be grouped by:
+
+- `execution_mode` — `observed`, `simulation`, `tracking_only`, `real`
+- `execution_state` — `observed`, `selected`, `queued`, `awaiting_approval`, `running`, `skipped`, `blocked`, `succeeded`, `failed`
+- `external_executed` — true/false counts
+- `tracking_recorded` — true/false counts
+- `simulated` — true/false counts
+
 ### Decision 7: UI Language
 
 Use these labels:

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import ipaddress
 from datetime import datetime
 
@@ -6,6 +8,12 @@ from flask_login import login_required
 
 from core.auth import admin_required, analyst_or_super_admin_required
 from core.db import get_db_connection
+from core.soar_response_outcomes import (
+    build_latest_outcome_api_shape,
+    get_latest_decisions_for_alerts_bulk,
+    get_latest_outcomes_for_alerts_bulk,
+    serialize_latest_outcome,
+)
 from helpers.enrichment_helpers import enrich_alert_with_correlation_context, enrich_alert_with_mitre
 from core.ip_helpers import determine_response_action, get_ip_reputation, lookup_ip_reputation
 
@@ -21,6 +29,97 @@ VALID_EVENT_SEARCH_TYPES = VALID_EVENT_TYPES | {
 }
 VALID_EVENT_SOURCES = {"bank_app", "nginx", "azure_insights", "opentelemetry"}
 
+_ALERT_SELECT = """
+    SELECT
+        id,
+        alert_type,
+        severity,
+        message,
+        source_ip,
+        created_at,
+        status,
+        country,
+        city,
+        latitude,
+        longitude,
+        reputation_score,
+        reputation_label,
+        reputation_source,
+        reputation_summary,
+        response_action,
+        response_status,
+        source,
+        source_type,
+        context
+    FROM alerts
+"""
+
+
+def _resolve_alert_list_response_outcomes(conn, alert_ids: list[int]) -> dict[int, dict | None]:
+    bulk_events = get_latest_outcomes_for_alerts_bulk(conn, alert_ids)
+    latest_decisions = get_latest_decisions_for_alerts_bulk(conn, alert_ids)
+    outcomes: dict[int, dict | None] = {}
+    for alert_id in alert_ids:
+        decision = latest_decisions.get(alert_id)
+        if decision is None:
+            outcomes[alert_id] = None
+        else:
+            outcomes[alert_id] = build_latest_outcome_api_shape(
+                decision,
+                bulk_events.get(alert_id),
+            )
+    return outcomes
+
+
+def _build_alert_payload(
+    row,
+    *,
+    cur,
+    reputation_by_ip: dict,
+    response_outcome,
+) -> dict:
+    source_ip = str(row[4]) if row[4] is not None else None
+    if source_ip not in reputation_by_ip:
+        reputation_by_ip[source_ip] = get_ip_reputation(source_ip, cur=cur)
+    behavioral_reputation = reputation_by_ip[source_ip]
+    behavioral_contributing_signals = behavioral_reputation.get("contributing_signals", [])
+
+    return enrich_alert_with_correlation_context(
+        enrich_alert_with_mitre(
+            {
+                "id": row[0],
+                "alert_type": row[1],
+                "severity": row[2],
+                "message": row[3],
+                "source_ip": row[4],
+                "created_at": str(row[5]),
+                "status": row[6],
+                "country": row[7],
+                "city": row[8],
+                "latitude": row[9],
+                "longitude": row[10],
+                "reputation_score": row[11],
+                "reputation_label": row[12],
+                "reputation_source": row[13],
+                "reputation_summary": row[14],
+                "behavioral_reputation": {
+                    "score": behavioral_reputation["reputation_score"],
+                    "label": behavioral_reputation["reputation_label"],
+                    "source": "siem_internal",
+                    "summary": behavioral_reputation["reputation_summary"],
+                    "contributing_signals": behavioral_contributing_signals,
+                },
+                "contributing_signals": behavioral_contributing_signals,
+                "response_action": row[15],
+                "response_status": row[16],
+                "response_outcome": response_outcome,
+                "source": row[17] or "unknown",
+                "source_type": row[18] or "legacy",
+                "context": row[19] if row[19] is not None else {},
+            }
+        )
+    )
+
 
 @alerts_events_bp.route("/alerts", methods=["GET"])
 @login_required
@@ -29,78 +128,23 @@ def get_alerts():
         conn = get_db_connection()
         cur = conn.cursor()
 
-        cur.execute("""
-            SELECT
-                id,
-                alert_type,
-                severity,
-                message,
-                source_ip,
-                created_at,
-                status,
-                country,
-                city,
-                latitude,
-                longitude,
-                reputation_score,
-                reputation_label,
-                reputation_source,
-                reputation_summary,
-                response_action,
-                response_status,
-                source,
-                source_type,
-                context
-            FROM alerts
-            ORDER BY created_at DESC
-        """)
+        cur.execute(f"{_ALERT_SELECT} ORDER BY created_at DESC")
 
         rows = cur.fetchall()
+        alert_ids = [row[0] for row in rows]
+        response_outcomes_by_alert = _resolve_alert_list_response_outcomes(conn, alert_ids)
         reputation_by_ip = {}
 
         alerts = []
         for row in rows:
-            source_ip = str(row[4]) if row[4] is not None else None
-            if source_ip not in reputation_by_ip:
-                reputation_by_ip[source_ip] = get_ip_reputation(source_ip, cur=cur)
-            behavioral_reputation = reputation_by_ip[source_ip]
-            behavioral_contributing_signals = behavioral_reputation.get("contributing_signals", [])
-
             alerts.append(
-                enrich_alert_with_correlation_context(
-                    enrich_alert_with_mitre({
-                    "id": row[0],
-                    "alert_type": row[1],
-                    "severity": row[2],
-                    "message": row[3],
-                    "source_ip": row[4],
-                    "created_at": str(row[5]),
-                    "status": row[6],
-                    "country": row[7],
-                    "city": row[8],
-                    "latitude": row[9],
-                    "longitude": row[10],
-                    "reputation_score": row[11],
-                    "reputation_label": row[12],
-                    "reputation_source": row[13],
-                    "reputation_summary": row[14],
-                    "behavioral_reputation": {
-                        "score": behavioral_reputation["reputation_score"],
-                        "label": behavioral_reputation["reputation_label"],
-                        "source": "siem_internal",
-                        "summary": behavioral_reputation["reputation_summary"],
-                        "contributing_signals": behavioral_contributing_signals,
-                    },
-                    "contributing_signals": behavioral_contributing_signals,
-                    "response_action": row[15],
-                    "response_status": row[16],
-                    "source": row[17] or "unknown",
-                    "source_type": row[18] or "legacy",
-                    "context": row[19] if row[19] is not None else {},
-                    })
+                _build_alert_payload(
+                    row,
+                    cur=cur,
+                    reputation_by_ip=reputation_by_ip,
+                    response_outcome=response_outcomes_by_alert.get(row[0]),
                 )
             )
-
 
         cur.close()
         conn.close()
@@ -109,6 +153,38 @@ def get_alerts():
 
     except Exception as e:
         current_app.logger.error("Error in get_alerts: %s", e)
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@alerts_events_bp.route("/alerts/<int:alert_id>", methods=["GET"])
+@login_required
+def get_alert(alert_id):
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(f"{_ALERT_SELECT} WHERE id = %s", (alert_id,))
+        row = cur.fetchone()
+        if row is None:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Alert not found"}), 404
+
+        response_outcome = serialize_latest_outcome(conn, alert_id=alert_id)
+        alert = _build_alert_payload(
+            row,
+            cur=cur,
+            reputation_by_ip={},
+            response_outcome=response_outcome,
+        )
+
+        cur.close()
+        conn.close()
+
+        return jsonify(alert), 200
+
+    except Exception as e:
+        current_app.logger.error("Error in get_alert: %s", e)
         return jsonify({"error": "Internal server error"}), 500
 
 

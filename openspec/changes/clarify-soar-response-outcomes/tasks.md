@@ -113,9 +113,9 @@
 
 ## 6. Phase 6 - Backend API Contract Updates
 
-- [ ] 6.1 Add canonical latest-outcome serializer shape with `soar_correlation_id`, `decision_id`, `latest_outcome_event_id`, selected action, decision source, execution actor, execution mode/state, `external_executed`, `tracking_recorded`, `simulated`, summary, reason code, related ids, and timestamps.
+- [ ] 6.1 Add canonical latest-outcome serializer helpers: (a) `serialize_latest_outcome(conn, ...)` returning the Decision 6 shape — `outcome_summary` must be sourced from the latest outcome event row (`soar_response_outcome_events.outcome_summary`), not from `soar_response_decisions.decision_summary`; fields: `soar_correlation_id`, `decision_id`, `latest_outcome_event_id`, selected action, decision source, execution actor, execution mode/state, `external_executed`, `tracking_recorded`, `simulated`, summary, reason code, related ids, and timestamps; (b) `get_latest_outcomes_for_alerts_bulk(conn, alert_ids)` issuing a single `WHERE alert_id = ANY(%s)` query and returning `dict[int, dict]` — this helper is required before alert list APIs are updated to avoid N+1 queries; (c) outcome timeline serializer is task 6.2.
 - [ ] 6.2 Add outcome timeline serializer for ordered decision/outcome-event history.
-- [ ] 6.3 Update alert list/detail APIs to include `response_outcome` and preserve legacy `response_action`/`response_status`.
+- [ ] 6.3 Update alert list/detail APIs to include `response_outcome`; use `get_latest_outcomes_for_alerts_bulk` (from 6.1) for the list path to avoid N+1 queries; preserve legacy `response_action`/`response_status`; always include the `response_outcome` key — return `response_outcome: null` when no canonical outcome exists (never omit the key).
 - [ ] 6.4 Update response log API to include canonical outcome links and latest outcome where available.
 - [ ] 6.5 Update SOAR Queue status/list/detail APIs to include canonical latest outcomes and related approval/playbook/log ids.
 - [ ] 6.6 Update Playbooks APIs to include execution-level and step-level canonical outcome payloads.
@@ -123,10 +123,10 @@
 - [ ] 6.8 Update Notification Delivery APIs to include canonical mode/state and execution booleans derived from delivery status, mode, and adapter result metadata.
 - [ ] 6.9 Update Incident APIs and incident timeline to include canonical outcome events without mutating incident state.
 - [ ] 6.10 Update Source-IP Context API to include recent canonical outcomes grouped by mode/state and execution booleans.
-- [ ] 6.11 Update SOC Command Center data aggregation to prefer canonical outcomes where available.
+- [ ] 6.11 There is no dedicated SOC Command Center backend route. Add canonical outcome summary fields (counts by execution mode/state and execution booleans) to the existing `metrics_routes.py` endpoints the SOC Command Center frontend aggregates from: `GET /metrics/playbooks`, `GET /metrics/notifications`, `GET /metrics/incidents`, and `GET /metrics/approvals`. Do not create a new route. Existing fields in all four endpoints must remain.
 - [ ] 6.12 Update Attack Map source-IP popup payloads if they display response status.
 - [ ] 6.13 Update Blocklist Manager APIs to include tracking-only provenance and related outcome ids.
-- [ ] 6.14 Update metrics APIs to count observed-only, simulation, tracking-only, real, awaiting approval, blocked, skipped, failed, succeeded, `external_executed`, `tracking_recorded`, and `simulated` outcomes.
+- [ ] 6.14 Add canonical outcome count fields to the existing `/metrics/playbooks`, `/metrics/notifications`, `/metrics/incidents`, and `/metrics/approvals` endpoints in `metrics_routes.py`. Do not create a new endpoint. New fields are additive — existing fields must be preserved. Counts must be grouped by: `execution_mode` (observed/simulation/tracking_only/real), `execution_state` (observed/selected/queued/awaiting_approval/running/skipped/blocked/succeeded/failed), `external_executed` (true/false), `tracking_recorded` (true/false), and `simulated` (true/false).
 - [ ] 6.15 Add API contract tests for each updated endpoint and compatibility fallback for older records.
 
 ## 7. Phase 7 - Frontend Shared Outcome Components
