@@ -26,7 +26,8 @@ _EXECUTION_COLUMNS_SQL = (
     "id, playbook_id, alert_id, incident_id, status, "
     "started_at, completed_at, last_completed_step, steps_log, created_at, "
     "attempt_count, max_attempts, last_attempted_at, failure_reason, stale_after, timeout_seconds, "
-    "lease_owner, lease_acquired_at, lease_heartbeat_at, lease_expires_at, recovery_count"
+    "lease_owner, lease_acquired_at, lease_heartbeat_at, lease_expires_at, recovery_count, "
+    "decision_id, soar_correlation_id"
 )
 _SCHEDULE_COLUMNS_SQL = (
     "id, playbook_id, schedule_expression, timezone, enabled, paused, "
@@ -720,6 +721,8 @@ def _execution_row_to_dict(record: tuple[Any, ...]) -> dict[str, Any]:
         lease_heartbeat_at,
         lease_expires_at,
         recovery_count,
+        decision_id,
+        soar_correlation_id,
     ) = record
     return {
         "id": row_id,
@@ -743,6 +746,8 @@ def _execution_row_to_dict(record: tuple[Any, ...]) -> dict[str, Any]:
         "lease_heartbeat_at": lease_heartbeat_at,
         "lease_expires_at": lease_expires_at,
         "recovery_count": recovery_count,
+        "decision_id": decision_id,
+        "soar_correlation_id": soar_correlation_id,
     }
 
 
@@ -1071,17 +1076,21 @@ def create_playbook_execution(
     playbook_id: str,
     alert_id: int | None,
     incident_id: int | None = None,
+    *,
+    decision_id: int | None = None,
+    soar_correlation_id: str | None = None,
 ) -> int:
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO playbook_executions (
-                playbook_id, alert_id, incident_id, status
+                playbook_id, alert_id, incident_id, status,
+                decision_id, soar_correlation_id
             )
-            VALUES (%s, %s, %s, 'pending')
+            VALUES (%s, %s, %s, 'pending', %s, %s)
             RETURNING id
             """,
-            (playbook_id, alert_id, incident_id),
+            (playbook_id, alert_id, incident_id, decision_id, soar_correlation_id),
         )
         row = cur.fetchone()
         if row is None:
@@ -1094,11 +1103,15 @@ def create_pending_playbook_execution_once(
     playbook_id: str,
     alert_id: int,
     incident_id: int | None = None,
+    *,
+    decision_id: int | None = None,
+    soar_correlation_id: str | None = None,
 ) -> int | None:
     """
     Insert one pending execution for a playbook/alert pair.
 
     Returns the new execution id, or None when the pair already exists. Caller commits.
+    decision_id and soar_correlation_id are written when provided (Phase 5A linkage).
     """
     if alert_id is None:
         raise ValueError("alert_id is required")
@@ -1107,16 +1120,17 @@ def create_pending_playbook_execution_once(
         cur.execute(
             """
             INSERT INTO playbook_executions (
-                playbook_id, alert_id, incident_id, status
+                playbook_id, alert_id, incident_id, status,
+                decision_id, soar_correlation_id
             )
-            VALUES (%s, %s, %s, 'pending')
+            VALUES (%s, %s, %s, 'pending', %s, %s)
             ON CONFLICT (playbook_id, alert_id)
                 WHERE alert_id IS NOT NULL
                   AND status IN ('pending', 'running', 'awaiting_approval')
                 DO NOTHING
             RETURNING id
             """,
-            (playbook_id, alert_id, incident_id),
+            (playbook_id, alert_id, incident_id, decision_id, soar_correlation_id),
         )
         row = cur.fetchone()
         if row is None:

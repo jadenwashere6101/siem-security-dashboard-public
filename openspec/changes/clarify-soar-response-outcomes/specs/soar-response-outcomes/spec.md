@@ -112,8 +112,20 @@ The system SHALL record response decision facts separately from execution outcom
 - **THEN** the system SHALL record `decision_source=manual`, the actor user id, selected action, alert id, source IP, and a separate SOAR correlation id or child decision.
 
 #### Scenario: Playbook decision
-- **WHEN** a playbook step selects or represents a response action
-- **THEN** the system SHALL record `decision_source=playbook`, the playbook id, playbook execution id, step index, selected action, and related alert or incident ids where available.
+- **WHEN** a playbook execution is created
+- **THEN** the system SHALL create one execution-level canonical decision with `decision_source=playbook`, the playbook id, playbook execution id, selected action, and related alert or incident ids where available; per-step child decisions SHALL NOT be created in Phase 5.
+
+#### Scenario: Playbook step event linkage
+- **WHEN** a playbook step records an outcome event
+- **THEN** the event SHALL attach to the execution-level decision, SHALL carry the playbook step index and selected action, and SHALL NOT create a separate per-step child decision.
+
+#### Scenario: Playbook source IP resolution
+- **WHEN** a playbook outcome event records source_ip
+- **THEN** the system SHALL resolve source_ip from the related alerts row when alert_id exists; if no alert is linked, source_ip SHALL be NULL; the system SHALL NOT derive source_ip from playbook wrapper state, steps_log, incident records, or other indirect paths.
+
+#### Scenario: Playbook execution_mode default
+- **WHEN** a Phase 5 playbook outcome event is written and adapter metadata does not explicitly confirm real execution with safety guards verified
+- **THEN** the system SHALL default to execution_mode=simulation and SHALL NOT set external_executed=true from playbook wrapper mode state alone.
 
 #### Scenario: Approval outcome
 - **WHEN** an approval is requested, approved, denied, or expired
@@ -394,6 +406,10 @@ The system SHALL provide a conservative migration/backfill strategy for existing
 #### Scenario: Re-runnable verification
 - **WHEN** backfill validation is run repeatedly
 - **THEN** it SHALL produce stable counts and SHALL NOT create duplicate canonical decisions or outcome events.
+
+#### Scenario: Backfill delivery mechanism
+- **WHEN** write-mode backfill is enabled after dry-run verification
+- **THEN** it SHALL be implemented as an idempotent operator script and SHALL NOT be implemented as a database migration or an admin API endpoint; dry-run output SHALL be reviewed and approved before write mode is invoked.
 
 ### Requirement: Reason Code Taxonomy
 The system SHALL use a canonical reason-code taxonomy for blocked, skipped, failed, inferred, and explanatory outcomes.

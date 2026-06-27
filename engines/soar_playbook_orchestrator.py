@@ -11,6 +11,7 @@ import logging
 from typing import Any
 
 from core.playbook_store import create_pending_playbook_execution_once
+from core.soar_response_outcomes import get_latest_outcome_for_alert
 from engines.playbook_engine import match_playbooks
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,9 @@ def create_pending_executions_for_committed_alerts(
             continue
 
         summary["processed_alerts"] += 1
+
+        decision_id, soar_correlation_id = _resolve_alert_canonical_linkage(conn, int(alert_id))
+
         try:
             matches = match_playbooks(conn, int(alert_id))
         except Exception as error:
@@ -133,6 +137,8 @@ def create_pending_executions_for_committed_alerts(
                     str(playbook_id),
                     int(alert_id),
                     incident_id=None,
+                    decision_id=decision_id,
+                    soar_correlation_id=soar_correlation_id,
                 )
             except Exception as error:
                 logger.exception(
@@ -182,3 +188,27 @@ def create_pending_executions_for_committed_alerts(
             )
 
     return {"summary": summary, "results": results}
+
+
+def _resolve_alert_canonical_linkage(
+    conn, alert_id: int
+) -> tuple[int | None, str | None]:
+    """
+    Return (decision_id, soar_correlation_id) for the alert's existing canonical decision.
+
+    Uses the latest outcome event for the alert as the lookup path. Returns (None, None)
+    when no canonical decision exists yet — callers treat this as a nullable linkage gap
+    and the playbook execution is still created without linkage (backward compatible).
+    """
+    try:
+        outcome = get_latest_outcome_for_alert(conn, alert_id)
+        if outcome is None:
+            return None, None
+        return outcome.get("decision_id"), outcome.get("soar_correlation_id")
+    except Exception:
+        logger.warning(
+            "[PLAYBOOK ORCHESTRATION] canonical linkage lookup failed alert_id=%s; "
+            "execution will be created without decision_id/soar_correlation_id",
+            alert_id,
+        )
+        return None, None

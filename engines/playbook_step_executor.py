@@ -19,6 +19,7 @@ from core import dead_letter_store
 from core import notification_delivery_store
 from core import playbook_store
 from core.playbook_worker_identity import generate_playbook_worker_id
+from core.soar_response_outcomes import append_outcome_event
 from engines.playbook_registry import SUPPORTED_ACTIONS
 from integrations.base_integration import (
     FAILURE_CLASSIFICATION_CIRCUIT_OPEN,
@@ -160,7 +161,7 @@ def _record_notification_delivery_attempt(
         safe_meta["executed"] = adapter_result.get("executed")
 
         execution_id: int = execution["id"]
-        notification_delivery_store.create_notification_delivery_attempt(
+        delivery_attempt = notification_delivery_store.create_notification_delivery_attempt(
             conn,
             correlation_id=_make_delivery_correlation_id(provider, execution_id, step_index),
             idempotency_key=_make_delivery_idempotency_key(
@@ -184,6 +185,7 @@ def _record_notification_delivery_attempt(
             timeout_seconds=timeout_seconds,
             circuit_breaker_state=circuit_state,
         )
+        _append_notification_delivery_outcome_event(conn, execution, delivery_attempt)
     except Exception:
         logger.warning(
             "[PLAYBOOK SIMULATION] delivery tracking failed safely "
@@ -211,6 +213,7 @@ def process_next_pending_playbook_execution(
     )
     if claimed is None:
         return None
+    _append_playbook_running_outcome_event(conn, claimed)
     return _process_running_execution(
         conn,
         claimed,
@@ -340,6 +343,7 @@ def process_playbook_execution(
             "Playbook execution could not be leased for processing.",
             new_status=latest.get("status"),
         )
+    _append_playbook_running_outcome_event(conn, running)
     return _process_running_execution(
         conn,
         running,
@@ -547,6 +551,14 @@ def _process_awaiting_approval_execution(
         }
 
     if approval_request["status"] == "approved":
+        _append_playbook_approval_decision_outcome_event(
+            conn,
+            execution,
+            approval_request=approval_request,
+            event_type="approval_approved",
+            execution_state="running",
+            summary="Approval granted for simulated playbook gate.",
+        )
         if not _has_gate_event(steps_log, gate_index, approval_request["id"], "approval_approved"):
             steps_log.append(
                 _approval_decision_entry(
@@ -589,6 +601,13 @@ def _process_awaiting_approval_execution(
                 new_status=latest.get("status"),
             )
 
+        _append_playbook_running_outcome_event(conn, resumed)
+        _append_playbook_resumed_outcome_event(
+            conn,
+            resumed,
+            approval_request=approval_request,
+        )
+
         definition = playbook_store.get_playbook_definition(conn, execution["playbook_id"])
         if definition is None or not isinstance(definition.get("steps"), list):
             return _fail_awaiting_execution(
@@ -618,6 +637,17 @@ def _process_awaiting_approval_execution(
 
     if approval_request["status"] in {"denied", "expired"}:
         event = f"approval_{approval_request['status']}"
+        _append_playbook_approval_decision_outcome_event(
+            conn,
+            execution,
+            approval_request=approval_request,
+            event_type=event,
+            execution_state="blocked",
+            summary=(
+                f"Approval {approval_request['status']}; "
+                "simulated playbook stopped safely."
+            ),
+        )
         if not _has_gate_event(steps_log, gate_index, approval_request["id"], event):
             steps_log.append(
                 _approval_decision_entry(
@@ -764,6 +794,13 @@ def _process_steps(
                     "Playbook execution lease was lost while pausing for approval.",
                     reason="lease_lost",
                 )
+            _append_playbook_awaiting_approval_outcome_event(
+                conn,
+                updated,
+                approval_request=approval_request,
+                step_index=index,
+                summary=entry["message"],
+            )
             playbook_store.release_execution_lease(conn, execution_id, worker_id)
             return _result(
                 execution,
@@ -827,8 +864,10 @@ def _process_steps(
                     "Playbook execution lease was lost while saving step progress.",
                     reason="lease_lost",
                 )
+            _append_non_adapter_playbook_step_outcome_event(conn, execution, entry)
             continue
 
+        _append_non_adapter_playbook_step_outcome_event(conn, execution, entry)
         failed = True
         failure_message = entry["message"]
         on_failure = step.get("on_failure", "abort") if isinstance(step, dict) else "abort"
@@ -1361,7 +1400,7 @@ def _finalize_success(
     *,
     last_completed_step: int | None,
     now: datetime,
-) -> None:
+) -> dict[str, Any] | None:
     updated = playbook_store.set_playbook_execution_success(
         conn,
         execution_id,
@@ -1376,8 +1415,16 @@ def _finalize_success(
             execution_id,
             worker_id,
         )
-        return
+        return None
+    _append_playbook_terminal_outcome_event(
+        conn,
+        updated,
+        execution_state="succeeded",
+        event_type="succeeded",
+        summary="Simulated playbook execution completed successfully.",
+    )
     playbook_store.release_execution_lease(conn, execution_id, worker_id)
+    return updated
 
 
 def _finalize_failed(
@@ -1388,7 +1435,7 @@ def _finalize_failed(
     *,
     last_completed_step: int | None,
     now: datetime,
-) -> None:
+) -> dict[str, Any] | None:
     updated = playbook_store.set_playbook_execution_failed(
         conn,
         execution_id,
@@ -1417,14 +1464,21 @@ def _finalize_failed(
                 execution_id,
                 worker_id,
             )
-            return
+            return None
     if updated is None:
         logger.info(
             "[PLAYBOOK SIMULATION] failure finalize skipped execution_id=%s worker_id=%s reason=update_race",
             execution_id,
             worker_id,
         )
-        return
+        return None
+    _append_playbook_terminal_outcome_event(
+        conn,
+        updated,
+        execution_state="failed",
+        event_type="failed",
+        summary="Simulated playbook execution failed.",
+    )
     capture_failed_execution_dead_letter(
         conn,
         updated,
@@ -1433,6 +1487,446 @@ def _finalize_failed(
         now=now,
     )
     playbook_store.release_execution_lease(conn, execution_id, worker_id)
+    return updated
+
+
+def _append_playbook_running_outcome_event(conn, execution: dict[str, Any]):
+    return _append_playbook_execution_outcome_event(
+        conn,
+        execution,
+        event_type="running",
+        execution_state="running",
+        summary=f"Playbook worker claimed playbook execution {execution['id']} for simulation.",
+        idempotency_key=f"playbook-running-{execution['id']}",
+    )
+
+
+def _append_playbook_resumed_outcome_event(
+    conn,
+    execution: dict[str, Any],
+    *,
+    approval_request: dict[str, Any],
+):
+    return _append_playbook_execution_outcome_event(
+        conn,
+        execution,
+        event_type="resumed",
+        execution_state="running",
+        summary="Simulated playbook execution resumed after approval.",
+        idempotency_key=f"playbook-resumed-{execution['id']}-{approval_request['id']}",
+        playbook_step_index=approval_request.get("playbook_step_index"),
+        approval_request_id=approval_request["id"],
+        execution_actor="playbook_worker",
+        reason_code="approval_required",
+        metadata={
+            "approval_request_id": approval_request["id"],
+            "approval_status": approval_request.get("status"),
+        },
+    )
+
+
+def _append_notification_delivery_outcome_event(
+    conn,
+    execution: dict[str, Any],
+    delivery_attempt: dict[str, Any],
+):
+    execution_id = execution["id"]
+    step_index = delivery_attempt.get("playbook_step_index")
+    delivery_id = delivery_attempt.get("id")
+    mapped = _map_notification_delivery_outcome(delivery_attempt)
+    return _append_playbook_execution_outcome_event(
+        conn,
+        execution,
+        event_type="notification_delivery",
+        execution_state=mapped["execution_state"],
+        summary=mapped["summary"],
+        idempotency_key=f"playbook-notification-{execution_id}-{step_index}-{delivery_id}",
+        playbook_step_index=step_index,
+        notification_delivery_attempt_id=delivery_id,
+        execution_actor="adapter",
+        reason_code=mapped["reason_code"],
+        execution_mode=mapped["execution_mode"],
+        simulated=mapped["simulated"],
+        external_executed=mapped["external_executed"],
+        provider=delivery_attempt.get("provider"),
+        adapter_name=delivery_attempt.get("adapter_name"),
+        metadata={
+            "notification_delivery_attempt_id": delivery_id,
+            "delivery_mode": delivery_attempt.get("mode"),
+            "delivery_status": delivery_attempt.get("status"),
+            "provider": delivery_attempt.get("provider"),
+            "adapter_name": delivery_attempt.get("adapter_name"),
+            "action": delivery_attempt.get("action"),
+            "real_evidence": mapped["real_evidence"],
+        },
+    )
+
+
+def _map_notification_delivery_outcome(delivery_attempt: dict[str, Any]) -> dict[str, Any]:
+    mode = str(delivery_attempt.get("mode") or "simulation").strip().lower()
+    status = str(delivery_attempt.get("status") or "failed").strip().lower()
+    provider = delivery_attempt.get("provider") or "notification provider"
+    metadata = delivery_attempt.get("metadata") or {}
+    has_real_evidence = _notification_delivery_has_real_evidence(delivery_attempt)
+
+    if status == "blocked":
+        return {
+            "execution_mode": "real" if mode == "real" else "simulation",
+            "execution_state": "blocked",
+            "external_executed": False,
+            "simulated": mode != "real",
+            "reason_code": "policy_blocked",
+            "real_evidence": False,
+            "summary": f"Notification delivery to {provider} was blocked; no real execution was confirmed.",
+        }
+
+    if status in {"failed", "timeout"}:
+        reason = "adapter_unavailable" if status == "timeout" else "provider_error"
+        return {
+            "execution_mode": "real" if mode == "real" else "simulation",
+            "execution_state": "failed",
+            "external_executed": False,
+            "simulated": mode != "real",
+            "reason_code": reason,
+            "real_evidence": False,
+            "summary": f"Notification delivery to {provider} {status}; no real execution was confirmed.",
+        }
+
+    if mode == "real" and status == "success" and has_real_evidence:
+        return {
+            "execution_mode": "real",
+            "execution_state": "succeeded",
+            "external_executed": True,
+            "simulated": False,
+            "reason_code": None,
+            "real_evidence": True,
+            "summary": f"Notification delivery to {provider} succeeded with explicit real execution evidence.",
+        }
+
+    if mode == "real" and status == "success":
+        return {
+            "execution_mode": "simulation",
+            "execution_state": "succeeded",
+            "external_executed": False,
+            "simulated": True,
+            "reason_code": "simulation_mode",
+            "real_evidence": False,
+            "summary": (
+                f"Notification delivery to {provider} reported success without complete "
+                "real execution evidence; recorded as simulated."
+            ),
+        }
+
+    return {
+        "execution_mode": "simulation",
+        "execution_state": "succeeded" if status == "success" else "failed",
+        "external_executed": False,
+        "simulated": True,
+        "reason_code": "simulation_mode",
+        "real_evidence": False,
+        "summary": f"Simulated notification delivery to {provider} {status}.",
+    }
+
+
+def _notification_delivery_has_real_evidence(delivery_attempt: dict[str, Any]) -> bool:
+    metadata = delivery_attempt.get("metadata") or {}
+    if delivery_attempt.get("mode") != "real" or delivery_attempt.get("status") != "success":
+        return False
+    if metadata.get("executed") is not True:
+        return False
+    if metadata.get("simulated") is not False:
+        return False
+    adapter_mode = str(metadata.get("adapter_mode") or "").strip().lower()
+    if adapter_mode == "real":
+        return True
+    return any(
+        metadata.get(key) is True
+        for key in (
+            "provider_success",
+            "provider_success_evidence",
+            "provider_delivery_confirmed",
+            "delivery_confirmed",
+        )
+    )
+
+
+def _append_non_adapter_playbook_step_outcome_event(
+    conn,
+    execution: dict[str, Any],
+    entry: dict[str, Any],
+):
+    action = entry.get("action")
+    step_index = entry.get("step_index")
+    if action == "require_approval" or action in ADAPTER_ACTIONS:
+        return None
+    if not isinstance(step_index, int):
+        return None
+
+    status = entry.get("status")
+    if status == "success":
+        execution_state = "succeeded"
+        event_type = "step_succeeded"
+        reason_code = "simulation_mode"
+    elif status == "failed":
+        execution_state = "failed"
+        event_type = "step_failed"
+        reason_code = _canonical_playbook_reason_code(entry)
+    else:
+        return None
+
+    return _append_playbook_execution_outcome_event(
+        conn,
+        execution,
+        event_type=event_type,
+        execution_state=execution_state,
+        summary=entry.get("message") or f"Simulated playbook step {step_index} {status}.",
+        idempotency_key=f"playbook-step-{execution['id']}-{step_index}-{execution_state}",
+        playbook_step_index=step_index,
+        reason_code=reason_code,
+        metadata={
+            "step_index": step_index,
+            "action": action,
+            "step_status": status,
+        },
+    )
+
+
+def _append_playbook_awaiting_approval_outcome_event(
+    conn,
+    execution: dict[str, Any],
+    *,
+    approval_request: dict[str, Any],
+    step_index: int,
+    summary: str,
+):
+    return _append_playbook_execution_outcome_event(
+        conn,
+        execution,
+        event_type="awaiting_approval",
+        execution_state="awaiting_approval",
+        summary=summary,
+        idempotency_key=(
+            f"playbook-awaiting-approval-{execution['id']}-{step_index}-"
+            f"{approval_request['id']}"
+        ),
+        playbook_step_index=step_index,
+        approval_request_id=approval_request["id"],
+        execution_actor="playbook_worker",
+        reason_code="approval_required",
+        simulated=False,
+        metadata={
+            "step_index": step_index,
+            "action": "require_approval",
+            "approval_request_id": approval_request["id"],
+            "approval_status": approval_request["status"],
+        },
+    )
+
+
+def _append_playbook_approval_decision_outcome_event(
+    conn,
+    execution: dict[str, Any],
+    *,
+    approval_request: dict[str, Any],
+    event_type: str,
+    execution_state: str,
+    summary: str,
+):
+    step_index = approval_request.get("playbook_step_index")
+    approval_request_id = approval_request["id"]
+    metadata = {
+        "approval_request_id": approval_request_id,
+        "approval_status": approval_request.get("status"),
+        "playbook_step_index": step_index,
+    }
+    approval_event_id = _latest_approval_request_event_id(
+        conn,
+        approval_request_id,
+        approval_request.get("status"),
+    )
+    if approval_event_id is not None:
+        metadata["approval_request_event_id"] = approval_event_id
+
+    return _append_playbook_execution_outcome_event(
+        conn,
+        execution,
+        event_type=event_type,
+        execution_state=execution_state,
+        summary=summary,
+        idempotency_key=f"playbook-{event_type}-{execution['id']}-{approval_request_id}",
+        playbook_step_index=step_index,
+        approval_request_id=approval_request_id,
+        execution_actor="approval_service",
+        reason_code=(
+            "approval_denied"
+            if approval_request.get("status") in {"denied", "expired"}
+            else "approval_required"
+        ),
+        simulated=False,
+        metadata=metadata,
+    )
+
+
+def _append_playbook_terminal_outcome_event(
+    conn,
+    execution: dict[str, Any],
+    *,
+    execution_state: str,
+    event_type: str,
+    summary: str,
+):
+    return _append_playbook_execution_outcome_event(
+        conn,
+        execution,
+        event_type=event_type,
+        execution_state=execution_state,
+        summary=summary,
+        idempotency_key=(
+            f"playbook-{_playbook_terminal_idempotency_label(event_type)}-{execution['id']}"
+        ),
+    )
+
+
+def _append_playbook_execution_outcome_event(
+    conn,
+    execution: dict[str, Any],
+    *,
+    event_type: str,
+    execution_state: str,
+    summary: str,
+    idempotency_key: str,
+    playbook_step_index: int | None = None,
+    approval_request_id: int | None = None,
+    notification_delivery_attempt_id: int | None = None,
+    execution_actor: str = "playbook_worker",
+    reason_code: str = "simulation_mode",
+    execution_mode: str = "simulation",
+    simulated: bool = True,
+    external_executed: bool = False,
+    provider: str | None = None,
+    adapter_name: str | None = None,
+    metadata: dict[str, Any] | None = None,
+):
+    decision_id = execution.get("decision_id")
+    soar_correlation_id = execution.get("soar_correlation_id")
+    if decision_id is None or not soar_correlation_id:
+        return None
+
+    execution_id = execution["id"]
+    return _with_canonical_playbook_outcome_savepoint(
+        conn,
+        execution_id,
+        event_type,
+        lambda: append_outcome_event(
+            conn,
+            decision_id=decision_id,
+            soar_correlation_id=soar_correlation_id,
+            event_type=event_type,
+            execution_mode=execution_mode,
+            execution_state=execution_state,
+            simulated=simulated,
+            external_executed=external_executed,
+            tracking_recorded=False,
+            execution_actor=execution_actor,
+            reason_code=reason_code,
+            outcome_summary=summary,
+            alert_id=execution.get("alert_id"),
+            incident_id=execution.get("incident_id"),
+            source_ip=_resolve_playbook_alert_source_ip(conn, execution.get("alert_id")),
+            playbook_execution_id=execution_id,
+            playbook_step_index=playbook_step_index,
+            approval_request_id=approval_request_id,
+            notification_delivery_attempt_id=notification_delivery_attempt_id,
+            provider=provider,
+            adapter_name=adapter_name,
+            idempotency_key=idempotency_key,
+            metadata={
+                "playbook_execution_id": execution_id,
+                "playbook_id": execution.get("playbook_id"),
+                "status": execution.get("status"),
+                **(metadata or {}),
+            },
+        ),
+    )
+
+
+def _playbook_terminal_idempotency_label(event_type: str) -> str:
+    if event_type == "succeeded":
+        return "success"
+    return event_type
+
+
+def _resolve_playbook_alert_source_ip(conn, alert_id: int | None) -> str | None:
+    if alert_id is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute("SELECT host(source_ip) FROM alerts WHERE id = %s", (alert_id,))
+        row = cur.fetchone()
+    return row[0] if row and row[0] else None
+
+
+def _latest_approval_request_event_id(
+    conn,
+    approval_request_id: int,
+    approval_status: str | None,
+) -> int | None:
+    if not approval_status:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id
+            FROM approval_request_events
+            WHERE approval_request_id = %s
+              AND event_type = %s
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (approval_request_id, approval_status),
+        )
+        row = cur.fetchone()
+    return int(row[0]) if row else None
+
+
+def _canonical_playbook_reason_code(entry: dict[str, Any]) -> str:
+    error = entry.get("error") if isinstance(entry.get("error"), dict) else {}
+    code = error.get("code")
+    if code == "unsupported_action":
+        return "unsupported_action"
+    if code in {"invalid_step", "missing_action"}:
+        return "policy_blocked"
+    return "provider_error"
+
+
+def _with_canonical_playbook_outcome_savepoint(conn, execution_id, event_type, writer):
+    savepoint_name = "canonical_playbook_outcome"
+    savepoint_created = False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"SAVEPOINT {savepoint_name}")
+            savepoint_created = True
+        event = writer()
+        with conn.cursor() as cur:
+            cur.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+        return event
+    except Exception:
+        if savepoint_created:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+                    cur.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+            except Exception:
+                logger.exception(
+                    "Failed to rollback canonical %s outcome savepoint for playbook_execution_id=%s",
+                    event_type,
+                    execution_id,
+                )
+        logger.exception(
+            "Failed to append canonical %s outcome for playbook_execution_id=%s",
+            event_type,
+            execution_id,
+        )
+        return None
 
 
 def _iso(dt: datetime) -> str:

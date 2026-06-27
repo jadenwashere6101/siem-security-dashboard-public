@@ -403,6 +403,52 @@ Blocked IP linkage gap:
 - Phase 4 explicitly defers blocked IP direct linkage unless a new additive migration is approved.
 - Until then, manual tracking-only outcomes may link through `alert_id`, `source_ip`, `decision_id`, `soar_correlation_id`, and `response_action_log_id`.
 
+### Decision 8B: Phase 5 Playbook Integration Semantics
+
+#### Phase 5A Schema Migration (approved)
+
+The Phase 5A migration adds two nullable linkage columns to `playbook_executions`:
+
+```text
+decision_id INTEGER REFERENCES soar_response_decisions(id) ON DELETE SET NULL
+soar_correlation_id VARCHAR(128)
+```
+
+This migration is additive and approved for Phase 5 implementation. It is safe to roll back by ignoring the new columns. No other `playbook_executions` columns are added or changed in Phase 5.
+
+#### Decision Granularity
+
+Phase 5 creates one execution-level `soar_response_decisions` row per `playbook_execution`. All step outcome events attach to that single execution-level decision via `decision_id`. Per-step child decisions are not part of Phase 5 and must not be created.
+
+Rationale:
+- One decision per execution is the simplest model that preserves full traceability without introducing per-step linkage complexity before phase scope is confirmed.
+- Step-level events still carry `playbook_step_index` and all relevant entity ids; the execution-level decision row is the anchor for cross-surface lookups.
+
+Deferred: Per-step child decisions may be introduced in a future OpenSpec phase only if analyst requirements prove they are necessary.
+
+#### source_ip Semantics for Playbook Outcome Events
+
+Playbook outcome events should resolve `source_ip` from the related `alerts` row when `alert_id` is present. If no alert is linked, `source_ip` may be NULL. `alert_id` is the primary link for source attribution in playbook outcomes.
+
+Do not derive `source_ip` from playbook wrapper state, `steps_log`, incident records, or other indirect paths. If `alert_id` resolution fails, leave `source_ip` null.
+
+#### execution_mode Default for Phase 5 Playbook Events
+
+Phase 5 playbook outcome events must default to `execution_mode=simulation` unless both of the following conditions are true:
+
+- Verified adapter metadata explicitly confirms real execution (not just a playbook-level `mode` field or wrapper state).
+- Safety guards approved for real mode are confirmed active for that adapter call.
+
+Do not set `execution_mode=real` or `external_executed=true` from playbook wrapper `mode` state alone. When execution mode is ambiguous or adapter metadata is absent, default to simulation and document the reason in `outcome_summary`.
+
+#### Backfill Scope
+
+Write-mode backfill remains a script/operator task. It is not a database migration and is not an admin API endpoint. The backfill script must:
+
+- Be idempotent: repeated runs must not create duplicate decisions or events.
+- Be reviewable before apply: dry-run output must be reviewed and acknowledged before write mode is enabled.
+- Preserve the dry-run/write separation introduced in Phase 3.
+
 ### Decision 9: Retention and Archive Strategy
 
 Canonical decisions and outcome events are audit/reporting data and should not be deleted during normal rollback.

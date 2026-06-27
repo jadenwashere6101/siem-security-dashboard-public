@@ -8,7 +8,13 @@ from unittest.mock import patch
 import pytest
 from psycopg2.extras import Json
 
-from core import approval_store, dead_letter_store, notification_delivery_store, playbook_store
+from core import (
+    approval_store,
+    dead_letter_store,
+    notification_delivery_store,
+    playbook_store,
+    soar_response_outcomes as outcomes,
+)
 from engines import playbook_step_executor
 from scripts import run_playbook_executor_once
 from integrations.base_integration import (
@@ -16,6 +22,7 @@ from integrations.base_integration import (
     CIRCUIT_STATE_HALF_OPEN,
     CIRCUIT_STATE_OPEN,
     FAILURE_CLASSIFICATION_PROVIDER_RATE_LIMITED,
+    FAILURE_CLASSIFICATION_TIMEOUT,
     FAILURE_CLASSIFICATION_TRANSIENT,
     configure_simulated_circuit_breaker,
     get_simulated_circuit_breaker_dict,
@@ -52,6 +59,39 @@ def _create_execution(conn, cur, playbook_id="pb_exec", steps=None):
     return playbook_store.create_pending_playbook_execution_once(conn, playbook_id, aid)
 
 
+def _create_linked_execution(
+    conn,
+    cur,
+    playbook_id="pb_linked",
+    steps=None,
+    source_ip="198.51.100.42",
+):
+    aid = _insert_alert(cur, source_ip=source_ip)
+    playbook_store.create_playbook_definition(
+        conn,
+        playbook_id,
+        playbook_id,
+        steps=steps if steps is not None else _valid_steps(),
+    )
+    decision = outcomes.create_response_decision(
+        conn,
+        selected_action=f"playbook:{playbook_id}",
+        decision_source="playbook",
+        outcome_summary=f"Playbook {playbook_id} selected for simulation.",
+        alert_id=aid,
+        source_ip=source_ip,
+        playbook_id=playbook_id,
+    )
+    eid = playbook_store.create_pending_playbook_execution_once(
+        conn,
+        playbook_id,
+        aid,
+        decision_id=decision["id"],
+        soar_correlation_id=decision["soar_correlation_id"],
+    )
+    return eid, decision
+
+
 def _set_playbook_steps(cur, playbook_id, steps):
     cur.execute(
         "UPDATE playbook_definitions SET steps = %s WHERE id = %s",
@@ -62,6 +102,22 @@ def _set_playbook_steps(cur, playbook_id, steps):
 def _count(cur, table):
     cur.execute(f"SELECT COUNT(*) FROM {table}")
     return cur.fetchone()[0]
+
+
+def _fetch_playbook_outcome_events(cur, execution_id):
+    cur.execute(
+        """
+        SELECT event_type, execution_mode, execution_state, execution_actor,
+               reason_code, simulated, external_executed, tracking_recorded,
+               idempotency_key, playbook_execution_id, playbook_step_index,
+               alert_id, host(source_ip), approval_request_id, metadata
+        FROM soar_response_outcome_events
+        WHERE playbook_execution_id = %s
+        ORDER BY id
+        """,
+        (execution_id,),
+    )
+    return cur.fetchall()
 
 
 def _progress_entry(step_index, action, now=None):
@@ -197,6 +253,325 @@ def test_pending_monitor_step_becomes_success(postgres_db):
     assert entry["mode"] == "simulation"
     assert entry["output"] == {"simulated": True, "executed": False}
     assert _count(cur, "soar_dead_letters") == 0
+
+
+def test_linked_playbook_claim_appends_running_outcome_event(postgres_db):
+    conn, cur = postgres_db
+    eid, decision = _create_linked_execution(conn, cur, "pb_outcome_running")
+
+    result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "success"
+    events = _fetch_playbook_outcome_events(cur, eid)
+    running = events[0]
+    assert running[0:9] == (
+        "running",
+        "simulation",
+        "running",
+        "playbook_worker",
+        "simulation_mode",
+        True,
+        False,
+        False,
+        f"playbook-running-{eid}",
+    )
+    assert running[9] == eid
+    assert running[10] is None
+    assert running[11] == decision["alert_id"]
+    assert running[12] == "198.51.100.42"
+
+
+def test_linked_playbook_success_appends_succeeded_outcome_event(postgres_db):
+    conn, cur = postgres_db
+    eid, decision = _create_linked_execution(conn, cur, "pb_outcome_success")
+
+    result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "success"
+    events = _fetch_playbook_outcome_events(cur, eid)
+    assert [event[0] for event in events] == ["running", "step_succeeded", "succeeded"]
+    succeeded = [event for event in events if event[0] == "succeeded"][0]
+    assert succeeded[0:9] == (
+        "succeeded",
+        "simulation",
+        "succeeded",
+        "playbook_worker",
+        "simulation_mode",
+        True,
+        False,
+        False,
+        f"playbook-success-{eid}",
+    )
+    assert succeeded[9] == eid
+    assert succeeded[10] is None
+    assert succeeded[11] == decision["alert_id"]
+
+
+def test_linked_playbook_failure_appends_failed_outcome_event(postgres_db):
+    conn, cur = postgres_db
+    eid, _decision = _create_linked_execution(conn, cur, "pb_outcome_failed")
+    _set_playbook_steps(cur, "pb_outcome_failed", [{"action": "bad_action"}])
+
+    result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "failed"
+    events = _fetch_playbook_outcome_events(cur, eid)
+    assert [event[0] for event in events] == ["running", "step_failed", "failed"]
+    failed = [event for event in events if event[0] == "failed"][0]
+    assert failed[0:9] == (
+        "failed",
+        "simulation",
+        "failed",
+        "playbook_worker",
+        "simulation_mode",
+        True,
+        False,
+        False,
+        f"playbook-failed-{eid}",
+    )
+    assert failed[9] == eid
+    assert failed[10] is None
+
+
+def test_playbook_outcome_idempotency_keys_prevent_duplicate_events(postgres_db):
+    conn, cur = postgres_db
+    eid, _decision = _create_linked_execution(conn, cur, "pb_outcome_idempotent")
+    execution = playbook_store.get_playbook_execution(conn, eid)
+
+    first = playbook_step_executor._append_playbook_running_outcome_event(conn, execution)
+    second = playbook_step_executor._append_playbook_running_outcome_event(conn, execution)
+
+    assert first["id"] == second["id"]
+    events = _fetch_playbook_outcome_events(cur, eid)
+    assert len(events) == 1
+    assert events[0][8] == f"playbook-running-{eid}"
+
+
+def test_unlinked_legacy_playbook_execution_preserves_behavior_without_outcomes(postgres_db):
+    conn, cur = postgres_db
+    eid = _create_execution(conn, cur, "pb_legacy_unlinked")
+
+    result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "success"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["status"] == "success"
+    assert row["decision_id"] is None
+    assert row["soar_correlation_id"] is None
+    assert _fetch_playbook_outcome_events(cur, eid) == []
+
+
+def test_linked_non_adapter_steps_append_step_outcome_events(postgres_db):
+    conn, cur = postgres_db
+    eid, _decision = _create_linked_execution(
+        conn,
+        cur,
+        "pb_step_outcomes",
+        steps=[
+            {"action": "monitor"},
+            {"action": "flag_high_priority"},
+            {"action": "block_ip", "params": {"source_ip": "203.0.113.10"}},
+        ],
+    )
+
+    result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "success"
+    events = _fetch_playbook_outcome_events(cur, eid)
+    step_events = [event for event in events if event[0] == "step_succeeded"]
+    assert [(event[10], event[14]["action"]) for event in step_events] == [
+        (0, "monitor"),
+        (1, "flag_high_priority"),
+    ]
+    assert [event[8] for event in step_events] == [
+        f"playbook-step-{eid}-0-succeeded",
+        f"playbook-step-{eid}-1-succeeded",
+    ]
+    assert all(event[3] == "playbook_worker" for event in step_events)
+    assert all(event[1] == "simulation" for event in step_events)
+    assert all(event[5] is True for event in step_events)
+    assert all(event[10] != 2 for event in step_events)
+
+
+def test_linked_playbook_awaiting_approval_appends_linked_event(postgres_db):
+    conn, cur = postgres_db
+    eid, _decision = _create_linked_execution(
+        conn,
+        cur,
+        "pb_awaiting_outcome",
+        steps=[
+            {"action": "monitor"},
+            {"action": "require_approval", "reason": "Pause for review"},
+        ],
+    )
+
+    result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "awaiting_approval"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    approval_id = row["steps_log"][1]["approval_request_id"]
+    events = _fetch_playbook_outcome_events(cur, eid)
+    awaiting = [event for event in events if event[0] == "awaiting_approval"][0]
+    assert awaiting[1:9] == (
+        "simulation",
+        "awaiting_approval",
+        "playbook_worker",
+        "approval_required",
+        False,
+        False,
+        False,
+        f"playbook-awaiting-approval-{eid}-1-{approval_id}",
+    )
+    assert awaiting[10] == 1
+    assert awaiting[13] == approval_id
+    assert awaiting[14]["approval_request_id"] == approval_id
+
+
+def test_approved_playbook_approval_appends_decision_and_resumed_events(postgres_db):
+    conn, cur = postgres_db
+    user_id = _insert_user(cur)
+    eid, _decision = _create_linked_execution(
+        conn,
+        cur,
+        "pb_approved_outcome",
+        steps=[
+            {"action": "require_approval", "reason": "Approve continuation"},
+            {"action": "monitor"},
+        ],
+    )
+    playbook_step_executor.process_playbook_execution(conn, eid)
+    approval_id = playbook_store.get_playbook_execution(conn, eid)["steps_log"][0][
+        "approval_request_id"
+    ]
+    approval_store.approve_request(conn, approval_id, actor_user_id=user_id)
+
+    result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "success"
+    events = _fetch_playbook_outcome_events(cur, eid)
+    approved = [event for event in events if event[0] == "approval_approved"][0]
+    resumed = [event for event in events if event[0] == "resumed"][0]
+    assert approved[1:9] == (
+        "simulation",
+        "running",
+        "approval_service",
+        "approval_required",
+        False,
+        False,
+        False,
+        f"playbook-approval_approved-{eid}-{approval_id}",
+    )
+    assert approved[10] == 0
+    assert approved[13] == approval_id
+    assert approved[14]["approval_request_event_id"] is not None
+    assert resumed[3] == "playbook_worker"
+    assert resumed[13] == approval_id
+    assert resumed[8] == f"playbook-resumed-{eid}-{approval_id}"
+
+
+def test_denied_playbook_approval_appends_blocked_approval_event(postgres_db):
+    conn, cur = postgres_db
+    user_id = _insert_user(cur)
+    eid, _decision = _create_linked_execution(
+        conn,
+        cur,
+        "pb_denied_outcome",
+        steps=[
+            {"action": "require_approval", "reason": "Approve continuation"},
+            {"action": "monitor"},
+        ],
+    )
+    playbook_step_executor.process_playbook_execution(conn, eid)
+    approval_id = playbook_store.get_playbook_execution(conn, eid)["steps_log"][0][
+        "approval_request_id"
+    ]
+    approval_store.deny_request(conn, approval_id, actor_user_id=user_id)
+
+    result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "failed"
+    events = _fetch_playbook_outcome_events(cur, eid)
+    denied = [event for event in events if event[0] == "approval_denied"][0]
+    assert denied[1:9] == (
+        "simulation",
+        "blocked",
+        "approval_service",
+        "approval_denied",
+        False,
+        False,
+        False,
+        f"playbook-approval_denied-{eid}-{approval_id}",
+    )
+    assert denied[10] == 0
+    assert denied[13] == approval_id
+    assert denied[14]["approval_request_event_id"] is not None
+
+
+def test_expired_playbook_approval_appends_blocked_approval_event(postgres_db):
+    conn, cur = postgres_db
+    now = datetime.now(timezone.utc)
+    eid, _decision = _create_linked_execution(
+        conn,
+        cur,
+        "pb_expired_outcome",
+        steps=[
+            {"action": "require_approval", "expires_in_minutes": 5},
+            {"action": "monitor"},
+        ],
+    )
+    playbook_step_executor.process_playbook_execution(conn, eid, now=now)
+    approval_id = playbook_store.get_playbook_execution(conn, eid)["steps_log"][0][
+        "approval_request_id"
+    ]
+
+    result = playbook_step_executor.process_playbook_execution(
+        conn,
+        eid,
+        now=now + timedelta(minutes=10),
+    )
+
+    assert result["outcome"] == "failed"
+    events = _fetch_playbook_outcome_events(cur, eid)
+    expired = [event for event in events if event[0] == "approval_expired"][0]
+    assert expired[1:9] == (
+        "simulation",
+        "blocked",
+        "approval_service",
+        "approval_denied",
+        False,
+        False,
+        False,
+        f"playbook-approval_expired-{eid}-{approval_id}",
+    )
+    assert expired[10] == 0
+    assert expired[13] == approval_id
+    assert expired[14]["approval_request_event_id"] is not None
+
+
+def test_playbook_approval_event_write_failure_preserves_legacy_behavior(
+    postgres_db, monkeypatch, caplog
+):
+    conn, cur = postgres_db
+    eid, _decision = _create_linked_execution(
+        conn,
+        cur,
+        "pb_approval_outcome_failure",
+        steps=[{"action": "require_approval"}],
+    )
+
+    def fail_append(*_args, **_kwargs):
+        raise RuntimeError("canonical writer unavailable")
+
+    monkeypatch.setattr("engines.playbook_step_executor.append_outcome_event", fail_append)
+
+    with caplog.at_level("ERROR"):
+        result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "awaiting_approval"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["status"] == "awaiting_approval"
+    assert _fetch_playbook_outcome_events(cur, eid) == []
+    assert "Failed to append canonical awaiting_approval outcome" in caplog.text
 
 
 def test_multiple_supported_steps_are_simulated_successfully(postgres_db):
@@ -971,6 +1346,23 @@ def _fetch_deliveries(cur, playbook_execution_id):
     return cur.fetchall()
 
 
+def _fetch_notification_outcomes(cur, playbook_execution_id):
+    cur.execute(
+        """
+        SELECT event_type, execution_mode, execution_state, execution_actor,
+               external_executed, simulated, reason_code,
+               notification_delivery_attempt_id, playbook_step_index,
+               provider, adapter_name, idempotency_key, metadata
+        FROM soar_response_outcome_events
+        WHERE playbook_execution_id = %s
+          AND event_type = 'notification_delivery'
+        ORDER BY id
+        """,
+        (playbook_execution_id,),
+    )
+    return cur.fetchall()
+
+
 def test_notify_slack_step_creates_delivery_record(postgres_db, no_network):
     conn, cur = postgres_db
     eid = _create_execution(conn, cur, "pb_slack_delivery")
@@ -993,6 +1385,155 @@ def test_notify_slack_step_creates_delivery_record(postgres_db, no_network):
     assert adapter_name == "slack"
     assert action == "send_message"
     assert cb_state == "closed"
+
+
+def test_simulated_notification_maps_to_simulation_outcome(postgres_db, no_network):
+    conn, cur = postgres_db
+    eid, _decision = _create_linked_execution(
+        conn,
+        cur,
+        "pb_slack_canonical_sim",
+        steps=[{"action": "notify_slack", "params": {"message": "test alert"}}],
+    )
+
+    result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "success"
+    [outcome] = _fetch_notification_outcomes(cur, eid)
+    delivery_id = outcome[7]
+    assert outcome[0:7] == (
+        "notification_delivery",
+        "simulation",
+        "succeeded",
+        "adapter",
+        False,
+        True,
+        "simulation_mode",
+    )
+    assert outcome[8] == 0
+    assert outcome[9] == "slack"
+    assert outcome[10] == "slack"
+    assert outcome[11] == f"playbook-notification-{eid}-0-{delivery_id}"
+
+
+def test_real_success_notification_with_strong_evidence_marks_external_executed(
+    postgres_db,
+):
+    conn, cur = postgres_db
+    eid, _decision = _create_linked_execution(
+        conn,
+        cur,
+        "pb_slack_canonical_real",
+        steps=[{"action": "notify_slack", "params": {"message": "real alert"}}],
+    )
+    real_result = {
+        "adapter": "slack",
+        "action": "send_message",
+        "mode": "real",
+        "simulated": False,
+        "executed": True,
+        "success": True,
+        "message": "Delivered to Slack.",
+        "params": {},
+        "context": {},
+        "metadata": {"provider_success": True},
+    }
+
+    with patch(
+        "engines.playbook_step_executor.execute_playbook_simulated_adapter",
+        return_value=real_result,
+    ):
+        result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "success"
+    [outcome] = _fetch_notification_outcomes(cur, eid)
+    assert outcome[1:7] == ("real", "succeeded", "adapter", True, False, None)
+    assert outcome[12]["real_evidence"] is True
+
+
+def test_real_success_missing_simulated_false_does_not_mark_external_executed(
+    postgres_db,
+):
+    conn, cur = postgres_db
+    eid, _decision = _create_linked_execution(
+        conn,
+        cur,
+        "pb_slack_missing_simulated_false",
+        steps=[{"action": "notify_slack"}],
+    )
+    real_result = {
+        "adapter": "slack",
+        "action": "send_message",
+        "mode": "real",
+        "executed": True,
+        "success": True,
+        "message": "Delivered to Slack.",
+        "params": {},
+        "context": {},
+        "metadata": {"provider_success": True},
+    }
+
+    with patch(
+        "engines.playbook_step_executor.execute_playbook_simulated_adapter",
+        return_value=real_result,
+    ):
+        result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "success"
+    [outcome] = _fetch_notification_outcomes(cur, eid)
+    assert outcome[1:7] == (
+        "simulation",
+        "succeeded",
+        "adapter",
+        False,
+        True,
+        "simulation_mode",
+    )
+    assert outcome[12]["real_evidence"] is False
+
+
+def test_real_success_missing_provider_evidence_does_not_mark_external_executed(
+    postgres_db,
+):
+    conn, cur = postgres_db
+    eid, _decision = _create_linked_execution(
+        conn,
+        cur,
+        "pb_slack_missing_provider_evidence",
+        steps=[{"action": "notify_slack"}],
+    )
+    execution = playbook_store.get_playbook_execution(conn, eid)
+    delivery = notification_delivery_store.create_notification_delivery_attempt(
+        conn,
+        correlation_id=f"missing-evidence-{eid}",
+        idempotency_key=f"missing-evidence-{eid}",
+        provider="slack",
+        mode="real",
+        status="success",
+        adapter_name="slack",
+        action="send_message",
+        metadata={"executed": True, "simulated": False},
+        playbook_execution_id=eid,
+        playbook_step_index=0,
+        alert_id=execution["alert_id"],
+    )
+
+    playbook_step_executor._append_notification_delivery_outcome_event(
+        conn,
+        execution,
+        delivery,
+    )
+
+    [outcome] = _fetch_notification_outcomes(cur, eid)
+    assert outcome[1:7] == (
+        "simulation",
+        "succeeded",
+        "adapter",
+        False,
+        True,
+        "simulation_mode",
+    )
+    assert outcome[12]["real_evidence"] is False
 
 
 def test_notify_teams_step_creates_delivery_record(postgres_db, no_network):
@@ -1061,6 +1602,33 @@ def test_non_notification_steps_do_not_create_delivery_records(postgres_db, no_n
     assert _count_deliveries(cur, eid) == 0
 
 
+def test_firewall_playbook_adapter_remains_simulation_dry_run(postgres_db, no_network):
+    conn, cur = postgres_db
+    eid, _decision = _create_linked_execution(
+        conn,
+        cur,
+        "pb_firewall_dry_run_outcome",
+        steps=[{"action": "block_ip", "params": {"source_ip": "203.0.113.10"}}],
+    )
+
+    result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "success"
+    assert _count_deliveries(cur, eid) == 0
+    row = playbook_store.get_playbook_execution(conn, eid)
+    entry = row["steps_log"][0]
+    assert entry["action"] == "block_ip"
+    assert entry["mode"] == "simulation"
+    assert entry["output"]["adapter_result"]["adapter"] == "firewall"
+    assert entry["output"]["adapter_result"]["mode"] == "simulation"
+    assert entry["output"]["adapter_result"]["executed"] is False
+    assert entry["output"]["adapter_result"]["simulated"] is True
+    events = _fetch_playbook_outcome_events(cur, eid)
+    assert _fetch_notification_outcomes(cur, eid) == []
+    assert all(event[4] is not True for event in events)
+    assert all(event[1] != "real" for event in events)
+
+
 def test_delivery_tracking_failure_does_not_crash_step(postgres_db, no_network):
     conn, cur = postgres_db
     eid = _create_execution(conn, cur, "pb_delivery_crash")
@@ -1077,6 +1645,33 @@ def test_delivery_tracking_failure_does_not_crash_step(postgres_db, no_network):
     row = playbook_store.get_playbook_execution(conn, eid)
     assert row["status"] == "success"
     assert row["steps_log"][0]["status"] == "success"
+
+
+def test_notification_canonical_write_failure_does_not_break_delivery(
+    postgres_db, monkeypatch, caplog, no_network
+):
+    conn, cur = postgres_db
+    eid, _decision = _create_linked_execution(
+        conn,
+        cur,
+        "pb_notification_canonical_failure",
+        steps=[{"action": "notify_slack", "params": {}}],
+    )
+
+    def fail_append(*_args, **_kwargs):
+        raise RuntimeError("canonical writer unavailable")
+
+    monkeypatch.setattr("engines.playbook_step_executor.append_outcome_event", fail_append)
+
+    with caplog.at_level("ERROR"):
+        result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "success"
+    assert _count_deliveries(cur, eid) == 1
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["status"] == "success"
+    assert _fetch_notification_outcomes(cur, eid) == []
+    assert "Failed to append canonical notification_delivery outcome" in caplog.text
 
 
 def test_circuit_blocked_notify_slack_creates_blocked_delivery_record(postgres_db, no_network):
@@ -1099,6 +1694,35 @@ def test_circuit_blocked_notify_slack_creates_blocked_delivery_record(postgres_d
     assert provider == "slack"
     assert status == "blocked"
     assert cb_state == "open"
+
+
+def test_blocked_notification_maps_to_blocked_outcome(postgres_db, no_network):
+    conn, cur = postgres_db
+    eid, _decision = _create_linked_execution(
+        conn,
+        cur,
+        "pb_blocked_notification_outcome",
+        steps=[{"action": "notify_slack", "params": {}}],
+    )
+    configure_simulated_circuit_breaker("slack", state=CIRCUIT_STATE_OPEN, consecutive_failures=3)
+
+    with patch.object(
+        SlackSimulationAdapter,
+        "_simulate",
+        side_effect=AssertionError("simulation body must not run when circuit is open"),
+    ):
+        result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "failed"
+    [outcome] = _fetch_notification_outcomes(cur, eid)
+    assert outcome[1:7] == (
+        "simulation",
+        "blocked",
+        "adapter",
+        False,
+        True,
+        "policy_blocked",
+    )
 
 
 def test_notify_slack_and_teams_steps_create_separate_delivery_records(postgres_db, no_network):
@@ -1186,6 +1810,60 @@ def test_failed_notify_slack_step_creates_failed_delivery_record(postgres_db, no
     rows = _fetch_deliveries(cur, eid)
     assert len(rows) == 1
     assert rows[0][2] == "failed"
+
+
+@pytest.mark.parametrize(
+    ("failure_classification", "expected_status", "expected_reason"),
+    [
+        ("transient", "failed", "provider_error"),
+        (FAILURE_CLASSIFICATION_TIMEOUT, "timeout", "adapter_unavailable"),
+    ],
+)
+def test_failed_or_timeout_notification_maps_to_failed_outcome(
+    postgres_db,
+    no_network,
+    failure_classification,
+    expected_status,
+    expected_reason,
+):
+    conn, cur = postgres_db
+    eid, _decision = _create_linked_execution(
+        conn,
+        cur,
+        f"pb_notification_{expected_status}_outcome",
+        steps=[{"action": "notify_slack", "params": {}}],
+    )
+    failing_result = {
+        "adapter": "slack",
+        "action": "send_message",
+        "mode": "simulation",
+        "simulated": True,
+        "executed": False,
+        "success": False,
+        "message": "Simulated adapter failure.",
+        "params": {},
+        "context": {},
+        "metadata": {"failure_classification": failure_classification},
+    }
+
+    with patch(
+        "engines.playbook_step_executor.execute_playbook_simulated_adapter",
+        return_value=failing_result,
+    ):
+        result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "failed"
+    rows = _fetch_deliveries(cur, eid)
+    assert rows[0][2] == expected_status
+    [outcome] = _fetch_notification_outcomes(cur, eid)
+    assert outcome[1:7] == (
+        "simulation",
+        "failed",
+        "adapter",
+        False,
+        True,
+        expected_reason,
+    )
 
 
 def test_rate_limited_notify_slack_creates_blocked_delivery_record(

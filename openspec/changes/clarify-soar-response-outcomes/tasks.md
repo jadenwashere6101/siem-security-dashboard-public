@@ -84,21 +84,32 @@
 
 ## 5. Phase 5 - Playbook, Approval, Notification, Audit, and Backfill Write Integration
 
-- [ ] 5.1 Propagate alert SOAR correlation id into newly-created `playbook_executions`.
-- [ ] 5.2 Create child decisions for playbook steps that select distinct response actions.
-- [ ] 5.3 Append outcome events when a playbook execution is created, claimed, completed, failed, abandoned, resumed, retried, or permanently failed.
-- [ ] 5.4 Append step outcome events for non-adapter playbook steps using step index and selected action.
-- [ ] 5.5 Append `awaiting_approval` events when a playbook `require_approval` step pauses execution.
-- [ ] 5.6 Append `blocked` events when playbook approvals are denied or expired.
-- [ ] 5.7 Append approval decision events for `approval_requests` and `approval_request_events` using `execution_actor=approval_service`.
-- [ ] 5.8 Link approval outcomes to queue rows or playbook execution/step rows as applicable.
-- [ ] 5.9 Map `notification_delivery_attempts.mode`, `status`, and metadata into canonical outcome events.
-- [ ] 5.10 Ensure real notification delivery only uses `execution_mode=real` and `external_executed=true` when adapter result explicitly confirms real execution.
-- [ ] 5.11 Ensure failed-closed real-capable adapter results do not set `external_executed=true`.
-- [ ] 5.12 Ensure firewall playbook adapter outcomes remain simulation/dry-run unless a future approved OpenSpec changes that.
-- [ ] 5.13 Link relevant `audit_log` rows to SOAR correlation, decision, and latest outcome event where useful.
-- [ ] 5.14 Implement write-mode backfill after dry-run verification, using deterministic idempotency keys.
-- [ ] 5.15 Add tests covering playbook success, failure, approval pending, approval denied, approval expired, notification simulation, notification real success, notification blocked, notification timeout, audit linkage, and write-mode backfill idempotency.
+### 5A. Phase 5A Schema Migration (approved)
+
+- [x] 5A.1 Add nullable `decision_id INTEGER REFERENCES soar_response_decisions(id) ON DELETE SET NULL` to `playbook_executions`.
+- [x] 5A.2 Add nullable `soar_correlation_id VARCHAR(128)` to `playbook_executions`.
+- [x] 5A.3 Update schema snapshot after migration.
+- [x] 5A.4 Run schema validation and record output.
+
+### 5B. Phase 5 Runtime Integration
+
+- [ ] 5.1 Propagate alert SOAR correlation id into newly-created `playbook_executions`; write it to `playbook_executions.soar_correlation_id` once the Phase 5A migration is applied.
+- [ ] 5.2 Create one execution-level canonical decision per `playbook_execution` with `decision_source=playbook`; write `decision_id` back to `playbook_executions.decision_id`. Do NOT create per-step child decisions in Phase 5. All step outcome events attach to this single execution-level decision. Per-step child decisions are deferred and must not be implemented unless a future OpenSpec explicitly approves them.
+- [ ] 5.3 Append outcome events when a playbook execution is created, claimed, completed, failed, abandoned, resumed, retried, or permanently failed; link all events to the execution-level decision.
+- [ ] 5.4 Append step outcome events for playbook steps using step index and selected action; attach all step events to the execution-level decision, not to per-step child decisions.
+- [x] 5.5 Resolve `source_ip` for playbook outcome events from the related `alerts` row when `alert_id` exists; set `source_ip=NULL` when no alert is linked; do not derive `source_ip` from playbook wrapper state, `steps_log`, or indirect paths.
+- [x] 5.6 Default `execution_mode=simulation` for Phase 5 playbook outcome events unless verified adapter metadata explicitly confirms real execution AND safety guards allow real mode; do not set `execution_mode=real` or `external_executed=true` from playbook wrapper `mode` state alone.
+- [x] 5.7 Append `awaiting_approval` events when a playbook `require_approval` step pauses execution.
+- [x] 5.8 Append `blocked` events when playbook approvals are denied or expired.
+- [x] 5.9 Append approval decision events for `approval_requests` and `approval_request_events` using `execution_actor=approval_service`.
+- [x] 5.10 Link approval outcomes to queue rows or playbook execution rows as applicable.
+- [x] 5.11 Map `notification_delivery_attempts.mode`, `status`, and metadata into canonical outcome events.
+- [x] 5.12 Ensure real notification delivery only uses `execution_mode=real` and `external_executed=true` when adapter result explicitly confirms real execution.
+- [x] 5.13 Ensure failed-closed real-capable adapter results do not set `external_executed=true`.
+- [x] 5.14 Ensure firewall playbook adapter outcomes remain simulation/dry-run unless a future approved OpenSpec changes that.
+- [x] 5.15 Link relevant `audit_log` rows to SOAR correlation, decision, and latest outcome event where useful.
+- [x] 5.16 Implement write-mode backfill as an idempotent operator script (not a migration and not an admin endpoint); dry-run output must be reviewed and approved before write mode is invoked; deterministic idempotency keys must prevent duplicate decisions/events on re-run.
+- [x] 5.17 Add tests covering playbook execution-level decision creation, step event attachment to execution-level decision, source_ip resolution from alert, execution_mode simulation default, approval pending, approval denied, approval expired, notification simulation, notification real success, notification blocked, notification timeout, audit linkage, and write-mode backfill idempotency.
 
 ## 6. Phase 6 - Backend API Contract Updates
 
