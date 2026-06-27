@@ -122,7 +122,21 @@ jobs:
         run: python3 -m pytest tests/test_schema_migrations.py -v
 
       - name: Install PostgreSQL client
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+        run: |
+          set -euo pipefail
+
+          for source_file in /etc/apt/sources.list /etc/apt/sources.list.d/*; do
+            [[ -f "$source_file" ]] || continue
+            if sudo grep -q "packages.microsoft.com/repos/azure-cli" "$source_file"; then
+              echo "Disabling broken azure-cli apt source in ${source_file}"
+              sudo sed -i.bak \
+                '/packages.microsoft.com\/repos\/azure-cli/s/^/# disabled for migration validation CI: /' \
+                "$source_file"
+            fi
+          done
+
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
 
       - name: Create disposable PostgreSQL database
         env:
