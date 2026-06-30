@@ -5,6 +5,7 @@ from unittest.mock import patch
 from psycopg2.extras import Json
 from werkzeug.security import generate_password_hash
 
+from core import soar_response_outcomes as outcomes
 from core.incident_store import create_incident, link_alert_to_incident
 
 
@@ -254,6 +255,68 @@ def test_get_incident_detail_super_admin_can_view(client, postgres_db):
 
     assert resp.status_code == 200
     assert resp.get_json()["incident"]["id"] == incident["id"]
+
+
+def test_incident_list_detail_and_timeline_include_response_outcome(client, postgres_db):
+    conn, _cur = postgres_db
+    incident = _insert_incident(conn, title="Outcome incident", source_ip="203.0.113.186")
+    decision = outcomes.create_response_decision(
+        conn,
+        selected_action="monitor",
+        decision_source="manual",
+        outcome_summary="Incident response selected.",
+        incident_id=incident["id"],
+        source_ip="203.0.113.186",
+        reason_code="simulation_mode",
+    )
+    event = outcomes.append_outcome_event(
+        conn,
+        decision_id=decision["id"],
+        execution_mode="simulation",
+        execution_state="succeeded",
+        execution_actor="manual",
+        simulated=True,
+        outcome_summary="Incident monitored in simulation.",
+        incident_id=incident["id"],
+        source_ip="203.0.113.186",
+        reason_code="simulation_mode",
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        list_resp = client.get("/incidents")
+        detail_resp = client.get(f"/incidents/{incident['id']}")
+        timeline_resp = client.get(f"/incidents/{incident['id']}/timeline")
+
+    assert list_resp.status_code == 200
+    listed = next(item for item in list_resp.get_json()["incidents"] if item["id"] == incident["id"])
+    assert listed["response_outcome"]["decision_id"] == decision["id"]
+    assert listed["response_outcome"]["latest_outcome_event_id"] == event["id"]
+
+    assert detail_resp.status_code == 200
+    detail = detail_resp.get_json()["incident"]
+    assert detail["response_outcome"]["decision_id"] == decision["id"]
+
+    assert timeline_resp.status_code == 200
+    outcome_entries = [
+        entry for entry in timeline_resp.get_json()["timeline"]
+        if entry.get("type") == "response_outcome"
+    ]
+    assert len(outcome_entries) == 1
+    assert outcome_entries[0]["metadata"]["outcome_event_id"] == event["id"]
+
+
+def test_incident_unlinked_response_outcome_is_null(client, postgres_db):
+    conn, _cur = postgres_db
+    incident = _insert_incident(conn, title="No outcome", source_ip="203.0.113.187")
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get(f"/incidents/{incident['id']}")
+
+    assert resp.status_code == 200
+    assert resp.get_json()["incident"]["response_outcome"] is None
 
 
 def test_get_incident_detail_missing_returns_404(client, postgres_db):

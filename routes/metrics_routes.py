@@ -14,6 +14,7 @@ from flask_login import login_required
 
 from core.auth import analyst_or_super_admin_required
 from core.db import get_db_connection
+from core.soar_response_outcomes import get_outcome_count_groups
 
 metrics_bp = Blueprint("metrics", __name__)
 
@@ -318,6 +319,7 @@ def playbook_execution_metrics_route():
                 """
             )
             stale_running_count = int(cur.fetchone()[0])
+            canonical_outcome_counts = get_outcome_count_groups(conn)
 
         payload: dict[str, Any] = {
             "total_executions": total_executions,
@@ -335,6 +337,7 @@ def playbook_execution_metrics_route():
                 "with_linked_approval": with_linked_approval,
             },
             "stale_running_count": stale_running_count,
+            "canonical_outcome_counts": canonical_outcome_counts,
         }
         if unknown_statuses:
             payload["unknown_statuses"] = unknown_statuses
@@ -451,6 +454,7 @@ def notification_delivery_metrics_route():
                 cur.fetchall() or [],
                 KNOWN_CIRCUIT_BREAKER_STATES,
             )
+            canonical_outcome_counts = get_outcome_count_groups(conn)
 
         payload: dict[str, Any] = {
             "total_delivery_attempts": total_delivery_attempts,
@@ -465,6 +469,7 @@ def notification_delivery_metrics_route():
                 f"requested_at, created_at) falls within the last {RECENT_WINDOW_HOURS} hours (UTC).",
             },
             "circuit_breaker_state_counts": circuit_breaker_state_counts,
+            "canonical_outcome_counts": canonical_outcome_counts,
         }
         if unknown_modes:
             payload["unknown_modes"] = unknown_modes
@@ -538,6 +543,7 @@ def incident_metrics_route():
             )
             oldest_open_row = cur.fetchone()
             oldest_open_incident_at = oldest_open_row[0] if oldest_open_row else None
+            canonical_outcome_counts = get_outcome_count_groups(conn)
 
         return (
             jsonify(
@@ -551,6 +557,7 @@ def incident_metrics_route():
                     "open_high_critical": open_high_critical_count,
                     "newest_incident_at": _iso_timestamp(newest_incident_at),
                     "oldest_open_incident_at": _iso_timestamp(oldest_open_incident_at),
+                    "canonical_outcome_counts": canonical_outcome_counts,
                 }
             ),
             200,
@@ -608,6 +615,7 @@ def approval_metrics_route():
             )
             oldest_pending_row = cur.fetchone()
             oldest_pending_approval_at = oldest_pending_row[0] if oldest_pending_row else None
+            canonical_outcome_counts = get_outcome_count_groups(conn)
 
         return (
             jsonify(
@@ -618,6 +626,7 @@ def approval_metrics_route():
                     "pending_count": by_status["pending"],
                     "newest_approval_at": _iso_timestamp(newest_approval_at),
                     "oldest_pending_approval_at": _iso_timestamp(oldest_pending_approval_at),
+                    "canonical_outcome_counts": canonical_outcome_counts,
                 }
             ),
             200,

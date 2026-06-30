@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 import pytest
 from werkzeug.security import generate_password_hash
 
+from core import soar_response_outcomes as outcomes
 import siem_backend
 
 
@@ -109,6 +110,18 @@ def _fetch_queue_row(cur, queue_id):
         WHERE id = %s
         """,
         (queue_id,),
+    )
+    return cur.fetchone()
+
+
+def _count_queue_route_state(cur):
+    cur.execute(
+        """
+        SELECT
+            (SELECT COUNT(*) FROM response_actions_queue),
+            (SELECT COUNT(*) FROM soar_response_decisions),
+            (SELECT COUNT(*) FROM soar_response_outcome_events)
+        """
     )
     return cur.fetchone()
 
@@ -305,6 +318,7 @@ def test_queue_recent_endpoint_as_super_admin_returns_200_stable_shape(client, p
             "last_error",
             "created_at",
             "updated_at",
+            "response_outcome",
         ):
             assert key in item
         
@@ -433,6 +447,112 @@ def test_queue_recent_filters_by_status(client, postgres_db):
     assert data["items"][0]["status"] == "awaiting_approval"
 
 
+def test_queue_recent_unlinked_rows_include_null_response_outcome(client, postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    queue_id = _insert_queue_row(cur, alert_id, "192.0.2.41", "block_ip", "pending")
+    conn.commit()
+
+    _login_super_admin(client)
+    before_counts = _count_queue_route_state(cur)
+    with _patched_app_db(conn):
+        resp = client.get("/admin/soar/queue/recent")
+    after_counts = _count_queue_route_state(cur)
+
+    assert resp.status_code == 200
+    assert after_counts == before_counts
+    item = resp.get_json()["items"][0]
+    assert item["id"] == queue_id
+    assert item["alert_id"] == alert_id
+    assert item["source_ip"] == "192.0.2.41"
+    assert item["action"] == "block_ip"
+    assert item["status"] == "pending"
+    assert item["response_outcome"] is None
+
+
+def test_queue_recent_linked_row_returns_canonical_response_outcome(client, postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur, source_ip="192.0.2.42")
+    queue_id = _insert_queue_row(cur, alert_id, "192.0.2.42", "block_ip", "success")
+    decision = outcomes.create_response_decision(
+        conn,
+        selected_action="block_ip",
+        decision_source="manual",
+        outcome_summary="Queue response selected.",
+        alert_id=alert_id,
+        source_ip="192.0.2.42",
+        queue_id=queue_id,
+        reason_code="tracking_only",
+    )
+    event = outcomes.append_outcome_event(
+        conn,
+        decision_id=decision["id"],
+        execution_mode="tracking_only",
+        execution_state="succeeded",
+        execution_actor="manual",
+        external_executed=False,
+        tracking_recorded=True,
+        simulated=False,
+        reason_code="tracking_only",
+        outcome_summary="Queue response recorded as tracking only.",
+        alert_id=alert_id,
+        source_ip="192.0.2.42",
+        queue_id=queue_id,
+    )
+    cur.execute(
+        """
+        UPDATE response_actions_queue
+        SET decision_id = %s, soar_correlation_id = %s
+        WHERE id = %s
+        """,
+        (decision["id"], decision["soar_correlation_id"], queue_id),
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    before_counts = _count_queue_route_state(cur)
+    with _patched_app_db(conn):
+        resp = client.get("/admin/soar/queue/recent")
+    after_counts = _count_queue_route_state(cur)
+
+    assert resp.status_code == 200
+    assert after_counts == before_counts
+    item = resp.get_json()["items"][0]
+    assert item["id"] == queue_id
+    outcome = item["response_outcome"]
+    assert outcome is not None
+    assert outcome["decision_id"] == decision["id"]
+    assert outcome["latest_outcome_event_id"] == event["id"]
+    assert outcome["soar_correlation_id"] == decision["soar_correlation_id"]
+    assert outcome["selected_action"] == "block_ip"
+    assert outcome["decision_source"] == "manual"
+    assert outcome["execution_mode"] == "tracking_only"
+    assert outcome["execution_state"] == "succeeded"
+    assert outcome["tracking_recorded"] is True
+    assert outcome["external_executed"] is False
+    assert outcome["simulated"] is False
+    assert outcome["related"]["queue_id"] == queue_id
+
+
+def test_queue_recent_uses_bulk_response_outcome_lookup(client, postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    _insert_queue_row(cur, alert_id, "192.0.2.43", "block_ip", "pending")
+    _insert_queue_row(cur, alert_id, "192.0.2.44", "monitor", "success")
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn), patch(
+        "routes.admin_routes.get_latest_outcomes_for_queues_bulk",
+        wraps=outcomes.get_latest_outcomes_for_queues_bulk,
+    ) as bulk_lookup:
+        resp = client.get("/admin/soar/queue/recent")
+
+    assert resp.status_code == 200
+    assert bulk_lookup.call_count == 1
+    assert len(bulk_lookup.call_args.args[1]) == 2
+
+
 # ============================================================================
 # Nullable alert_id Tests
 # ============================================================================
@@ -531,11 +651,97 @@ def test_queue_detail_endpoint_returns_stable_shape(client, postgres_db):
         "last_error",
         "created_at",
         "updated_at",
+        "response_outcome",
         "idempotency_key",
         "latest_approval",
         "approval_events",
     ):
         assert key in item
+
+
+def test_queue_detail_unlinked_row_includes_null_response_outcome(client, postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    queue_id = _insert_queue_row(cur, alert_id, "192.0.2.45", "monitor", "pending")
+    conn.commit()
+
+    _login_super_admin(client)
+    before_counts = _count_queue_route_state(cur)
+    with _patched_app_db(conn):
+        resp = client.get(f"/admin/soar/queue/{queue_id}")
+    after_counts = _count_queue_route_state(cur)
+
+    assert resp.status_code == 200
+    assert after_counts == before_counts
+    item = resp.get_json()
+    assert item["id"] == queue_id
+    assert item["alert_id"] == alert_id
+    assert item["source_ip"] == "192.0.2.45"
+    assert item["action"] == "monitor"
+    assert item["status"] == "pending"
+    assert item["response_outcome"] is None
+
+
+def test_queue_detail_linked_by_correlation_id_returns_canonical_response_outcome(
+    client, postgres_db
+):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur, source_ip="192.0.2.46")
+    queue_id = _insert_queue_row(cur, alert_id, "192.0.2.46", "monitor", "success")
+    decision = outcomes.create_response_decision(
+        conn,
+        selected_action="monitor",
+        decision_source="manual",
+        outcome_summary="Queue monitor response selected.",
+        alert_id=alert_id,
+        source_ip="192.0.2.46",
+        queue_id=queue_id,
+        reason_code="simulation_mode",
+    )
+    event = outcomes.append_outcome_event(
+        conn,
+        decision_id=decision["id"],
+        execution_mode="simulation",
+        execution_state="succeeded",
+        execution_actor="manual",
+        external_executed=False,
+        tracking_recorded=False,
+        simulated=True,
+        reason_code="simulation_mode",
+        outcome_summary="Queue monitor response completed in simulation.",
+        alert_id=alert_id,
+        source_ip="192.0.2.46",
+        queue_id=queue_id,
+    )
+    cur.execute(
+        """
+        UPDATE response_actions_queue
+        SET soar_correlation_id = %s
+        WHERE id = %s
+        """,
+        (decision["soar_correlation_id"], queue_id),
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    before_counts = _count_queue_route_state(cur)
+    with _patched_app_db(conn):
+        resp = client.get(f"/admin/soar/queue/{queue_id}")
+    after_counts = _count_queue_route_state(cur)
+
+    assert resp.status_code == 200
+    assert after_counts == before_counts
+    item = resp.get_json()
+    outcome = item["response_outcome"]
+    assert outcome is not None
+    assert outcome["decision_id"] == decision["id"]
+    assert outcome["latest_outcome_event_id"] == event["id"]
+    assert outcome["soar_correlation_id"] == decision["soar_correlation_id"]
+    assert outcome["selected_action"] == "monitor"
+    assert outcome["execution_mode"] == "simulation"
+    assert outcome["execution_state"] == "succeeded"
+    assert outcome["simulated"] is True
+    assert outcome["related"]["queue_id"] == queue_id
 
 
 def test_queue_detail_latest_approval_null_when_no_approval(client, postgres_db):

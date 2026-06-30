@@ -99,6 +99,19 @@ def _fetch_response_log_links(cur, alert_id):
     return cur.fetchall()
 
 
+def _count_response_log_route_state(cur, alert_id):
+    cur.execute(
+        """
+        SELECT
+            (SELECT COUNT(*) FROM response_actions_log WHERE alert_id = %s),
+            (SELECT COUNT(*) FROM soar_response_decisions WHERE alert_id = %s),
+            (SELECT COUNT(*) FROM soar_response_outcome_events WHERE alert_id = %s)
+        """,
+        (alert_id, alert_id, alert_id),
+    )
+    return cur.fetchone()
+
+
 def test_get_alert_notes_without_session_returns_401(client):
     resp = client.get("/alerts/1/notes")
     assert resp.status_code == 401
@@ -406,5 +419,136 @@ def test_get_alert_response_log_authenticated_returns_200_stable_json_shape(clie
     assert isinstance(data, list)
     assert len(data) >= 1
     entry = data[0]
+    for key in (
+        "id",
+        "alert_id",
+        "source_ip",
+        "action",
+        "status",
+        "details",
+        "executed_at",
+        "response_outcome",
+    ):
+        assert key in entry
+    assert entry["id"] is not None
+    assert entry["alert_id"] == alert_id
+    assert entry["source_ip"] == "203.0.113.10"
+    assert entry["action"] == "monitor"
+    assert entry["status"] == "executed"
+    assert entry["details"] == "contract details"
+
+
+def test_get_alert_response_log_linked_canonical_log_returns_response_outcome(
+    client, postgres_db
+):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur, source_ip="198.51.100.252")
+    conn.commit()
+    _login_super_admin(client)
+
+    with _patched_app_db(conn):
+        execute_resp = client.post(f"/alerts/{alert_id}/execute", json={"action": "monitor"})
+        assert execute_resp.status_code == 200
+
+        before_counts = _count_response_log_route_state(cur, alert_id)
+        resp = client.get(f"/alerts/{alert_id}/response-log")
+        after_counts = _count_response_log_route_state(cur, alert_id)
+
+    assert resp.status_code == 200
+    assert after_counts == before_counts
+    data = resp.get_json()
+    assert len(data) == 1
+    entry = data[0]
     for key in ("id", "alert_id", "source_ip", "action", "status", "details", "executed_at"):
         assert key in entry
+    outcome = entry["response_outcome"]
+    assert outcome is not None
+    assert outcome["inferred"] is False
+    assert outcome["decision_id"] is not None
+    assert outcome["latest_outcome_event_id"] is not None
+    assert outcome["selected_action"] == "monitor"
+    assert outcome["decision_source"] == "manual"
+    assert outcome["execution_mode"] == "simulation"
+    assert outcome["execution_state"] == "succeeded"
+    assert outcome["simulated"] is True
+    assert outcome["external_executed"] is False
+    assert outcome["tracking_recorded"] is False
+    assert outcome["related"]["alert_id"] == alert_id
+    assert outcome["source_table"] == "response_actions_log"
+    assert outcome["source_id"] == entry["id"]
+    assert outcome["latest_outcome"]["response_action_log_id"] == entry["id"]
+
+
+def test_get_alert_response_log_unlinked_legacy_log_returns_conservative_outcome(
+    client, postgres_db
+):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur, source_ip="198.51.100.253", message="Legacy log")
+    cur.execute(
+        """
+        INSERT INTO response_actions_log (alert_id, source_ip, action, status, details)
+        VALUES (%s, %s, %s, %s, %s)
+        RETURNING id
+        """,
+        (alert_id, "203.0.113.11", "monitor", "executed", "legacy simulation"),
+    )
+    log_id = cur.fetchone()[0]
+    conn.commit()
+
+    _login_super_admin(client)
+    before_counts = _count_response_log_route_state(cur, alert_id)
+    with _patched_app_db(conn):
+        resp = client.get(f"/alerts/{alert_id}/response-log")
+    after_counts = _count_response_log_route_state(cur, alert_id)
+
+    assert resp.status_code == 200
+    assert after_counts == before_counts
+    data = resp.get_json()
+    assert len(data) == 1
+    entry = data[0]
+    assert entry["id"] == log_id
+    assert entry["alert_id"] == alert_id
+    assert entry["source_ip"] == "203.0.113.11"
+    assert entry["action"] == "monitor"
+    assert entry["status"] == "executed"
+    assert entry["details"] == "legacy simulation"
+    outcome = entry["response_outcome"]
+    assert outcome is not None
+    assert outcome["inferred"] is True
+    assert outcome["decision_id"] is None
+    assert outcome["latest_outcome_event_id"] is None
+    assert outcome["selected_action"] == "monitor"
+    assert outcome["execution_mode"] == "simulation"
+    assert outcome["execution_state"] == "succeeded"
+    assert outcome["simulated"] is True
+    assert outcome["external_executed"] is False
+    assert outcome["tracking_recorded"] is False
+    assert outcome["related"]["alert_id"] == alert_id
+    assert outcome["related"]["response_action_log_id"] == log_id
+
+
+def test_get_alert_response_log_resolver_miss_returns_null_response_outcome(
+    client, postgres_db
+):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur, source_ip="198.51.100.254", message="Resolver miss")
+    cur.execute(
+        """
+        INSERT INTO response_actions_log (alert_id, source_ip, action, status, details)
+        VALUES (%s, %s, %s, %s, %s)
+        """,
+        (alert_id, "203.0.113.12", "monitor", "executed", "contract details"),
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn), patch(
+        "routes.alert_mutation_routes.resolve_response_log_outcome",
+        return_value=None,
+    ):
+        resp = client.get(f"/alerts/{alert_id}/response-log")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert len(data) == 1
+    assert data[0]["response_outcome"] is None

@@ -15,6 +15,10 @@ from core.incident_store import (
     list_incidents,
     update_incident_status,
 )
+from core.soar_response_outcomes import (
+    get_latest_outcomes_for_incidents_bulk,
+    serialize_incident_outcome_timeline_entries,
+)
 
 
 incident_bp = Blueprint("incidents", __name__)
@@ -673,6 +677,12 @@ def list_incidents_route():
             limit=limit,
             offset=offset,
         )
+        response_outcomes = get_latest_outcomes_for_incidents_bulk(
+            conn,
+            [incident["id"] for incident in incidents],
+        )
+        for incident in incidents:
+            incident["response_outcome"] = response_outcomes.get(incident["id"])
         return jsonify({"incidents": incidents, "count": len(incidents)}), 200
     except Exception as error:
         current_app.logger.error("Error in list_incidents_route: %s", error)
@@ -692,6 +702,10 @@ def get_incident_route(incident_id):
         incident = get_incident_detail(conn, incident_id)
         if incident is None:
             return jsonify({"error": "incident not found"}), 404
+        incident["response_outcome"] = get_latest_outcomes_for_incidents_bulk(
+            conn,
+            [incident_id],
+        ).get(incident_id)
         return jsonify({"incident": incident}), 200
     except Exception as error:
         current_app.logger.error("Error in get_incident_route: %s", error)
@@ -711,6 +725,10 @@ def get_incident_timeline_route(incident_id):
         payload = build_readonly_incident_timeline(conn, incident_id)
         if payload is None:
             return jsonify({"error": "incident not found"}), 404
+        outcome_entries = serialize_incident_outcome_timeline_entries(conn, incident_id)
+        if outcome_entries:
+            payload["timeline"].extend(outcome_entries)
+            payload["timeline"].sort(key=lambda entry: entry.get("timestamp") or "")
         return jsonify(payload), 200
     except Exception as error:
         current_app.logger.error("Error in get_incident_timeline_route: %s", error)

@@ -10,6 +10,10 @@ from flask_login import login_required
 from core.auth import analyst_or_super_admin_required
 from core.db import get_db_connection
 from core.ip_helpers import get_ip_reputation
+from core.soar_response_outcomes import (
+    get_outcome_count_groups,
+    get_recent_outcomes_for_source_ip,
+)
 
 
 source_ip_context_bp = Blueprint("source_ip_context", __name__)
@@ -391,6 +395,12 @@ def get_source_ip_context():
             behavioral = get_ip_reputation(source_ip, cur=cur)
             external = _fetch_external_reputation_snapshots(cur, source_ip)
             playbook_executions = _fetch_playbook_execution_context(cur, alert_ids, incident_ids)
+            response_outcomes = get_recent_outcomes_for_source_ip(
+                conn,
+                source_ip,
+                limit=10,
+            )
+            response_outcome_counts = get_outcome_count_groups(conn, source_ip=source_ip)
 
         return (
             jsonify(
@@ -413,6 +423,8 @@ def get_source_ip_context():
                         **external,
                     },
                     "playbook_executions": playbook_executions,
+                    "response_outcomes": response_outcomes,
+                    "response_outcome_counts": response_outcome_counts,
                 }
             ),
             200,

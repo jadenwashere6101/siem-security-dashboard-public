@@ -11,7 +11,8 @@ from werkzeug.security import generate_password_hash
 
 from core import approval_store
 from core import playbook_store
-from core.soar_response_outcomes import create_response_decision
+from core import soar_response_outcomes as outcomes
+from core.soar_response_outcomes import append_outcome_event, create_response_decision
 
 ADMIN_USER = "testadmin"
 ADMIN_PASS = "testpassword123!"
@@ -141,8 +142,8 @@ def _def_keys():
     }
 
 
-def _exec_keys():
-    return {
+def _exec_keys(*, include_timeline: bool = False):
+    keys = {
         "id",
         "playbook_id",
         "alert_id",
@@ -153,7 +154,11 @@ def _exec_keys():
         "last_completed_step",
         "steps_log",
         "created_at",
+        "response_outcome",
     }
+    if include_timeline:
+        keys.add("response_outcomes")
+    return keys
 
 
 def _schedule_keys():
@@ -382,6 +387,8 @@ def test_list_playbook_executions_filters_and_shape(client, postgres_db):
     assert d0["playbook_id"] is None
     assert d0["status"] is None
     assert {x["playbook_id"] for x in d0["items"]} == {"pb_a", "pb_b"}
+    assert all("response_outcome" in item for item in d0["items"])
+    assert all(item["response_outcome"] is None for item in d0["items"])
 
     d_pb = r_pb.get_json()
     assert all(x["playbook_id"] == "pb_a" for x in d_pb["items"])
@@ -451,12 +458,12 @@ def test_get_playbook_execution_detail(client, postgres_db):
 
     assert ok.status_code == 200
     body = ok.get_json()
-    assert _exec_keys() == set(body.keys())
+    assert _exec_keys(include_timeline=True) == set(body.keys())
     assert body["alert_id"] is None
     assert body["incident_id"] is None
     assert body["steps_log"] == []
-
-    assert missing.status_code == 404
+    assert body["response_outcome"] is None
+    assert body["response_outcomes"] == []
 
 
 # --- Schedules list / detail (read-only metadata) ---
@@ -1575,3 +1582,212 @@ def test_lifecycle_events_skipped_gracefully_when_no_decision(client, postgres_d
     assert row["status"] == "abandoned"
     cur.execute("SELECT COUNT(*) FROM soar_response_outcome_events")
     assert cur.fetchone()[0] == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: playbook execution response_outcome API contracts
+# ---------------------------------------------------------------------------
+
+
+def _count_playbook_read_route_state(cur):
+    cur.execute(
+        """
+        SELECT
+            (SELECT COUNT(*) FROM playbook_executions),
+            (SELECT COUNT(*) FROM soar_response_decisions),
+            (SELECT COUNT(*) FROM soar_response_outcome_events)
+        """
+    )
+    return cur.fetchone()
+
+
+def _link_execution_canonical_outcome(conn, cur, execution_id, *, playbook_id, alert_id):
+    decision = create_response_decision(
+        conn,
+        selected_action="run_playbook",
+        decision_source="playbook",
+        outcome_summary="Playbook execution selected.",
+        alert_id=alert_id,
+        playbook_id=playbook_id,
+        playbook_execution_id=execution_id,
+    )
+    event = append_outcome_event(
+        conn,
+        decision_id=decision["id"],
+        execution_mode="simulation",
+        execution_state="running",
+        execution_actor="playbook_worker",
+        simulated=True,
+        outcome_summary="Playbook execution running in simulation.",
+        alert_id=alert_id,
+        playbook_execution_id=execution_id,
+        event_type="running",
+    )
+    playbook_store.set_playbook_execution_canonical_linkage(
+        conn,
+        execution_id,
+        decision["id"],
+        decision["soar_correlation_id"],
+    )
+    return decision, event
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_list_playbook_executions_unlinked_include_null_response_outcome(client, postgres_db):
+    conn, cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_ro_list", "List", steps=_valid_steps())
+    execution_id = playbook_store.create_playbook_execution(conn, "pb_ro_list", alert_id=None)
+    conn.commit()
+
+    _login_super_admin(client)
+    before_counts = _count_playbook_read_route_state(cur)
+    with _patched_app_db(conn):
+        resp = client.get("/playbook-executions")
+    after_counts = _count_playbook_read_route_state(cur)
+
+    assert resp.status_code == 200
+    assert after_counts == before_counts
+    item = next(row for row in resp.get_json()["items"] if row["id"] == execution_id)
+    assert _exec_keys().issubset(set(item.keys()))
+    assert item["response_outcome"] is None
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_list_playbook_executions_linked_returns_canonical_response_outcome(client, postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    playbook_store.create_playbook_definition(conn, "pb_ro_linked", "Linked", steps=_valid_steps())
+    execution_id = playbook_store.create_playbook_execution(conn, "pb_ro_linked", alert_id)
+    decision, event = _link_execution_canonical_outcome(
+        conn,
+        cur,
+        execution_id,
+        playbook_id="pb_ro_linked",
+        alert_id=alert_id,
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get("/playbook-executions")
+
+    assert resp.status_code == 200
+    item = next(row for row in resp.get_json()["items"] if row["id"] == execution_id)
+    outcome = item["response_outcome"]
+    assert outcome is not None
+    assert outcome["decision_id"] == decision["id"]
+    assert outcome["latest_outcome_event_id"] == event["id"]
+    assert outcome["soar_correlation_id"] == decision["soar_correlation_id"]
+    assert outcome["execution_mode"] == "simulation"
+    assert outcome["execution_state"] == "running"
+    assert outcome["simulated"] is True
+    assert outcome["related"]["playbook_execution_id"] == execution_id
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_list_playbook_executions_uses_bulk_response_outcome_lookup(client, postgres_db):
+    conn, cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_ro_bulk", "Bulk", steps=_valid_steps())
+    playbook_store.create_playbook_execution(conn, "pb_ro_bulk", alert_id=None)
+    playbook_store.create_playbook_execution(conn, "pb_ro_bulk", alert_id=None)
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn), patch(
+        "routes.playbook_routes.get_latest_outcomes_for_playbook_executions_bulk",
+        wraps=outcomes.get_latest_outcomes_for_playbook_executions_bulk,
+    ) as bulk_lookup:
+        resp = client.get("/playbook-executions")
+
+    assert resp.status_code == 200
+    bulk_lookup.assert_called_once()
+    assert len(bulk_lookup.call_args.args[1]) == len(resp.get_json()["items"])
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_get_playbook_execution_detail_linked_returns_canonical_response_outcome(client, postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    playbook_store.create_playbook_definition(conn, "pb_ro_detail", "Detail", steps=_valid_steps())
+    execution_id = playbook_store.create_playbook_execution(conn, "pb_ro_detail", alert_id)
+    decision, event = _link_execution_canonical_outcome(
+        conn,
+        cur,
+        execution_id,
+        playbook_id="pb_ro_detail",
+        alert_id=alert_id,
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    before_counts = _count_playbook_read_route_state(cur)
+    with _patched_app_db(conn):
+        resp = client.get(f"/playbook-executions/{execution_id}")
+    after_counts = _count_playbook_read_route_state(cur)
+
+    assert resp.status_code == 200
+    assert after_counts == before_counts
+    body = resp.get_json()
+    assert _exec_keys(include_timeline=True).issubset(set(body.keys()))
+    assert body["id"] == execution_id
+    assert body["playbook_id"] == "pb_ro_detail"
+    assert body["status"] == "pending"
+    assert body["response_outcome"]["decision_id"] == decision["id"]
+    assert body["response_outcome"]["latest_outcome_event_id"] == event["id"]
+    assert len(body["response_outcomes"]) == 1
+    assert body["response_outcomes"][0]["id"] == event["id"]
+    assert body["response_outcomes"][0]["event_type"] == "running"
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_get_playbook_execution_detail_unlinked_returns_null_response_outcome(client, postgres_db):
+    conn, cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_ro_unlinked", "Unlinked", steps=_valid_steps())
+    execution_id = playbook_store.create_playbook_execution(conn, "pb_ro_unlinked", alert_id=None)
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get(f"/playbook-executions/{execution_id}")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["response_outcome"] is None
+    assert body["response_outcomes"] == []
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_playbook_execution_read_routes_do_not_mutate_state(client, postgres_db):
+    conn, cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_ro_readonly", "ReadOnly", steps=_valid_steps())
+    execution_id = playbook_store.create_playbook_execution(conn, "pb_ro_readonly", alert_id=None)
+    conn.commit()
+
+    cur.execute(
+        """
+        SELECT id, status, started_at, completed_at, last_completed_step, steps_log,
+               decision_id, soar_correlation_id
+        FROM playbook_executions WHERE id = %s
+        """,
+        (execution_id,),
+    )
+    execution_before = cur.fetchone()
+    before_counts = _count_playbook_read_route_state(cur)
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        list_resp = client.get("/playbook-executions")
+        detail_resp = client.get(f"/playbook-executions/{execution_id}")
+
+    assert list_resp.status_code == 200
+    assert detail_resp.status_code == 200
+    cur.execute(
+        """
+        SELECT id, status, started_at, completed_at, last_completed_step, steps_log,
+               decision_id, soar_correlation_id
+        FROM playbook_executions WHERE id = %s
+        """,
+        (execution_id,),
+    )
+    assert cur.fetchone() == execution_before
+    assert _count_playbook_read_route_state(cur) == before_counts

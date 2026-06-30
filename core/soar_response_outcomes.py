@@ -868,6 +868,674 @@ def get_latest_outcomes_for_alerts_bulk(
     return result
 
 
+def get_latest_outcomes_for_playbook_executions_bulk(
+    conn,
+    execution_ids: list[int],
+) -> dict[int, dict[str, Any]]:
+    """Return Design Decision 6 API shapes for linked playbook executions using batched reads."""
+    if not execution_ids:
+        return {}
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            WITH linked_decisions AS (
+                SELECT DISTINCT ON (pe.id)
+                    pe.id AS pe_execution_id,
+                    d.id,
+                    d.soar_correlation_id,
+                    d.parent_soar_correlation_id,
+                    d.alert_id,
+                    d.incident_id,
+                    host(d.source_ip) AS source_ip,
+                    d.selected_action,
+                    d.decision_source,
+                    d.reason_code,
+                    d.outcome_summary,
+                    d.playbook_id,
+                    d.playbook_execution_id,
+                    d.playbook_step_index,
+                    d.queue_id,
+                    d.approval_request_id,
+                    d.created_by,
+                    d.safe_metadata,
+                    d.selected_at,
+                    d.created_at,
+                    d.updated_at,
+                    CASE WHEN pe.decision_id = d.id THEN 0 ELSE 1 END AS link_priority
+                FROM playbook_executions pe
+                JOIN soar_response_decisions d
+                  ON d.id = pe.decision_id
+                  OR (
+                    pe.decision_id IS NULL
+                    AND pe.soar_correlation_id IS NOT NULL
+                    AND d.soar_correlation_id = pe.soar_correlation_id
+                  )
+                WHERE pe.id = ANY(%s)
+                ORDER BY pe.id, link_priority, d.created_at DESC, d.id DESC
+            )
+            SELECT pe_execution_id, id, soar_correlation_id, parent_soar_correlation_id,
+                   alert_id, incident_id, source_ip, selected_action, decision_source,
+                   reason_code, outcome_summary, playbook_id, playbook_execution_id,
+                   playbook_step_index, queue_id, approval_request_id, created_by,
+                   safe_metadata, selected_at, created_at, updated_at
+            FROM linked_decisions
+            """,
+            (list(execution_ids),),
+        )
+        decision_rows = cur.fetchall() or []
+
+    decisions_by_execution: dict[int, dict[str, Any]] = {}
+    decision_ids: list[int] = []
+    for row in decision_rows:
+        execution_id = int(row[0])
+        decision = _decision_row_to_dict(row[1:])
+        decisions_by_execution[execution_id] = decision
+        decision_ids.append(int(decision["id"]))
+
+    if not decisions_by_execution:
+        return {}
+
+    latest_events_by_decision: dict[int, dict[str, Any]] = {}
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT DISTINCT ON (decision_id) {_OUTCOME_EVENT_COLUMNS}
+            FROM soar_response_outcome_events
+            WHERE decision_id = ANY(%s)
+            ORDER BY decision_id, occurred_at DESC, created_at DESC, id DESC
+            """,
+            (decision_ids,),
+        )
+        event_rows = cur.fetchall() or []
+
+    for row in event_rows:
+        event = _outcome_event_row_to_dict(row)
+        latest_events_by_decision[int(event["decision_id"])] = event
+
+    return {
+        execution_id: build_latest_outcome_api_shape(
+            decision,
+            latest_events_by_decision.get(int(decision["id"])),
+        )
+        for execution_id, decision in decisions_by_execution.items()
+    }
+
+
+def get_latest_outcomes_for_queues_bulk(
+    conn,
+    queue_ids: list[int],
+) -> dict[int, dict[str, Any]]:
+    """Return Design Decision 6 API shapes for linked queue rows using batched reads."""
+    if not queue_ids:
+        return {}
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            WITH linked_decisions AS (
+                SELECT DISTINCT ON (q.id)
+                    q.id AS q_queue_id,
+                    d.id,
+                    d.soar_correlation_id,
+                    d.parent_soar_correlation_id,
+                    d.alert_id,
+                    d.incident_id,
+                    host(d.source_ip) AS source_ip,
+                    d.selected_action,
+                    d.decision_source,
+                    d.reason_code,
+                    d.outcome_summary,
+                    d.playbook_id,
+                    d.playbook_execution_id,
+                    d.playbook_step_index,
+                    d.queue_id,
+                    d.approval_request_id,
+                    d.created_by,
+                    d.safe_metadata,
+                    d.selected_at,
+                    d.created_at,
+                    d.updated_at,
+                    CASE WHEN q.decision_id = d.id THEN 0 ELSE 1 END AS link_priority
+                FROM response_actions_queue q
+                JOIN soar_response_decisions d
+                  ON d.id = q.decision_id
+                  OR (
+                    q.decision_id IS NULL
+                    AND q.soar_correlation_id IS NOT NULL
+                    AND d.soar_correlation_id = q.soar_correlation_id
+                  )
+                WHERE q.id = ANY(%s)
+                ORDER BY q.id, link_priority, d.created_at DESC, d.id DESC
+            )
+            SELECT q_queue_id, id, soar_correlation_id, parent_soar_correlation_id,
+                   alert_id, incident_id, source_ip, selected_action, decision_source,
+                   reason_code, outcome_summary, playbook_id, playbook_execution_id,
+                   playbook_step_index, queue_id, approval_request_id, created_by,
+                   safe_metadata, selected_at, created_at, updated_at
+            FROM linked_decisions
+            """,
+            (list(queue_ids),),
+        )
+        decision_rows = cur.fetchall() or []
+
+    decisions_by_queue: dict[int, dict[str, Any]] = {}
+    decision_ids: list[int] = []
+    for row in decision_rows:
+        queue_id = int(row[0])
+        decision = _decision_row_to_dict(row[1:])
+        decisions_by_queue[queue_id] = decision
+        decision_ids.append(int(decision["id"]))
+
+    if not decisions_by_queue:
+        return {}
+
+    latest_events_by_decision: dict[int, dict[str, Any]] = {}
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT DISTINCT ON (decision_id) {_OUTCOME_EVENT_COLUMNS}
+            FROM soar_response_outcome_events
+            WHERE decision_id = ANY(%s)
+            ORDER BY decision_id, occurred_at DESC, created_at DESC, id DESC
+            """,
+            (decision_ids,),
+        )
+        event_rows = cur.fetchall() or []
+
+    for row in event_rows:
+        event = _outcome_event_row_to_dict(row)
+        latest_events_by_decision[int(event["decision_id"])] = event
+
+    return {
+        queue_id: build_latest_outcome_api_shape(
+            decision,
+            latest_events_by_decision.get(int(decision["id"])),
+        )
+        for queue_id, decision in decisions_by_queue.items()
+    }
+
+
+def get_latest_outcomes_for_approvals_bulk(
+    conn,
+    approval_ids: list[int],
+) -> dict[int, dict[str, Any]]:
+    """Return Design Decision 6 API shapes for linked approval requests using batched reads."""
+    if not approval_ids:
+        return {}
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            WITH linked_decisions AS (
+                SELECT DISTINCT ON (ar.id)
+                    ar.id AS ar_approval_id,
+                    d.id,
+                    d.soar_correlation_id,
+                    d.parent_soar_correlation_id,
+                    d.alert_id,
+                    d.incident_id,
+                    host(d.source_ip) AS source_ip,
+                    d.selected_action,
+                    d.decision_source,
+                    d.reason_code,
+                    d.outcome_summary,
+                    d.playbook_id,
+                    d.playbook_execution_id,
+                    d.playbook_step_index,
+                    d.queue_id,
+                    d.approval_request_id,
+                    d.created_by,
+                    d.safe_metadata,
+                    d.selected_at,
+                    d.created_at,
+                    d.updated_at,
+                    CASE WHEN ar.decision_id = d.id THEN 0
+                         WHEN ar.soar_correlation_id IS NOT NULL
+                              AND d.soar_correlation_id = ar.soar_correlation_id THEN 1
+                         ELSE 2
+                    END AS link_priority
+                FROM approval_requests ar
+                JOIN soar_response_decisions d
+                  ON d.id = ar.decision_id
+                  OR (
+                    ar.decision_id IS NULL
+                    AND ar.soar_correlation_id IS NOT NULL
+                    AND d.soar_correlation_id = ar.soar_correlation_id
+                  )
+                  OR d.approval_request_id = ar.id
+                WHERE ar.id = ANY(%s)
+                ORDER BY ar.id, link_priority, d.created_at DESC, d.id DESC
+            )
+            SELECT ar_approval_id, id, soar_correlation_id, parent_soar_correlation_id,
+                   alert_id, incident_id, source_ip, selected_action, decision_source,
+                   reason_code, outcome_summary, playbook_id, playbook_execution_id,
+                   playbook_step_index, queue_id, approval_request_id, created_by,
+                   safe_metadata, selected_at, created_at, updated_at
+            FROM linked_decisions
+            """,
+            (list(approval_ids),),
+        )
+        decision_rows = cur.fetchall() or []
+
+    decisions_by_approval: dict[int, dict[str, Any]] = {}
+    decision_ids: list[int] = []
+    for row in decision_rows:
+        approval_id = int(row[0])
+        decision = _decision_row_to_dict(row[1:])
+        decisions_by_approval[approval_id] = decision
+        decision_ids.append(int(decision["id"]))
+
+    if not decisions_by_approval:
+        return {}
+
+    latest_events_by_decision: dict[int, dict[str, Any]] = {}
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT DISTINCT ON (decision_id) {_OUTCOME_EVENT_COLUMNS}
+            FROM soar_response_outcome_events
+            WHERE decision_id = ANY(%s)
+            ORDER BY decision_id, occurred_at DESC, created_at DESC, id DESC
+            """,
+            (decision_ids,),
+        )
+        event_rows = cur.fetchall() or []
+
+    for row in event_rows:
+        event = _outcome_event_row_to_dict(row)
+        latest_events_by_decision[int(event["decision_id"])] = event
+
+    return {
+        approval_id: build_latest_outcome_api_shape(
+            decision,
+            latest_events_by_decision.get(int(decision["id"])),
+        )
+        for approval_id, decision in decisions_by_approval.items()
+    }
+
+
+def get_latest_outcomes_for_notification_deliveries_bulk(
+    conn,
+    attempt_ids: list[int],
+) -> dict[int, dict[str, Any]]:
+    """Return latest outcome API shapes for linked notification delivery attempts."""
+    if not attempt_ids:
+        return {}
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            WITH linked_decisions AS (
+                SELECT DISTINCT ON (nda.id)
+                    nda.id AS nda_attempt_id,
+                    d.id,
+                    d.soar_correlation_id,
+                    d.parent_soar_correlation_id,
+                    d.alert_id,
+                    d.incident_id,
+                    host(d.source_ip) AS source_ip,
+                    d.selected_action,
+                    d.decision_source,
+                    d.reason_code,
+                    d.outcome_summary,
+                    d.playbook_id,
+                    d.playbook_execution_id,
+                    d.playbook_step_index,
+                    d.queue_id,
+                    d.approval_request_id,
+                    d.created_by,
+                    d.safe_metadata,
+                    d.selected_at,
+                    d.created_at,
+                    d.updated_at,
+                    CASE WHEN nda.decision_id = d.id THEN 0
+                         WHEN nda.soar_correlation_id IS NOT NULL
+                              AND d.soar_correlation_id = nda.soar_correlation_id THEN 1
+                         ELSE 2
+                    END AS link_priority
+                FROM notification_delivery_attempts nda
+                JOIN soar_response_decisions d
+                  ON d.id = nda.decision_id
+                  OR (
+                    nda.decision_id IS NULL
+                    AND nda.soar_correlation_id IS NOT NULL
+                    AND d.soar_correlation_id = nda.soar_correlation_id
+                  )
+                  OR d.approval_request_id = nda.approval_request_id
+                  OR d.playbook_execution_id = nda.playbook_execution_id
+                WHERE nda.id = ANY(%s)
+                ORDER BY nda.id, link_priority, d.created_at DESC, d.id DESC
+            )
+            SELECT nda_attempt_id, id, soar_correlation_id, parent_soar_correlation_id,
+                   alert_id, incident_id, source_ip, selected_action, decision_source,
+                   reason_code, outcome_summary, playbook_id, playbook_execution_id,
+                   playbook_step_index, queue_id, approval_request_id, created_by,
+                   safe_metadata, selected_at, created_at, updated_at
+            FROM linked_decisions
+            """,
+            (list(attempt_ids),),
+        )
+        decision_rows = cur.fetchall() or []
+
+    decisions_by_attempt: dict[int, dict[str, Any]] = {}
+    decision_ids: list[int] = []
+    for row in decision_rows:
+        attempt_id = int(row[0])
+        decision = _decision_row_to_dict(row[1:])
+        decisions_by_attempt[attempt_id] = decision
+        decision_ids.append(int(decision["id"]))
+
+    if not decisions_by_attempt:
+        return {}
+
+    latest_events_by_decision: dict[int, dict[str, Any]] = {}
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT DISTINCT ON (decision_id) {_OUTCOME_EVENT_COLUMNS}
+            FROM soar_response_outcome_events
+            WHERE decision_id = ANY(%s)
+            ORDER BY decision_id, occurred_at DESC, created_at DESC, id DESC
+            """,
+            (decision_ids,),
+        )
+        event_rows = cur.fetchall() or []
+
+    for row in event_rows:
+        event = _outcome_event_row_to_dict(row)
+        latest_events_by_decision[int(event["decision_id"])] = event
+
+    return {
+        attempt_id: build_latest_outcome_api_shape(
+            decision,
+            latest_events_by_decision.get(int(decision["id"])),
+        )
+        for attempt_id, decision in decisions_by_attempt.items()
+    }
+
+
+def get_latest_outcomes_for_incidents_bulk(
+    conn,
+    incident_ids: list[int],
+) -> dict[int, dict[str, Any]]:
+    """Return latest outcome API shapes for incidents using one decision/event batch."""
+    if not incident_ids:
+        return {}
+
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT DISTINCT ON (incident_id) {_DECISION_COLUMNS}
+            FROM soar_response_decisions
+            WHERE incident_id = ANY(%s)
+            ORDER BY incident_id, created_at DESC, id DESC
+            """,
+            (list(incident_ids),),
+        )
+        decision_rows = cur.fetchall() or []
+
+    decisions_by_incident: dict[int, dict[str, Any]] = {}
+    decision_ids: list[int] = []
+    for row in decision_rows:
+        decision = _decision_row_to_dict(row)
+        if decision["incident_id"] is not None:
+            incident_id = int(decision["incident_id"])
+            decisions_by_incident[incident_id] = decision
+            decision_ids.append(int(decision["id"]))
+
+    if not decisions_by_incident:
+        return {}
+
+    latest_events_by_decision: dict[int, dict[str, Any]] = {}
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT DISTINCT ON (decision_id) {_OUTCOME_EVENT_COLUMNS}
+            FROM soar_response_outcome_events
+            WHERE decision_id = ANY(%s)
+            ORDER BY decision_id, occurred_at DESC, created_at DESC, id DESC
+            """,
+            (decision_ids,),
+        )
+        event_rows = cur.fetchall() or []
+
+    for row in event_rows:
+        event = _outcome_event_row_to_dict(row)
+        latest_events_by_decision[int(event["decision_id"])] = event
+
+    return {
+        incident_id: build_latest_outcome_api_shape(
+            decision,
+            latest_events_by_decision.get(int(decision["id"])),
+        )
+        for incident_id, decision in decisions_by_incident.items()
+    }
+
+
+def get_latest_outcomes_for_blocked_ips_bulk(
+    conn,
+    block_ids: list[int],
+) -> dict[int, dict[str, Any]]:
+    """Return latest canonical outcome shapes for blocklist rows via source alert linkage."""
+    if not block_ids:
+        return {}
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, source_alert_id
+            FROM blocked_ips
+            WHERE id = ANY(%s)
+              AND source_alert_id IS NOT NULL
+            """,
+            (list(block_ids),),
+        )
+        block_rows = cur.fetchall() or []
+
+    if not block_rows:
+        return {}
+
+    alert_ids = [int(row[1]) for row in block_rows]
+    decisions_by_alert = get_latest_decisions_for_alerts_bulk(conn, alert_ids)
+    if not decisions_by_alert:
+        return {}
+
+    decision_ids = [int(decision["id"]) for decision in decisions_by_alert.values()]
+    latest_events_by_decision: dict[int, dict[str, Any]] = {}
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT DISTINCT ON (decision_id) {_OUTCOME_EVENT_COLUMNS}
+            FROM soar_response_outcome_events
+            WHERE decision_id = ANY(%s)
+            ORDER BY decision_id, occurred_at DESC, created_at DESC, id DESC
+            """,
+            (decision_ids,),
+        )
+        event_rows = cur.fetchall() or []
+
+    for row in event_rows:
+        event = _outcome_event_row_to_dict(row)
+        latest_events_by_decision[int(event["decision_id"])] = event
+
+    result: dict[int, dict[str, Any]] = {}
+    for block_id, alert_id in block_rows:
+        decision = decisions_by_alert.get(int(alert_id))
+        if decision is not None:
+            result[int(block_id)] = build_latest_outcome_api_shape(
+                decision,
+                latest_events_by_decision.get(int(decision["id"])),
+            )
+    return result
+
+
+def serialize_incident_outcome_timeline_entries(
+    conn,
+    incident_id: int,
+) -> list[dict[str, Any]]:
+    """Return canonical outcome timeline entries for one incident, oldest first."""
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT {_OUTCOME_EVENT_COLUMNS}
+            FROM soar_response_outcome_events
+            WHERE incident_id = %s
+            ORDER BY occurred_at ASC, created_at ASC, id ASC
+            """,
+            (incident_id,),
+        )
+        rows = cur.fetchall() or []
+
+    entries: list[dict[str, Any]] = []
+    for row in rows:
+        event = _outcome_event_row_to_dict(row)
+        entries.append(
+            {
+                "type": "response_outcome",
+                "timestamp": event["occurred_at"] or event["created_at"],
+                "title": "Response outcome recorded",
+                "description": event["outcome_summary"],
+                "severity": "info",
+                "metadata": {
+                    "incident_id": incident_id,
+                    "outcome_event_id": event["id"],
+                    "decision_id": event["decision_id"],
+                    "soar_correlation_id": event["soar_correlation_id"],
+                    "execution_mode": event["execution_mode"],
+                    "execution_state": event["execution_state"],
+                    "external_executed": event["external_executed"],
+                    "tracking_recorded": event["tracking_recorded"],
+                    "simulated": event["simulated"],
+                    "reason_code": event["reason_code"],
+                    "related": {
+                        "alert_id": event["alert_id"],
+                        "queue_id": event["queue_id"],
+                        "playbook_execution_id": event["playbook_execution_id"],
+                        "playbook_step_index": event["playbook_step_index"],
+                        "approval_request_id": event["approval_request_id"],
+                        "notification_delivery_attempt_id": event[
+                            "notification_delivery_attempt_id"
+                        ],
+                        "response_action_log_id": event["response_action_log_id"],
+                    },
+                },
+            }
+        )
+    return entries
+
+
+def _empty_outcome_count_groups() -> dict[str, dict[str, int]]:
+    return {
+        "execution_mode": {mode: 0 for mode in EXECUTION_MODES},
+        "execution_state": {state: 0 for state in EXECUTION_STATES},
+        "external_executed": {"true": 0, "false": 0},
+        "tracking_recorded": {"true": 0, "false": 0},
+        "simulated": {"true": 0, "false": 0},
+    }
+
+
+def _merge_outcome_count_rows(rows: list[tuple[str, Any, int]]) -> dict[str, dict[str, int]]:
+    counts = _empty_outcome_count_groups()
+    for group_name, raw_value, raw_count in rows:
+        if group_name in {"external_executed", "tracking_recorded", "simulated"}:
+            key = "true" if str(raw_value).lower() in {"true", "t", "1"} else "false"
+        else:
+            key = str(raw_value)
+        counts.setdefault(str(group_name), {})
+        counts[str(group_name)][key] = int(raw_count)
+    return counts
+
+
+def get_outcome_count_groups(conn, *, source_ip: str | None = None) -> dict[str, dict[str, int]]:
+    """Return canonical outcome counts grouped for metrics or a specific source IP."""
+    params: list[Any] = []
+    predicate = ""
+    if source_ip is not None:
+        predicate = "WHERE source_ip = %s::inet"
+        params.append(source_ip)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT 'execution_mode' AS group_name, execution_mode::text AS value, COUNT(*)
+            FROM soar_response_outcome_events
+            {predicate}
+            GROUP BY execution_mode
+            UNION ALL
+            SELECT 'execution_state', execution_state::text, COUNT(*)
+            FROM soar_response_outcome_events
+            {predicate}
+            GROUP BY execution_state
+            UNION ALL
+            SELECT 'external_executed', external_executed::text, COUNT(*)
+            FROM soar_response_outcome_events
+            {predicate}
+            GROUP BY external_executed
+            UNION ALL
+            SELECT 'tracking_recorded', tracking_recorded::text, COUNT(*)
+            FROM soar_response_outcome_events
+            {predicate}
+            GROUP BY tracking_recorded
+            UNION ALL
+            SELECT 'simulated', simulated::text, COUNT(*)
+            FROM soar_response_outcome_events
+            {predicate}
+            GROUP BY simulated
+            """,
+            params * 5,
+        )
+        rows = cur.fetchall() or []
+    return _merge_outcome_count_rows(rows)
+
+
+def get_recent_outcomes_for_source_ip(
+    conn,
+    source_ip: str,
+    *,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Return recent canonical latest-outcome API shapes for one source IP."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                e.id, e.decision_id, e.soar_correlation_id, e.event_type,
+                e.alert_id, e.incident_id, host(e.source_ip) AS source_ip,
+                e.execution_mode, e.execution_state, e.external_executed,
+                e.tracking_recorded, e.simulated, e.execution_actor,
+                e.reason_code, e.outcome_summary, e.queue_id,
+                e.playbook_execution_id, e.playbook_step_index,
+                e.approval_request_id, e.notification_delivery_attempt_id,
+                e.response_action_log_id, e.provider, e.adapter_name,
+                e.external_reference, e.idempotency_key, e.metadata,
+                e.occurred_at, e.created_at,
+                d.id, d.soar_correlation_id, d.parent_soar_correlation_id,
+                d.alert_id, d.incident_id, host(d.source_ip) AS source_ip,
+                d.selected_action, d.decision_source, d.reason_code,
+                d.outcome_summary, d.playbook_id, d.playbook_execution_id,
+                d.playbook_step_index, d.queue_id, d.approval_request_id,
+                d.created_by, d.safe_metadata, d.selected_at, d.created_at,
+                d.updated_at
+            FROM soar_response_outcome_events e
+            JOIN soar_response_decisions d ON d.id = e.decision_id
+            WHERE e.source_ip = %s::inet
+            ORDER BY e.occurred_at DESC, e.created_at DESC, e.id DESC
+            LIMIT %s
+            """,
+            (source_ip, int(limit)),
+        )
+        rows = cur.fetchall() or []
+
+    event_column_count = 28
+    recent: list[dict[str, Any]] = []
+    for row in rows:
+        event = _outcome_event_row_to_dict(row[:event_column_count])
+        decision = _decision_row_to_dict(row[event_column_count:])
+        recent.append(build_latest_outcome_api_shape(decision, event))
+    return recent
+
+
 def get_latest_decisions_for_alerts_bulk(
     conn,
     alert_ids: list[int],
@@ -1165,6 +1833,14 @@ __all__ = [
     "build_latest_outcome_api_shape",
     "get_latest_decisions_for_alerts_bulk",
     "get_latest_outcomes_for_alerts_bulk",
+    "get_latest_outcomes_for_approvals_bulk",
+    "get_latest_outcomes_for_blocked_ips_bulk",
+    "get_latest_outcomes_for_incidents_bulk",
+    "get_latest_outcomes_for_notification_deliveries_bulk",
+    "get_latest_outcomes_for_playbook_executions_bulk",
+    "get_latest_outcomes_for_queues_bulk",
+    "get_outcome_count_groups",
+    "get_recent_outcomes_for_source_ip",
     "infer_alert_legacy_outcome",
     "infer_approval_request_legacy_outcome",
     "infer_blocked_ip_legacy_outcome",
@@ -1181,6 +1857,7 @@ __all__ = [
     "resolve_playbook_execution_outcome",
     "resolve_queue_outcome",
     "resolve_response_log_outcome",
+    "serialize_incident_outcome_timeline_entries",
     "serialize_latest_outcome",
     "serialize_outcome_timeline",
     "validate_decision_source",

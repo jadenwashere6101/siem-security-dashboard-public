@@ -6,6 +6,7 @@ from flask_login import current_user, login_required
 from core.audit_helpers import log_audit_event
 from core.auth import analyst_or_super_admin_required
 from core.db import create_blocked_ip_record, get_db_connection, validate_blocked_ip
+from core.soar_response_outcomes import get_latest_outcomes_for_blocked_ips_bulk
 
 blocklist_bp = Blueprint("blocklist", __name__)
 
@@ -42,19 +43,25 @@ def list_blocked_ips():
         )
 
         rows = cur.fetchall()
-        blocked_ips = [
-            {
-                "id": row[0],
-                "ip_address": str(row[1]) if row[1] is not None else None,
-                "reason": row[2],
-                "status": row[3],
-                "created_by": row[4],
-                "created_at": str(row[5]),
-                "expires_at": str(row[6]) if row[6] is not None else None,
-                "source_alert_id": row[7],
-            }
-            for row in rows
-        ]
+        response_outcomes = get_latest_outcomes_for_blocked_ips_bulk(
+            conn,
+            [row[0] for row in rows],
+        )
+        blocked_ips = []
+        for row in rows:
+            blocked_ips.append(
+                {
+                    "id": row[0],
+                    "ip_address": str(row[1]) if row[1] is not None else None,
+                    "reason": row[2],
+                    "status": row[3],
+                    "created_by": row[4],
+                    "created_at": str(row[5]),
+                    "expires_at": str(row[6]) if row[6] is not None else None,
+                    "source_alert_id": row[7],
+                    "response_outcome": response_outcomes.get(row[0]),
+                }
+            )
 
         return jsonify(blocked_ips), 200
     except Exception as error:

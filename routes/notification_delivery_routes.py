@@ -13,6 +13,7 @@ from flask_login import login_required
 from core import notification_delivery_store
 from core.auth import analyst_or_super_admin_required
 from core.db import get_db_connection
+from core.soar_response_outcomes import get_latest_outcomes_for_notification_deliveries_bulk
 
 # spec: SPEC-NOTIFY-001
 notification_delivery_bp = Blueprint("notification_deliveries", __name__)
@@ -105,6 +106,12 @@ def list_notification_deliveries():
                 approval_request_id=approval_request_id,
                 adapter_name=adapter_name,
             )
+            response_outcomes = get_latest_outcomes_for_notification_deliveries_bulk(
+                conn,
+                [item["id"] for item in items],
+            )
+            for item in items:
+                item["response_outcome"] = response_outcomes.get(item["id"])
         except ValueError as exc:
             return jsonify({"error": "invalid_query", "message": str(exc)}), 400
 
@@ -136,6 +143,10 @@ def get_notification_delivery(attempt_id: int):
         row = notification_delivery_store.get_notification_delivery_attempt(conn, attempt_id)
         if row is None:
             return jsonify({"error": "not_found", "message": "Delivery attempt not found."}), 404
+        row["response_outcome"] = get_latest_outcomes_for_notification_deliveries_bulk(
+            conn,
+            [attempt_id],
+        ).get(attempt_id)
         return jsonify(row), 200
     except Exception as error:
         current_app.logger.error("get_notification_delivery: %s", error)

@@ -11,6 +11,7 @@ from werkzeug.security import generate_password_hash
 
 from core import approval_store
 from core import playbook_store
+from core import soar_response_outcomes as outcomes
 from routes.metrics_routes import KNOWN_EXECUTION_STATUSES, RECENT_WINDOW_HOURS
 
 ADMIN_USER = "testadmin"
@@ -234,7 +235,42 @@ def test_metrics_empty_database_all_zero_buckets(client, postgres_db):
     assert "time_basis" in data["recent"]
     assert data["approval_gated"]["awaiting_approval"] == 0
     assert data["approval_gated"]["with_linked_approval"] == 0
+    assert data["canonical_outcome_counts"]["execution_mode"]["simulation"] == 0
+    assert data["canonical_outcome_counts"]["tracking_recorded"]["true"] == 0
     assert "unknown_statuses" not in data
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_metrics_playbooks_include_canonical_outcome_counts(client, postgres_db):
+    conn, _cur = postgres_db
+    decision = outcomes.create_response_decision(
+        conn,
+        selected_action="monitor",
+        decision_source="manual",
+        outcome_summary="Metrics response selected.",
+        reason_code="simulation_mode",
+    )
+    outcomes.append_outcome_event(
+        conn,
+        decision_id=decision["id"],
+        execution_mode="simulation",
+        execution_state="succeeded",
+        execution_actor="manual",
+        simulated=True,
+        outcome_summary="Metrics response simulated.",
+        reason_code="simulation_mode",
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_metrics_db(conn):
+        resp = client.get("/metrics/playbooks")
+
+    assert resp.status_code == 200
+    counts = resp.get_json()["canonical_outcome_counts"]
+    assert counts["execution_mode"]["simulation"] == 1
+    assert counts["execution_state"]["succeeded"] == 1
+    assert counts["simulated"]["true"] == 1
 
 
 @pytest.mark.usefixtures("postgres_db")

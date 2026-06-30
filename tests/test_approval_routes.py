@@ -5,6 +5,7 @@ from unittest.mock import patch
 from werkzeug.security import generate_password_hash
 
 from core.approval_store import create_approval_request
+import core.soar_response_outcomes as outcomes
 
 
 ADMIN_USER = "testadmin"
@@ -513,3 +514,249 @@ def test_list_approvals_limit_clamped_to_100(client, postgres_db, monkeypatch):
 
     assert resp.status_code == 200
     assert captured["limit"] == 100
+
+
+# ---------------------------------------------------------------------------
+# response_outcome — list endpoint
+# ---------------------------------------------------------------------------
+
+def test_list_approvals_response_outcome_key_present(client, postgres_db):
+    conn, cur = postgres_db
+    incident_id = _insert_incident(cur, source_ip="203.0.115.1")
+    conn.commit()
+    _insert_approval(conn, incident_id)
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get("/approvals")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert len(data["approvals"]) >= 1
+    for item in data["approvals"]:
+        assert "response_outcome" in item
+
+
+def test_list_approvals_unlinked_approval_response_outcome_is_null(client, postgres_db):
+    conn, cur = postgres_db
+    incident_id = _insert_incident(cur, source_ip="203.0.115.2")
+    conn.commit()
+    approval = _insert_approval(conn, incident_id)
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get("/approvals")
+
+    assert resp.status_code == 200
+    items = resp.get_json()["approvals"]
+    match = next((a for a in items if a["id"] == approval["id"]), None)
+    assert match is not None
+    assert match["response_outcome"] is None
+
+
+def test_list_approvals_linked_approval_returns_canonical_outcome(client, postgres_db):
+    conn, cur = postgres_db
+    incident_id = _insert_incident(cur, source_ip="203.0.115.3")
+    conn.commit()
+    approval = _insert_approval(conn, incident_id)
+
+    decision = outcomes.create_response_decision(
+        conn,
+        selected_action="block_ip",
+        decision_source="manual",
+        outcome_summary="Approval response selected.",
+        incident_id=incident_id,
+        approval_request_id=approval["id"],
+    )
+    event = outcomes.append_outcome_event(
+        conn,
+        decision_id=decision["id"],
+        execution_mode="real",
+        execution_state="succeeded",
+        execution_actor="manual",
+        external_executed=True,
+        tracking_recorded=False,
+        simulated=False,
+        outcome_summary="Approval response executed.",
+        approval_request_id=approval["id"],
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get("/approvals")
+
+    assert resp.status_code == 200
+    items = resp.get_json()["approvals"]
+    match = next((a for a in items if a["id"] == approval["id"]), None)
+    assert match is not None
+    outcome = match["response_outcome"]
+    assert outcome is not None
+    assert outcome["decision_id"] == decision["id"]
+    assert outcome["latest_outcome_event_id"] == event["id"]
+    assert outcome["soar_correlation_id"] == decision["soar_correlation_id"]
+    assert outcome["selected_action"] == "block_ip"
+    assert outcome["execution_mode"] == "real"
+    assert outcome["execution_state"] == "succeeded"
+    assert outcome["external_executed"] is True
+    assert outcome["related"]["approval_request_id"] == approval["id"]
+
+
+def test_list_approvals_legacy_fields_preserved(client, postgres_db):
+    conn, cur = postgres_db
+    incident_id = _insert_incident(cur, source_ip="203.0.115.4")
+    conn.commit()
+    approval = _insert_approval(conn, incident_id)
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get("/approvals")
+
+    assert resp.status_code == 200
+    items = resp.get_json()["approvals"]
+    match = next((a for a in items if a["id"] == approval["id"]), None)
+    assert match is not None
+    for field in (
+        "id", "incident_id", "status", "action", "risk_level",
+        "request_reason", "created_at", "expires_at",
+    ):
+        assert field in match
+
+
+# ---------------------------------------------------------------------------
+# response_outcome — detail endpoint
+# ---------------------------------------------------------------------------
+
+def test_get_approval_detail_response_outcome_key_present(client, postgres_db):
+    conn, cur = postgres_db
+    incident_id = _insert_incident(cur, source_ip="203.0.115.5")
+    conn.commit()
+    approval = _insert_approval(conn, incident_id)
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get(f"/approvals/{approval['id']}")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert "response_outcome" in data["approval"]
+
+
+def test_get_approval_detail_unlinked_response_outcome_is_null(client, postgres_db):
+    conn, cur = postgres_db
+    incident_id = _insert_incident(cur, source_ip="203.0.115.6")
+    conn.commit()
+    approval = _insert_approval(conn, incident_id)
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get(f"/approvals/{approval['id']}")
+
+    assert resp.status_code == 200
+    assert resp.get_json()["approval"]["response_outcome"] is None
+
+
+def test_get_approval_detail_linked_returns_canonical_outcome(client, postgres_db):
+    conn, cur = postgres_db
+    incident_id = _insert_incident(cur, source_ip="203.0.115.7")
+    conn.commit()
+    approval = _insert_approval(conn, incident_id)
+
+    decision = outcomes.create_response_decision(
+        conn,
+        selected_action="isolate_host",
+        decision_source="playbook",
+        outcome_summary="Approval linked decision.",
+        incident_id=incident_id,
+        approval_request_id=approval["id"],
+    )
+    event = outcomes.append_outcome_event(
+        conn,
+        decision_id=decision["id"],
+        execution_mode="simulation",
+        execution_state="succeeded",
+        execution_actor="playbook_worker",
+        external_executed=False,
+        tracking_recorded=False,
+        simulated=True,
+        outcome_summary="Simulated approval response.",
+        approval_request_id=approval["id"],
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get(f"/approvals/{approval['id']}")
+
+    assert resp.status_code == 200
+    data = resp.get_json()["approval"]
+    outcome = data["response_outcome"]
+    assert outcome is not None
+    assert outcome["decision_id"] == decision["id"]
+    assert outcome["latest_outcome_event_id"] == event["id"]
+    assert outcome["execution_mode"] == "simulation"
+    assert outcome["simulated"] is True
+    assert outcome["related"]["approval_request_id"] == approval["id"]
+
+
+def test_get_approval_detail_legacy_fields_preserved(client, postgres_db):
+    conn, cur = postgres_db
+    incident_id = _insert_incident(cur, source_ip="203.0.115.8")
+    conn.commit()
+    approval = _insert_approval(conn, incident_id)
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get(f"/approvals/{approval['id']}")
+
+    assert resp.status_code == 200
+    data = resp.get_json()["approval"]
+    for field in (
+        "id", "incident_id", "status", "action", "risk_level",
+        "request_reason", "created_at", "expires_at", "events",
+    ):
+        assert field in data
+
+
+# ---------------------------------------------------------------------------
+# Read-only guarantee
+# ---------------------------------------------------------------------------
+
+def test_list_approvals_route_is_read_only(client, postgres_db):
+    conn, cur = postgres_db
+    incident_id = _insert_incident(cur, source_ip="203.0.115.9")
+    conn.commit()
+    _insert_approval(conn, incident_id)
+
+    cur.execute("SELECT COUNT(*) FROM approval_requests")
+    before = cur.fetchone()[0]
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get("/approvals")
+
+    cur.execute("SELECT COUNT(*) FROM approval_requests")
+    after = cur.fetchone()[0]
+
+    assert resp.status_code == 200
+    assert after == before
+
+
+def test_get_approval_detail_route_is_read_only(client, postgres_db):
+    conn, cur = postgres_db
+    incident_id = _insert_incident(cur, source_ip="203.0.115.10")
+    conn.commit()
+    approval = _insert_approval(conn, incident_id)
+
+    cur.execute("SELECT status FROM approval_requests WHERE id = %s", (approval["id"],))
+    before_status = cur.fetchone()[0]
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get(f"/approvals/{approval['id']}")
+
+    cur.execute("SELECT status FROM approval_requests WHERE id = %s", (approval["id"],))
+    after_status = cur.fetchone()[0]
+
+    assert resp.status_code == 200
+    assert after_status == before_status

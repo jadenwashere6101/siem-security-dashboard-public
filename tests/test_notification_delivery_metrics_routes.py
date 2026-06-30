@@ -141,6 +141,8 @@ def test_notification_metrics_empty_database_all_zero_buckets(client, postgres_d
         assert data["recent"][bucket] == 0
     for state in KNOWN_CIRCUIT_BREAKER_STATES:
         assert data["circuit_breaker_state_counts"][state] == 0
+    assert data["canonical_outcome_counts"]["execution_mode"]["simulation"] == 0
+    assert data["canonical_outcome_counts"]["external_executed"]["true"] == 0
     assert data["recent"]["window_hours"] == RECENT_WINDOW_HOURS
     assert "time_basis" in data["recent"]
 

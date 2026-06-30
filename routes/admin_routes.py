@@ -19,6 +19,7 @@ from core.response_action_queue_store import (
     list_recent_queue_actions,
     sweep_terminal_approval_queue_rows,
 )
+from core.soar_response_outcomes import get_latest_outcomes_for_queues_bulk
 from engines.soar_action_worker import process_batch
 from engines.detection_config import (
     get_all_effective_detection_rules,
@@ -494,7 +495,7 @@ def update_detection_rule(rule_id):
 # ============================================================================
 
 
-def _serialize_queue_item_for_list(queue_row):
+def _serialize_queue_item_for_list(queue_row, response_outcome=None):
     """Serialize queue row for list responses. Excludes idempotency_key."""
     if queue_row is None:
         return None
@@ -517,15 +518,19 @@ def _serialize_queue_item_for_list(queue_row):
         "last_error": queue_row["last_error"],
         "created_at": str(queue_row["created_at"]),
         "updated_at": str(queue_row["updated_at"]),
+        "response_outcome": response_outcome,
     }
 
 
-def _serialize_queue_item_for_detail(queue_row):
+def _serialize_queue_item_for_detail(queue_row, response_outcome=None):
     """Serialize queue row for detail responses. Includes idempotency_key."""
     if queue_row is None:
         return None
     
-    item = _serialize_queue_item_for_list(queue_row)
+    item = _serialize_queue_item_for_list(
+        queue_row,
+        response_outcome=response_outcome,
+    )
     item["idempotency_key"] = queue_row["idempotency_key"]
     return item
 
@@ -626,8 +631,18 @@ def get_queue_recent():
         conn = get_db_connection()
         # Helper function clamps limit to 100 max
         queue_rows = list_recent_queue_actions(conn, limit=limit, status=status_filter)
+        response_outcomes = get_latest_outcomes_for_queues_bulk(
+            conn,
+            [row["id"] for row in queue_rows],
+        )
         
-        items = [_serialize_queue_item_for_list(row) for row in queue_rows]
+        items = [
+            _serialize_queue_item_for_list(
+                row,
+                response_outcome=response_outcomes.get(row["id"]),
+            )
+            for row in queue_rows
+        ]
         
         return jsonify({
             "items": items,
@@ -656,7 +671,11 @@ def get_queue_item_detail(queue_id):
         if queue_row is None:
             return jsonify({"error": "Queue item not found"}), 404
         
-        item = _serialize_queue_item_for_detail(queue_row)
+        response_outcome = get_latest_outcomes_for_queues_bulk(conn, [queue_id]).get(queue_id)
+        item = _serialize_queue_item_for_detail(
+            queue_row,
+            response_outcome=response_outcome,
+        )
         approval = get_latest_approval_for_queue_action(
             conn, queue_id=queue_id, action=queue_row["action"]
         )

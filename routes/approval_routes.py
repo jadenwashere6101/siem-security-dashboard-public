@@ -10,6 +10,7 @@ from core.approval_store import (
     get_approval_request,
     list_approval_requests,
 )
+from core.soar_response_outcomes import get_latest_outcomes_for_approvals_bulk
 
 
 approval_bp = Blueprint("approvals", __name__)
@@ -83,6 +84,10 @@ def list_approvals_route():
             limit=limit,
             offset=offset,
         )
+        approval_ids = [a["id"] for a in approvals]
+        response_outcomes = get_latest_outcomes_for_approvals_bulk(conn, approval_ids)
+        for approval in approvals:
+            approval["response_outcome"] = response_outcomes.get(approval["id"])
         return jsonify({"approvals": approvals, "count": len(approvals)}), 200
     except Exception as error:
         current_app.logger.error("Error in list_approvals_route: %s", error)
@@ -102,6 +107,9 @@ def get_approval_route(approval_id):
         approval = get_approval_request(conn, approval_id)
         if approval is None:
             return jsonify({"error": "approval not found"}), 404
+        approval["response_outcome"] = get_latest_outcomes_for_approvals_bulk(
+            conn, [approval_id]
+        ).get(approval_id)
         return jsonify({"approval": approval}), 200
     except Exception as error:
         current_app.logger.error("Error in get_approval_route: %s", error)

@@ -9,6 +9,7 @@ import pytest
 from werkzeug.security import generate_password_hash
 
 from core import notification_delivery_store
+from core import soar_response_outcomes as outcomes
 
 ADMIN_USER = "testadmin"
 ADMIN_PASS = "testpassword123!"
@@ -131,6 +132,7 @@ def test_list_super_admin_shape_and_filters(client, postgres_db):
     assert body["limit"] == 100
     assert len(body["items"]) == 2
     assert body["items"][0]["correlation_id"] == "route-c2"
+    assert "response_outcome" in body["items"][0]
 
     with _patched_nd_db(conn):
         r2 = client.get("/notification-deliveries?provider=slack")
@@ -150,6 +152,89 @@ def test_list_super_admin_shape_and_filters(client, postgres_db):
         r5 = client.get("/notification-deliveries?status=failed")
     assert len(r5.get_json()["items"]) == 1
     assert r5.get_json()["items"][0]["status"] == "failed"
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_notification_delivery_list_and_detail_include_response_outcome(client, postgres_db):
+    conn, cur = postgres_db
+    row = notification_delivery_store.create_notification_delivery_attempt(
+        conn,
+        correlation_id="nd-outcome",
+        idempotency_key="nd-outcome-i",
+        provider="slack",
+        mode="simulation",
+        status="success",
+        adapter_name="slack",
+        action="send_message",
+    )
+    decision = outcomes.create_response_decision(
+        conn,
+        selected_action="notify_slack",
+        decision_source="manual",
+        outcome_summary="Notification selected.",
+        reason_code="simulation_mode",
+    )
+    event = outcomes.append_outcome_event(
+        conn,
+        decision_id=decision["id"],
+        execution_mode="simulation",
+        execution_state="succeeded",
+        execution_actor="manual",
+        simulated=True,
+        outcome_summary="Notification sent in simulation.",
+        reason_code="simulation_mode",
+        notification_delivery_attempt_id=row["id"],
+    )
+    cur.execute(
+        """
+        UPDATE notification_delivery_attempts
+        SET decision_id = %s, soar_correlation_id = %s
+        WHERE id = %s
+        """,
+        (decision["id"], decision["soar_correlation_id"], row["id"]),
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_nd_db(conn):
+        list_resp = client.get("/notification-deliveries")
+        detail_resp = client.get(f"/notification-deliveries/{row['id']}")
+
+    assert list_resp.status_code == 200
+    item = list_resp.get_json()["items"][0]
+    assert item["id"] == row["id"]
+    assert item["provider"] == "slack"
+    assert item["status"] == "success"
+    assert item["response_outcome"]["decision_id"] == decision["id"]
+    assert item["response_outcome"]["latest_outcome_event_id"] == event["id"]
+    assert item["response_outcome"]["related"]["notification_delivery_attempt_id"] == row["id"]
+
+    assert detail_resp.status_code == 200
+    detail = detail_resp.get_json()
+    assert detail["response_outcome"]["decision_id"] == decision["id"]
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_notification_delivery_unlinked_attempt_response_outcome_is_null(client, postgres_db):
+    conn, _cur = postgres_db
+    row = notification_delivery_store.create_notification_delivery_attempt(
+        conn,
+        correlation_id="nd-null",
+        idempotency_key="nd-null-i",
+        provider="teams",
+        mode="simulation",
+        status="blocked",
+        adapter_name="teams",
+        action="send_message",
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_nd_db(conn):
+        resp = client.get(f"/notification-deliveries/{row['id']}")
+
+    assert resp.status_code == 200
+    assert resp.get_json()["response_outcome"] is None
 
 
 @pytest.mark.usefixtures("postgres_db")

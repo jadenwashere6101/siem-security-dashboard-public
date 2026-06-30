@@ -6,7 +6,11 @@ from core.auth import analyst_or_super_admin_required
 from core.db import get_db_connection
 from core.extensions import limiter
 from core.ip_helpers import execute_response_action
-from core.soar_response_outcomes import append_outcome_event, create_response_decision
+from core.soar_response_outcomes import (
+    append_outcome_event,
+    create_response_decision,
+    resolve_response_log_outcome,
+)
 
 
 alert_mutation_bp = Blueprint("alert_mutation", __name__)
@@ -31,23 +35,26 @@ def get_response_log(alert_id):
             WHERE alert_id = %s
             ORDER BY executed_at DESC
             """,
-            (alert_id,)
+            (alert_id,),
         )
 
         rows = cur.fetchall()
 
-        logs = [
-            {
-                "id": row[0],
-                "alert_id": row[1],
-                "source_ip": row[2],
-                "action": row[3],
-                "status": row[4],
-                "details": row[5],
-                "executed_at": str(row[6])
-            }
-            for row in rows
-        ]
+        logs = []
+        for row in rows:
+            response_outcome = resolve_response_log_outcome(conn, row[0])
+            logs.append(
+                {
+                    "id": row[0],
+                    "alert_id": row[1],
+                    "source_ip": row[2],
+                    "action": row[3],
+                    "status": row[4],
+                    "details": row[5],
+                    "executed_at": str(row[6]),
+                    "response_outcome": response_outcome,
+                }
+            )
 
         return jsonify(logs)
 

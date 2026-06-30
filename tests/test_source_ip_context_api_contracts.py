@@ -5,6 +5,7 @@ from unittest.mock import patch
 from werkzeug.security import generate_password_hash
 
 from core import playbook_store
+from core import soar_response_outcomes as outcomes
 
 
 ADMIN_USER = "testadmin"
@@ -258,6 +259,8 @@ def test_source_ip_context_response_shape_sections_and_no_unified_status(client,
         "blocklist",
         "reputation",
         "playbook_executions",
+        "response_outcomes",
+        "response_outcome_counts",
     ):
         assert section in data
     assert "status" not in data
@@ -338,9 +341,53 @@ def test_source_ip_context_populates_linked_context_and_separate_reputation(clie
 
     assert data["playbook_executions"]["recent"][0]["id"] == execution_id
     assert data["playbook_executions"]["recent"][0]["status"] == "pending"
+    assert data["response_outcomes"] == []
+    assert data["response_outcome_counts"]["execution_mode"]["simulation"] == 0
 
     cur.execute("SELECT status FROM blocked_ips WHERE id = %s", (block_id,))
     assert cur.fetchone()[0] == "active"
+
+
+def test_source_ip_context_includes_recent_response_outcomes_and_counts(client, postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    decision = outcomes.create_response_decision(
+        conn,
+        selected_action="block_ip",
+        decision_source="manual",
+        outcome_summary="Source IP response selected.",
+        alert_id=alert_id,
+        source_ip=SOURCE_IP,
+        reason_code="tracking_only",
+    )
+    event = outcomes.append_outcome_event(
+        conn,
+        decision_id=decision["id"],
+        execution_mode="tracking_only",
+        execution_state="succeeded",
+        execution_actor="manual",
+        tracking_recorded=True,
+        outcome_summary="Source IP block recorded as tracking only.",
+        alert_id=alert_id,
+        source_ip=SOURCE_IP,
+        reason_code="tracking_only",
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get(f"/source-ip-context?source_ip={SOURCE_IP}")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["response_outcomes"][0]["decision_id"] == decision["id"]
+    assert data["response_outcomes"][0]["latest_outcome_event_id"] == event["id"]
+    counts = data["response_outcome_counts"]
+    assert counts["execution_mode"]["tracking_only"] == 1
+    assert counts["execution_state"]["succeeded"] == 1
+    assert counts["tracking_recorded"]["true"] == 1
+    assert counts["external_executed"]["false"] == 1
+    assert counts["simulated"]["false"] == 1
 
 
 def test_source_ip_context_is_read_only(client, postgres_db):

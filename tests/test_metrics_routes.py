@@ -145,6 +145,8 @@ def test_incident_metrics_empty_database_all_zero_buckets(client, postgres_db):
         assert data["by_status"][status] == 0
     for severity in KNOWN_INCIDENT_SEVERITIES:
         assert data["by_severity"][severity] == 0
+    assert data["canonical_outcome_counts"]["execution_mode"]["simulation"] == 0
+    assert data["canonical_outcome_counts"]["tracking_recorded"]["true"] == 0
 
 
 @pytest.mark.usefixtures("postgres_db")
@@ -237,6 +239,8 @@ def test_approval_metrics_empty_database_all_zero_buckets(client, postgres_db):
     assert data["oldest_pending_approval_at"] is None
     for status in KNOWN_APPROVAL_STATUSES:
         assert data["by_status"][status] == 0
+    assert data["canonical_outcome_counts"]["execution_state"]["succeeded"] == 0
+    assert data["canonical_outcome_counts"]["simulated"]["true"] == 0
 
 
 @pytest.mark.usefixtures("postgres_db")

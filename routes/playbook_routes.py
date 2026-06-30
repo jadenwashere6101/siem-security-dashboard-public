@@ -35,6 +35,11 @@ from core.playbook_store import (
     update_execution_status,
     update_playbook_definition,
 )
+from core.soar_response_outcomes import (
+    get_latest_outcomes_for_playbook_executions_bulk,
+    serialize_latest_outcome,
+    serialize_outcome_timeline,
+)
 from engines.playbook_registry import validate_playbook_steps
 from engines.soar_playbook_orchestrator import create_and_link_playbook_execution_decision
 from engines.playbook_step_executor import try_append_playbook_lifecycle_outcome_event
@@ -167,8 +172,13 @@ def _serialize_definition_dict(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _serialize_execution_dict(row: dict[str, Any]) -> dict[str, Any]:
-    return {
+def _serialize_execution_dict(
+    row: dict[str, Any],
+    *,
+    response_outcome: dict[str, Any] | None = None,
+    response_outcomes: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    payload = {
         "id": row["id"],
         "playbook_id": row["playbook_id"],
         "alert_id": row["alert_id"],
@@ -179,7 +189,39 @@ def _serialize_execution_dict(row: dict[str, Any]) -> dict[str, Any]:
         "last_completed_step": row["last_completed_step"],
         "steps_log": row["steps_log"],
         "created_at": _iso(row["created_at"]),
+        "response_outcome": response_outcome,
     }
+    if response_outcomes is not None:
+        payload["response_outcomes"] = response_outcomes
+    return payload
+
+
+def _resolve_execution_detail_outcomes(
+    conn,
+    row: dict[str, Any],
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    decision_id = row.get("decision_id")
+    soar_correlation_id = row.get("soar_correlation_id")
+    if decision_id is None and not soar_correlation_id:
+        return None, []
+
+    if decision_id is not None:
+        response_outcome = serialize_latest_outcome(conn, decision_id=int(decision_id))
+        response_outcomes = (
+            serialize_outcome_timeline(conn, int(decision_id))
+            if response_outcome is not None
+            else []
+        )
+        return response_outcome, response_outcomes
+
+    response_outcome = serialize_latest_outcome(
+        conn, soar_correlation_id=soar_correlation_id
+    )
+    if response_outcome is None:
+        return None, []
+    return response_outcome, serialize_outcome_timeline(
+        conn, int(response_outcome["decision_id"])
+    )
 
 
 def _serialize_schedule_dict(row: dict[str, Any]) -> dict[str, Any]:
@@ -614,7 +656,17 @@ def list_playbook_executions_route():
             status=status,
             limit=limit,
         )
-        items = [_serialize_execution_dict(r) for r in rows]
+        response_outcomes = get_latest_outcomes_for_playbook_executions_bulk(
+            conn,
+            [row["id"] for row in rows],
+        )
+        items = [
+            _serialize_execution_dict(
+                row,
+                response_outcome=response_outcomes.get(row["id"]),
+            )
+            for row in rows
+        ]
         return (
             jsonify(
                 {
@@ -644,7 +696,17 @@ def get_playbook_execution_route(execution_id):
         row = get_playbook_execution(conn, execution_id)
         if row is None:
             return jsonify({"error": "playbook execution not found"}), 404
-        return jsonify(_serialize_execution_dict(row)), 200
+        response_outcome, response_outcomes = _resolve_execution_detail_outcomes(conn, row)
+        return (
+            jsonify(
+                _serialize_execution_dict(
+                    row,
+                    response_outcome=response_outcome,
+                    response_outcomes=response_outcomes,
+                )
+            ),
+            200,
+        )
     except Exception as error:
         current_app.logger.error("Error in get_playbook_execution_route: %s", error)
         return jsonify({"error": "Internal server error"}), 500
