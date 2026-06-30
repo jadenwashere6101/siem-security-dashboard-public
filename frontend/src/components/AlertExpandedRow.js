@@ -5,6 +5,7 @@ import AlertMitreDetails from "./AlertMitreDetails";
 import AlertReputationDetails from "./AlertReputationDetails";
 import AlertResponseLog from "./AlertResponseLog";
 import AlertSourceDetails from "./AlertSourceDetails";
+import { ResponseOutcomeBadge } from "./ResponseOutcome";
 import TargetedAlertPanel from "./TargetedAlertPanel";
 import {
   correlationListStyle,
@@ -132,6 +133,10 @@ function AlertExpandedRow({
           <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
             <strong style={detailLabelTextStyle}>Response Status:</strong>{" "}
             <span style={detailValueTextStyle}>{alert.response_status || "Not set"}</span>
+          </p>
+          <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
+            <strong style={detailLabelTextStyle}>Response Outcome:</strong>{" "}
+            <ResponseOutcomeBadge outcome={alert.response_outcome || null} />
           </p>
 
           <AlertExportLinks

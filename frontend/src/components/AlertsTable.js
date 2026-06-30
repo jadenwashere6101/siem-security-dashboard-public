@@ -12,6 +12,7 @@ import AlertsTableHeader from "./AlertsTableHeader";
 import AlertsToolbar from "./AlertsToolbar";
 import AlertsToast from "./AlertsToast";
 import ResolvedAlertsTable from "./ResolvedAlertsTable";
+import { outcomeLabel } from "./ResponseOutcome";
 import {
   correlationBadgeStyle,
   correlationListStyle,
@@ -295,6 +296,7 @@ function AlertsTable({
           getApiErrorMessage(errorData, "Action failed", ["message", "error"])
         );
       }
+      const executeData = await parseJsonResponse(executeRes, {});
 
       // refresh response log for that alert
       await fetchResponseLog(alertId);
@@ -316,7 +318,14 @@ function AlertsTable({
 
       setAlerts(data);
 
-      showToast(`Action "${action}" executed successfully`);
+      const responseOutcome = executeData?.response_outcome || null;
+      if (action === "block_ip" && responseOutcome?.execution_mode === "tracking_only") {
+        showToast(
+          `${outcomeLabel(responseOutcome)}: SIEM blocklist entry recorded. No firewall, provider, external, or local enforcement occurred.`
+        );
+      } else {
+        showToast(`Action "${action}" completed successfully`);
+      }
     } catch (err) {
       console.error("Error executing action:", err);
       showToast(

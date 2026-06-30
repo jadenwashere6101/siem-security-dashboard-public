@@ -31,6 +31,22 @@ const baseAlert = {
   response_status: "pending",
 };
 
+const trackingOutcome = {
+  decision_id: 10,
+  alert_id: 101,
+  queue_id: 202,
+  selected_action: "block_ip",
+  decision_source: "manual",
+  execution_actor: "manual",
+  execution_mode: "tracking_only",
+  execution_state: "succeeded",
+  external_executed: false,
+  tracking_recorded: true,
+  simulated: false,
+  reason_code: "tracking_only",
+  outcome_summary: "Recorded in SIEM blocklist.",
+};
+
 const styles = {};
 
 const sidePanelResponseStatus = () =>
@@ -143,4 +159,52 @@ test("side panel uses refreshed alert data after manual response execution", asy
   await waitFor(() => {
     expect(sidePanelResponseStatus()).toHaveTextContent("success");
   });
+});
+
+test("manual block_ip feedback uses tracking-only wording without executed copy", async () => {
+  const refreshedAlert = {
+    ...baseAlert,
+    response_action: "block_ip",
+    response_status: "success",
+    response_outcome: trackingOutcome,
+  };
+  const setAlerts = jest.fn();
+
+  global.fetch = jest.fn((url, options = {}) => {
+    const path = String(url);
+    if (path.endsWith("/alerts/101/response-log")) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve([]),
+      });
+    }
+    if (path.endsWith("/alerts/101/notes")) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve([]),
+      });
+    }
+    if (path.endsWith("/alerts/101/execute") && options.method === "POST") {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ response_outcome: trackingOutcome }),
+      });
+    }
+    if (path.endsWith("/alerts")) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve([refreshedAlert]),
+      });
+    }
+    return Promise.reject(new Error(`Unexpected fetch: ${path}`));
+  });
+
+  renderAlertsTable([{ ...baseAlert, response_outcome: null }], setAlerts);
+
+  await userEvent.click(screen.getByText("failed_login_threshold"));
+  await userEvent.click(screen.getAllByRole("button", { name: "Block IP" }).at(-1));
+
+  const feedback = await screen.findByText(/Tracking only: SIEM blocklist entry recorded/i);
+  expect(feedback).toHaveTextContent("No firewall, provider, external, or local enforcement occurred.");
+  expect(feedback).not.toHaveTextContent("Executed");
 });

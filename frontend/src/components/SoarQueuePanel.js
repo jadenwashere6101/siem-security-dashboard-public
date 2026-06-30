@@ -6,6 +6,11 @@ import {
   runSoarWorkerOnce,
 } from "../services/soarQueueService";
 import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
+import {
+  ResponseOutcomeBadge,
+  ResponseOutcomeSummary,
+  outcomeLabel,
+} from "./ResponseOutcome";
 
 const QUEUE_STATUSES = ["pending", "running", "awaiting_approval", "success", "failed", "skipped"];
 const QUEUE_STATUS_FILTERS = ["all", ...QUEUE_STATUSES];
@@ -210,7 +215,7 @@ function SoarQueuePanel({
             <div style={resultHeaderStyle}>
               <p style={resultLabelStyle}>Last manual simulation batch</p>
               <span style={resultMetaStyle}>
-                Batch size used: {lastRunResult.batch_size ?? "N/A"}
+                {lastRunResult.summary.processed || 0} actions simulated · Batch size used: {lastRunResult.batch_size ?? "N/A"}
               </span>
             </div>
             <div style={resultGridStyle}>
@@ -291,6 +296,7 @@ function SoarQueuePanel({
                     <th style={{ ...headerCellStyle, width: "7%" }}>Queue ID</th>
                     <th style={{ ...headerCellStyle, width: "12%" }}>Action</th>
                     <th style={{ ...headerCellStyle, width: "10%" }}>Status</th>
+                    <th style={{ ...headerCellStyle, width: "12%" }}>Outcome</th>
                     <th style={{ ...headerCellStyle, width: "13%" }}>Source IP</th>
                     <th style={{ ...headerCellStyle, width: "12%" }}>Alert</th>
                     <th style={{ ...headerCellStyle, width: "8%" }}>Retries</th>
@@ -315,6 +321,9 @@ function SoarQueuePanel({
                         <span style={{ ...statusBadgeStyle, ...getStatusBadgeStyle(item.status) }}>
                           {formatQueueLabel(item.status)}
                         </span>
+                      </td>
+                      <td style={bodyCellStyle}>
+                        <ResponseOutcomeBadge outcome={item.response_outcome || null} />
                       </td>
                       <td style={{ ...bodyCellStyle, ...monoCellStyle }}>
                         {item.source_ip || <span style={mutedTextStyle}>N/A</span>}
@@ -397,6 +406,14 @@ function SoarQueuePanel({
                     mono
                     wrap
                   />
+                  {selectedQueueItem.response_outcome?.soar_correlation_id ? (
+                    <DetailField
+                      label="SOAR Correlation ID"
+                      value={selectedQueueItem.response_outcome.soar_correlation_id}
+                      mono
+                      wrap
+                    />
+                  ) : null}
                   <DetailField
                     label="Idempotency Key"
                     value={selectedQueueItem.idempotency_key || "N/A"}
@@ -409,6 +426,13 @@ function SoarQueuePanel({
                       and decide, open the Approvals panel.
                     </div>
                   ) : null}
+                </div>
+                <div style={outcomeSummarySectionStyle}>
+                  <div style={timelineHeaderStyle}>Response Outcome</div>
+                  <ResponseOutcomeSummary
+                    outcome={selectedQueueItem.response_outcome || null}
+                    showRelated
+                  />
                 </div>
                 {selectedQueueItem.latest_approval ? (
                   <div style={approvalContextSectionStyle}>
@@ -519,7 +543,9 @@ function buildTimeline(queueItem) {
     events.push({
       time: queueItem.updated_at,
       type: "success",
-      label: "Action executed",
+      label: queueItem.response_outcome
+        ? outcomeLabel(queueItem.response_outcome)
+        : "Action completed",
       detail: null,
     });
   } else if (queueItem.status === "failed") {
@@ -702,6 +728,14 @@ const resultNoteStyle = {
   margin: "10px 0 0",
   color: "#8b949e",
   fontSize: "12px",
+};
+
+const outcomeSummarySectionStyle = {
+  marginTop: "16px",
+  padding: "14px",
+  borderRadius: "8px",
+  border: "1px solid rgba(148, 163, 184, 0.18)",
+  backgroundColor: "rgba(15, 23, 42, 0.55)",
 };
 
 const countsGridStyle = {

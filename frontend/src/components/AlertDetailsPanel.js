@@ -1,5 +1,6 @@
 import React from "react";
 import AlertTimeline from "./AlertTimeline";
+import { ResponseOutcomeSummary } from "./ResponseOutcome";
 import SourceIpContext from "./SourceIpContext";
 import { getBehavioralReputation, getExternalReputation } from "../utils/alertDisplay";
 
@@ -68,6 +69,15 @@ function AlertDetailsPanel({
       <p><strong>Severity:</strong> {selectedAlert.severity}</p>
       <p><strong>Status:</strong> {selectedAlert.status}</p>
       <p><strong>Message:</strong> {selectedAlert.message}</p>
+      <div style={{ margin: "14px 0" }}>
+        <strong>Response Outcome:</strong>
+        <div style={{ marginTop: "8px" }}>
+          <ResponseOutcomeSummary
+            outcome={selectedAlert.response_outcome || null}
+            showRelated
+          />
+        </div>
+      </div>
       <p>
         <strong>Location:</strong>{" "}
         {selectedAlert.city && selectedAlert.country

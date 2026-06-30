@@ -43,6 +43,23 @@ const queueRowFixture = {
   updated_at: "2026-05-06T12:01:00Z",
 };
 
+const simulatedOutcome = {
+  decision_id: 501,
+  alert_id: null,
+  queue_id: 101,
+  selected_action: "block_ip",
+  decision_source: "queue",
+  execution_actor: "queue_worker",
+  execution_mode: "simulation",
+  execution_state: "succeeded",
+  external_executed: false,
+  tracking_recorded: false,
+  simulated: true,
+  reason_code: "simulation_mode",
+  outcome_summary: "Simulated queue action completed.",
+  soar_correlation_id: "soar-corr-101",
+};
+
 const queueDetailFixture = {
   ...queueRowFixture,
   idempotency_key: "queue-idempotency-key-101",
@@ -226,7 +243,7 @@ describe("SoarQueuePanel", () => {
     );
   });
 
-  test("renders queue counts and recent queue rows", async () => {
+test("renders queue counts and recent queue rows", async () => {
     loadSoarQueueStatus.mockResolvedValue(statusFixture);
     loadRecentSoarQueueItems.mockResolvedValue({ items: [queueRowFixture] });
 
@@ -237,6 +254,22 @@ describe("SoarQueuePanel", () => {
     expect(screen.getByText("8.8.8.8")).toBeInTheDocument();
     expect(screen.getByText("1 / 3")).toBeInTheDocument();
     expect(screen.getAllByText("Pending").length).toBeGreaterThan(0);
+  });
+
+  test("renders canonical outcome badges in queue rows", async () => {
+    loadSoarQueueStatus.mockResolvedValue(statusFixture);
+    loadRecentSoarQueueItems.mockResolvedValue({
+      items: [
+        { ...queueRowFixture, response_outcome: simulatedOutcome },
+        { ...queueRowFixture, id: 102, response_outcome: null },
+      ],
+    });
+
+    renderPanel();
+
+    expect(await screen.findByText("Recent Queue Items")).toBeInTheDocument();
+    expect(screen.getByText("Simulated")).toBeInTheDocument();
+    expect(screen.getByText("Observed only")).toBeInTheDocument();
   });
 
   test("shows awaiting approval count tile", async () => {
@@ -403,6 +436,28 @@ describe("SoarQueuePanel", () => {
       expect(loadSoarQueueItem).toHaveBeenCalledWith(queueRowFixture.id)
     );
     expect(await screen.findByText("queue-idempotency-key-101")).toBeInTheDocument();
+  });
+
+  test("renders queue detail correlation id and response outcome summary", async () => {
+    loadSoarQueueStatus.mockResolvedValue(statusFixture);
+    loadRecentSoarQueueItems.mockResolvedValue({
+      items: [{ ...queueRowFixture, response_outcome: simulatedOutcome }],
+    });
+    loadSoarQueueItem.mockResolvedValue({
+      ...queueDetailFixture,
+      response_outcome: simulatedOutcome,
+    });
+
+    renderPanel();
+    await screen.findByText("Recent Queue Items");
+
+    await userEvent.click(screen.getByRole("button", { name: "View" }));
+
+    expect(await screen.findByText("SOAR Correlation ID")).toBeInTheDocument();
+    expect(screen.getByText("soar-corr-101")).toBeInTheDocument();
+    expect(screen.getByText("Response Outcome")).toBeInTheDocument();
+    expect(screen.getAllByText("Simulated").length).toBeGreaterThan(0);
+    expect(screen.getByText("Simulated queue action completed.")).toBeInTheDocument();
   });
 
   test("shows approval-waiting note in detail for awaiting approval item", async () => {
@@ -686,7 +741,8 @@ describe("SoarQueuePanel", () => {
     await userEvent.click(screen.getByRole("button", { name: "Run simulation batch" }));
 
     expect(await screen.findByText("Last manual simulation batch")).toBeInTheDocument();
-    expect(await screen.findByText("Batch size used: 10")).toBeInTheDocument();
+    expect(await screen.findByText(/2 actions simulated/i)).toBeInTheDocument();
+    expect(screen.queryByText(/actions executed/i)).not.toBeInTheDocument();
     expect(await screen.findByText("Processed")).toBeInTheDocument();
 
     await waitFor(() => expect(loadSoarQueueStatus).toHaveBeenCalledTimes(2));

@@ -1,3 +1,5 @@
+import { outcomeLabel } from "./ResponseOutcome";
+
 function AlertResponseLog({ logs, variant = "inline" }) {
   const panelVariant = variant === "panel";
 
@@ -8,6 +10,9 @@ function AlertResponseLog({ logs, variant = "inline" }) {
       {logs && logs.length > 0 ? (
         logs.map((log) => {
           let color = "#999";
+          const statusLabel = log.response_outcome
+            ? outcomeLabel(log.response_outcome)
+            : log.status;
 
           if (log.action === "block_ip") color = "#ff4d4f";
           else if (log.action === "flag_high_priority") color = "#faad14";
@@ -38,7 +43,7 @@ function AlertResponseLog({ logs, variant = "inline" }) {
               <span>
                 <strong style={{ color }}>{log.action.toUpperCase()}</strong>
                 {" \u2192 "}
-                {log.status}
+                {statusLabel}
               </span>
               <span style={{ opacity: 0.7 }}>
                 {new Date(log.executed_at).toLocaleTimeString()}
