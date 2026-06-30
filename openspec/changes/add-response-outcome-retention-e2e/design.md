@@ -1,12 +1,16 @@
-# Design: Response Outcome Retention and End-to-End Tests
+# Design: Response Outcome Retention and API Integration Tests
 
 ## Boundary
 
-This child change is verification and test work only. It does not change canonical outcome writers, API contracts, UI components, migrations, schema, or real execution policy. All phases before this (1–9) must be implemented before end-to-end tests can exercise the full lifecycle.
+This child change is verification and test work only. It does not change canonical outcome writers, UI components, migrations, schema, or real execution policy. It may add retention-boundary metadata to existing metrics API responses so metrics document the live retention window required by Phase 10. All phases before this (1–9) must be implemented before API/read-model integration tests verify canonical lifecycle shapes.
 
 ## Retention Design (Phase 10)
 
 ### Retention window definition
+
+**Default policy (implemented):** indefinite live retention until an operator sets `SIEM_OUTCOME_RETENTION_DAYS`; the retention helper reads that environment variable with safe positive-integer parsing. Recommended production starting point after policy review: **365 days**.
+
+Full operator documentation: `docs/soar-response-outcome-retention.md`.
 
 The canonical model introduces two append-only tables:
 - `soar_response_decisions` — one row per selected response.
@@ -58,6 +62,8 @@ These can be verified with local test data or a synthetic seed script.
 
 ### Reporting query
 
+Implemented as `get_response_outcome_traceability_report(conn, alert_id=..., incident_id=..., soar_correlation_id=...)` in `core/soar_response_outcomes.py`.
+
 Add a helper or SQL query that answers the primary analyst question:
 > "What happened, what response was selected, what playbook ran, and was anything actually executed?"
 
@@ -66,18 +72,18 @@ The query must:
 - Return: selected action, decision source, execution actor, execution mode/state, execution booleans, outcome summary, playbook execution id, approval request id, SOAR correlation id.
 - Work for both live and inferred-from-legacy (backfill) rows.
 
-## End-to-End Test Design (Phase 11)
+## API/Read-Model Integration Test Design (Phase 11)
 
 ### Test scope contract
 
-Each end-to-end test must exercise the full path from data creation through API response, verifying canonical `response_outcome` fields at the API layer. Tests use the existing `postgres_db` fixture and real PostgreSQL.
+These Phase 11 tests are API/read-model integration tests. They seed canonical decisions/events directly, then exercise Flask route handlers and real PostgreSQL reads to verify canonical `response_outcome` fields at the API layer. They do not claim to exercise writer/orchestration paths end-to-end unless a test explicitly calls that writer/orchestrator.
 
 No test may:
 - Set `external_executed = true` without `execution_mode = real` and `execution_state = succeeded`.
 - Set `simulated = true` without `execution_mode = simulation`.
 - Set `tracking_recorded = true` without `execution_mode = tracking_only` and `execution_state = succeeded`.
 
-### Lifecycle paths
+### API/read-model lifecycle shapes
 
 1. **Observed-only**: create alert with no decision/event → verify `response_outcome: null` from alert API.
 2. **Simulated queue action**: create alert → create decision with `simulation/selected` → append `simulation/succeeded/simulated=true` event → verify API returns correct shape.
@@ -86,7 +92,7 @@ No test may:
 5. **Playbook awaiting approval**: create playbook execution → append `awaiting_approval` event → verify `execution_state = awaiting_approval` in API response.
 6. **Approval denied/expired**: create approval request → deny or expire → append `blocked/approval_denied` event → verify `execution_state = blocked`, `reason_code = approval_denied` in API response.
 7. **Notification simulated delivery**: create notification delivery attempt → create decision with `simulation/selected` → append `simulation/succeeded/simulated=true` event → verify API returns simulated mode.
-8. **Guarded real notification success**: create notification delivery with explicit real execution evidence → append `real/succeeded/external_executed=true` event with mocked provider call → verify `external_executed = true` in API response.
+8. **Guarded real notification success**: create notification delivery with explicit real execution evidence → append `real/succeeded/external_executed=true` event → verify `external_executed = true` in API response.
 9. **Real-capable notification blocked/fail-closed**: simulate adapter fail-closed result → append `real/failed/external_executed=false` event → verify `external_executed = false` and `execution_state = failed` in API response.
 10. **Cross-surface canonical facts**: create one decision/event linked to both a source IP and an incident → verify Source-IP Context API and SOC Command Center metrics API return the same canonical outcome facts.
 
@@ -97,7 +103,7 @@ No test may:
 
 ### Test file location
 
-Add end-to-end tests as a new file `tests/test_response_outcome_e2e.py` or extend `tests/test_soar_response_outcome_schema.py` if that file is the designated cross-surface test file.
+Add API/read-model integration tests as `tests/test_response_outcome_e2e.py` for compatibility with the child task runner, but test names and module docs must classify seeded canonical-row tests as integration tests rather than true E2E writer/orchestrator tests.
 
 ## Dependencies
 

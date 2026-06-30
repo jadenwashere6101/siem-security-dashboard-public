@@ -10,6 +10,7 @@ Do not persist webhooks, tokens, headers, raw payloads, or raw provider response
 from __future__ import annotations
 
 import copy
+import os
 import re
 import uuid
 from datetime import datetime
@@ -1719,6 +1720,226 @@ def serialize_outcome_timeline(
     return [_outcome_event_row_to_dict(row) for row in rows]
 
 
+# ---------------------------------------------------------------------------
+# Retention, archive, and reporting (Phase 10)
+# ---------------------------------------------------------------------------
+
+# Indefinite live retention until an operator sets SIEM_OUTCOME_RETENTION_DAYS.
+DEFAULT_LIVE_RETENTION_DAYS: int | None = None
+REAL_EXECUTION_AUDIT_RETENTION_DAYS: int | None = None
+
+ARCHIVE_PRESERVED_FIELDS: tuple[str, ...] = (
+    "decision_id",
+    "soar_correlation_id",
+    "selected_action",
+    "decision_source",
+    "execution_mode",
+    "execution_state",
+    "external_executed",
+    "tracking_recorded",
+    "simulated",
+    "outcome_summary",
+    "alert_id",
+    "incident_id",
+    "queue_id",
+    "playbook_execution_id",
+    "approval_request_id",
+)
+
+PRIMARY_ANALYST_QUESTION = (
+    "What happened, what response was selected, what playbook ran, "
+    "and was anything actually executed?"
+)
+
+
+def _parse_optional_positive_int_env(name: str) -> int | None:
+    raw_value = os.environ.get(name)
+    if raw_value is None or not raw_value.strip():
+        return None
+    try:
+        parsed = int(raw_value.strip())
+    except ValueError:
+        return None
+    return parsed if parsed > 0 else None
+
+
+def get_canonical_outcome_retention_policy() -> dict[str, Any]:
+    """Document the live retention window used by metrics and reporting helpers."""
+    live_window = _parse_optional_positive_int_env("SIEM_OUTCOME_RETENTION_DAYS")
+    if live_window is None:
+        live_window = DEFAULT_LIVE_RETENTION_DAYS
+    return {
+        "live_retention_days": live_window,
+        "live_retention_policy": (
+            "indefinite_by_default"
+            if live_window is None
+            else f"{live_window}_day_live_window"
+        ),
+        "archive_strategy": (
+            "Events older than the live window are eligible for cold archive after "
+            "a summary row is written. Real-execution evidence rows are never deleted "
+            "during routine archival."
+        ),
+        "real_execution_audit_retention_days": REAL_EXECUTION_AUDIT_RETENTION_DAYS,
+        "archive_preserved_fields": list(ARCHIVE_PRESERVED_FIELDS),
+        "metrics_scope": (
+            "canonical_outcome_counts aggregate all live canonical outcome events "
+            "currently stored in soar_response_outcome_events. Archived summaries "
+            "are not included until an archive aggregation job is deployed."
+        ),
+        "primary_analyst_question": PRIMARY_ANALYST_QUESTION,
+    }
+
+
+def build_archive_record(
+    decision: dict[str, Any],
+    latest_event: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Build the minimum archive summary row for a decision + latest outcome."""
+    if latest_event is not None:
+        execution_mode = latest_event["execution_mode"]
+        execution_state = latest_event["execution_state"]
+        external_executed = latest_event["external_executed"]
+        tracking_recorded = latest_event["tracking_recorded"]
+        simulated = latest_event["simulated"]
+        outcome_summary = latest_event["outcome_summary"]
+        playbook_execution_id = latest_event.get("playbook_execution_id") or decision.get(
+            "playbook_execution_id"
+        )
+        approval_request_id = latest_event.get("approval_request_id") or decision.get(
+            "approval_request_id"
+        )
+        alert_id = latest_event.get("alert_id") or decision.get("alert_id")
+        incident_id = latest_event.get("incident_id") or decision.get("incident_id")
+        queue_id = latest_event.get("queue_id") or decision.get("queue_id")
+    else:
+        execution_mode = "observed"
+        execution_state = "selected"
+        external_executed = False
+        tracking_recorded = False
+        simulated = False
+        outcome_summary = decision["outcome_summary"]
+        playbook_execution_id = decision.get("playbook_execution_id")
+        approval_request_id = decision.get("approval_request_id")
+        alert_id = decision.get("alert_id")
+        incident_id = decision.get("incident_id")
+        queue_id = decision.get("queue_id")
+
+    record = {
+        "decision_id": decision["id"],
+        "soar_correlation_id": decision["soar_correlation_id"],
+        "selected_action": decision["selected_action"],
+        "decision_source": decision["decision_source"],
+        "execution_mode": execution_mode,
+        "execution_state": execution_state,
+        "external_executed": external_executed,
+        "tracking_recorded": tracking_recorded,
+        "simulated": simulated,
+        "outcome_summary": outcome_summary,
+        "alert_id": alert_id,
+        "incident_id": incident_id,
+        "queue_id": queue_id,
+        "playbook_execution_id": playbook_execution_id,
+        "approval_request_id": approval_request_id,
+    }
+    return {key: record[key] for key in ARCHIVE_PRESERVED_FIELDS}
+
+
+def _fetch_decisions_for_traceability(
+    conn,
+    *,
+    alert_id: int | None = None,
+    incident_id: int | None = None,
+    soar_correlation_id: str | None = None,
+) -> list[dict[str, Any]]:
+    filters: list[str] = []
+    params: list[Any] = []
+    if alert_id is not None:
+        filters.append("alert_id = %s")
+        params.append(int(alert_id))
+    if incident_id is not None:
+        filters.append("incident_id = %s")
+        params.append(int(incident_id))
+    if soar_correlation_id is not None:
+        filters.append("soar_correlation_id = %s")
+        params.append(validate_soar_correlation_id(soar_correlation_id))
+
+    if not filters:
+        raise SoarResponseOutcomeValidationError(
+            "alert_id, incident_id, or soar_correlation_id is required"
+        )
+
+    where_clause = " OR ".join(filters)
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT {_DECISION_COLUMNS}
+            FROM soar_response_decisions
+            WHERE {where_clause}
+            ORDER BY created_at DESC, id DESC
+            """,
+            tuple(params),
+        )
+        rows = cur.fetchall() or []
+    return [_decision_row_to_dict(row) for row in rows]
+
+
+def _build_traceability_entry(
+    conn,
+    decision: dict[str, Any],
+    *,
+    include_timeline: bool = True,
+) -> dict[str, Any]:
+    latest_event = get_latest_outcome_for_decision(conn, decision["id"])
+    archive_record = build_archive_record(decision, latest_event)
+    latest_shape = build_latest_outcome_api_shape(decision, latest_event)
+    playbook_execution_id = archive_record["playbook_execution_id"]
+    timeline = (
+        serialize_outcome_timeline(conn, int(decision["id"])) if include_timeline else []
+    )
+
+    return {
+        "analyst_question": PRIMARY_ANALYST_QUESTION,
+        "what_happened": archive_record["outcome_summary"],
+        "selected_response": archive_record["selected_action"],
+        "decision_source": archive_record["decision_source"],
+        "playbook_ran": playbook_execution_id is not None,
+        "playbook_execution_id": playbook_execution_id,
+        "anything_actually_executed": bool(archive_record["external_executed"]),
+        "outcome_label": derive_outcome_label(
+            execution_mode=archive_record["execution_mode"],
+            execution_state=archive_record["execution_state"],
+            external_executed=archive_record["external_executed"],
+            tracking_recorded=archive_record["tracking_recorded"],
+            simulated=archive_record["simulated"],
+        ),
+        "archive_record": archive_record,
+        "latest_outcome": latest_shape,
+        "step_outcomes": timeline,
+    }
+
+
+def get_response_outcome_traceability_report(
+    conn,
+    *,
+    alert_id: int | None = None,
+    incident_id: int | None = None,
+    soar_correlation_id: str | None = None,
+    include_timeline: bool = True,
+) -> list[dict[str, Any]]:
+    """Answer the primary analyst question from canonical decision/event tables."""
+    decisions = _fetch_decisions_for_traceability(
+        conn,
+        alert_id=alert_id,
+        incident_id=incident_id,
+        soar_correlation_id=soar_correlation_id,
+    )
+    return [
+        _build_traceability_entry(conn, decision, include_timeline=include_timeline)
+        for decision in decisions
+    ]
+
+
 def get_decision_with_latest_outcome(
     conn,
     *,
@@ -1807,7 +2028,9 @@ from core.soar_response_outcomes_legacy import (  # noqa: E402
 )
 
 __all__ = [
-    "BackfillDryRunPlan",
+    "ARCHIVE_PRESERVED_FIELDS",
+    "DEFAULT_LIVE_RETENTION_DAYS",
+    "PRIMARY_ANALYST_QUESTION",
     "DECISION_SOURCES",
     "EXECUTION_ACTORS",
     "EXECUTION_MODES",
@@ -1830,7 +2053,10 @@ __all__ = [
     "get_latest_outcome_for_playbook_execution",
     "get_latest_outcome_for_queue",
     "get_latest_outcome_for_source_ip",
+    "build_archive_record",
     "build_latest_outcome_api_shape",
+    "get_canonical_outcome_retention_policy",
+    "get_response_outcome_traceability_report",
     "get_latest_decisions_for_alerts_bulk",
     "get_latest_outcomes_for_alerts_bulk",
     "get_latest_outcomes_for_approvals_bulk",

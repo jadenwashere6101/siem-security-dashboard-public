@@ -1,19 +1,20 @@
 ## ADDED Requirements
 
 ### Requirement: Child Change Scope
-This change SHALL implement Phases 10 and 11 from parent roadmap `openspec/changes/clarify-soar-response-outcomes` — retention/archive/reporting verification and end-to-end traceability tests.
+This change SHALL implement Phases 10 and 11 from parent roadmap `openspec/changes/clarify-soar-response-outcomes` — retention/archive/reporting verification and API/read-model integration traceability tests.
 
 #### Scenario: Parent roadmap remains master
 - **WHEN** this child change is implemented
 - **THEN** the parent roadmap SHALL remain the master roadmap/spec and this child change SHALL be treated as the active implementation spec for Phases 10 and 11 work only
 
-#### Scenario: No phase implementations changed
+#### Scenario: Prior phase implementations preserved
 - **WHEN** this child change is implemented
-- **THEN** it SHALL NOT modify canonical outcome writers, API route implementations, UI components, migrations, or runtime behavior from Phases 1–9
+- **THEN** it SHALL NOT modify canonical outcome writers, UI components, migrations, or runtime behavior from Phases 1–9
+- **AND** any API route change SHALL be limited to additive retention-boundary metadata on existing metrics responses
 
 #### Scenario: Depends on all prior phases
 - **WHEN** this child change is implemented
-- **THEN** all Phases 1–9 SHALL be implemented and passing before end-to-end tests are run
+- **THEN** all Phases 1–9 SHALL be implemented and passing before API/read-model integration tests are run
 
 ### Requirement: Retention Window and Archive Criteria Defined
 A default retention window and archive criteria SHALL be documented before production deployment.
@@ -71,33 +72,33 @@ Metrics endpoints SHALL either include archived summaries or document their live
 - **WHEN** a metrics endpoint aggregates canonical outcome counts
 - **THEN** it SHALL either include archived event summaries in the count OR document that the count covers only the live retention window
 
-### Requirement: End-to-End Lifecycle Tests
-Each major SOAR lifecycle path SHALL have an end-to-end test.
+### Requirement: API/Read-Model Lifecycle Tests
+Each major SOAR canonical lifecycle shape SHALL have an API/read-model integration test unless it explicitly exercises the actual writer/orchestrator path.
 
 #### Scenario: Observed-only lifecycle
 - **WHEN** an alert has no decision or outcome event
 - **THEN** the alert API SHALL return `response_outcome: null`
-- **AND** the end-to-end test SHALL assert this
+- **AND** the API/read-model integration test SHALL assert this
 
 #### Scenario: Simulated queue lifecycle
 - **WHEN** a detection-selected simulated queue action completes
 - **THEN** the API SHALL return `execution_mode = "simulation"`, `simulated = true`, `external_executed = false`
-- **AND** the end-to-end test SHALL assert all three fields
+- **AND** the API/read-model integration test SHALL assert all three fields
 
 #### Scenario: Manual tracking-only lifecycle
 - **WHEN** a manual tracking-only blocklist action completes
 - **THEN** the API SHALL return `execution_mode = "tracking_only"`, `tracking_recorded = true`, `external_executed = false`
-- **AND** the end-to-end test SHALL assert all three fields
+- **AND** the API/read-model integration test SHALL assert all three fields
 
 #### Scenario: Playbook simulation lifecycle
 - **WHEN** a playbook simulation step sequence completes
 - **THEN** the API SHALL return step events attached to the execution-level decision
-- **AND** the end-to-end test SHALL assert step events have `decision_id` matching the execution-level decision
+- **AND** the API/read-model integration test SHALL assert step events have `decision_id` matching the execution-level decision
 
 #### Scenario: Approval awaiting and denied/expired lifecycle
 - **WHEN** a playbook awaiting approval is blocked by denial or expiration
 - **THEN** the API SHALL return `execution_state = "blocked"` and `reason_code = "approval_denied"`
-- **AND** the end-to-end test SHALL assert both fields
+- **AND** the API/read-model integration test SHALL assert both fields
 
 #### Scenario: Notification simulated and real lifecycles
 - **WHEN** notification outcomes are returned
@@ -119,5 +120,5 @@ Canonical boundaries SHALL be enforced by automated regression tests.
 - **AND** the regression test SHALL be deterministic and SHALL NOT pass if this invariant is violated
 
 #### Scenario: Zero test failures
-- **WHEN** all end-to-end and regression tests run
+- **WHEN** all API/read-model integration and regression tests run
 - **THEN** all 12 tests SHALL pass with zero failures

@@ -14,7 +14,10 @@ from flask_login import login_required
 
 from core.auth import analyst_or_super_admin_required
 from core.db import get_db_connection
-from core.soar_response_outcomes import get_outcome_count_groups
+from core.soar_response_outcomes import (
+    get_canonical_outcome_retention_policy,
+    get_outcome_count_groups,
+)
 
 metrics_bp = Blueprint("metrics", __name__)
 
@@ -42,6 +45,11 @@ KNOWN_INCIDENT_STATUSES: tuple[str, ...] = ("open", "investigating", "resolved",
 KNOWN_INCIDENT_SEVERITIES: tuple[str, ...] = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 KNOWN_APPROVAL_STATUSES: tuple[str, ...] = ("pending", "approved", "denied", "expired")
 RECENT_WINDOW_HOURS = 24
+
+
+def _attach_canonical_outcome_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    payload["canonical_outcome_retention"] = get_canonical_outcome_retention_policy()
+    return payload
 
 
 def _empty_by_status() -> dict[str, int]:
@@ -342,7 +350,7 @@ def playbook_execution_metrics_route():
         if unknown_statuses:
             payload["unknown_statuses"] = unknown_statuses
 
-        return jsonify(payload), 200
+        return jsonify(_attach_canonical_outcome_metadata(payload)), 200
     except Exception as error:
         current_app.logger.error("Error in playbook_execution_metrics_route: %s", error)
         return jsonify({"error": "Internal server error"}), 500
@@ -480,7 +488,7 @@ def notification_delivery_metrics_route():
         if unknown_circuit_breaker_states:
             payload["unknown_circuit_breaker_states"] = unknown_circuit_breaker_states
 
-        return jsonify(payload), 200
+        return jsonify(_attach_canonical_outcome_metadata(payload)), 200
     except Exception as error:
         current_app.logger.error("Error in notification_delivery_metrics_route: %s", error)
         return jsonify({"error": "Internal server error"}), 500
@@ -547,18 +555,20 @@ def incident_metrics_route():
 
         return (
             jsonify(
-                {
-                    "total_count": total_count,
-                    "total": total_count,
-                    "open_count": by_status["open"],
-                    "by_status": by_status,
-                    "by_severity": by_severity,
-                    "open_high_critical_count": open_high_critical_count,
-                    "open_high_critical": open_high_critical_count,
-                    "newest_incident_at": _iso_timestamp(newest_incident_at),
-                    "oldest_open_incident_at": _iso_timestamp(oldest_open_incident_at),
-                    "canonical_outcome_counts": canonical_outcome_counts,
-                }
+                _attach_canonical_outcome_metadata(
+                    {
+                        "total_count": total_count,
+                        "total": total_count,
+                        "open_count": by_status["open"],
+                        "by_status": by_status,
+                        "by_severity": by_severity,
+                        "open_high_critical_count": open_high_critical_count,
+                        "open_high_critical": open_high_critical_count,
+                        "newest_incident_at": _iso_timestamp(newest_incident_at),
+                        "oldest_open_incident_at": _iso_timestamp(oldest_open_incident_at),
+                        "canonical_outcome_counts": canonical_outcome_counts,
+                    }
+                )
             ),
             200,
         )
@@ -619,15 +629,17 @@ def approval_metrics_route():
 
         return (
             jsonify(
-                {
-                    "total_count": total_count,
-                    "total": total_count,
-                    "by_status": by_status,
-                    "pending_count": by_status["pending"],
-                    "newest_approval_at": _iso_timestamp(newest_approval_at),
-                    "oldest_pending_approval_at": _iso_timestamp(oldest_pending_approval_at),
-                    "canonical_outcome_counts": canonical_outcome_counts,
-                }
+                _attach_canonical_outcome_metadata(
+                    {
+                        "total_count": total_count,
+                        "total": total_count,
+                        "by_status": by_status,
+                        "pending_count": by_status["pending"],
+                        "newest_approval_at": _iso_timestamp(newest_approval_at),
+                        "oldest_pending_approval_at": _iso_timestamp(oldest_pending_approval_at),
+                        "canonical_outcome_counts": canonical_outcome_counts,
+                    }
+                )
             ),
             200,
         )
