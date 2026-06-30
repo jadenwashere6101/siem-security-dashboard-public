@@ -73,6 +73,42 @@ test("MapView opens source-IP context from selected marker source IP", async () 
   expect(loadSourceIpContext).toHaveBeenCalledWith("8.8.8.8");
 });
 
+test("MapView attack popup shows canonical response outcome badge and label", () => {
+  render(
+    <MapView
+      alerts={[
+        {
+          id: 9,
+          alert_type: "failed_login_threshold",
+          source_ip: "8.8.8.8",
+          latitude: 40.7128,
+          longitude: -74.006,
+          city: "New York",
+          country: "United States",
+          severity: "high",
+          message: "Failed login threshold exceeded",
+          response_action: "block_ip",
+          response_status: "completed",
+          response_outcome: {
+            execution_mode: "simulation",
+            execution_state: "succeeded",
+            simulated: true,
+            external_executed: false,
+            tracking_recorded: false,
+          },
+        },
+      ]}
+    />
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "alert marker" }));
+
+  expect(screen.getByText("Response Outcome:")).toBeInTheDocument();
+  expect(screen.getAllByText("Simulated").length).toBeGreaterThan(0);
+  expect(screen.getByText("Legacy Response Status:")).toBeInTheDocument();
+  expect(screen.getByText("completed")).toBeInTheDocument();
+});
+
 test("MapView attack details popup is vertically scrollable for long context", async () => {
   render(
     <MapView

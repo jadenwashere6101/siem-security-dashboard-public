@@ -1451,3 +1451,63 @@ test("shows success message after successful create", async () => {
     expect(screen.getByText(/Created playbook "New playbook"/i)).toBeInTheDocument();
   });
 });
+
+test("execution list and detail render canonical response outcome surfaces", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50 });
+  listPlaybookExecutions.mockResolvedValue({
+    items: [
+      {
+        ...execRow,
+        response_outcome: {
+          execution_mode: "simulation",
+          execution_state: "succeeded",
+          simulated: true,
+        },
+      },
+    ],
+    limit: 50,
+  });
+  getPlaybookExecution.mockResolvedValue({
+    ...execRow,
+    response_outcome: {
+      execution_mode: "simulation",
+      execution_state: "succeeded",
+      simulated: true,
+      selected_action: "monitor",
+      decision_source: "playbook",
+      outcome_summary: "Simulation completed without enforcement.",
+      alert_id: 99,
+      playbook_execution_id: 42,
+    },
+    response_outcomes: [
+      {
+        playbook_step_index: 0,
+        execution_mode: "simulation",
+        execution_state: "succeeded",
+        simulated: true,
+      },
+    ],
+    steps_log: [
+      {
+        step_index: 0,
+        action: "monitor",
+        status: "success",
+        mode: "simulation",
+      },
+    ],
+  });
+
+  render(<PlaybooksPanel {...styleProps} />);
+  await screen.findByText("pb_one");
+  await userEvent.click(screen.getByRole("button", { name: /^executions$/i }));
+  await screen.findByText("42");
+
+  expect(screen.getAllByText("Simulated").length).toBeGreaterThan(0);
+
+  const viewButtons = screen.getAllByRole("button", { name: /^view$/i });
+  await userEvent.click(viewButtons[viewButtons.length - 1]);
+
+  expect(await screen.findByText("Simulation completed without enforcement.")).toBeInTheDocument();
+  expect(screen.getByText("99")).toBeInTheDocument();
+  expect(screen.getAllByText("monitor").length).toBeGreaterThan(0);
+});

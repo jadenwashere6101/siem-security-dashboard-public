@@ -17,6 +17,7 @@ import { listDeadLetters } from "../services/deadLetterService";
 import { listNotificationDeliveries } from "../services/notificationDeliveryService";
 import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
 import PlaybookExecutionTimeline from "./PlaybookExecutionTimeline";
+import { ResponseOutcomeBadge, ResponseOutcomeSummary } from "./ResponseOutcome";
 
 const PAGE_LIMIT = 50;
 const EXEC_STATUSES = ["pending", "running", "awaiting_approval", "success", "failed", "abandoned"];
@@ -886,6 +887,7 @@ function PlaybooksPanel({
                       <th style={headerCellStyle}>ID</th>
                       <th style={headerCellStyle}>Playbook</th>
                       <th style={headerCellStyle}>Status</th>
+                      <th style={headerCellStyle}>Outcome</th>
                       <th style={headerCellStyle}>Alert</th>
                       <th style={headerCellStyle}>Incident</th>
                       <th style={headerCellStyle}>Last step</th>
@@ -906,6 +908,9 @@ function PlaybooksPanel({
                           <td style={{ ...bodyCellStyle, ...mono }}>{row.id}</td>
                           <td style={{ ...bodyCellStyle, ...mono }}>{row.playbook_id}</td>
                           <td style={bodyCellStyle}>{row.status}</td>
+                          <td style={bodyCellStyle}>
+                            <ResponseOutcomeBadge outcome={row.response_outcome || null} />
+                          </td>
                           <td style={bodyCellStyle}>
                             {row.alert_id === null || row.alert_id === undefined ? "—" : row.alert_id}
                           </td>
@@ -1244,6 +1249,13 @@ function PlaybooksPanel({
                   {isAwaitingApproval(detailRecord) ? (
                     <div style={approvalNoticeStyle}>{APPROVAL_PAUSED_MESSAGE}</div>
                   ) : null}
+                  <div style={outcomeSectionStyle}>
+                    <p style={detailLabelStyle}>Canonical response outcome</p>
+                    <ResponseOutcomeSummary
+                      outcome={detailRecord.response_outcome || null}
+                      showRelated
+                    />
+                  </div>
                   <PlaybookExecutionTimeline execution={detailRecord} />
                   {hasWorkerLeaseRecoveryFields(detailRecord) ? (
                     <div style={detailSubsectionStyle}>
@@ -1829,6 +1841,12 @@ const approvalNoticeStyle = {
   color: "#fde68a",
   fontSize: "13px",
   fontWeight: "700",
+};
+
+const outcomeSectionStyle = {
+  margin: "0 0 14px",
+  paddingTop: "12px",
+  borderTop: "1px solid #21262d",
 };
 
 const deliveryEvidenceNoteStyle = {

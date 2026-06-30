@@ -257,3 +257,79 @@ describe("ResponseOutcomeSummary", () => {
     expect(text).not.toMatch(/(^|[^A-Za-z])executed($|[^A-Za-z])/);
   });
 });
+
+describe("canonical outcome count utilities", () => {
+  const {
+    buildCanonicalStepOutcomeLabels,
+    canonicalOutcomeCountSections,
+    hasCanonicalOutcomeCounts,
+    isTrackingOnlyOutcome,
+    mergeCanonicalOutcomeCounts,
+    outcomeCountEntryLabel,
+  } = require("../utils/responseOutcomeDisplay");
+
+  test("mergeCanonicalOutcomeCounts sums grouped counts", () => {
+    const merged = mergeCanonicalOutcomeCounts(
+      { execution_mode: { simulation: 2 } },
+      { execution_mode: { simulation: 3, real: 1 } }
+    );
+
+    expect(merged.execution_mode.simulation).toBe(5);
+    expect(merged.execution_mode.real).toBe(1);
+  });
+
+  test("hasCanonicalOutcomeCounts detects non-zero groups", () => {
+    expect(hasCanonicalOutcomeCounts(null)).toBe(false);
+    expect(hasCanonicalOutcomeCounts({ execution_mode: { simulation: 0 } })).toBe(false);
+    expect(hasCanonicalOutcomeCounts({ execution_mode: { simulation: 1 } })).toBe(true);
+  });
+
+  test("canonicalOutcomeCountSections uses outcomeLabel-derived entry labels", () => {
+    const sections = canonicalOutcomeCountSections({
+      execution_mode: { simulation: 4, real: 1 },
+      external_executed: { true: 1, false: 4 },
+    });
+
+    expect(sections[0].entries.map((entry) => entry.label)).toEqual(
+      expect.arrayContaining(["Simulated", "Real executed"])
+    );
+    expect(outcomeCountEntryLabel("external_executed", "true")).toBe("Real executed");
+  });
+
+  test("buildCanonicalStepOutcomeLabels maps first outcome per step index", () => {
+    const labels = buildCanonicalStepOutcomeLabels([
+      {
+        playbook_step_index: 0,
+        execution_mode: "simulation",
+        execution_state: "succeeded",
+        simulated: true,
+      },
+      {
+        playbook_step_index: 0,
+        execution_mode: "real",
+        execution_state: "succeeded",
+        external_executed: true,
+      },
+      {
+        playbook_step_index: 2,
+        execution_mode: "tracking_only",
+        execution_state: "succeeded",
+        tracking_recorded: true,
+      },
+    ]);
+
+    expect(labels[0]).toBe("Simulated");
+    expect(labels[2]).toBe("Tracking only");
+    expect(labels[1]).toBeUndefined();
+  });
+
+  test("isTrackingOnlyOutcome recognizes tracking-only canonical outcomes", () => {
+    expect(
+      isTrackingOnlyOutcome({
+        execution_mode: "tracking_only",
+        tracking_recorded: true,
+      })
+    ).toBe(true);
+    expect(isTrackingOnlyOutcome({ execution_mode: "simulation", simulated: true })).toBe(false);
+  });
+});

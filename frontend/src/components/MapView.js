@@ -12,6 +12,8 @@ import {
   getReputationBadgeStyle,
 } from "../utils/alertDisplay";
 import SourceIpContext from "./SourceIpContext";
+import { ResponseOutcomeBadge } from "./ResponseOutcome";
+import { outcomeLabel } from "../utils/responseOutcomeDisplay";
 
 const geoUrl = "https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json";
 
@@ -314,8 +316,17 @@ function MapView({ alerts }) {
             <strong>Response Action:</strong>{" "}
             {selectedAlert.response_action || "Not set"}
           </p>
+          <p style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+            <strong>Response Outcome:</strong>
+            <ResponseOutcomeBadge outcome={selectedAlert.response_outcome || null} />
+            <span>
+              {selectedAlert.response_outcome
+                ? outcomeLabel(selectedAlert.response_outcome)
+                : selectedAlert.response_status || "Not set"}
+            </span>
+          </p>
           <p>
-            <strong>Response Status:</strong>{" "}
+            <strong>Legacy Response Status:</strong>{" "}
             {selectedAlert.response_status || "Not set"}
           </p>
           <SourceIpContext sourceIp={selectedAlert.source_ip} compact />

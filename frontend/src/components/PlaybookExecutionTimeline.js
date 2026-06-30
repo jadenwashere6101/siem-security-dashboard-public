@@ -1,5 +1,6 @@
 import React, { useMemo } from "react";
 import ExecutionSafetyModelPanel from "./ExecutionSafetyModelPanel";
+import { buildCanonicalStepOutcomeLabels } from "../utils/responseOutcomeDisplay";
 
 // spec: SPEC-UI-004 - timeline labels clarify simulation-safe execution without downplaying real workflows.
 const STATUS_TONES = {
@@ -243,6 +244,7 @@ function safeMetadataEntries(step) {
 
 export function normalizeExecutionTimeline(execution = {}) {
   const parsed = parseStepsLog(execution?.steps_log);
+  const canonicalStepLabels = buildCanonicalStepOutcomeLabels(execution?.response_outcomes);
   const steps = parsed.steps
     .filter((step) => step && typeof step === "object" && !Array.isArray(step))
     .map((step, index) => {
@@ -261,13 +263,14 @@ export function normalizeExecutionTimeline(execution = {}) {
         step.output && typeof step.output === "object" ? step.output.adapter_result : null;
       const startedAt = step.started_at || step.start_time || step.timestamp || step.created_at;
       const completedAt = step.completed_at || step.end_time || step.finished_at;
+      const canonicalOutcomeLabel = canonicalStepLabels[stepIndex];
       return {
         id: step.step_id || `${stepIndex}-${action}-${index}`,
         order: stepIndex,
         label: step.label || step.step_name || `Step ${stepIndex + 1}`,
         action,
         status,
-        eventLabel: getEventLabel(step, status),
+        eventLabel: canonicalOutcomeLabel || getEventLabel(step, status),
         tone: STATUS_TONES[status] || "muted",
         mode,
         startedAt,

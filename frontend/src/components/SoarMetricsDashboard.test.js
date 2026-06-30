@@ -1150,4 +1150,56 @@ describe("SoarMetricsDashboard", () => {
       });
     });
   });
+
+  describe("canonical outcome breakdowns", () => {
+    test("renders canonical outcome counts in playbook, notification, incident, and approval sections", async () => {
+      getPlaybookMetrics.mockResolvedValue({
+        ...playbookFixture,
+        canonical_outcome_counts: {
+          execution_mode: { simulation: 10, real: 2 },
+          execution_state: { succeeded: 8, failed: 2 },
+          external_executed: { true: 2, false: 10 },
+          tracking_recorded: { false: 12 },
+          simulated: { true: 10, false: 2 },
+        },
+      });
+      getNotificationDeliveryMetrics.mockResolvedValue({
+        total_attempts: 20,
+        recent: { success: 15, failed: 2, blocked: 1 },
+        by_mode: { simulation: 18, real: 2 },
+        canonical_outcome_counts: {
+          execution_mode: { simulation: 18, real: 2 },
+          simulated: { true: 18, false: 2 },
+        },
+      });
+      getIncidentMetrics.mockResolvedValue({
+        by_status: { open: 2, investigating: 1, resolved: 1, closed: 0 },
+        by_severity: { HIGH: 1, MEDIUM: 2 },
+        canonical_outcome_counts: {
+          execution_mode: { observed: 3 },
+          execution_state: { observed: 3 },
+        },
+      });
+      getApprovalMetrics.mockResolvedValue({
+        by_status: { pending: 1, approved: 2, denied: 1, expired: 0 },
+        pending_count: 1,
+        canonical_outcome_counts: {
+          execution_mode: { simulation: 2, real: 1 },
+          execution_state: { awaiting_approval: 1, blocked: 1, succeeded: 1 },
+        },
+      });
+      getDeadLetterMetrics.mockResolvedValue(emptyData);
+
+      render(<SoarMetricsDashboard {...analystProps} />);
+
+      expect(await screen.findByLabelText("Playbook canonical outcome counts")).toBeInTheDocument();
+      expect(screen.getByLabelText("Notification canonical outcome counts")).toBeInTheDocument();
+      expect(screen.getByLabelText("Incident canonical outcome counts")).toBeInTheDocument();
+      expect(screen.getByLabelText("Approval canonical outcome counts")).toBeInTheDocument();
+      expect(screen.getAllByText("Simulated").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Real executed").length).toBeGreaterThan(0);
+      expect(screen.getByText("Total Executions")).toBeInTheDocument();
+      expect(screen.getAllByText("Pending").length).toBeGreaterThan(0);
+    });
+  });
 });

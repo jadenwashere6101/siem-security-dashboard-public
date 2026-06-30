@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 
 import { loadSourceIpContext } from "../services/sourceIpContextService";
+import { CanonicalOutcomeBreakdown, ResponseOutcomeBadge, ResponseOutcomeSummary } from "./ResponseOutcome";
+import { outcomeLabel } from "../utils/responseOutcomeDisplay";
 
 function SourceIpContext({ sourceIp, compact = false }) {
   const [context, setContext] = useState(null);
@@ -51,9 +53,14 @@ function SourceIpContext({ sourceIp, compact = false }) {
         context.reputation?.latest_external ||
         context.reputation?.external_snapshots?.length ||
         context.playbook_executions?.recent?.length ||
-        context.reputation?.behavioral
+        context.reputation?.behavioral ||
+        context.response_outcomes?.length ||
+        context.response_outcome_counts
     );
   }, [context]);
+
+  const recentOutcomes = Array.isArray(context?.response_outcomes) ? context.response_outcomes : [];
+  const latestOutcome = recentOutcomes[0] || null;
 
   if (status === "empty") {
     return (
@@ -102,6 +109,39 @@ function SourceIpContext({ sourceIp, compact = false }) {
         <p style={mutedTextStyle}>No source-IP context found.</p>
       ) : (
         <div style={sectionGridStyle}>
+          <ContextSection title="Canonical Outcomes">
+            {recentOutcomes.length === 0 ? (
+              <p style={mutedTextStyle}>No canonical response outcomes recorded for this source IP.</p>
+            ) : (
+              <>
+                <div style={outcomeHeaderStyle}>
+                  <ResponseOutcomeBadge outcome={latestOutcome} />
+                </div>
+                <ResponseOutcomeSummary outcome={latestOutcome} />
+                {recentOutcomes.length > 1 ? (
+                  <div style={outcomeListStyle}>
+                    <p style={outcomeListTitleStyle}>Recent canonical outcomes</p>
+                    {recentOutcomes.slice(0, 5).map((outcome, index) => (
+                      <div
+                        key={`${outcome.latest_outcome_event_id || outcome.soar_correlation_id || index}`}
+                        style={outcomeListItemStyle}
+                      >
+                        <ResponseOutcomeBadge outcome={outcome} />
+                        <span style={outcomeSummaryStyle}>
+                          {outcome.outcome_summary || outcomeLabel(outcome)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </>
+            )}
+            <CanonicalOutcomeBreakdown
+              counts={context.response_outcome_counts}
+              title="Outcome counts for this source IP"
+            />
+          </ContextSection>
+
           <ContextSection title="Alerts">
             <SummaryLine label="Total alerts" value={context.alerts?.counts?.total ?? 0} />
             <SummaryLine label="Open alerts" value={context.alerts?.counts?.open ?? 0} />
@@ -384,6 +424,38 @@ const errorTextStyle = {
   margin: "6px 0",
   color: "#fecaca",
   fontSize: "12px",
+};
+
+const outcomeHeaderStyle = {
+  marginBottom: "10px",
+};
+
+const outcomeListStyle = {
+  display: "grid",
+  gap: "8px",
+  marginTop: "12px",
+};
+
+const outcomeListTitleStyle = {
+  margin: "0 0 6px 0",
+  color: "#cbd5e1",
+  fontSize: "12px",
+  fontWeight: "700",
+};
+
+const outcomeListItemStyle = {
+  display: "grid",
+  gap: "6px",
+  padding: "8px",
+  border: "1px solid #1e293b",
+  borderRadius: "6px",
+  backgroundColor: "#0b1220",
+};
+
+const outcomeSummaryStyle = {
+  color: "#cbd5e1",
+  fontSize: "11px",
+  lineHeight: 1.4,
 };
 
 export default SourceIpContext;

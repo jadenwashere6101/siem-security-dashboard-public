@@ -175,16 +175,37 @@ function mockResolvedData() {
   getIncidentMetrics.mockResolvedValue({
     by_status: { open: 1, investigating: 1 },
     open_high_critical: 1,
+    canonical_outcome_counts: {
+      execution_mode: { observed: 2 },
+      execution_state: { observed: 2 },
+    },
   });
   getPlaybookMetrics.mockResolvedValue({
     by_status: { pending: 1, running: 1, awaiting_approval: 0, failed: 1 },
     stale_running_count: 1,
+    canonical_outcome_counts: {
+      execution_mode: { simulation: 4, real: 1 },
+      execution_state: { succeeded: 3, awaiting_approval: 1 },
+      external_executed: { true: 1, false: 4 },
+      tracking_recorded: { false: 5 },
+      simulated: { true: 4, false: 1 },
+    },
   });
-  getApprovalMetrics.mockResolvedValue({ pending_count: 1 });
+  getApprovalMetrics.mockResolvedValue({
+    pending_count: 1,
+    canonical_outcome_counts: {
+      execution_mode: { simulation: 2 },
+      execution_state: { awaiting_approval: 1, blocked: 1 },
+    },
+  });
   getDeadLetterMetrics.mockResolvedValue({ open: 1, retrying: 0 });
   getNotificationDeliveryMetrics.mockResolvedValue({
     recent: { failed: 1, timeout: 0, blocked: 0 },
     by_mode: { simulation: 8, real: 0 },
+    canonical_outcome_counts: {
+      execution_mode: { simulation: 8 },
+      simulated: { true: 8 },
+    },
   });
   getPlaybookWorkerMetrics.mockResolvedValue({
     daemon_health: { status: "healthy" },
@@ -433,6 +454,62 @@ describe("SocCommandCenter", () => {
     expect(container).not.toHaveTextContent("hooks.example.invalid/secret");
     expect(container).not.toHaveTextContent(/global.*toggle/i);
     expect(container).not.toHaveTextContent(/fake/i);
+  });
+
+  test("renders canonical SOAR outcome counts without standalone Executed label", async () => {
+    renderPanel();
+
+    expect(await screen.findByLabelText("Canonical SOAR outcome counts")).toBeInTheDocument();
+    expect(screen.getAllByText("Simulated").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Real executed").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Awaiting approval").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/^Executed$/)).not.toBeInTheDocument();
+  });
+
+  test("renders incident workspace response outcome summary and no-history state", async () => {
+    loadIncidentDetail.mockResolvedValue({
+      incident: {
+        ...incidentAlpha,
+        assigned_to: "analyst1",
+        response_outcome: {
+          execution_mode: "simulation",
+          execution_state: "succeeded",
+          simulated: true,
+          external_executed: false,
+          tracking_recorded: false,
+          selected_action: "block_ip",
+          decision_source: "manual",
+          outcome_summary: "Simulation completed without enforcement.",
+        },
+        alerts: [
+          {
+            alert_id: 99,
+            alert_type: "failed_login_threshold",
+            severity: "HIGH",
+          },
+        ],
+      },
+    });
+
+    renderPanel();
+
+    expect((await screen.findAllByText("High-risk identity incident")).length).toBeGreaterThan(0);
+    await waitFor(() => {
+      expect(screen.getByText("Simulation completed without enforcement.")).toBeInTheDocument();
+    });
+    expect(screen.getAllByText("Simulated").length).toBeGreaterThan(0);
+
+    loadIncidentDetail.mockResolvedValue({
+      incident: {
+        ...incidentBeta,
+        assigned_to: "analyst1",
+        response_outcome: null,
+        alerts: [],
+      },
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /webhook drift incident/i }));
+    expect(await screen.findByText("No response outcome recorded.")).toBeInTheDocument();
   });
 
   test("exports helper behavior for activity and attention derivation", () => {

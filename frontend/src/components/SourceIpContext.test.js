@@ -180,3 +180,70 @@ test("SourceIpContext handles general load errors", async () => {
     expect(screen.getByText("network down")).toBeInTheDocument();
   });
 });
+
+const outcomeFixture = {
+  execution_mode: "simulation",
+  execution_state: "succeeded",
+  simulated: true,
+  external_executed: false,
+  tracking_recorded: false,
+  outcome_summary: "Simulation completed without enforcement.",
+};
+
+test("SourceIpContext renders canonical outcome badge and summary", async () => {
+  loadSourceIpContext.mockResolvedValue({
+    ...contextResponse,
+    response_outcomes: [outcomeFixture],
+    response_outcome_counts: {
+      execution_mode: { simulation: 1 },
+      simulated: { true: 1 },
+    },
+  });
+
+  render(<SourceIpContext sourceIp="8.8.8.8" />);
+
+  expect(await screen.findByText("Canonical Outcomes")).toBeInTheDocument();
+  expect(screen.getAllByText("Simulated").length).toBeGreaterThan(0);
+  expect(screen.getByText("Simulation completed without enforcement.")).toBeInTheDocument();
+  expect(screen.getByLabelText("Outcome counts for this source IP")).toBeInTheDocument();
+});
+
+test("SourceIpContext renders no-history state when no canonical outcomes exist", async () => {
+  loadSourceIpContext.mockResolvedValue({
+    ...contextResponse,
+    response_outcomes: [],
+    response_outcome_counts: null,
+  });
+
+  render(<SourceIpContext sourceIp="8.8.8.8" />);
+
+  expect(
+    await screen.findByText("No canonical response outcomes recorded for this source IP.")
+  ).toBeInTheDocument();
+  expect(screen.getByText("No canonical outcome counts recorded.")).toBeInTheDocument();
+});
+
+test("SourceIpContext renders multiple recent canonical outcomes", async () => {
+  loadSourceIpContext.mockResolvedValue({
+    ...contextResponse,
+    response_outcomes: [
+      outcomeFixture,
+      {
+        ...outcomeFixture,
+        execution_mode: "tracking_only",
+        tracking_recorded: true,
+        simulated: false,
+        outcome_summary: "Tracking-only record created.",
+      },
+    ],
+    response_outcome_counts: {
+      execution_mode: { simulation: 1, tracking_only: 1 },
+    },
+  });
+
+  render(<SourceIpContext sourceIp="8.8.8.8" />);
+
+  expect(await screen.findByText("Recent canonical outcomes")).toBeInTheDocument();
+  expect(screen.getAllByText("Tracking only").length).toBeGreaterThan(0);
+  expect(screen.getByText("Tracking-only record created.")).toBeInTheDocument();
+});

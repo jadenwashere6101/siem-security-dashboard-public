@@ -7,6 +7,7 @@ import {
 } from "../services/approvalService";
 import { listApprovalNotificationDeliveries } from "../services/notificationDeliveryService";
 import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
+import { ResponseOutcomeBadge, ResponseOutcomeSummary } from "./ResponseOutcome";
 
 const STATUS_FILTERS = ["all", "pending", "approved", "denied", "expired"];
 const RISK_FILTERS = ["all", "medium", "high", "critical"];
@@ -323,7 +324,8 @@ function ApprovalsPanel({
                     <th style={{ ...headerCellStyle, width: "8%" }}>ID</th>
                     <th style={{ ...headerCellStyle, width: "17%" }}>Action</th>
                     <th style={{ ...headerCellStyle, width: "12%" }}>Risk</th>
-                    <th style={{ ...headerCellStyle, width: "13%" }}>Status</th>
+                    <th style={{ ...headerCellStyle, width: "12%" }}>Outcome</th>
+                    <th style={{ ...headerCellStyle, width: "11%" }}>Status</th>
                     <th style={{ ...headerCellStyle, width: "12%" }}>Incident</th>
                     <th style={{ ...headerCellStyle, width: "12%" }}>Queue</th>
                     <th style={{ ...headerCellStyle, width: "13%" }}>Created</th>
@@ -346,6 +348,9 @@ function ApprovalsPanel({
                         <span style={{ ...badgeStyle, ...getRiskBadgeStyle(approval.risk_level) }}>
                           {formatLabel(approval.risk_level)}
                         </span>
+                      </td>
+                      <td style={bodyCellStyle}>
+                        <ResponseOutcomeBadge outcome={approval.response_outcome || null} />
                       </td>
                       <td style={bodyCellStyle}>
                         <span style={{ ...badgeStyle, ...getStatusBadgeStyle(approval.status) }}>
@@ -413,6 +418,11 @@ function ApprovalsPanel({
                       Queue panel to view its current execution status.
                     </div>
                   ) : null}
+                </div>
+
+                <div style={outcomeSectionStyle}>
+                  <p style={tableMetaLabelStyle}>Canonical response outcome</p>
+                  <ResponseOutcomeSummary outcome={selectedApproval.response_outcome || null} />
                 </div>
 
                 <div style={eventsSectionStyle}>
@@ -920,6 +930,12 @@ const queueLinkNoteStyle = {
 };
 
 const eventsSectionStyle = {
+  marginTop: "18px",
+  paddingTop: "16px",
+  borderTop: "1px solid #21262d",
+};
+
+const outcomeSectionStyle = {
   marginTop: "18px",
   paddingTop: "16px",
   borderTop: "1px solid #21262d",

@@ -17,6 +17,7 @@ import {
   getPlaybookWorkerMetrics,
 } from "../services/metricsService";
 import { loadSoarQueueStatus } from "../services/soarQueueService";
+import { CanonicalOutcomeBreakdown } from "./ResponseOutcome";
 
 // spec: SPEC-METRICS-001
 export const REFRESH_INTERVAL_MS = 60_000;
@@ -548,6 +549,10 @@ export default function SoarMetricsDashboard({
                 <p style={emptyTextStyle}>No executions recorded.</p>
               )}
               <PlaybookTable rows={playbookRows} />
+              <CanonicalOutcomeBreakdown
+                counts={playbook.data?.canonical_outcome_counts}
+                title="Playbook canonical outcome counts"
+              />
             </>
           )}
         </section>
@@ -677,6 +682,10 @@ export default function SoarMetricsDashboard({
                   />
                 ))}
               </div>
+              <CanonicalOutcomeBreakdown
+                counts={notification.data?.canonical_outcome_counts}
+                title="Notification canonical outcome counts"
+              />
             </>
           )}
         </section>
@@ -732,6 +741,10 @@ export default function SoarMetricsDashboard({
                   )}
                 </div>
               </div>
+              <CanonicalOutcomeBreakdown
+                counts={incident.data?.canonical_outcome_counts}
+                title="Incident canonical outcome counts"
+              />
             </>
           )}
         </section>
@@ -779,6 +792,10 @@ export default function SoarMetricsDashboard({
               <p style={operationalNoteStyle}>
                 Approve or deny pending approvals in the SOAR Approvals tab.
               </p>
+              <CanonicalOutcomeBreakdown
+                counts={approval.data?.canonical_outcome_counts}
+                title="Approval canonical outcome counts"
+              />
             </>
           )}
         </section>

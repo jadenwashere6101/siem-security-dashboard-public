@@ -175,13 +175,122 @@ export function relatedOutcomeIds(outcome) {
   if (!outcome) return [];
 
   return [
-    ["Alert id", outcome.alert_id],
-    ["Queue id", outcome.queue_id],
-    ["Playbook execution id", outcome.playbook_execution_id],
-    ["Approval request id", outcome.approval_request_id],
+    ["Alert id", outcome.alert_id ?? outcome.related?.alert_id],
+    ["Queue id", outcome.queue_id ?? outcome.related?.queue_id],
+    ["Playbook execution id", outcome.playbook_execution_id ?? outcome.related?.playbook_execution_id],
+    ["Approval request id", outcome.approval_request_id ?? outcome.related?.approval_request_id],
     [
       "Notification delivery id",
-      outcome.notification_delivery_id || outcome.notification_delivery_attempt_id,
+      outcome.notification_delivery_id ||
+        outcome.notification_delivery_attempt_id ||
+        outcome.related?.notification_delivery_attempt_id,
     ],
   ];
+}
+
+const OUTCOME_COUNT_GROUP_ORDER = [
+  "execution_mode",
+  "execution_state",
+  "external_executed",
+  "tracking_recorded",
+  "simulated",
+];
+
+const OUTCOME_COUNT_GROUP_LABELS = {
+  execution_mode: "Execution mode",
+  execution_state: "Execution state",
+  external_executed: "External executed",
+  tracking_recorded: "Tracking recorded",
+  simulated: "Simulated",
+};
+
+export function outcomeCountEntryLabel(groupName, key) {
+  if (groupName === "execution_mode") {
+    return outcomeLabel({
+      execution_mode: key,
+      execution_state: "succeeded",
+      external_executed: key === "real",
+      tracking_recorded: key === "tracking_only",
+      simulated: key === "simulation",
+    });
+  }
+  if (groupName === "execution_state") {
+    return outcomeLabel({
+      execution_mode: "observed",
+      execution_state: key,
+    });
+  }
+  if (groupName === "external_executed") {
+    return key === "true" ? "Real executed" : "Not real executed";
+  }
+  if (groupName === "tracking_recorded") {
+    return key === "true" ? "Tracking only" : "Not tracking only";
+  }
+  if (groupName === "simulated") {
+    return key === "true" ? "Simulated" : "Not simulated";
+  }
+  return formatOutcomeValue(key);
+}
+
+export function mergeCanonicalOutcomeCounts(...sources) {
+  const merged = {};
+  for (const source of sources) {
+    if (!source || typeof source !== "object") continue;
+    for (const [groupName, values] of Object.entries(source)) {
+      if (!values || typeof values !== "object") continue;
+      if (!merged[groupName]) merged[groupName] = {};
+      for (const [key, count] of Object.entries(values)) {
+        merged[groupName][key] = Number(merged[groupName][key] || 0) + Number(count || 0);
+      }
+    }
+  }
+  return merged;
+}
+
+export function hasCanonicalOutcomeCounts(counts) {
+  if (!counts || typeof counts !== "object") return false;
+  return OUTCOME_COUNT_GROUP_ORDER.some((groupName) => {
+    const group = counts[groupName];
+    if (!group || typeof group !== "object") return false;
+    return Object.values(group).some((value) => Number(value) > 0);
+  });
+}
+
+export function canonicalOutcomeCountSections(counts) {
+  if (!counts || typeof counts !== "object") return [];
+  return OUTCOME_COUNT_GROUP_ORDER.map((groupName) => ({
+    groupName,
+    title: OUTCOME_COUNT_GROUP_LABELS[groupName] || formatOutcomeValue(groupName),
+    entries: Object.entries(counts[groupName] || {})
+      .map(([key, count]) => ({
+        key,
+        count: Number(count) || 0,
+        label: outcomeCountEntryLabel(groupName, key),
+      }))
+      .filter((entry) => entry.count > 0),
+  })).filter((section) => section.entries.length > 0);
+}
+
+export function isTrackingOnlyOutcome(outcome) {
+  if (!outcome) return false;
+  return outcome.execution_mode === "tracking_only" || outcome.tracking_recorded === true;
+}
+
+export function buildCanonicalStepOutcomeLabels(responseOutcomes) {
+  const labelsByStep = {};
+  if (!Array.isArray(responseOutcomes)) return labelsByStep;
+  for (const event of responseOutcomes) {
+    const stepIndex = event?.playbook_step_index;
+    if (stepIndex === null || stepIndex === undefined) continue;
+    const normalizedIndex = Number(stepIndex);
+    if (!Number.isFinite(normalizedIndex) || labelsByStep[normalizedIndex]) continue;
+    labelsByStep[normalizedIndex] = outcomeLabel({
+      execution_mode: event.execution_mode,
+      execution_state: event.execution_state,
+      external_executed: event.external_executed,
+      tracking_recorded: event.tracking_recorded,
+      simulated: event.simulated,
+    });
+  }
+  return labelsByStep;
 }

@@ -5,6 +5,8 @@ import {
   unblockBlocklistEntry,
 } from "../services/blocklistService";
 import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
+import { ResponseOutcomeBadge } from "./ResponseOutcome";
+import { isTrackingOnlyOutcome } from "../utils/responseOutcomeDisplay";
 
 function BlocklistManagerPanel({
   cardStyle,
@@ -174,6 +176,7 @@ function BlocklistManagerPanel({
                 <tr>
                   <th style={headerCellStyle}>IP</th>
                   <th style={headerCellStyle}>Status</th>
+                  <th style={headerCellStyle}>Outcome</th>
                   <th style={headerCellStyle}>Reason</th>
                   <th style={headerCellStyle}>Created By</th>
                   <th style={headerCellStyle}>Created At</th>
@@ -189,6 +192,18 @@ function BlocklistManagerPanel({
                       <span style={entry.status === "active" ? activeBadgeStyle : inactiveBadgeStyle}>
                         {entry.status}
                       </span>
+                      {isTrackingOnlyOutcome(entry.response_outcome) ? (
+                        <p style={trackingOnlyNoteStyle}>
+                          SIEM tracking only; no firewall or host enforcement is implied.
+                        </p>
+                      ) : null}
+                    </td>
+                    <td style={bodyCellStyle}>
+                      {entry.response_outcome ? (
+                        <ResponseOutcomeBadge outcome={entry.response_outcome} />
+                      ) : (
+                        <span style={inactiveTextStyle}>No canonical outcome</span>
+                      )}
                     </td>
                     <td style={bodyCellStyle}>{entry.reason || "No reason provided"}</td>
                     <td style={bodyCellStyle}>{entry.created_by || "Unknown"}</td>
@@ -354,6 +369,13 @@ const inactiveTextStyle = {
   color: "#8b949e",
   fontSize: "12px",
   fontWeight: "600",
+};
+
+const trackingOnlyNoteStyle = {
+  margin: "6px 0 0 0",
+  color: "#8b949e",
+  fontSize: "11px",
+  lineHeight: 1.4,
 };
 
 const emptyTextStyle = {

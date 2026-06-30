@@ -584,4 +584,71 @@ describe("ApprovalsPanel", () => {
     ).toBeInTheDocument();
     expect(screen.getAllByText("Pending").length).toBeGreaterThan(0);
   });
+
+  test("renders canonical outcome badges for awaiting, blocked, and real executed approvals", async () => {
+    listApprovals.mockResolvedValue({
+      approvals: [
+        {
+          ...approvalFixture,
+          id: 11,
+          response_outcome: {
+            execution_mode: "simulation",
+            execution_state: "awaiting_approval",
+            simulated: true,
+          },
+        },
+        {
+          ...approvalFixture,
+          id: 12,
+          status: "denied",
+          response_outcome: {
+            execution_mode: "simulation",
+            execution_state: "blocked",
+            simulated: true,
+          },
+        },
+        {
+          ...approvalFixture,
+          id: 13,
+          status: "approved",
+          response_outcome: {
+            execution_mode: "real",
+            execution_state: "succeeded",
+            external_executed: true,
+            simulated: false,
+          },
+        },
+      ],
+      count: 3,
+    });
+    getApproval.mockResolvedValue({
+      approval: {
+        ...approvalDetailFixture,
+        id: 13,
+        status: "approved",
+        response_outcome: {
+          execution_mode: "real",
+          execution_state: "succeeded",
+          external_executed: true,
+          simulated: false,
+          selected_action: "block_ip",
+          decision_source: "approval",
+          outcome_summary: "Real execution confirmed after approval.",
+        },
+      },
+    });
+
+    renderPanel();
+    await screen.findAllByText("Block Ip");
+
+    expect(screen.getAllByText("Awaiting approval").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Blocked by approval").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Real executed").length).toBeGreaterThan(0);
+
+    await userEvent.click(screen.getByRole("cell", { name: "13" }));
+    expect(await screen.findByText("Real execution confirmed after approval.")).toBeInTheDocument();
+    expect(screen.getAllByText("Approved").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("High").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Created").length).toBeGreaterThan(0);
+  });
 });

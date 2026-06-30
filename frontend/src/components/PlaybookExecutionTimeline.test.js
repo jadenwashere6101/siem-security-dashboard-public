@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 
 import PlaybookExecutionTimeline, {
   normalizeExecutionTimeline,
@@ -53,6 +53,50 @@ test("renders a success execution with flow nodes and summary counts", () => {
   expect(screen.getAllByText("Step 2").length).toBeGreaterThan(0);
   expect(screen.getAllByText("notify_owner").length).toBeGreaterThan(0);
   expect(screen.getByText("2.0 sec")).toBeInTheDocument();
+});
+
+test("uses canonical outcome labels from response_outcomes timeline", () => {
+  render(
+    <PlaybookExecutionTimeline
+      execution={{
+        ...baseExecution,
+        response_outcomes: [
+          {
+            playbook_step_index: 0,
+            execution_mode: "simulation",
+            execution_state: "succeeded",
+            simulated: true,
+          },
+          {
+            playbook_step_index: 1,
+            execution_mode: "real",
+            execution_state: "succeeded",
+            external_executed: true,
+            simulated: false,
+          },
+        ],
+        steps_log: [
+          {
+            step_index: 0,
+            action: "enrich_alert",
+            status: "success",
+            mode: "simulation",
+          },
+          {
+            step_index: 1,
+            action: "block_ip",
+            status: "success",
+            mode: "real",
+          },
+        ],
+      }}
+    />
+  );
+
+  expect(screen.getAllByText("Simulated").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("Real executed").length).toBeGreaterThan(0);
+  const flowSection = screen.getByLabelText("Execution step flow");
+  expect(within(flowSection).queryByText(/^Success$/)).not.toBeInTheDocument();
 });
 
 test("renders failed step with safe failure class and sanitized message", () => {

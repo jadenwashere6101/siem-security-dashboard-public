@@ -26,6 +26,8 @@ import {
 } from "../services/soarQueueService";
 import ExecutionSafetyModelPanel from "./ExecutionSafetyModelPanel";
 import SourceIpContext from "./SourceIpContext";
+import { CanonicalOutcomeBreakdown, ResponseOutcomeSummary } from "./ResponseOutcome";
+import { mergeCanonicalOutcomeCounts } from "../utils/responseOutcomeDisplay";
 
 // spec: SPEC-UI-004 - SOC safety model wording separates real workflows from guarded integrations.
 const SOURCE_LIMIT = 12;
@@ -664,6 +666,16 @@ function SocCommandCenter({
   );
 
   const summaryCards = useMemo(() => buildSummaryCards(data), [data]);
+  const canonicalOutcomeCounts = useMemo(
+    () =>
+      mergeCanonicalOutcomeCounts(
+        data.playbookMetrics?.canonical_outcome_counts,
+        data.incidentMetrics?.canonical_outcome_counts,
+        data.approvalMetrics?.canonical_outcome_counts,
+        data.notificationMetrics?.canonical_outcome_counts
+      ),
+    [data.approvalMetrics, data.incidentMetrics, data.notificationMetrics, data.playbookMetrics]
+  );
   const feed = useMemo(() => buildActivityFeed(data), [data]);
   const attentionItems = useMemo(() => deriveAttentionItems(data), [data]);
   const integrationSummary = useMemo(
@@ -720,6 +732,11 @@ function SocCommandCenter({
           <SummaryCard key={card.label} card={card} />
         ))}
       </div>
+
+      <CanonicalOutcomeBreakdown
+        counts={canonicalOutcomeCounts}
+        title="Canonical SOAR outcome counts"
+      />
 
       <div
         style={{
@@ -863,6 +880,10 @@ function SocCommandCenter({
                         </dd>
                       </div>
                     </dl>
+                    <div style={incidentOutcomeStyle}>
+                      <p style={miniHeadingStyle}>Response outcome</p>
+                      <ResponseOutcomeSummary outcome={selectedIncident.response_outcome || null} />
+                    </div>
                     <div style={contextGridStyle}>
                       <ContextBlock label="Linked alerts" count={linkedAlerts.length} items={linkedAlerts} field="alert_type" />
                       <ContextBlock label="Playbooks" count={relatedExecutions.length} items={relatedExecutions} field="playbook_id" />
@@ -1320,6 +1341,10 @@ const detailValueStyle = {
   color: "#e6edf3",
   fontSize: "13px",
   fontWeight: "700",
+};
+
+const incidentOutcomeStyle = {
+  marginBottom: "16px",
 };
 
 const sourceIpButtonStyle = {
