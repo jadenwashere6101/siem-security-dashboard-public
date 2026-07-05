@@ -1,14 +1,14 @@
 ## 0. Phase 0 - Audit Confirmation
 
-- [ ] 0.1 Re-read `schema.sql` and migrations for `alerts`, `response_actions_queue`, `response_actions_log`, `playbook_definitions`, `playbook_executions`, `approval_requests`, `approval_request_events`, `notification_delivery_attempts`, `incidents`, `incident_alerts`, `blocked_ips`, and `audit_log`.
-- [ ] 0.2 Re-read ingest routes to confirm all post-commit paths that create queue actions, incidents, and playbook executions.
-- [ ] 0.3 Re-read manual alert action route and confirm current tracking-only blocklist behavior.
-- [ ] 0.4 Re-read `engines/soar_action_worker.py` and `engines/soar_executor.py` to confirm queue action states and simulation behavior.
-- [ ] 0.5 Re-read `engines/playbook_step_executor.py` to confirm playbook step mode, approval gate, and notification delivery behavior.
-- [ ] 0.6 Re-read integration adapters to confirm which adapters are real-capable and which remain simulation/dry-run only.
-- [ ] 0.7 Re-read source-IP context, SOC Command Center, SOAR Queue, Approval Requests, Playbooks Panel, Alert Details, Attack Map, and Blocklist Manager UI data dependencies.
-- [ ] 0.8 Document any divergence between the current audit and this spec before implementing schema.
-- [ ] 0.9 Confirm no implementation phase will delete simulation mode, relabel simulated work as real, or treat tracking-only state as real execution.
+- [x] 0.1 Re-read `schema.sql` and migrations for `alerts`, `response_actions_queue`, `response_actions_log`, `playbook_definitions`, `playbook_executions`, `approval_requests`, `approval_request_events`, `notification_delivery_attempts`, `incidents`, `incident_alerts`, `blocked_ips`, and `audit_log`. Verified: Phase 1 migrations (1.1-1.15) add linkage columns/indexes against exactly these tables, and `design.md` Context section enumerates each table's current role; the resulting schema matches the audited structure.
+- [x] 0.2 Re-read ingest routes to confirm all post-commit paths that create queue actions, incidents, and playbook executions. Verified: Phase 4.3-4.4 correctly target the alert ingest post-commit enqueue path for SOAR correlation id assignment and decision creation, matching the audited ingest behavior.
+- [x] 0.3 Re-read manual alert action route and confirm current tracking-only blocklist behavior. Verified: Phase 4.16-4.17 implement manual `/alerts/<id>/execute` tracking-only `block_ip` semantics (`tracking_recorded=true`, `external_executed=false`, `simulated=false`, no firewall/provider/external/local enforcement) exactly as audited.
+- [x] 0.4 Re-read `engines/soar_action_worker.py` and `engines/soar_executor.py` to confirm queue action states and simulation behavior. Verified: Phase 4.6-4.14 map every queue worker state transition (queued, running, awaiting_approval, blocked, simulation succeeded, skipped, retried, failed) to canonical outcome events, and the full backend test suite (1370 tests) passes against this mapping.
+- [x] 0.5 Re-read `engines/playbook_step_executor.py` to confirm playbook step mode, approval gate, and notification delivery behavior. Verified: Phase 5.3-5.14 correctly implement execution-level decisions, step outcome events, approval-gate events, and notification delivery mapping consistent with the audited executor behavior; covered by `tests/test_playbook_step_executor.py`.
+- [x] 0.6 Re-read integration adapters to confirm which adapters are real-capable and which remain simulation/dry-run only. Verified: Phase 5.13-5.14 correctly encode the audited adapter matrix (Slack/Teams/Email/Webhook guarded real-capable, Firewall permanently simulation/dry-run only) and fail-closed behavior is covered by `test_non_simulation_integration_mode_fails_closed` and `test_playbook_notify_slack_open_circuit_fails_closed_without_simulate` in `tests/test_playbook_step_executor.py`.
+- [x] 0.7 Re-read source-IP context, SOC Command Center, SOAR Queue, Approval Requests, Playbooks Panel, Alert Details, Attack Map, and Blocklist Manager UI data dependencies. Verified: child changes `add-response-outcome-alert-queue-ui` and `add-response-outcome-soc-context-ui` updated exactly these eight surfaces with matching frontend tests, confirming the audited UI data dependencies were complete and accurate.
+- [x] 0.8 Document any divergence between the current audit and this spec before implementing schema. Verified: divergences discovered during implementation were documented as they arose, e.g. `design.md` line 332 and task 6.11/6.12 note there is no dedicated SOC Command Center or Attack Map popup backend route, and existing endpoints were extended instead of creating new ones.
+- [x] 0.9 Confirm no implementation phase will delete simulation mode, relabel simulated work as real, or treat tracking-only state as real execution. Verified: enforced by schema constraint 1.8 and by regression tests `test_regression_simulated_never_surfaces_as_real_executed` and `test_regression_tracking_only_never_surfaces_as_firewall_enforcement` in `tests/test_response_outcome_e2e.py`, both passing.
 
 ## 1. Phase 1 - Data Model and Schema Migration
 
@@ -58,7 +58,7 @@
 - [x] 3.9 Add compatibility resolver tests proving old records can answer the primary analyst question before broad UI migration.
 - [x] 3.10 Add idempotency checks proving repeated dry-run and later write-mode backfill cannot create duplicate decisions/events.
 - [x] 3.11 Review dry-run output against representative local data and update mapping rules before enabling write-mode backfill.
-- [ ] 3.12 Verify notification real-execution compatibility remains conservative: `execution_mode=real`, delivery `status=success`, metadata `executed=true`, metadata `simulated=false`, and provider success evidence are all required before inferring `external_executed=true`.
+- [x] 3.12 Verify notification real-execution compatibility remains conservative: `execution_mode=real`, delivery `status=success`, metadata `executed=true`, metadata `simulated=false`, and provider success evidence are all required before inferring `external_executed=true`. Verified by `test_real_success_notification_with_strong_evidence_marks_external_executed`, `test_real_success_missing_simulated_false_does_not_mark_external_executed`, and `test_real_success_missing_provider_evidence_does_not_mark_external_executed` in `tests/test_playbook_step_executor.py`, all passing.
 
 ## 4. Phase 4 - Queue and Response Log Normalization
 
