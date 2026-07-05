@@ -1,6 +1,6 @@
 # SOAR Architecture Summary
 
-Last updated: 2026-05-18
+Last updated: 2026-07-05
 
 This document is the portfolio-ready overview of the SIEM/SOAR platform.
 
@@ -56,6 +56,31 @@ approval state, and recovery context where available. The Playbooks UI renders
 this as a read-only execution timeline so reviewers can see exactly where an
 automation succeeded, paused, failed, retried, or recovered.
 
+## Canonical Response Outcomes
+
+SOAR response outcome semantics are defined by the canonical decision/event
+model in [SOAR Response Outcome Model](soar_response_outcome_model.md).
+
+The model uses:
+
+- `soar_response_decisions`: one selected response and the reason it was chosen.
+- `soar_response_outcome_events`: append-only lifecycle events for that selected
+  response.
+- `soar_correlation_id`: a safe lifecycle id propagated across alerts, queue
+  rows, playbook executions, approvals, notification delivery attempts, response
+  logs, incidents, and relevant audit rows.
+
+The canonical API/read model exposes `response_outcome` with selected action,
+decision source, execution actor, mode/state, booleans, summary, reason code,
+related ids, and timestamps. Latest outcome is derived from append-only events,
+not from a rewritten status field.
+
+Dashboard wording is canonicalized around `Observed only`, `Simulated`,
+`Tracking only`, `Real executed`, `Failed`, `Blocked by approval`,
+`Awaiting approval`, and `Skipped`. Standalone `Executed` is not a canonical
+label because it hides the difference between simulation, tracking-only state,
+and guarded real execution.
+
 ## Integration Safety Model
 
 Real outbound execution requires all guards to pass:
@@ -95,4 +120,5 @@ Credential values must never be logged or shown in UI output.
   approved deployment action.
 - Worker operations reference:
   [SOAR Playbook Worker Daemon Runbook](soar_playbook_worker_daemon_runbook.md).
-
+- Response outcome rollout and rollback reference:
+  [SOAR Response Outcome Rollout and Rollback](soar_response_outcome_rollout.md).

@@ -133,78 +133,100 @@ Delegation note: Phase 6 backend API contract work was implemented and verified 
 
 ## 7. Phase 7 - Frontend Shared Outcome Components
 
-- [ ] 7.1 Create shared outcome display utility for canonical labels and color/tone mapping.
-- [ ] 7.2 Create shared `ResponseOutcomeBadge` component for execution mode/state.
-- [ ] 7.3 Create shared `ResponseOutcomeSummary` component that shows selected action, decision source, execution actor, execution booleans, summary, and related ids.
-- [ ] 7.4 Create shared formatter that avoids vague standalone `executed` copy.
-- [ ] 7.5 Add UI handling for inferred legacy outcomes.
-- [ ] 7.6 Add tests for all canonical modes, states, booleans, and reason codes.
-- [ ] 7.7 Add accessibility assertions for badge text and summary text.
+Delegation note: Phase 7 frontend shared outcome component work was implemented
+and verified by child change `add-response-outcome-frontend-components`.
+
+- [x] 7.1 Create shared outcome display utility for canonical labels and color/tone mapping. Completed by child change `add-response-outcome-frontend-components`.
+- [x] 7.2 Create shared `ResponseOutcomeBadge` component for execution mode/state. Completed by child change `add-response-outcome-frontend-components`.
+- [x] 7.3 Create shared `ResponseOutcomeSummary` component that shows selected action, decision source, execution actor, execution booleans, summary, and related ids. Completed by child change `add-response-outcome-frontend-components`.
+- [x] 7.4 Create shared formatter that avoids vague standalone `executed` copy. Completed by child change `add-response-outcome-frontend-components`.
+- [x] 7.5 Add UI handling for inferred legacy outcomes. Completed by child change `add-response-outcome-frontend-components`.
+- [x] 7.6 Add tests for all canonical modes, states, booleans, and reason codes. Completed by child change `add-response-outcome-frontend-components`.
+- [x] 7.7 Add accessibility assertions for badge text and summary text. Completed by child change `add-response-outcome-frontend-components`.
 
 ## 8. Phase 8 - Alert Details and SOAR Queue UI
 
-- [ ] 8.1 Update expanded alert row to display canonical response outcome summary.
-- [ ] 8.2 Update alert side/detail panel to display selected action, decision source, execution actor, mode, state, execution booleans, summary, and related ids.
-- [ ] 8.3 Update alert response log display to distinguish simulated, tracking-only, and real outcomes.
-- [ ] 8.4 Update manual action feedback to describe tracking-only blocklist behavior accurately.
-- [ ] 8.5 Update SOAR Queue list rows to show canonical outcome badge and summary.
-- [ ] 8.6 Update SOAR Queue detail panel to show SOAR correlation id, related approval, response log, playbook execution, and canonical lifecycle.
-- [ ] 8.7 Update SOAR Queue run simulation batch feedback to use canonical simulation language.
-- [ ] 8.8 Add frontend tests for Alert Details and SOAR Queue outcome rendering.
+Delegation note: Phase 8 Alert Details and SOAR Queue UI work was implemented
+and verified by child change `add-response-outcome-alert-queue-ui`.
+
+- [x] 8.1 Update expanded alert row to display canonical response outcome summary. Completed by child change `add-response-outcome-alert-queue-ui`.
+- [x] 8.2 Update alert side/detail panel to display selected action, decision source, execution actor, mode, state, execution booleans, summary, and related ids. Completed by child change `add-response-outcome-alert-queue-ui`.
+- [x] 8.3 Update alert response log display to distinguish simulated, tracking-only, and real outcomes. Completed by child change `add-response-outcome-alert-queue-ui`.
+- [x] 8.4 Update manual action feedback to describe tracking-only blocklist behavior accurately. Completed by child change `add-response-outcome-alert-queue-ui`.
+- [x] 8.5 Update SOAR Queue list rows to show canonical outcome badge and summary. Completed by child change `add-response-outcome-alert-queue-ui`.
+- [x] 8.6 Update SOAR Queue detail panel to show SOAR correlation id, related approval, response log, playbook execution, and canonical lifecycle. Completed by child change `add-response-outcome-alert-queue-ui`.
+- [x] 8.7 Update SOAR Queue run simulation batch feedback to use canonical simulation language. Completed by child change `add-response-outcome-alert-queue-ui`.
+- [x] 8.8 Add frontend tests for Alert Details and SOAR Queue outcome rendering. Completed by child change `add-response-outcome-alert-queue-ui`.
 
 ## 9. Phase 9 - SOC Command Center, Source-IP Context, Map, and Blocklist UI
 
-- [ ] 9.1 Update SOC Command Center operational cards to count canonical outcome modes/states and execution booleans.
-- [ ] 9.2 Update SOC Command Center incident workspace to show related canonical outcomes.
-- [ ] 9.3 Update Source-IP Context component to display recent canonical outcomes for the selected IP.
-- [ ] 9.4 Update Attack Map popup source-IP context integration to show canonical outcome labels if response status is displayed.
-- [ ] 9.5 Update Blocklist Manager to mark tracking-only entries and avoid implying firewall enforcement.
-- [ ] 9.6 Update Approvals Panel to show canonical awaiting/blocked/real-executed-after-approval language.
-- [ ] 9.7 Update Playbooks Panel execution timeline to use canonical step outcome labels.
-- [ ] 9.8 Update SOAR Metrics dashboard to distinguish observed, simulated, tracking-only, real, blocked, skipped, failed, awaiting approval, succeeded, `external_executed`, `tracking_recorded`, and `simulated` counts.
-- [ ] 9.9 Add frontend tests for SOC Command Center, Source-IP Context, Map context, Blocklist Manager, Approvals Panel, Playbooks Panel, and metrics.
+Delegation note: Phase 9 SOC context, map, blocklist, approvals, playbook, and
+metrics UI work was implemented and verified by child change
+`add-response-outcome-soc-context-ui`.
+
+- [x] 9.1 Update SOC Command Center operational cards to count canonical outcome modes/states and execution booleans. Completed by child change `add-response-outcome-soc-context-ui`.
+- [x] 9.2 Update SOC Command Center incident workspace to show related canonical outcomes. Completed by child change `add-response-outcome-soc-context-ui`.
+- [x] 9.3 Update Source-IP Context component to display recent canonical outcomes for the selected IP. Completed by child change `add-response-outcome-soc-context-ui`.
+- [x] 9.4 Update Attack Map popup source-IP context integration to show canonical outcome labels if response status is displayed. Completed by child change `add-response-outcome-soc-context-ui`.
+- [x] 9.5 Update Blocklist Manager to mark tracking-only entries and avoid implying firewall enforcement. Completed by child change `add-response-outcome-soc-context-ui`.
+- [x] 9.6 Update Approvals Panel to show canonical awaiting/blocked/real-executed-after-approval language. Completed by child change `add-response-outcome-soc-context-ui`.
+- [x] 9.7 Update Playbooks Panel execution timeline to use canonical step outcome labels. Completed by child change `add-response-outcome-soc-context-ui`.
+- [x] 9.8 Update SOAR Metrics dashboard to distinguish observed, simulated, tracking-only, real, blocked, skipped, failed, awaiting approval, succeeded, `external_executed`, `tracking_recorded`, and `simulated` counts. Completed by child change `add-response-outcome-soc-context-ui`.
+- [x] 9.9 Add frontend tests for SOC Command Center, Source-IP Context, Map context, Blocklist Manager, Approvals Panel, Playbooks Panel, and metrics. Completed by child change `add-response-outcome-soc-context-ui`.
 
 ## 10. Phase 10 - Retention, Archive, and Reporting Verification
 
-- [ ] 10.1 Define default retention window for canonical decisions and outcome events.
-- [ ] 10.2 Define archive criteria for append-only outcome events.
-- [ ] 10.3 Ensure archive preserves decision id, SOAR correlation id, selected action, final/latest outcome, and enough related ids to answer the primary analyst question.
-- [ ] 10.4 Add reporting query for "What happened, what response was selected, what playbook ran, and was anything actually executed?"
-- [ ] 10.5 Verify latest-outcome queries perform acceptably with representative event volume.
-- [ ] 10.6 Verify metrics either include archived summaries or clearly document their live retention window.
+Delegation note: Phase 10 retention, archive, and reporting verification work was
+implemented and verified by child change `add-response-outcome-retention-e2e`.
+
+- [x] 10.1 Define default retention window for canonical decisions and outcome events. Completed by child change `add-response-outcome-retention-e2e`.
+- [x] 10.2 Define archive criteria for append-only outcome events. Completed by child change `add-response-outcome-retention-e2e`.
+- [x] 10.3 Ensure archive preserves decision id, SOAR correlation id, selected action, final/latest outcome, and enough related ids to answer the primary analyst question. Completed by child change `add-response-outcome-retention-e2e`.
+- [x] 10.4 Add reporting query for "What happened, what response was selected, what playbook ran, and was anything actually executed?" Completed by child change `add-response-outcome-retention-e2e`.
+- [x] 10.5 Verify latest-outcome queries perform acceptably with representative event volume. Completed by child change `add-response-outcome-retention-e2e`.
+- [x] 10.6 Verify metrics either include archived summaries or clearly document their live retention window. Completed by child change `add-response-outcome-retention-e2e`.
 
 ## 11. Phase 11 - End-to-End Tests
 
-- [ ] 11.1 Add end-to-end test for alert observed-only lifecycle.
-- [ ] 11.2 Add end-to-end test for detection-selected simulated queue action.
-- [ ] 11.3 Add end-to-end test for manual tracking-only blocklist action.
-- [ ] 11.4 Add end-to-end test for playbook simulation step sequence.
-- [ ] 11.5 Add end-to-end test for playbook awaiting approval.
-- [ ] 11.6 Add end-to-end test for approval denied/expired blocking execution.
-- [ ] 11.7 Add end-to-end test for notification simulated delivery.
-- [ ] 11.8 Add end-to-end test for guarded real notification success using mocked provider calls.
-- [ ] 11.9 Add end-to-end test for real-capable notification blocked/fail-closed path.
-- [ ] 11.10 Add end-to-end test for source-IP context and SOC Command Center showing the same canonical outcome facts.
-- [ ] 11.11 Add regression test proving simulated actions are never shown as real executed.
-- [ ] 11.12 Add regression test proving tracking-only blocklist entries are never shown as firewall enforcement.
+Delegation note: Phase 11 API/read-model integration and regression tests were
+implemented and verified by child change `add-response-outcome-retention-e2e`.
+
+- [x] 11.1 Add end-to-end test for alert observed-only lifecycle. Completed by child change `add-response-outcome-retention-e2e`.
+- [x] 11.2 Add end-to-end test for detection-selected simulated queue action. Completed by child change `add-response-outcome-retention-e2e`.
+- [x] 11.3 Add end-to-end test for manual tracking-only blocklist action. Completed by child change `add-response-outcome-retention-e2e`.
+- [x] 11.4 Add end-to-end test for playbook simulation step sequence. Completed by child change `add-response-outcome-retention-e2e`.
+- [x] 11.5 Add end-to-end test for playbook awaiting approval. Completed by child change `add-response-outcome-retention-e2e`.
+- [x] 11.6 Add end-to-end test for approval denied/expired blocking execution. Completed by child change `add-response-outcome-retention-e2e`.
+- [x] 11.7 Add end-to-end test for notification simulated delivery. Completed by child change `add-response-outcome-retention-e2e`.
+- [x] 11.8 Add end-to-end test for guarded real notification success using mocked provider calls. Completed by child change `add-response-outcome-retention-e2e`.
+- [x] 11.9 Add end-to-end test for real-capable notification blocked/fail-closed path. Completed by child change `add-response-outcome-retention-e2e`.
+- [x] 11.10 Add end-to-end test for source-IP context and SOC Command Center showing the same canonical outcome facts. Completed by child change `add-response-outcome-retention-e2e`.
+- [x] 11.11 Add regression test proving simulated actions are never shown as real executed. Completed by child change `add-response-outcome-retention-e2e`.
+- [x] 11.12 Add regression test proving tracking-only blocklist entries are never shown as firewall enforcement. Completed by child change `add-response-outcome-retention-e2e`.
 
 ## 12. Phase 12 - Documentation and Interview Notes
 
-- [ ] 12.1 Update SOAR architecture documentation with canonical decision/outcome-event model definitions.
-- [ ] 12.2 Add dashboard wording guide for observed-only, simulated, tracking-only, real-executed, failed, blocked, awaiting approval, and skipped.
-- [ ] 12.3 Document schema additions and rollback behavior.
-- [ ] 12.4 Document backfill dry-run/write-mode strategy and compatibility behavior for legacy records.
-- [ ] 12.5 Document real execution safety boundaries, including firewall dry-run limitation and guarded notification adapters.
-- [ ] 12.6 Update runbooks for analysts explaining how to answer the primary outcome question.
-- [ ] 12.7 Add interview notes summarizing why canonical outcomes were introduced and how they reduce ambiguity.
-- [ ] 12.8 Update OpenSpec task status after each completed implementation slice.
+Delegation note: Phase 12 documentation and interview-note work was implemented
+and verified by child change `add-response-outcome-docs-rollout`.
+
+- [x] 12.1 Update SOAR architecture documentation with canonical decision/outcome-event model definitions. Completed by child change `add-response-outcome-docs-rollout` in `docs/soar_response_outcome_model.md` and `docs/soar_architecture_summary.md`.
+- [x] 12.2 Add dashboard wording guide for observed-only, simulated, tracking-only, real-executed, failed, blocked, awaiting approval, and skipped. Completed by child change `add-response-outcome-docs-rollout`.
+- [x] 12.3 Document schema additions and rollback behavior. Completed by child change `add-response-outcome-docs-rollout`.
+- [x] 12.4 Document backfill dry-run/write-mode strategy and compatibility behavior for legacy records. Completed by child change `add-response-outcome-docs-rollout`.
+- [x] 12.5 Document real execution safety boundaries, including firewall dry-run limitation and guarded notification adapters. Completed by child change `add-response-outcome-docs-rollout`.
+- [x] 12.6 Update runbooks for analysts explaining how to answer the primary outcome question. Completed by child change `add-response-outcome-docs-rollout` in `docs/soar_response_outcome_runbook.md`.
+- [x] 12.7 Add interview notes summarizing why canonical outcomes were introduced and how they reduce ambiguity. Completed by child change `add-response-outcome-docs-rollout`.
+- [x] 12.8 Update OpenSpec task status after each completed implementation slice. Completed by child change `add-response-outcome-docs-rollout`.
 
 ## 13. Rollout and Rollback Checkpoints
 
-- [ ] 13.1 Verify schema-only deployment can be rolled back by ignoring additive objects.
-- [ ] 13.2 Verify backend dual-write can be disabled without changing legacy behavior.
-- [ ] 13.3 Verify API consumers can fall back to legacy fields while canonical fields are unavailable.
-- [ ] 13.4 Verify UI can render inferred legacy outcomes.
-- [ ] 13.5 Verify production rollout order: schema, helpers, dry-run compatibility, dual-write, write-mode backfill, API fields, UI components, screen migrations, metrics.
-- [ ] 13.6 Verify rollback order: disable UI canonical reads, disable API canonical preference, disable dual-write, leave additive data in place.
-- [ ] 13.7 Document known risks and operator-facing mitigations before enabling canonical UI in production.
+Delegation note: Phase 13 rollout and rollback checkpoints were implemented and
+verified by child change `add-response-outcome-docs-rollout`.
+
+- [x] 13.1 Verify schema-only deployment can be rolled back by ignoring additive objects. Completed by child change `add-response-outcome-docs-rollout`.
+- [x] 13.2 Verify backend dual-write can be disabled without changing legacy behavior. Completed by child change `add-response-outcome-docs-rollout`.
+- [x] 13.3 Verify API consumers can fall back to legacy fields while canonical fields are unavailable. Completed by child change `add-response-outcome-docs-rollout`.
+- [x] 13.4 Verify UI can render inferred legacy outcomes. Completed by child change `add-response-outcome-docs-rollout`.
+- [x] 13.5 Verify production rollout order: schema, helpers, dry-run compatibility, dual-write, write-mode backfill, API fields, UI components, screen migrations, metrics. Completed by child change `add-response-outcome-docs-rollout` in `docs/soar_response_outcome_rollout.md`.
+- [x] 13.6 Verify rollback order: disable UI canonical reads, disable API canonical preference, disable dual-write, leave additive data in place. Completed by child change `add-response-outcome-docs-rollout`.
+- [x] 13.7 Document known risks and operator-facing mitigations before enabling canonical UI in production. Completed by child change `add-response-outcome-docs-rollout`.

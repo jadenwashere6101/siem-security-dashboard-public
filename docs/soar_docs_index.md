@@ -1,6 +1,6 @@
 # SOAR Docs Index
 
-Last updated: 2026-05-18
+Last updated: 2026-07-05
 
 This index points reviewers to the current SOAR demo, operations, safety, and
 validation docs.
@@ -15,6 +15,9 @@ validation docs.
 - [SOAR Demo Walkthrough](soar_demo_walkthrough.md)
 - [SOAR Demo Reset Guide](soar_demo_reset_guide.md)
 - [SOAR Architecture Summary](soar_architecture_summary.md)
+- [SOAR Response Outcome Model](soar_response_outcome_model.md)
+- [SOAR Response Outcome Analyst Runbook](soar_response_outcome_runbook.md)
+- [SOAR Response Outcome Rollout and Rollback](soar_response_outcome_rollout.md)
 - [SOAR Security and Safety Boundaries](soar_security_boundaries.md)
 - [SOAR Interview Talking Points](soar_interview_talking_points.md)
 - [SOAR Final Validation Checklist](soar_final_validation_checklist.md)

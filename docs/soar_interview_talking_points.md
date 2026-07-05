@@ -1,6 +1,6 @@
 # SOAR Interview Talking Points
 
-Last updated: 2026-05-18
+Last updated: 2026-07-05
 
 Use this as the concise narrative for portfolio reviews and interviews.
 
@@ -42,6 +42,28 @@ outbound execution.
   uncontrolled security automation is risky.
 - Added audit redaction, rate limiting, and idempotency to make outbound
   integrations safer to operate and demo.
+- Added canonical response outcomes so analysts can distinguish observed-only,
+  simulated, tracking-only, guarded real-executed, failed, blocked, awaiting
+  approval, and skipped states without relying on ambiguous `executed` wording.
+
+## Canonical Response Outcome Explanation
+
+The canonical outcome work replaced ambiguous execution language with a durable
+decision/event model:
+
+- `soar_response_decisions` records what response was selected and why.
+- `soar_response_outcome_events` records what happened afterward as append-only
+  lifecycle evidence.
+- `external_executed`, `tracking_recorded`, and `simulated` answer whether
+  anything real happened, only SIEM tracking happened, or the result was
+  simulation-only.
+- `soar_correlation_id` ties alerts, queue work, playbooks, approvals,
+  notifications, incidents, response logs, and audit context together.
+
+This reduces ambiguity because every view can use one model, one label set, and
+one API shape. It preserves simulation mode, detection semantics, approval
+workflows, and legacy fields during the transition. It does not change real
+firewall enforcement policy, detection/correlation logic, or approval policy.
 
 ## Worker Orchestration Explanation
 
@@ -79,4 +101,3 @@ retryability, and explicit runbooks for any controlled staging smoke test.
   investigations.
 - Added productization runbooks, demo guidance, and validation checklists to
   make the platform safe to present and operate.
-
