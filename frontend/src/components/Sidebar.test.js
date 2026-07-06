@@ -143,7 +143,7 @@ test("footer status and version text carry a title attribute with their full con
 });
 
 test("renders no broken footer row when statusLabel and versionLabel are omitted", () => {
-  const { container } = render(
+  render(
     <Sidebar
       sections={mockSections}
       roleFlags={{ isAdmin: true }}
@@ -153,7 +153,75 @@ test("renders no broken footer row when statusLabel and versionLabel are omitted
   );
 
   expect(screen.queryByText("Operational")).not.toBeInTheDocument();
-  expect(container.querySelector("[title]")).not.toBeInTheDocument();
+  expect(screen.getByTestId("sidebar-status-panel").querySelector("[title]")).toBeNull();
+});
+
+test("hides group heading text when collapsed but keeps the accessible group label", () => {
+  render(
+    <Sidebar
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      isCollapsed
+    />
+  );
+
+  expect(screen.queryByText("Overview")).not.toBeInTheDocument();
+  expect(screen.queryByText("Admin")).not.toBeInTheDocument();
+  expect(screen.getByRole("group", { name: "Overview" })).toBeInTheDocument();
+  expect(screen.getByRole("group", { name: "Admin" })).toBeInTheDocument();
+});
+
+test("shows a decorative glyph and a native tooltip on each nav item when collapsed", () => {
+  render(
+    <Sidebar
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      isCollapsed
+    />
+  );
+
+  const alphaButton = screen.getByRole("button", { name: "Alpha" });
+  expect(alphaButton).toHaveAttribute("title", "Alpha");
+
+  const glyph = alphaButton.querySelector('[aria-hidden="true"]');
+  expect(glyph).not.toBeNull();
+  expect(glyph).toHaveTextContent("A");
+});
+
+test("renders no clipped footer text when collapsed, using a decorative status indicator instead", () => {
+  const { container } = render(
+    <Sidebar
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      isCollapsed
+      statusLabel="Operational"
+      versionLabel="v1.2.3"
+    />
+  );
+
+  expect(screen.queryByText("Operational")).not.toBeInTheDocument();
+  expect(screen.queryByText("v1.2.3")).not.toBeInTheDocument();
+  expect(container.querySelector('[title="Operational · v1.2.3"]')).toBeInTheDocument();
+});
+
+test("renders no footer indicator when collapsed with no status/version props", () => {
+  render(
+    <Sidebar
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      isCollapsed
+    />
+  );
+
+  expect(screen.getByTestId("sidebar-status-panel").querySelector("[title]")).toBeNull();
 });
 
 test("renders a semantic primary nav landmark matching the exposed nav id", () => {

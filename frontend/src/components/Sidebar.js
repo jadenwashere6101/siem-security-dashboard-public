@@ -39,7 +39,7 @@ function Sidebar({
             aria-label={group.name || undefined}
             style={groupStyle}
           >
-            {group.name && (
+            {group.name && !isCollapsed && (
               <p aria-hidden="true" style={groupHeadingStyle}>
                 {group.name}
               </p>
@@ -54,11 +54,18 @@ function Sidebar({
                   type="button"
                   onClick={() => onNavigate(section.id)}
                   aria-current={isActive ? "page" : undefined}
+                  title={section.label}
                   style={{
                     ...navButtonStyle,
+                    ...(isCollapsed ? collapsedNavButtonStyle : {}),
                     ...(isActive ? activeNavButtonStyle : {}),
                   }}
                 >
+                  {isCollapsed && (
+                    <span aria-hidden="true" style={collapsedGlyphStyle}>
+                      {section.label.trim().charAt(0).toUpperCase()}
+                    </span>
+                  )}
                   <span style={isCollapsed ? visuallyHiddenStyle : undefined}>
                     {section.label}
                   </span>
@@ -69,17 +76,29 @@ function Sidebar({
         ))}
       </nav>
 
-      <div style={statusPanelStyle}>
-        {statusLabel && (
-          <p style={statusLabelStyle} title={statusLabel}>
-            {statusLabel}
-          </p>
-        )}
-        {versionLabel && (
-          <p style={versionLabelStyle} title={versionLabel}>
-            {versionLabel}
-          </p>
-        )}
+      <div data-testid="sidebar-status-panel" style={statusPanelStyle}>
+        {isCollapsed
+          ? (statusLabel || versionLabel) && (
+              <span
+                aria-hidden="true"
+                title={[statusLabel, versionLabel].filter(Boolean).join(" · ")}
+                style={collapsedStatusDotStyle}
+              />
+            )
+          : (
+            <>
+              {statusLabel && (
+                <p style={statusLabelStyle} title={statusLabel}>
+                  {statusLabel}
+                </p>
+              )}
+              {versionLabel && (
+                <p style={versionLabelStyle} title={versionLabel}>
+                  {versionLabel}
+                </p>
+              )}
+            </>
+          )}
       </div>
     </aside>
   );
@@ -124,8 +143,11 @@ const navButtonStyle = {
   display: "flex",
   alignItems: "center",
   width: "100%",
-  padding: "9px 12px",
-  border: "1px solid transparent",
+  minHeight: "38px",
+  padding: "10px 14px",
+  borderWidth: "1px",
+  borderStyle: "solid",
+  borderColor: "transparent",
   borderRadius: "8px",
   backgroundColor: "transparent",
   color: "#c9d1d9",
@@ -136,6 +158,22 @@ const navButtonStyle = {
   whiteSpace: "nowrap",
   overflow: "hidden",
   textOverflow: "ellipsis",
+  boxSizing: "border-box",
+};
+
+const collapsedNavButtonStyle = {
+  justifyContent: "center",
+  padding: "10px 0",
+};
+
+const collapsedGlyphStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: "22px",
+  height: "22px",
+  fontSize: "12px",
+  fontWeight: "700",
 };
 
 const activeNavButtonStyle = {
@@ -157,8 +195,17 @@ const visuallyHiddenStyle = {
 };
 
 const statusPanelStyle = {
-  padding: "12px",
+  padding: "14px 12px",
   borderTop: "1px solid #30363d",
+};
+
+const collapsedStatusDotStyle = {
+  display: "block",
+  width: "10px",
+  height: "10px",
+  margin: "0 auto",
+  borderRadius: "50%",
+  backgroundColor: "#3fb950",
 };
 
 const statusLabelStyle = {

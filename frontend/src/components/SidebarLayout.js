@@ -58,12 +58,14 @@ const shellStyle = {
   display: "flex",
   flexDirection: "column",
   minHeight: "100vh",
+  backgroundColor: "#0d1117",
 };
 
 const bodyStyle = {
   display: "flex",
   flex: "1 1 auto",
   minHeight: 0,
+  backgroundColor: "#0d1117",
 };
 
 const mainContentStyle = {
@@ -71,6 +73,7 @@ const mainContentStyle = {
   overflow: "auto",
   padding: "18px 32px 32px",
   boxSizing: "border-box",
+  backgroundColor: "#0d1117",
 };
 
 export default SidebarLayout;

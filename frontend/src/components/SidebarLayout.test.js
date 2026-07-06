@@ -248,3 +248,23 @@ test("does not add a new prop to the public contract for persistence", () => {
   expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument();
   expect(screen.getByText("Page Content")).toBeInTheDocument();
 });
+
+test("main content region has a dark background so no white gutter shows through", () => {
+  readStoredSidebarCollapsed.mockReturnValue(null);
+
+  render(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      title="SIEM Dashboard"
+    >
+      <p>Page Content</p>
+    </SidebarLayout>
+  );
+
+  const pageContent = screen.getByText("Page Content");
+  const mainRegion = pageContent.closest("main");
+  expect(mainRegion).toHaveStyle({ backgroundColor: "#0d1117" });
+});
