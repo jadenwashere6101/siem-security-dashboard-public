@@ -5,7 +5,7 @@ The project SHALL maintain a single lightweight parent roadmap listing the order
 
 #### Scenario: Roadmap reflects child-spec order and dependencies
 - **WHEN** the parent roadmap's child-spec list is read
-- **THEN** it SHALL list each of the eight identified child specs exactly once, in dependency-respecting order, with a note stating what (if anything) each item depends on.
+- **THEN** it SHALL list each of the nine identified child specs exactly once, in dependency-respecting order, with a note stating what (if anything) each item depends on.
 
 #### Scenario: Child spec completion is tracked by checkbox
 - **WHEN** a child spec identified in this roadmap is completed
@@ -24,4 +24,4 @@ This change SHALL NOT modify application source code, database schema, migration
 
 #### Scenario: No child specs created as part of this change
 - **WHEN** this change's artifacts are created
-- **THEN** no directory for any of the eight child specs (e.g., `soar-automation-path-consolidation`) SHALL be created under `openspec/changes/`.
+- **THEN** no directory for any of the nine child specs (e.g., `soar-automation-path-consolidation`) SHALL be created under `openspec/changes/`.

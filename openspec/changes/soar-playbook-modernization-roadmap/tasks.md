@@ -10,16 +10,18 @@ Track the ordered child-spec roadmap for modernizing the SOAR playbook subsystem
   - Dependency: soft dependency on 2.1 (finalize protected-target guard placement once the path decision is made).
 - [ ] 2.3 Playbook Schedules Resolution
   - Dependency: none — independent, can run in parallel with any other item.
-- [ ] 2.4 Core Playbook Pack v1
-  - Dependency: 2.1 (target the decided execution path) and 2.2 (build on hardened primitives).
-- [ ] 2.5 Conditional Branching Primitive
+- [ ] 2.4 Dynamic Playbook Parameter Binding
+  - Dependency: 2.2 (hardened executor and canonical action vocabulary before adding resolution semantics).
+- [ ] 2.5 Core Playbook Pack v1
+  - Dependency: 2.1 (target the decided execution path), 2.2 (build on hardened primitives), and 2.4 (per-execution parameter binding for containment and alert-specific notifications).
+- [ ] 2.6 Conditional Branching Primitive
   - Dependency: 2.2 (hardened base before adding new execution semantics).
-- [ ] 2.6 Ad Hoc Trigger & Enrichment Step
-  - Dependency: 2.2 (hardened base); soft dependency on 2.4 (a real playbook to invoke/enrich).
-- [ ] 2.7 Incident Evidence Collection & Automated Case Enrichment
-  - Dependency: soft dependency on 2.6 (reuse enrichment-snapshot shape).
-- [ ] 2.8 Playbook Chaining & Cross-Path Orchestration Layer
-  - Dependency: 2.1, 2.2, 2.4, 2.5 — sequenced last on purpose.
+- [ ] 2.7 Ad Hoc Trigger & Enrichment Step
+  - Dependency: 2.2 (hardened base); soft dependency on 2.5 (a real playbook to invoke/enrich).
+- [ ] 2.8 Incident Evidence Collection & Automated Case Enrichment
+  - Dependency: soft dependency on 2.7 (reuse enrichment-snapshot shape).
+- [ ] 2.9 Playbook Chaining & Cross-Path Orchestration Layer
+  - Dependency: 2.1, 2.2, 2.5, 2.6 — sequenced last on purpose.
 
 ## 3. Deferred for now
 

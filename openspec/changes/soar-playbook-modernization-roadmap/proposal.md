@@ -4,7 +4,7 @@ The SOAR playbook audit (`audit-soar-playbook-library`) found a mature execution
 
 ## What Changes
 
-- Add a lightweight, non-implementing parent change that lists the eight child specs identified for SOAR playbook modernization, in dependency order, with a checkbox per child spec to track completion.
+- Add a lightweight, non-implementing parent change that lists the nine child specs identified for SOAR playbook modernization, in dependency order, with a checkbox per child spec to track completion.
 - Record the deferred items (rollback/compensating actions, generic pluggable action framework, reusable investigation stages, cross-execution incident timeline UI) so they remain visible without being scheduled.
 - No design detail, no implementation steps, and no code/schema changes are included here — each checked-off item corresponds to its own separate, focused child OpenSpec change created later.
 
