@@ -24,8 +24,20 @@ export const sectionsConfig = [
     visibleWhen: ({ canTakeAlertActions }) => canTakeAlertActions,
   },
   {
-    id: "administration",
-    label: "Administration",
+    id: "detection-rules",
+    label: "Detection Rules",
+    group: "administration",
+    visibleWhen: ({ isSuperAdmin }) => isSuperAdmin,
+  },
+  {
+    id: "admin-users",
+    label: "User Management",
+    group: "administration",
+    visibleWhen: ({ isSuperAdmin }) => isSuperAdmin,
+  },
+  {
+    id: "admin-audit-logs",
+    label: "Audit Logs",
     group: "administration",
     visibleWhen: ({ isSuperAdmin }) => isSuperAdmin,
   },

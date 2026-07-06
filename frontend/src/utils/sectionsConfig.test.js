@@ -5,7 +5,9 @@ const EXPECTED_SECTION_IDS = [
   "soc-command-center",
   "blocklist",
   "threat-hunt",
-  "administration",
+  "detection-rules",
+  "admin-users",
+  "admin-audit-logs",
   "soar-queue",
   "soar-incidents",
   "soar-approvals",
@@ -63,7 +65,19 @@ const expectedVisibility = {
     viewer: false,
     unauthenticated: false,
   },
-  administration: {
+  "detection-rules": {
+    super_admin: true,
+    analyst: false,
+    viewer: false,
+    unauthenticated: false,
+  },
+  "admin-users": {
+    super_admin: true,
+    analyst: false,
+    viewer: false,
+    unauthenticated: false,
+  },
+  "admin-audit-logs": {
     super_admin: true,
     analyst: false,
     viewer: false,
@@ -114,8 +128,8 @@ const expectedVisibility = {
 };
 
 describe("sectionsConfig", () => {
-  test("contains exactly the 12 existing section ids", () => {
-    expect(sectionsConfig).toHaveLength(12);
+  test("contains exactly the expected section ids", () => {
+    expect(sectionsConfig).toHaveLength(14);
     expect(sectionsConfig.map((section) => section.id)).toEqual(EXPECTED_SECTION_IDS);
   });
 

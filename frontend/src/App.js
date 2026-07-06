@@ -550,29 +550,33 @@ function App() {
           />
         )}
 
-        {activeSection === "administration" && isSectionVisible("administration", roleFlags) && (
-          <>
-            <DetectionRulesPanel
-              cardStyle={cardStyle}
-              cardHeaderStyle={cardHeaderStyle}
-              cardTitleStyle={cardTitleStyle}
-              cardSubtitleStyle={cardSubtitleStyle}
-            />
-            <AdminUsersPanel
-              cardStyle={cardStyle}
-              cardHeaderStyle={cardHeaderStyle}
-              cardTitleStyle={cardTitleStyle}
-              cardSubtitleStyle={cardSubtitleStyle}
-              filterLabelStyle={filterLabelStyle}
-              selectStyle={selectStyle}
-            />
-            <AuditLogPanel
-              cardStyle={cardStyle}
-              cardHeaderStyle={cardHeaderStyle}
-              cardTitleStyle={cardTitleStyle}
-              cardSubtitleStyle={cardSubtitleStyle}
-            />
-          </>
+        {activeSection === "detection-rules" && isSectionVisible("detection-rules", roleFlags) && (
+          <DetectionRulesPanel
+            cardStyle={cardStyle}
+            cardHeaderStyle={cardHeaderStyle}
+            cardTitleStyle={cardTitleStyle}
+            cardSubtitleStyle={cardSubtitleStyle}
+          />
+        )}
+
+        {activeSection === "admin-users" && isSectionVisible("admin-users", roleFlags) && (
+          <AdminUsersPanel
+            cardStyle={cardStyle}
+            cardHeaderStyle={cardHeaderStyle}
+            cardTitleStyle={cardTitleStyle}
+            cardSubtitleStyle={cardSubtitleStyle}
+            filterLabelStyle={filterLabelStyle}
+            selectStyle={selectStyle}
+          />
+        )}
+
+        {activeSection === "admin-audit-logs" && isSectionVisible("admin-audit-logs", roleFlags) && (
+          <AuditLogPanel
+            cardStyle={cardStyle}
+            cardHeaderStyle={cardHeaderStyle}
+            cardTitleStyle={cardTitleStyle}
+            cardSubtitleStyle={cardSubtitleStyle}
+          />
         )}
 
         {activeSection === "soar-queue" && isSectionVisible("soar-queue", roleFlags) && (
