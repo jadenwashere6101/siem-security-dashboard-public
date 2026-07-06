@@ -2,7 +2,7 @@ import React from "react";
 
 import { SIDEBAR_NAV_ID } from "./Sidebar";
 
-function TopBar({ isCollapsed = false, onToggleCollapse, title, children }) {
+function TopBar({ isCollapsed = false, onToggleCollapse, title, eyebrow, children }) {
   return (
     <header style={topBarStyle}>
       <div style={leftGroupStyle}>
@@ -17,7 +17,12 @@ function TopBar({ isCollapsed = false, onToggleCollapse, title, children }) {
           <span aria-hidden="true">☰</span>
         </button>
 
-        {title && <h1 style={titleStyle}>{title}</h1>}
+        {(eyebrow || title) && (
+          <div>
+            {eyebrow && <p style={eyebrowStyle}>{eyebrow}</p>}
+            {title && <h1 style={titleStyle}>{title}</h1>}
+          </div>
+        )}
       </div>
 
       <div style={rightSlotStyle}>{children}</div>
@@ -57,6 +62,15 @@ const hamburgerButtonStyle = {
   fontSize: "16px",
   cursor: "pointer",
   flexShrink: 0,
+};
+
+const eyebrowStyle = {
+  margin: "0 0 2px 0",
+  color: "#8b949e",
+  fontSize: "10px",
+  fontWeight: "700",
+  letterSpacing: "0.14em",
+  textTransform: "uppercase",
 };
 
 const titleStyle = {

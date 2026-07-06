@@ -9,6 +9,8 @@ function SidebarLayout({
   activeSectionId,
   onNavigate,
   title,
+  eyebrow,
+  topBarActions,
   statusLabel,
   versionLabel,
   children,
@@ -21,7 +23,14 @@ function SidebarLayout({
 
   return (
     <div style={shellStyle}>
-      <TopBar isCollapsed={isCollapsed} onToggleCollapse={toggleCollapsed} title={title} />
+      <TopBar
+        isCollapsed={isCollapsed}
+        onToggleCollapse={toggleCollapsed}
+        title={title}
+        eyebrow={eyebrow}
+      >
+        {topBarActions}
+      </TopBar>
 
       <div style={bodyStyle}>
         <Sidebar

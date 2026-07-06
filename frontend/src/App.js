@@ -14,6 +14,7 @@ import DeadLettersPanel from "./components/DeadLettersPanel";
 import SocCommandCenter from "./components/SocCommandCenter";
 import ThreatHuntPanel from "./components/ThreatHuntPanel";
 import BlocklistManagerPanel from "./components/BlocklistManagerPanel";
+import SidebarLayout from "./components/SidebarLayout";
 import {
   readStoredSessionIdentity,
   writeStoredSessionIdentity,
@@ -33,6 +34,7 @@ import {
   logoutFromDashboard,
 } from "./services/authService";
 import { isSectionVisible, sectionsConfig } from "./utils/sectionsConfig";
+import packageJson from "../package.json";
 
 function App() {
   const [alerts, setAlerts] = useState([]);
@@ -429,57 +431,39 @@ function App() {
   }
 
   return (
-    <div style={pageStyle}>
-      <div style={containerStyle}>
-        <header style={headerStyle}>
-          <div style={topBarStyle}>
-            <div>
-              <p style={eyebrowStyle}>SIEM</p>
-              <h1 style={titleStyle}>SIEM Dashboard</h1>
-            </div>
-            <div style={sessionActionsStyle}>
-              <div style={identityBlockStyle}>
-                <p style={identityLabelStyle}>Signed in as {currentUsername || "Unknown user"}</p>
-                <span
-                  style={{
-                    ...roleBadgeStyle,
-                    ...(isSuperAdmin
-                      ? superAdminRoleBadgeStyle
-                      : isAnalyst
-                      ? analystRoleBadgeStyle
-                      : viewerRoleBadgeStyle),
-                  }}
-                >
-                  {displayRoleLabel}
-                </span>
-              </div>
-              <button
-                onClick={handleLogout}
-                style={logoutButtonStyle}
-              >
-                Switch Account / Logout
-              </button>
-            </div>
+    <SidebarLayout
+      sections={sectionsConfig}
+      roleFlags={roleFlags}
+      activeSectionId={activeSection}
+      onNavigate={setActiveSection}
+      title="SIEM Dashboard"
+      eyebrow="SIEM"
+      statusLabel="Operational"
+      versionLabel={`v${packageJson.version}`}
+      topBarActions={
+        <div style={sessionActionsStyle}>
+          <div style={identityBlockStyle}>
+            <p style={identityLabelStyle}>Signed in as {currentUsername || "Unknown user"}</p>
+            <span
+              style={{
+                ...roleBadgeStyle,
+                ...(isSuperAdmin
+                  ? superAdminRoleBadgeStyle
+                  : isAnalyst
+                  ? analystRoleBadgeStyle
+                  : viewerRoleBadgeStyle),
+              }}
+            >
+              {displayRoleLabel}
+            </span>
           </div>
-          {sessionNotice && <div style={sessionNoticeStyle}>{sessionNotice}</div>}
-        </header>
-        <div style={sectionNavStyle}>
-          {sectionsConfig.map(({ id, label, visibleWhen }) =>
-            visibleWhen(roleFlags) ? (
-              <button
-                key={id}
-                type="button"
-                onClick={() => setActiveSection(id)}
-                style={{
-                  ...sectionTabStyle,
-                  ...(activeSection === id ? activeSectionTabStyle : inactiveSectionTabStyle),
-                }}
-              >
-                {label}
-              </button>
-            ) : null
-          )}
+          <button onClick={handleLogout} style={logoutButtonStyle}>
+            Switch Account / Logout
+          </button>
         </div>
+      }
+    >
+      {sessionNotice && <div style={sessionNoticeStyle}>{sessionNotice}</div>}
 
         {activeSection === "dashboard" && isSectionVisible("dashboard", roleFlags) && (
           <DashboardSection
@@ -669,67 +653,9 @@ function App() {
             userRole={userRole}
           />
         )}
-      </div>
-    </div>
+    </SidebarLayout>
   );
 }
-
-const pageStyle = {
-  minHeight: "100vh",
-  backgroundColor: "#0d1117",
-  color: "#e6edf3",
-  fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-};
-
-const containerStyle = {
-  maxWidth: "1400px",
-  margin: "0 auto",
-  padding: "18px 32px 32px",
-};
-
-const headerStyle = {
-  marginBottom: "14px",
-  paddingBottom: "10px",
-  borderBottom: "1px solid #21262d",
-};
-
-const sectionNavStyle = {
-  display: "flex",
-  alignItems: "center",
-  gap: "10px",
-  marginBottom: "24px",
-  flexWrap: "wrap",
-};
-
-const sectionTabStyle = {
-  padding: "8px 14px",
-  borderRadius: "999px",
-  border: "1px solid #30363d",
-  fontSize: "13px",
-  fontWeight: "700",
-  cursor: "pointer",
-  transition: "background-color 120ms ease, border-color 120ms ease, color 120ms ease",
-};
-
-const activeSectionTabStyle = {
-  backgroundColor: "#1f6feb",
-  borderColor: "#1f6feb",
-  color: "#ffffff",
-};
-
-const inactiveSectionTabStyle = {
-  backgroundColor: "#0d1117",
-  borderColor: "#30363d",
-  color: "#c9d1d9",
-};
-
-const topBarStyle = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-  gap: "12px",
-  flexWrap: "wrap",
-};
 
 const sessionActionsStyle = {
   display: "flex",
@@ -784,23 +710,6 @@ const viewerRoleBadgeStyle = {
   backgroundColor: "rgba(139, 148, 158, 0.12)",
   border: "1px solid rgba(139, 148, 158, 0.24)",
   color: "#c9d1d9",
-};
-
-const eyebrowStyle = {
-  margin: "0 0 2px 0",
-  color: "#8b949e",
-  fontSize: "10px",
-  fontWeight: "700",
-  letterSpacing: "0.14em",
-  textTransform: "uppercase",
-};
-
-const titleStyle = {
-  margin: 0,
-  fontSize: "18px",
-  fontWeight: "600",
-  color: "#e6edf3",
-  letterSpacing: "-0.01em",
 };
 
 const logoutButtonStyle = {

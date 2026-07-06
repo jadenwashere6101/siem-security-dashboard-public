@@ -59,3 +59,24 @@ test("renders caller-supplied content in the right-side slot", () => {
 
   expect(screen.getByRole("button", { name: "Log out" })).toBeInTheDocument();
 });
+
+test("renders eyebrow above title when provided", () => {
+  render(
+    <TopBar
+      isCollapsed={false}
+      onToggleCollapse={() => {}}
+      title="SIEM Dashboard"
+      eyebrow="SIEM"
+    />
+  );
+
+  expect(screen.getByText("SIEM")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "SIEM Dashboard" })).toBeInTheDocument();
+});
+
+test("renders without eyebrow when omitted", () => {
+  render(<TopBar isCollapsed={false} onToggleCollapse={() => {}} title="SIEM Dashboard" />);
+
+  expect(screen.queryByText("SIEM")).not.toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "SIEM Dashboard" })).toBeInTheDocument();
+});

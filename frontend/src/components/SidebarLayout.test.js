@@ -116,3 +116,38 @@ test("does not own activeSection state; activeSectionId prop alone controls high
     "aria-current"
   );
 });
+
+test("renders topBarActions content inside TopBar's right-side slot", () => {
+  render(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      title="SIEM Dashboard"
+      topBarActions={<button type="button">Log out</button>}
+    >
+      <p>Page Content</p>
+    </SidebarLayout>
+  );
+
+  expect(screen.getByRole("button", { name: "Log out" })).toBeInTheDocument();
+});
+
+test("forwards eyebrow to TopBar when provided", () => {
+  render(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      title="SIEM Dashboard"
+      eyebrow="SIEM"
+    >
+      <p>Page Content</p>
+    </SidebarLayout>
+  );
+
+  expect(screen.getByText("SIEM")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "SIEM Dashboard" })).toBeInTheDocument();
+});
