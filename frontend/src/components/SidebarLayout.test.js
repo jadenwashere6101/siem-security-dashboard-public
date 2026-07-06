@@ -288,3 +288,43 @@ test("main content region has minWidth 0 so wide content cannot squeeze the side
   const mainRegion = pageContent.closest("main");
   expect(mainRegion).toHaveStyle({ minWidth: 0 });
 });
+
+test("main content has no left padding when the sidebar is collapsed, so content sits flush against the rail", () => {
+  readStoredSidebarCollapsed.mockReturnValue(true);
+
+  render(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      title="SIEM Dashboard"
+    >
+      <p>Page Content</p>
+    </SidebarLayout>
+  );
+
+  const pageContent = screen.getByText("Page Content");
+  const mainRegion = pageContent.closest("main");
+  expect(mainRegion).toHaveStyle({ paddingLeft: 0 });
+});
+
+test("main content keeps its left padding when the sidebar is expanded", () => {
+  readStoredSidebarCollapsed.mockReturnValue(false);
+
+  render(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      title="SIEM Dashboard"
+    >
+      <p>Page Content</p>
+    </SidebarLayout>
+  );
+
+  const pageContent = screen.getByText("Page Content");
+  const mainRegion = pageContent.closest("main");
+  expect(mainRegion).toHaveStyle({ paddingLeft: "32px" });
+});

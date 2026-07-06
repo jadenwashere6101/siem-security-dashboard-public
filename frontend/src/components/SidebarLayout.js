@@ -48,7 +48,9 @@ function SidebarLayout({
           versionLabel={versionLabel}
         />
 
-        <main style={mainContentStyle}>{children}</main>
+        <main style={{ ...mainContentStyle, paddingLeft: isCollapsed ? 0 : "32px" }}>
+          {children}
+        </main>
       </div>
     </div>
   );
@@ -72,7 +74,9 @@ const mainContentStyle = {
   flex: "1 1 auto",
   minWidth: 0,
   overflow: "auto",
-  padding: "18px 32px 32px",
+  paddingTop: "18px",
+  paddingRight: "32px",
+  paddingBottom: "32px",
   boxSizing: "border-box",
   backgroundColor: "#0d1117",
 };
