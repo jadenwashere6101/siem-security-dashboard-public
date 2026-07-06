@@ -30,7 +30,7 @@ function Sidebar({
   });
 
   return (
-    <aside style={{ ...asideStyle, flex: isCollapsed ? "0 0 64px" : "0 0 256px" }}>
+    <aside style={{ ...asideStyle, width: isCollapsed ? 64 : 256 }}>
       <nav id={SIDEBAR_NAV_ID} aria-label="Primary" style={navStyle}>
         {groups.map((group) => (
           <div
@@ -103,10 +103,11 @@ const asideStyle = {
   display: "flex",
   flexDirection: "column",
   justifyContent: "space-between",
+  flex: "0 0 auto",
   height: "100%",
   backgroundColor: "#0d1117",
   borderRight: "1px solid #30363d",
-  transition: "flex-basis 120ms ease",
+  transition: "width 120ms ease",
   overflow: "hidden",
   boxSizing: "border-box",
 };

@@ -190,7 +190,7 @@ test("renders no visible letters or glyphs on nav items when collapsed, only a n
   expect(alphaButton).toHaveStyle({ justifyContent: "center" });
 });
 
-test("locks the sidebar to a fixed flex-basis so it cannot shrink or grow from sibling content", () => {
+test("locks the sidebar to a fixed width that cannot shrink or grow from sibling content", () => {
   const { container, rerender } = render(
     <Sidebar
       sections={mockSections}
@@ -201,7 +201,7 @@ test("locks the sidebar to a fixed flex-basis so it cannot shrink or grow from s
   );
 
   const aside = container.querySelector("aside");
-  expect(aside).toHaveStyle({ flex: "0 0 256px" });
+  expect(aside).toHaveStyle({ flex: "0 0 auto", width: "256px" });
 
   rerender(
     <Sidebar
@@ -213,7 +213,7 @@ test("locks the sidebar to a fixed flex-basis so it cannot shrink or grow from s
     />
   );
 
-  expect(aside).toHaveStyle({ flex: "0 0 64px" });
+  expect(aside).toHaveStyle({ flex: "0 0 auto", width: "64px" });
 });
 
 test("sidebar width does not vary with which section is active", () => {
@@ -227,7 +227,7 @@ test("sidebar width does not vary with which section is active", () => {
   );
 
   const aside = container.querySelector("aside");
-  const widthWithAlphaActive = aside.style.flex;
+  const widthWithAlphaActive = aside.style.width;
 
   rerender(
     <Sidebar
@@ -238,7 +238,7 @@ test("sidebar width does not vary with which section is active", () => {
     />
   );
 
-  expect(aside.style.flex).toBe(widthWithAlphaActive);
+  expect(aside.style.width).toBe(widthWithAlphaActive);
 });
 
 test("renders no clipped footer text when collapsed, using a decorative status indicator instead", () => {
