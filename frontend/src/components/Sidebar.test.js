@@ -94,7 +94,7 @@ test("calls onNavigate with the clicked section's id", async () => {
   expect(onNavigate).toHaveBeenCalledWith("gamma");
 });
 
-test("keeps each nav item's accessible name available when collapsed", () => {
+test("does not render hidden nav buttons when collapsed", () => {
   render(
     <Sidebar
       sections={mockSections}
@@ -105,9 +105,9 @@ test("keeps each nav item's accessible name available when collapsed", () => {
     />
   );
 
-  expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Beta" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Gamma" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Alpha" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Beta" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Gamma" })).not.toBeInTheDocument();
 });
 
 test("renders a bottom status/version panel from props", () => {
@@ -156,7 +156,7 @@ test("renders no broken footer row when statusLabel and versionLabel are omitted
   expect(screen.getByTestId("sidebar-status-panel").querySelector("[title]")).toBeNull();
 });
 
-test("hides group heading text when collapsed but keeps the accessible group label", () => {
+test("hides nav groups entirely when collapsed", () => {
   render(
     <Sidebar
       sections={mockSections}
@@ -169,25 +169,26 @@ test("hides group heading text when collapsed but keeps the accessible group lab
 
   expect(screen.queryByText("Overview")).not.toBeInTheDocument();
   expect(screen.queryByText("Admin")).not.toBeInTheDocument();
-  expect(screen.getByRole("group", { name: "Overview" })).toBeInTheDocument();
-  expect(screen.getByRole("group", { name: "Admin" })).toBeInTheDocument();
+  expect(screen.queryByRole("group", { name: "Overview" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("group", { name: "Admin" })).not.toBeInTheDocument();
 });
 
-test("renders no visible letters or glyphs on nav items when collapsed, only a native tooltip", () => {
+test("collapsed sidebar has no invisible navigation click targets", async () => {
+  const onNavigate = jest.fn();
+
   render(
     <Sidebar
       sections={mockSections}
       roleFlags={{ isAdmin: true }}
       activeSectionId="alpha"
-      onNavigate={() => {}}
+      onNavigate={onNavigate}
       isCollapsed
     />
   );
 
-  const alphaButton = screen.getByRole("button", { name: "Alpha" });
-  expect(alphaButton).toHaveAttribute("title", "Alpha");
-  expect(alphaButton.querySelector('[aria-hidden="true"]')).toBeNull();
-  expect(alphaButton).toHaveStyle({ justifyContent: "center" });
+  await userEvent.click(screen.getByRole("navigation", { name: "Primary" }));
+
+  expect(onNavigate).not.toHaveBeenCalled();
 });
 
 test("locks the sidebar to a fixed width that cannot shrink or grow from sibling content", () => {

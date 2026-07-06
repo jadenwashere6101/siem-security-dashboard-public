@@ -106,7 +106,7 @@ test("toggling the hamburger flips collapse state and propagates to both TopBar 
   await userEvent.click(toggleButton);
 
   expect(toggleButton).toHaveAttribute("aria-expanded", "false");
-  expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Alpha" })).not.toBeInTheDocument();
 });
 
 test("does not own activeSection state; activeSectionId prop alone controls highlighting", () => {

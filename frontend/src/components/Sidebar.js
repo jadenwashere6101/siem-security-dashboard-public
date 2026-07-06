@@ -32,43 +32,41 @@ function Sidebar({
   return (
     <aside style={{ ...asideStyle, width: isCollapsed ? 64 : 256 }}>
       <nav id={SIDEBAR_NAV_ID} aria-label="Primary" style={navStyle}>
-        {groups.map((group) => (
-          <div
-            key={group.name || "ungrouped"}
-            role="group"
-            aria-label={group.name || undefined}
-            style={groupStyle}
-          >
-            {group.name && !isCollapsed && (
-              <p aria-hidden="true" style={groupHeadingStyle}>
-                {group.name}
-              </p>
-            )}
+        {!isCollapsed &&
+          groups.map((group) => (
+            <div
+              key={group.name || "ungrouped"}
+              role="group"
+              aria-label={group.name || undefined}
+              style={groupStyle}
+            >
+              {group.name && (
+                <p aria-hidden="true" style={groupHeadingStyle}>
+                  {group.name}
+                </p>
+              )}
 
-            {group.sections.map((section) => {
-              const isActive = section.id === activeSectionId;
+              {group.sections.map((section) => {
+                const isActive = section.id === activeSectionId;
 
-              return (
-                <button
-                  key={section.id}
-                  type="button"
-                  onClick={() => onNavigate(section.id)}
-                  aria-current={isActive ? "page" : undefined}
-                  title={section.label}
-                  style={{
-                    ...navButtonStyle,
-                    ...(isCollapsed ? collapsedNavButtonStyle : {}),
-                    ...(isActive ? activeNavButtonStyle : {}),
-                  }}
-                >
-                  <span style={isCollapsed ? visuallyHiddenStyle : undefined}>
-                    {section.label}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        ))}
+                return (
+                  <button
+                    key={section.id}
+                    type="button"
+                    onClick={() => onNavigate(section.id)}
+                    aria-current={isActive ? "page" : undefined}
+                    title={section.label}
+                    style={{
+                      ...navButtonStyle,
+                      ...(isActive ? activeNavButtonStyle : {}),
+                    }}
+                  >
+                    <span>{section.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
       </nav>
 
       <div data-testid="sidebar-status-panel" style={statusPanelStyle}>
@@ -157,27 +155,10 @@ const navButtonStyle = {
   boxSizing: "border-box",
 };
 
-const collapsedNavButtonStyle = {
-  justifyContent: "center",
-  padding: "10px 0",
-};
-
 const activeNavButtonStyle = {
   backgroundColor: "#1f6feb",
   borderColor: "#1f6feb",
   color: "#ffffff",
-};
-
-const visuallyHiddenStyle = {
-  position: "absolute",
-  width: "1px",
-  height: "1px",
-  padding: 0,
-  margin: "-1px",
-  overflow: "hidden",
-  clip: "rect(0, 0, 0, 0)",
-  whiteSpace: "nowrap",
-  border: 0,
 };
 
 const statusPanelStyle = {
