@@ -30,7 +30,7 @@ function Sidebar({
   });
 
   return (
-    <aside style={{ ...asideStyle, width: isCollapsed ? 64 : 240 }}>
+    <aside style={{ ...asideStyle, flex: isCollapsed ? "0 0 64px" : "0 0 256px" }}>
       <nav id={SIDEBAR_NAV_ID} aria-label="Primary" style={navStyle}>
         {groups.map((group) => (
           <div
@@ -61,11 +61,6 @@ function Sidebar({
                     ...(isActive ? activeNavButtonStyle : {}),
                   }}
                 >
-                  {isCollapsed && (
-                    <span aria-hidden="true" style={collapsedGlyphStyle}>
-                      {section.label.trim().charAt(0).toUpperCase()}
-                    </span>
-                  )}
                   <span style={isCollapsed ? visuallyHiddenStyle : undefined}>
                     {section.label}
                   </span>
@@ -111,7 +106,7 @@ const asideStyle = {
   height: "100%",
   backgroundColor: "#0d1117",
   borderRight: "1px solid #30363d",
-  transition: "width 120ms ease",
+  transition: "flex-basis 120ms ease",
   overflow: "hidden",
   boxSizing: "border-box",
 };
@@ -164,16 +159,6 @@ const navButtonStyle = {
 const collapsedNavButtonStyle = {
   justifyContent: "center",
   padding: "10px 0",
-};
-
-const collapsedGlyphStyle = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  width: "22px",
-  height: "22px",
-  fontSize: "12px",
-  fontWeight: "700",
 };
 
 const activeNavButtonStyle = {

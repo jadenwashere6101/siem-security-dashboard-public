@@ -268,3 +268,23 @@ test("main content region has a dark background so no white gutter shows through
   const mainRegion = pageContent.closest("main");
   expect(mainRegion).toHaveStyle({ backgroundColor: "#0d1117" });
 });
+
+test("main content region has minWidth 0 so wide content cannot squeeze the sidebar", () => {
+  readStoredSidebarCollapsed.mockReturnValue(null);
+
+  render(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      title="SIEM Dashboard"
+    >
+      <p>Page Content</p>
+    </SidebarLayout>
+  );
+
+  const pageContent = screen.getByText("Page Content");
+  const mainRegion = pageContent.closest("main");
+  expect(mainRegion).toHaveStyle({ minWidth: 0 });
+});

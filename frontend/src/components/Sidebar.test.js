@@ -173,7 +173,7 @@ test("hides group heading text when collapsed but keeps the accessible group lab
   expect(screen.getByRole("group", { name: "Admin" })).toBeInTheDocument();
 });
 
-test("shows a decorative glyph and a native tooltip on each nav item when collapsed", () => {
+test("renders no visible letters or glyphs on nav items when collapsed, only a native tooltip", () => {
   render(
     <Sidebar
       sections={mockSections}
@@ -186,10 +186,59 @@ test("shows a decorative glyph and a native tooltip on each nav item when collap
 
   const alphaButton = screen.getByRole("button", { name: "Alpha" });
   expect(alphaButton).toHaveAttribute("title", "Alpha");
+  expect(alphaButton.querySelector('[aria-hidden="true"]')).toBeNull();
+  expect(alphaButton).toHaveStyle({ justifyContent: "center" });
+});
 
-  const glyph = alphaButton.querySelector('[aria-hidden="true"]');
-  expect(glyph).not.toBeNull();
-  expect(glyph).toHaveTextContent("A");
+test("locks the sidebar to a fixed flex-basis so it cannot shrink or grow from sibling content", () => {
+  const { container, rerender } = render(
+    <Sidebar
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+    />
+  );
+
+  const aside = container.querySelector("aside");
+  expect(aside).toHaveStyle({ flex: "0 0 256px" });
+
+  rerender(
+    <Sidebar
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      isCollapsed
+    />
+  );
+
+  expect(aside).toHaveStyle({ flex: "0 0 64px" });
+});
+
+test("sidebar width does not vary with which section is active", () => {
+  const { container, rerender } = render(
+    <Sidebar
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+    />
+  );
+
+  const aside = container.querySelector("aside");
+  const widthWithAlphaActive = aside.style.flex;
+
+  rerender(
+    <Sidebar
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="gamma"
+      onNavigate={() => {}}
+    />
+  );
+
+  expect(aside.style.flex).toBe(widthWithAlphaActive);
 });
 
 test("renders no clipped footer text when collapsed, using a decorative status indicator instead", () => {
