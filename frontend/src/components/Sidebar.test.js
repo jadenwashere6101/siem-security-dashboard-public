@@ -126,6 +126,36 @@ test("renders a bottom status/version panel from props", () => {
   expect(screen.getByText("v1.2.3")).toBeInTheDocument();
 });
 
+test("footer status and version text carry a title attribute with their full content", () => {
+  render(
+    <Sidebar
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      statusLabel="Operational"
+      versionLabel="v1.2.3"
+    />
+  );
+
+  expect(screen.getByText("Operational")).toHaveAttribute("title", "Operational");
+  expect(screen.getByText("v1.2.3")).toHaveAttribute("title", "v1.2.3");
+});
+
+test("renders no broken footer row when statusLabel and versionLabel are omitted", () => {
+  const { container } = render(
+    <Sidebar
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+    />
+  );
+
+  expect(screen.queryByText("Operational")).not.toBeInTheDocument();
+  expect(container.querySelector("[title]")).not.toBeInTheDocument();
+});
+
 test("renders a semantic primary nav landmark matching the exposed nav id", () => {
   render(
     <Sidebar

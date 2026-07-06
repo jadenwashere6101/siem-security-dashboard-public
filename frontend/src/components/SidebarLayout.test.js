@@ -3,6 +3,20 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import SidebarLayout from "./SidebarLayout";
+import {
+  readStoredSidebarCollapsed,
+  writeStoredSidebarCollapsed,
+} from "../utils/sidebarPreference";
+
+jest.mock("../utils/sidebarPreference", () => ({
+  readStoredSidebarCollapsed: jest.fn(),
+  writeStoredSidebarCollapsed: jest.fn(),
+}));
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  readStoredSidebarCollapsed.mockReturnValue(null);
+});
 
 const mockSections = [
   { id: "alpha", label: "Alpha", group: "Overview", visibleWhen: () => true },
@@ -150,4 +164,87 @@ test("forwards eyebrow to TopBar when provided", () => {
 
   expect(screen.getByText("SIEM")).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "SIEM Dashboard" })).toBeInTheDocument();
+});
+
+test("initializes collapsed when a stored preference of true is present", () => {
+  readStoredSidebarCollapsed.mockReturnValue(true);
+
+  render(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      title="SIEM Dashboard"
+    >
+      <p>Page Content</p>
+    </SidebarLayout>
+  );
+
+  expect(screen.getByRole("button", { name: /toggle navigation/i })).toHaveAttribute(
+    "aria-expanded",
+    "false"
+  );
+});
+
+test("initializes expanded when no stored preference is present", () => {
+  readStoredSidebarCollapsed.mockReturnValue(null);
+
+  render(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      title="SIEM Dashboard"
+    >
+      <p>Page Content</p>
+    </SidebarLayout>
+  );
+
+  expect(screen.getByRole("button", { name: /toggle navigation/i })).toHaveAttribute(
+    "aria-expanded",
+    "true"
+  );
+});
+
+test("persists the new collapse state when toggled", async () => {
+  readStoredSidebarCollapsed.mockReturnValue(false);
+
+  render(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      title="SIEM Dashboard"
+    >
+      <p>Page Content</p>
+    </SidebarLayout>
+  );
+
+  expect(writeStoredSidebarCollapsed).toHaveBeenCalledWith(false);
+
+  await userEvent.click(screen.getByRole("button", { name: /toggle navigation/i }));
+
+  expect(writeStoredSidebarCollapsed).toHaveBeenCalledWith(true);
+});
+
+test("does not add a new prop to the public contract for persistence", () => {
+  readStoredSidebarCollapsed.mockReturnValue(null);
+
+  render(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      title="SIEM Dashboard"
+    >
+      <p>Page Content</p>
+    </SidebarLayout>
+  );
+
+  expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument();
+  expect(screen.getByText("Page Content")).toBeInTheDocument();
 });

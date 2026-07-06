@@ -1,7 +1,8 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 
 import Sidebar from "./Sidebar";
 import TopBar from "./TopBar";
+import { readStoredSidebarCollapsed, writeStoredSidebarCollapsed } from "../utils/sidebarPreference";
 
 function SidebarLayout({
   sections,
@@ -15,11 +16,15 @@ function SidebarLayout({
   versionLabel,
   children,
 }) {
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(() => readStoredSidebarCollapsed() ?? false);
 
   const toggleCollapsed = useCallback(() => {
     setIsCollapsed((previous) => !previous);
   }, []);
+
+  useEffect(() => {
+    writeStoredSidebarCollapsed(isCollapsed);
+  }, [isCollapsed]);
 
   return (
     <div style={shellStyle}>

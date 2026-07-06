@@ -70,8 +70,16 @@ function Sidebar({
       </nav>
 
       <div style={statusPanelStyle}>
-        {statusLabel && <p style={statusLabelStyle}>{statusLabel}</p>}
-        {versionLabel && <p style={versionLabelStyle}>{versionLabel}</p>}
+        {statusLabel && (
+          <p style={statusLabelStyle} title={statusLabel}>
+            {statusLabel}
+          </p>
+        )}
+        {versionLabel && (
+          <p style={versionLabelStyle} title={versionLabel}>
+            {versionLabel}
+          </p>
+        )}
       </div>
     </aside>
   );
