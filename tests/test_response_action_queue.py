@@ -6,6 +6,7 @@ from unittest.mock import Mock
 from core.approval_store import approve_request, create_approval_request, deny_request
 from core.response_action_queue_store import (
     QueueTransitionError,
+    _queue_row_from_record,
     claim_next_approved_awaiting_action,
     claim_next_pending_action,
     get_queue_action,
@@ -217,6 +218,42 @@ def test_queue_row_defaults_on_insert(postgres_db):
     assert created_at is not None
     assert updated_at is not None
     assert ikey is not None and len(ikey) == 64  # SHA-256 hex digest
+
+
+def test_queue_row_from_record_accepts_real_dict_cursor_shape():
+    row = _queue_row_from_record(
+        {
+            "id": 123,
+            "alert_id": 456,
+            "host": "8.8.8.8",
+            "action": "monitor",
+            "status": "running",
+            "retry_count": 0,
+            "max_retries": 3,
+            "last_error": None,
+            "idempotency_key": "abc",
+            "created_at": "created",
+            "updated_at": "updated",
+            "decision_id": "decision-1",
+            "soar_correlation_id": "correlation-1",
+        }
+    )
+
+    assert row == {
+        "id": 123,
+        "alert_id": 456,
+        "source_ip": "8.8.8.8",
+        "action": "monitor",
+        "status": "running",
+        "retry_count": 0,
+        "max_retries": 3,
+        "last_error": None,
+        "idempotency_key": "abc",
+        "created_at": "created",
+        "updated_at": "updated",
+        "decision_id": "decision-1",
+        "soar_correlation_id": "correlation-1",
+    }
 
 
 def test_queue_row_custom_max_retries(postgres_db):

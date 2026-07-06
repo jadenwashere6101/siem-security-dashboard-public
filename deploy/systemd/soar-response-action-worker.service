@@ -1,0 +1,29 @@
+[Unit]
+Description=SOAR Response Action Queue Worker (one bounded simulation-safe batch)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=jaden
+Group=jaden
+WorkingDirectory=/home/jaden/siem-security-dashboard
+EnvironmentFile=/home/jaden/siem-security-dashboard/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=INTEGRATION_MODE=simulation
+Environment=SOAR_EXECUTION_MODE=simulation
+Environment=SOAR_RUNNER_BATCH_SIZE=10
+Environment=SOAR_RECOVER_STALE_RUNNING=true
+Environment=SOAR_STALE_RUNNING_AFTER_SECONDS=900
+Environment=SOAR_STALE_RECOVERY_LIMIT=50
+Environment=SOAR_REAL_SLACK_ENABLED=false
+Environment=SOAR_REAL_TEAMS_ENABLED=false
+Environment=SOAR_REAL_EMAIL_ENABLED=false
+Environment=SOAR_REAL_WEBHOOK_ENABLED=false
+Environment=SOAR_REAL_FIREWALL_ENABLED=false
+ExecStart=/home/jaden/siem-security-dashboard/scripts/run_response_action_worker_service.sh --json
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

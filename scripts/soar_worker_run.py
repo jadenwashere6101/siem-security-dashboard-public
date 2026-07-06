@@ -4,11 +4,10 @@ import logging
 import os
 import sys
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import psycopg2
-from psycopg2.extras import RealDictCursor
 
 # Ensure repo root is importable when invoked as a script path.
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -17,13 +16,15 @@ if str(REPO_ROOT) not in sys.path:
 
 from engines.soar_action_worker import process_batch
 from engines.soar_executor import AdapterBackedExecutor, SimulationExecutor
-from core.response_action_queue_store import get_queue_status_counts
+from core.response_action_queue_store import get_queue_status_counts, recover_stale_running_actions
 from integrations.soar_adapters.config import SoarAdapterConfig
 from integrations.soar_adapters.linux_firewall import LinuxFirewallDryRunAdapter
 from integrations.soar_adapters.registry import SoarAdapterRegistry
 
 DEFAULT_BATCH_SIZE = 10
 MAX_BATCH_SIZE = 50
+DEFAULT_STALE_AFTER_SECONDS = 900
+MAX_STALE_RECOVERY_LIMIT = 50
 VALID_EXECUTION_MODES = {"simulation", "real"}
 _KNOWN_STATUSES = ["pending", "running", "awaiting_approval", "failed", "skipped", "success"]
 
@@ -54,6 +55,24 @@ def _parse_args(argv=None):
         default=False,
         help="Print queue status counts and exit without processing any actions.",
     )
+    parser.add_argument(
+        "--recover-stale",
+        action="store_true",
+        default=False,
+        help="Recover stale running queue rows before processing the batch.",
+    )
+    parser.add_argument(
+        "--stale-after-seconds",
+        type=int,
+        default=None,
+        help=f"Running rows older than this are stale. Defaults to {DEFAULT_STALE_AFTER_SECONDS}.",
+    )
+    parser.add_argument(
+        "--stale-limit",
+        type=int,
+        default=None,
+        help=f"Maximum stale rows to recover before a batch (1-{MAX_STALE_RECOVERY_LIMIT}).",
+    )
     return parser.parse_args(argv)
 
 
@@ -66,6 +85,7 @@ def main(argv=None):
         if args.dry_run_info:
             return _run_dry_run_info(args)
         mode, batch_size = _load_and_validate_config(args)
+        stale_config = _load_stale_recovery_config(args)
         header = _build_header_dict(mode, batch_size)
         _print_start_header(header, json_mode=args.json)
         database_url = _read_database_url()
@@ -79,13 +99,21 @@ def main(argv=None):
 
     conn = None
     try:
-        conn = psycopg2.connect(database_url, cursor_factory=RealDictCursor)
+        conn = psycopg2.connect(database_url)
         conn.autocommit = False
     except Exception as error:
         print(f"ERROR: Unable to connect to database: {error}", file=sys.stderr)
         return 1
 
     try:
+        recovered_stale = []
+        if stale_config["enabled"]:
+            recovered_stale = recover_stale_running_actions(
+                conn,
+                stale_after=timedelta(seconds=stale_config["stale_after_seconds"]),
+                limit=stale_config["stale_limit"],
+            )
+            conn.commit()
         results = process_batch(conn, limit=batch_size, executor=executor)
         counts = _aggregate_results(results)
         if args.json:
@@ -95,6 +123,13 @@ def main(argv=None):
                         "mode": mode,
                         "batch_size": batch_size,
                         "started_at": header["started_at"],
+                        "stale_recovery": {
+                            "enabled": stale_config["enabled"],
+                            "stale_after_seconds": stale_config["stale_after_seconds"],
+                            "limit": stale_config["stale_limit"],
+                            "recovered": len(recovered_stale),
+                            "queue_ids": [row["id"] for row in recovered_stale],
+                        },
                         "results": results,
                         "summary": counts,
                     },
@@ -102,6 +137,7 @@ def main(argv=None):
                 )
             )
         else:
+            _print_stale_recovery_summary(stale_config, recovered_stale)
             _print_summary(counts)
         return 0
     except Exception:
@@ -157,6 +193,58 @@ def _load_and_validate_config(args):
         batch_size = MAX_BATCH_SIZE
 
     return raw_mode, batch_size
+
+
+def _load_stale_recovery_config(args):
+    enabled = args.recover_stale or os.getenv("SOAR_RECOVER_STALE_RUNNING", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+    if args.stale_after_seconds is not None:
+        raw_stale_after = str(args.stale_after_seconds)
+    else:
+        raw_stale_after = os.getenv(
+            "SOAR_STALE_RUNNING_AFTER_SECONDS", str(DEFAULT_STALE_AFTER_SECONDS)
+        ).strip()
+
+    if args.stale_limit is not None:
+        raw_stale_limit = str(args.stale_limit)
+    else:
+        raw_stale_limit = os.getenv("SOAR_STALE_RECOVERY_LIMIT", str(MAX_STALE_RECOVERY_LIMIT)).strip()
+
+    try:
+        stale_after_seconds = int(raw_stale_after)
+    except ValueError as error:
+        raise RunnerConfigError("SOAR_STALE_RUNNING_AFTER_SECONDS must be an integer") from error
+
+    try:
+        stale_limit = int(raw_stale_limit)
+    except ValueError as error:
+        raise RunnerConfigError("SOAR_STALE_RECOVERY_LIMIT must be an integer") from error
+
+    if stale_after_seconds < 0:
+        raise RunnerConfigError("SOAR_STALE_RUNNING_AFTER_SECONDS must be >= 0")
+
+    if stale_limit < 1:
+        raise RunnerConfigError("SOAR_STALE_RECOVERY_LIMIT must be >= 1")
+
+    if stale_limit > MAX_STALE_RECOVERY_LIMIT:
+        logging.warning(
+            "SOAR_STALE_RECOVERY_LIMIT=%s exceeds max %s; clamping to %s",
+            stale_limit,
+            MAX_STALE_RECOVERY_LIMIT,
+            MAX_STALE_RECOVERY_LIMIT,
+        )
+        stale_limit = MAX_STALE_RECOVERY_LIMIT
+
+    return {
+        "enabled": enabled,
+        "stale_after_seconds": stale_after_seconds,
+        "stale_limit": stale_limit,
+    }
 
 
 def _read_database_url():
@@ -248,6 +336,16 @@ def _print_summary(counts):
     print("Done.")
 
 
+def _print_stale_recovery_summary(config, recovered_stale):
+    if not config["enabled"]:
+        return
+    print("--- Stale Running Recovery ---")
+    print(f"Recovered: {len(recovered_stale)}")
+    if recovered_stale:
+        queue_ids = ", ".join(str(row["id"]) for row in recovered_stale)
+        print(f"Queue ids: {queue_ids}")
+
+
 def _normalize_queue_counts(raw):
     return {status: raw.get(status, 0) for status in _KNOWN_STATUSES}
 
@@ -264,7 +362,7 @@ def _run_dry_run_info(args):
 
     conn = None
     try:
-        conn = psycopg2.connect(database_url, cursor_factory=RealDictCursor)
+        conn = psycopg2.connect(database_url)
         conn.autocommit = False
         raw_counts = get_queue_status_counts(conn)
         counts = _normalize_queue_counts(raw_counts)

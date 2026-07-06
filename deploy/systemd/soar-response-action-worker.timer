@@ -1,0 +1,12 @@
+[Unit]
+Description=Run SOAR Response Action Queue Worker periodically
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30s
+Unit=soar-response-action-worker.service
+Persistent=false
+
+[Install]
+WantedBy=timers.target

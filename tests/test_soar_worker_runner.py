@@ -53,6 +53,51 @@ def test_runner_batch_clamped_to_50(monkeypatch):
     assert batch_size == 50
 
 
+def test_runner_stale_recovery_config_defaults_disabled(monkeypatch):
+    monkeypatch.delenv("SOAR_RECOVER_STALE_RUNNING", raising=False)
+    monkeypatch.delenv("SOAR_STALE_RUNNING_AFTER_SECONDS", raising=False)
+    monkeypatch.delenv("SOAR_STALE_RECOVERY_LIMIT", raising=False)
+    args = MagicMock(recover_stale=False, stale_after_seconds=None, stale_limit=None)
+
+    config = soar_worker_run._load_stale_recovery_config(args)
+
+    assert config == {
+        "enabled": False,
+        "stale_after_seconds": 900,
+        "stale_limit": 50,
+    }
+
+
+def test_runner_stale_recovery_config_env_enabled_and_clamped(monkeypatch):
+    monkeypatch.setenv("SOAR_RECOVER_STALE_RUNNING", "true")
+    monkeypatch.setenv("SOAR_STALE_RUNNING_AFTER_SECONDS", "30")
+    monkeypatch.setenv("SOAR_STALE_RECOVERY_LIMIT", "500")
+    args = MagicMock(recover_stale=False, stale_after_seconds=None, stale_limit=None)
+
+    config = soar_worker_run._load_stale_recovery_config(args)
+
+    assert config == {
+        "enabled": True,
+        "stale_after_seconds": 30,
+        "stale_limit": 50,
+    }
+
+
+def test_runner_stale_recovery_cli_overrides_env(monkeypatch):
+    monkeypatch.setenv("SOAR_RECOVER_STALE_RUNNING", "false")
+    monkeypatch.setenv("SOAR_STALE_RUNNING_AFTER_SECONDS", "900")
+    monkeypatch.setenv("SOAR_STALE_RECOVERY_LIMIT", "50")
+    args = MagicMock(recover_stale=True, stale_after_seconds=0, stale_limit=5)
+
+    config = soar_worker_run._load_stale_recovery_config(args)
+
+    assert config == {
+        "enabled": True,
+        "stale_after_seconds": 0,
+        "stale_limit": 5,
+    }
+
+
 def test_runner_missing_database_url_exits_1(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("SOAR_EXECUTION_MODE", "simulation")
@@ -71,6 +116,7 @@ def test_runner_connect_uses_database_url(monkeypatch):
     assert code == 0
     connect_mock.assert_called_once()
     assert connect_mock.call_args.args[0] == "postgresql://example/db"
+    assert "cursor_factory" not in connect_mock.call_args.kwargs
 
 
 def test_runner_default_executor_is_simulation(monkeypatch):
@@ -170,6 +216,7 @@ def test_runner_json_output_parseable(monkeypatch, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert {"mode", "batch_size", "started_at", "results", "summary"} <= set(payload.keys())
     assert payload["summary"]["processed"] == len(payload["results"])
+    assert payload["stale_recovery"]["enabled"] is False
 
 
 def test_runner_json_output_empty_queue(monkeypatch, capsys):
@@ -183,6 +230,35 @@ def test_runner_json_output_empty_queue(monkeypatch, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["results"] == []
     assert payload["summary"]["processed"] == 0
+
+
+def test_runner_json_output_includes_stale_recovery(monkeypatch, capsys):
+    _set_base_env(monkeypatch)
+    mock_conn = MagicMock()
+    stale_row = {"id": 42, "status": "pending"}
+    with patch("scripts.soar_worker_run.psycopg2.connect", return_value=mock_conn), patch(
+        "scripts.soar_worker_run.recover_stale_running_actions",
+        return_value=[stale_row],
+    ) as recover_mock, patch(
+        "scripts.soar_worker_run.process_batch", return_value=[]
+    ):
+        code = soar_worker_run.main(
+            ["--json", "--recover-stale", "--stale-after-seconds", "0", "--stale-limit", "5"]
+        )
+
+    assert code == 0
+    recover_mock.assert_called_once()
+    assert recover_mock.call_args.kwargs["stale_after"].total_seconds() == 0
+    assert recover_mock.call_args.kwargs["limit"] == 5
+    mock_conn.commit.assert_called()
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["stale_recovery"] == {
+        "enabled": True,
+        "stale_after_seconds": 0,
+        "limit": 5,
+        "recovered": 1,
+        "queue_ids": [42],
+    }
 
 
 def _insert_alert(cur, source_ip):
@@ -285,6 +361,44 @@ def test_normalize_queue_counts_defaults_and_filters():
         "skipped": 0,
         "success": 0,
     }
+
+
+def test_get_queue_status_counts_accepts_dict_rows():
+    conn = MagicMock()
+    cursor = MagicMock()
+    cursor.fetchall.return_value = [
+        {"status": "pending", "count": 4},
+        {"status": "awaiting_approval", "count": 2},
+    ]
+    conn.cursor.return_value.__enter__.return_value = cursor
+
+    counts = soar_worker_run.get_queue_status_counts(conn)
+
+    assert counts == {"pending": 4, "awaiting_approval": 2}
+
+
+def test_dry_run_info_json_output_with_real_dict_cursor_shape(monkeypatch, capsys):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://example/db")
+    conn = MagicMock()
+    cursor = MagicMock()
+    cursor.fetchall.return_value = [
+        {"status": "pending", "count": 57},
+        {"status": "success", "count": 3},
+    ]
+    conn.cursor.return_value.__enter__.return_value = cursor
+
+    with patch("scripts.soar_worker_run.psycopg2.connect", return_value=conn), patch(
+        "scripts.soar_worker_run.process_batch"
+    ) as process_batch_mock:
+        code = soar_worker_run.main(["--dry-run-info", "--json"])
+
+    assert code == 0
+    process_batch_mock.assert_not_called()
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["mode"] == "dry_run_info"
+    assert payload["queue_counts"]["pending"] == 57
+    assert payload["queue_counts"]["success"] == 3
+    assert payload["queue_counts"]["awaiting_approval"] == 0
 
 
 def test_dry_run_info_does_not_call_process_batch(postgres_db, monkeypatch):

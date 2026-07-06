@@ -12,6 +12,23 @@ def _queue_row_from_record(record):
     if record is None:
         return None
 
+    if hasattr(record, "get"):
+        return {
+            "id": record.get("id"),
+            "alert_id": record.get("alert_id"),
+            "source_ip": record.get("source_ip") or record.get("host"),
+            "action": record.get("action"),
+            "status": record.get("status"),
+            "retry_count": record.get("retry_count"),
+            "max_retries": record.get("max_retries"),
+            "last_error": record.get("last_error"),
+            "idempotency_key": record.get("idempotency_key"),
+            "created_at": record.get("created_at"),
+            "updated_at": record.get("updated_at"),
+            "decision_id": record.get("decision_id"),
+            "soar_correlation_id": record.get("soar_correlation_id"),
+        }
+
     (
         row_id,
         alert_id,
@@ -26,7 +43,7 @@ def _queue_row_from_record(record):
         updated_at,
         decision_id,
         soar_correlation_id,
-    ) = record
+    ) = record[:13]
     return {
         "id": row_id,
         "alert_id": alert_id,
@@ -78,7 +95,13 @@ def get_queue_status_counts(conn):
             GROUP BY status
             """
         )
-        return {row[0]: row[1] for row in cur.fetchall()}
+        counts = {}
+        for row in cur.fetchall():
+            if hasattr(row, "get"):
+                counts[row.get("status")] = row.get("count")
+            else:
+                counts[row[0]] = row[1]
+        return counts
 
 
 def list_recent_queue_actions(conn, limit=50, status=None):
@@ -244,8 +267,11 @@ def skip_next_terminal_approval_action(conn, now=None):
         row = cur.fetchone()
         if row is None:
             return None
-        queue_row = _queue_row_from_record(row[:13])
-        queue_row["approval_status"] = row[13]
+        queue_row = _queue_row_from_record(row)
+        if hasattr(row, "get"):
+            queue_row["approval_status"] = row.get("approval_status")
+        else:
+            queue_row["approval_status"] = row[13]
         return queue_row
 
 
@@ -293,8 +319,11 @@ def sweep_terminal_approval_queue_rows(conn, *, now=None, limit=100):
         rows = cur.fetchall()
         result = []
         for row in rows:
-            queue_row = _queue_row_from_record(row[:13])
-            queue_row["approval_status"] = row[13]
+            queue_row = _queue_row_from_record(row)
+            if hasattr(row, "get"):
+                queue_row["approval_status"] = row.get("approval_status")
+            else:
+                queue_row["approval_status"] = row[13]
             result.append(queue_row)
         return result
 

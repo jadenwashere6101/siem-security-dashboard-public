@@ -25,6 +25,7 @@ validation docs.
 ## Operations
 
 - [SOAR Playbook Worker Daemon Runbook](soar_playbook_worker_daemon_runbook.md)
+- [SOAR Response Action Queue Worker Runbook](soar_response_action_worker_runbook.md)
 - [SOAR Dead Letter Validation](soar_dead_letter_validation.md)
 - [SOAR Execution Locking Validation](soar_execution_locking_validation.md)
 - [Schema Migration Workflow](schema_migration_workflow.md)
