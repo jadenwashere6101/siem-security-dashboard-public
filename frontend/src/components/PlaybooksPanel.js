@@ -10,8 +10,6 @@ import {
   retryExecution,
   abandonExecution,
   resumeExecution,
-  listPlaybookSchedules,
-  getPlaybookSchedule,
 } from "../services/playbookService";
 import { listDeadLetters } from "../services/deadLetterService";
 import { listNotificationDeliveries } from "../services/notificationDeliveryService";
@@ -28,16 +26,6 @@ const ENABLED_OPTIONS = [
   { value: "enabled", label: "Enabled only" },
   { value: "disabled", label: "Disabled only" },
 ];
-const SAFE_SCHEDULE_METADATA_KEYS = [
-  "description",
-  "owner",
-  "source",
-  "environment",
-  "created_by",
-  "reason",
-  "ticket_id",
-];
-
 function summarizeTrigger(triggerConfig) {
   if (!triggerConfig || typeof triggerConfig !== "object") {
     return "—";
@@ -122,17 +110,6 @@ function getExecutionControls(status, isSuperAdmin) {
     canAbandon: status === "pending" || status === "running" || status === "awaiting_approval",
     canResume: status === "awaiting_approval",
   };
-}
-
-function getSafeScheduleMetadataEntries(schedule) {
-  const metadata = schedule?.metadata || schedule?.details;
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
-    return [];
-  }
-  return SAFE_SCHEDULE_METADATA_KEYS.filter((key) => metadata[key] !== undefined).map((key) => [
-    key,
-    metadata[key],
-  ]);
 }
 
 function formatAdapterFieldValue(value) {
@@ -259,12 +236,6 @@ function PlaybooksPanel({
   const [formSubmitError, setFormSubmitError] = useState("");
   const [formSubmitSuccess, setFormSubmitSuccess] = useState("");
 
-  // Schedule state
-  const [schedules, setSchedules] = useState([]);
-  const [schedLoading, setSchedLoading] = useState(true);
-  const [schedRefreshing, setSchedRefreshing] = useState(false);
-  const [schedError, setSchedError] = useState("");
-
   const loadDefinitions = useCallback(
     async ({ quiet = false } = {}) => {
       try {
@@ -322,37 +293,10 @@ function PlaybooksPanel({
     [execPlaybookIdApplied, execStatus]
   );
 
-  const loadSchedules = useCallback(
-    async ({ quiet = false } = {}) => {
-      try {
-        if (quiet) {
-          setSchedRefreshing(true);
-        } else {
-          setSchedLoading(true);
-        }
-        setSchedError("");
-        const data = await listPlaybookSchedules({
-          limit: PAGE_LIMIT,
-        });
-        setSchedules(Array.isArray(data?.items) ? data.items : []);
-      } catch (err) {
-        setSchedError(err.message || "Unable to load playbook schedules.");
-        if (!quiet) {
-          setSchedules([]);
-        }
-      } finally {
-        setSchedLoading(false);
-        setSchedRefreshing(false);
-      }
-    },
-    []
-  );
-
   const handleRefreshAll = useCallback(() => {
     loadDefinitions({ quiet: true });
     loadExecutions({ quiet: true });
-    loadSchedules({ quiet: true });
-  }, [loadDefinitions, loadExecutions, loadSchedules]);
+  }, [loadDefinitions, loadExecutions]);
 
   const handleCloseDetail = useCallback(() => {
     setDetailKind(null);
@@ -390,22 +334,6 @@ function PlaybooksPanel({
     } catch (err) {
       setDetailRecord(null);
       setDetailError(err.message || "Unable to load execution details.");
-    } finally {
-      setDetailLoading(false);
-    }
-  }, []);
-
-  const handleViewSchedule = useCallback(async (scheduleId) => {
-    setDetailKind("schedule");
-    setDetailRecord(null);
-    setDetailError("");
-    setDetailLoading(true);
-    try {
-      const row = await getPlaybookSchedule(scheduleId);
-      setDetailRecord(row || null);
-    } catch (err) {
-      setDetailRecord(null);
-      setDetailError(err.message || "Unable to load schedule details.");
     } finally {
       setDetailLoading(false);
     }
@@ -677,10 +605,6 @@ function PlaybooksPanel({
     loadExecutions();
   }, [loadExecutions]);
 
-  useEffect(() => {
-    loadSchedules();
-  }, [loadSchedules]);
-
   const mono = { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: "12px" };
 
   return (
@@ -717,24 +641,14 @@ function PlaybooksPanel({
           </button>
           <button
             type="button"
-            onClick={() => setActivePanel("schedules")}
-            style={{
-              ...subTabStyle,
-              ...(activePanel === "schedules" ? subTabActiveStyle : subTabInactiveStyle),
-            }}
-          >
-            Schedules
-          </button>
-          <button
-            type="button"
             onClick={handleRefreshAll}
-            disabled={defLoading || execLoading || schedLoading || defRefreshing || execRefreshing || schedRefreshing}
+            disabled={defLoading || execLoading || defRefreshing || execRefreshing}
             style={{
               ...refreshButtonStyle,
-              opacity: defLoading || execLoading || schedLoading || defRefreshing || execRefreshing || schedRefreshing ? 0.65 : 1,
+              opacity: defLoading || execLoading || defRefreshing || execRefreshing ? 0.65 : 1,
             }}
           >
-            {defRefreshing || execRefreshing || schedRefreshing ? "Refreshing…" : "Refresh"}
+            {defRefreshing || execRefreshing ? "Refreshing…" : "Refresh"}
           </button>
         </div>
       </div>
@@ -992,63 +906,7 @@ function PlaybooksPanel({
               </div>
             )}
           </>
-        ) : (
-          <>
-            <div style={toolbarStyle} />
-            <div style={noticeStyle}>
-              <p style={metadataOnlyNoticeStyle}>
-                Schedules are metadata-only. No scheduler or daemon exists, and these records do not execute playbooks.
-              </p>
-            </div>
-            {schedError ? <div style={errorStateStyle}>{schedError}</div> : null}
-            {schedLoading ? (
-              <p style={emptyTextStyle}>Loading playbook schedules…</p>
-            ) : schedules.length === 0 ? (
-              <p style={emptyTextStyle}>No playbook schedules found.</p>
-            ) : (
-              <div style={tableWrapperStyle}>
-                <table style={tableStyle}>
-                  <thead>
-                    <tr>
-                      <th style={headerCellStyle}>ID</th>
-                      <th style={headerCellStyle}>Playbook</th>
-                      <th style={headerCellStyle}>Enabled</th>
-                      <th style={headerCellStyle}>Paused</th>
-                      <th style={headerCellStyle}>Schedule</th>
-                      <th style={headerCellStyle}>Missed-Run Policy</th>
-                      <th style={headerCellStyle}>Last Run</th>
-                      <th style={headerCellStyle}>Next Run</th>
-                      <th style={headerCellStyle}>View</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {schedules.map((row) => (
-                      <tr key={row.id} style={rowStyle}>
-                        <td style={{ ...bodyCellStyle, ...mono }}>{row.id}</td>
-                        <td style={{ ...bodyCellStyle, ...mono }}>{row.playbook_id}</td>
-                        <td style={bodyCellStyle}>{row.enabled ? "Yes" : "No"}</td>
-                        <td style={bodyCellStyle}>{row.paused ? "Yes" : "No"}</td>
-                        <td style={bodyCellStyle}>{row.schedule_expression}</td>
-                        <td style={bodyCellStyle}>{row.missed_run_policy}</td>
-                        <td style={bodyCellStyle}>{formatAdminTimestamp(row.last_run_at, "—")}</td>
-                        <td style={bodyCellStyle}>{formatAdminTimestamp(row.next_run_at, "—")}</td>
-                        <td style={bodyCellStyle}>
-                          <button
-                            type="button"
-                            onClick={() => handleViewSchedule(row.id)}
-                            style={viewButtonStyle}
-                          >
-                            View
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </>
-        )}
+        ) : null}
 
         <div style={detailPanelStyle}>
           <div style={detailHeaderStyle}>
@@ -1057,8 +915,6 @@ function PlaybooksPanel({
                 ? "Definition detail"
                 : detailKind === "execution"
                 ? "Execution detail"
-                : detailKind === "schedule"
-                ? "Schedule detail"
                 : "Detail"}
             </h3>
             {detailKind ? (
@@ -1088,113 +944,6 @@ function PlaybooksPanel({
                     <span style={detailValueStyle}>{detailRecord.enabled ? "Yes" : "No"}</span>
                   </div>
                 </div>
-              ) : detailKind === "schedule" ? (
-                <>
-                  <div style={statusSummaryStyle}>
-                    Metadata-only schedule visibility. This record does not execute a playbook.
-                  </div>
-                  <div style={detailGridStyle}>
-                    <div style={detailFieldStyle}>
-                      <span style={detailLabelStyle}>Schedule ID</span>
-                      <span style={detailValueStyle}>{formatDetailValue(detailRecord.id)}</span>
-                    </div>
-                    <div style={detailFieldStyle}>
-                      <span style={detailLabelStyle}>Playbook ID</span>
-                      <span style={detailValueStyle}>{formatDetailValue(detailRecord.playbook_id)}</span>
-                    </div>
-                    <div style={detailFieldStyle}>
-                      <span style={detailLabelStyle}>Enabled</span>
-                      <span style={detailValueStyle}>{formatFlagValue(detailRecord.enabled)}</span>
-                    </div>
-                    <div style={detailFieldStyle}>
-                      <span style={detailLabelStyle}>Paused</span>
-                      <span style={detailValueStyle}>{formatFlagValue(detailRecord.paused)}</span>
-                    </div>
-                    <div style={detailFieldStyle}>
-                      <span style={detailLabelStyle}>Schedule Expression</span>
-                      <span style={detailValueStyle}>
-                        {formatDetailValue(detailRecord.schedule_expression)}
-                      </span>
-                    </div>
-                    <div style={detailFieldStyle}>
-                      <span style={detailLabelStyle}>Timezone</span>
-                      <span style={detailValueStyle}>{formatDetailValue(detailRecord.timezone)}</span>
-                    </div>
-                    <div style={detailFieldStyle}>
-                      <span style={detailLabelStyle}>Missed-Run Policy</span>
-                      <span style={detailValueStyle}>
-                        {formatDetailValue(detailRecord.missed_run_policy)}
-                      </span>
-                    </div>
-                    <div style={detailFieldStyle}>
-                      <span style={detailLabelStyle}>Max Catchup Runs</span>
-                      <span style={detailValueStyle}>
-                        {formatDetailValue(detailRecord.max_catchup_runs)}
-                      </span>
-                    </div>
-                    <div style={detailFieldStyle}>
-                      <span style={detailLabelStyle}>Max Concurrent Runs</span>
-                      <span style={detailValueStyle}>
-                        {formatDetailValue(detailRecord.max_concurrent_runs)}
-                      </span>
-                    </div>
-                    <div style={detailFieldStyle}>
-                      <span style={detailLabelStyle}>Last Run</span>
-                      <span style={detailValueStyle}>
-                        {formatAdminTimestamp(detailRecord.last_run_at, "—")}
-                      </span>
-                    </div>
-                    <div style={detailFieldStyle}>
-                      <span style={detailLabelStyle}>Next Run</span>
-                      <span style={detailValueStyle}>
-                        {formatAdminTimestamp(detailRecord.next_run_at, "—")}
-                      </span>
-                    </div>
-                    <div style={detailFieldStyle}>
-                      <span style={detailLabelStyle}>Last Success</span>
-                      <span style={detailValueStyle}>
-                        {formatAdminTimestamp(detailRecord.last_success_at, "—")}
-                      </span>
-                    </div>
-                    <div style={detailFieldStyle}>
-                      <span style={detailLabelStyle}>Last Failure</span>
-                      <span style={detailValueStyle}>
-                        {formatAdminTimestamp(detailRecord.last_failure_at, "—")}
-                      </span>
-                    </div>
-                    <div style={detailFieldStyle}>
-                      <span style={detailLabelStyle}>Last Scheduled Execution ID</span>
-                      <span style={detailValueStyle}>
-                        {formatDetailValue(detailRecord.last_scheduled_execution_id)}
-                      </span>
-                    </div>
-                    <div style={detailFieldStyle}>
-                      <span style={detailLabelStyle}>Created</span>
-                      <span style={detailValueStyle}>
-                        {formatAdminTimestamp(detailRecord.created_at, "—")}
-                      </span>
-                    </div>
-                    <div style={detailFieldStyle}>
-                      <span style={detailLabelStyle}>Updated</span>
-                      <span style={detailValueStyle}>
-                        {formatAdminTimestamp(detailRecord.updated_at, "—")}
-                      </span>
-                    </div>
-                  </div>
-                  {getSafeScheduleMetadataEntries(detailRecord).length > 0 ? (
-                    <div style={adapterMetadataStyle}>
-                      <div style={adapterMetadataTitleStyle}>Safe Metadata</div>
-                      <div style={timelineMetaGridStyle}>
-                        {getSafeScheduleMetadataEntries(detailRecord).map(([key, value]) => (
-                          <div key={key} style={detailFieldStyle}>
-                            <span style={detailLabelStyle}>{key}</span>
-                            <span style={detailValueStyle}>{formatAdapterFieldValue(value)}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                </>
               ) : (
                 <>
                   <div style={detailGridStyle}>
@@ -1486,11 +1235,6 @@ function PlaybooksPanel({
               ) : detailKind === "execution" ? (
                 <p style={emptyTextStyle}>
                   Raw step payloads are intentionally hidden; the visualization renders safe execution metadata only.
-                </p>
-              ) : null}
-              {detailKind === "schedule" ? (
-                <p style={emptyTextStyle}>
-                  Schedule details are shown from allowlisted metadata fields only.
                 </p>
               ) : null}
               {detailKind === "definition" ? (
@@ -2134,19 +1878,5 @@ const successStateStyle = {
   border: "1px solid rgba(34, 197, 94, 0.35)",
   backgroundColor: "rgba(34, 197, 94, 0.08)",
   color: "#86efac",
-  fontSize: "13px",
-};
-
-const noticeStyle = {
-  marginBottom: "14px",
-  padding: "10px 12px",
-  borderRadius: "8px",
-  border: "1px solid rgba(88, 166, 255, 0.35)",
-  backgroundColor: "rgba(88, 166, 255, 0.08)",
-};
-
-const metadataOnlyNoticeStyle = {
-  margin: 0,
-  color: "#c9d1d9",
   fontSize: "13px",
 };

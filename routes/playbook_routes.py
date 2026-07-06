@@ -25,10 +25,8 @@ from core.playbook_store import (
     active_playbook_execution_exists,
     create_playbook_definition,
     create_retry_execution,
-    get_playbook_schedule,
     get_playbook_definition,
     get_playbook_execution,
-    list_playbook_schedules,
     list_playbook_executions,
     mark_playbook_execution_permanently_failed,
     set_playbook_definition_enabled,
@@ -224,27 +222,6 @@ def _resolve_execution_detail_outcomes(
     )
 
 
-def _serialize_schedule_dict(row: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "id": row["id"],
-        "playbook_id": row["playbook_id"],
-        "schedule_expression": row["schedule_expression"],
-        "timezone": row["timezone"],
-        "enabled": row["enabled"],
-        "paused": row["paused"],
-        "next_run_at": _iso(row["next_run_at"]),
-        "last_run_at": _iso(row["last_run_at"]),
-        "last_success_at": _iso(row["last_success_at"]),
-        "last_failure_at": _iso(row["last_failure_at"]),
-        "last_scheduled_execution_id": row["last_scheduled_execution_id"],
-        "missed_run_policy": row["missed_run_policy"],
-        "max_catchup_runs": row["max_catchup_runs"],
-        "max_concurrent_runs": row["max_concurrent_runs"],
-        "created_at": _iso(row["created_at"]),
-        "updated_at": _iso(row["updated_at"]),
-    }
-
-
 def _parse_non_negative_int(value, default, field_name):
     if value is None:
         return default, None
@@ -336,77 +313,6 @@ def _list_definitions(conn, enabled_filter: bool | None, limit: int) -> list[dic
                 (limit,),
             )
         return [_serialize_definition_row(row) for row in cur.fetchall()]
-
-
-@playbook_bp.route("/playbook-schedules", methods=["GET"])
-@login_required
-@analyst_or_super_admin_required
-def list_playbook_schedules_route():
-    conn = None
-    try:
-        playbook_id = request.args.get("playbook_id")
-        if playbook_id is not None and not playbook_id.strip():
-            return jsonify({"error": "invalid playbook_id filter"}), 400
-        if playbook_id is not None:
-            playbook_id = playbook_id.strip()
-
-        enabled_raw = request.args.get("enabled")
-        enabled_filter, enabled_err = _parse_enabled_filter(enabled_raw)
-        if enabled_err:
-            return jsonify({"error": enabled_err}), 400
-
-        limit, limit_error = _parse_non_negative_int(
-            request.args.get("limit"),
-            DEFAULT_LIMIT,
-            "limit",
-        )
-        if limit_error:
-            return jsonify({"error": limit_error}), 400
-        limit = min(limit, MAX_LIMIT)
-
-        conn = get_db_connection()
-        rows = list_playbook_schedules(
-            conn,
-            playbook_id=playbook_id,
-            enabled=enabled_filter,
-            limit=limit,
-        )
-        return (
-            jsonify(
-                {
-                    "items": [_serialize_schedule_dict(row) for row in rows],
-                    "limit": limit,
-                    "playbook_id": playbook_id,
-                    "enabled": enabled_filter,
-                }
-            ),
-            200,
-        )
-    except Exception as error:
-        current_app.logger.error("Error in list_playbook_schedules_route: %s", error)
-        return jsonify({"error": "Internal server error"}), 500
-    finally:
-        if conn:
-            conn.close()
-
-
-@playbook_bp.route("/playbook-schedules/<int:schedule_id>", methods=["GET"])
-@login_required
-@analyst_or_super_admin_required
-def get_playbook_schedule_route(schedule_id):
-    conn = None
-    try:
-        conn = get_db_connection()
-        row = get_playbook_schedule(conn, schedule_id)
-        if row is None:
-            return jsonify({"error": "playbook schedule not found"}), 404
-        return jsonify(_serialize_schedule_dict(row)), 200
-    except Exception as error:
-        current_app.logger.error("Error in get_playbook_schedule_route: %s", error)
-        return jsonify({"error": "Internal server error"}), 500
-    finally:
-        if conn:
-            conn.close()
 
 
 @playbook_bp.route("/playbooks", methods=["GET"])

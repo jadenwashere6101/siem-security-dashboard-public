@@ -338,10 +338,10 @@ Phase 2 (playbook execution model), Phase 3 (notifications).
 - Surface in admin detection rule config so analysts can see which rules generate noise
 - Feed into detection rule tuning recommendations
 
-**5C. Scheduled Playbooks**
-- Playbooks that run on a schedule rather than only on alerts (e.g. "every 24h: export blocked IPs to firewall")
-- Uses APScheduler already available in Flask ecosystem
-- New column on `playbook_definitions`: `schedule_cron` (nullable)
+**5C. Scheduled Playbooks (Future Spec Only)**
+- Time-based playbooks are not part of the current SOAR implementation.
+- The legacy `playbook_schedules` table is intentionally inert after `playbook-schedules-resolution`.
+- Any future scheduler must be designed in a separate approved spec with explicit requirements.
 
 **5D. Dead Letter Queue**
 - Actions that fail all retries go to a `failed_actions` table (dead letter queue)
@@ -756,7 +756,8 @@ Follow this checklist in exact order. Do not proceed to a step until all verific
 - **Verify:** Playbook pauses on approval gate. Approval resumes; denial aborts. Timeline includes all event types in correct order.
 
 ### Step 10 — Hardening + Metrics (Phase 5)
-- Implement dead letter queue, playbook metrics, rate limiting, scheduled playbooks
+- Implement dead letter queue, playbook metrics, and rate limiting
+- Treat `playbook_schedules` as intentionally inert legacy schema unless a future approved scheduler spec reintroduces scheduled playbooks
 - **Verify:** Dead letter queue receives exhausted-retry actions. Metrics endpoint returns accurate data. Rate limiter prevents notification floods.
 
 ---

@@ -161,27 +161,6 @@ def _exec_keys(*, include_timeline: bool = False):
     return keys
 
 
-def _schedule_keys():
-    return {
-        "id",
-        "playbook_id",
-        "schedule_expression",
-        "timezone",
-        "enabled",
-        "paused",
-        "next_run_at",
-        "last_run_at",
-        "last_success_at",
-        "last_failure_at",
-        "last_scheduled_execution_id",
-        "missed_run_policy",
-        "max_catchup_runs",
-        "max_concurrent_runs",
-        "created_at",
-        "updated_at",
-    }
-
-
 # --- Auth ---
 
 
@@ -193,8 +172,10 @@ def test_playbook_executions_without_session_returns_401(client):
     assert client.get("/playbook-executions").status_code == 401
 
 
-def test_playbook_schedules_without_session_returns_401(client):
-    assert client.get("/playbook-schedules").status_code == 401
+def test_playbook_schedules_routes_are_retired(client):
+    routes = {str(rule) for rule in client.application.url_map.iter_rules()}
+    assert "/playbook-schedules" not in routes
+    assert "/playbook-schedules/<int:schedule_id>" not in routes
 
 
 def test_playbooks_viewer_forbidden(client, mock_db):
@@ -218,16 +199,6 @@ def test_playbook_executions_viewer_forbidden(client, mock_db):
     assert resp.status_code == 403
 
 
-def test_playbook_schedules_viewer_forbidden(client, mock_db):
-    fake = _fake_user("pb_sched_viewer", "vpass", "viewer")
-    with patch("routes.auth_routes.get_user_by_username", return_value=fake), patch(
-        "core.auth.get_user_by_username", return_value=fake
-    ):
-        assert client.post("/login", json={"username": "pb_sched_viewer", "password": "vpass"}).status_code == 200
-        resp = client.get("/playbook-schedules")
-    assert resp.status_code == 403
-
-
 def test_playbooks_detail_viewer_forbidden(client, mock_db):
     fake = _fake_user("pb_detail_viewer", "vpass", "viewer")
     with patch("routes.auth_routes.get_user_by_username", return_value=fake), patch(
@@ -245,16 +216,6 @@ def test_playbook_executions_detail_viewer_forbidden(client, mock_db):
     ):
         assert client.post("/login", json={"username": "pb_exd_viewer", "password": "vpass"}).status_code == 200
         resp = client.get("/playbook-executions/1")
-    assert resp.status_code == 403
-
-
-def test_playbook_schedules_detail_viewer_forbidden(client, mock_db):
-    fake = _fake_user("pb_sched_detail_viewer", "vpass", "viewer")
-    with patch("routes.auth_routes.get_user_by_username", return_value=fake), patch(
-        "core.auth.get_user_by_username", return_value=fake
-    ):
-        assert client.post("/login", json={"username": "pb_sched_detail_viewer", "password": "vpass"}).status_code == 200
-        resp = client.get("/playbook-schedules/1")
     assert resp.status_code == 403
 
 
@@ -466,136 +427,6 @@ def test_get_playbook_execution_detail(client, postgres_db):
     assert body["response_outcomes"] == []
 
 
-# --- Schedules list / detail (read-only metadata) ---
-
-
-@pytest.mark.usefixtures("postgres_db")
-def test_list_playbook_schedules_authorized_shape_and_filters(client, postgres_db):
-    conn, _cur = postgres_db
-    playbook_store.create_playbook_definition(conn, "pb_sched_on", "On", steps=_valid_steps())
-    playbook_store.create_playbook_definition(conn, "pb_sched_off", "Off", steps=_valid_steps())
-    on = playbook_store.create_playbook_schedule(
-        conn,
-        "pb_sched_on",
-        schedule_expression="0 * * * *",
-        enabled=True,
-    )
-    off = playbook_store.create_playbook_schedule(
-        conn,
-        "pb_sched_off",
-        schedule_expression="30 * * * *",
-        enabled=False,
-        paused=True,
-        missed_run_policy="record_only",
-    )
-    conn.commit()
-
-    _login_super_admin(client)
-    with _patched_app_db(conn):
-        r_all = client.get("/playbook-schedules")
-        r_true = client.get("/playbook-schedules?enabled=true")
-        r_false = client.get("/playbook-schedules?enabled=false")
-        r_playbook = client.get("/playbook-schedules?playbook_id=pb_sched_off")
-
-    assert r_all.status_code == 200
-    data_all = r_all.get_json()
-    assert set(data_all.keys()) == {"items", "limit", "playbook_id", "enabled"}
-    assert data_all["enabled"] is None
-    assert data_all["playbook_id"] is None
-    assert [item["id"] for item in data_all["items"]] == [on["id"], off["id"]]
-    assert set(data_all["items"][0].keys()) == _schedule_keys()
-    assert data_all["items"][0]["schedule_expression"] == "0 * * * *"
-    assert data_all["items"][0]["timezone"] == "UTC"
-    assert data_all["items"][0]["max_concurrent_runs"] == 1
-
-    assert r_true.status_code == 200
-    assert [item["id"] for item in r_true.get_json()["items"]] == [on["id"]]
-
-    assert r_false.status_code == 200
-    false_items = r_false.get_json()["items"]
-    assert [item["id"] for item in false_items] == [off["id"]]
-    assert false_items[0]["paused"] is True
-    assert false_items[0]["missed_run_policy"] == "record_only"
-
-    assert r_playbook.status_code == 200
-    assert [item["id"] for item in r_playbook.get_json()["items"]] == [off["id"]]
-
-
-@pytest.mark.usefixtures("postgres_db")
-def test_list_playbook_schedules_invalid_filters_return_400(client, postgres_db):
-    conn, _cur = postgres_db
-    _login_super_admin(client)
-    with _patched_app_db(conn):
-        invalid_enabled = client.get("/playbook-schedules?enabled=maybe")
-        invalid_limit = client.get("/playbook-schedules?limit=-1")
-        invalid_playbook = client.get("/playbook-schedules?playbook_id=")
-
-    assert invalid_enabled.status_code == 400
-    assert invalid_limit.status_code == 400
-    assert invalid_playbook.status_code == 400
-
-
-@pytest.mark.usefixtures("postgres_db")
-def test_get_playbook_schedule_detail_authorized_and_404(client, postgres_db):
-    conn, _cur = postgres_db
-    playbook_store.create_playbook_definition(conn, "pb_sched_detail", "Detail", steps=_valid_steps())
-    schedule = playbook_store.create_playbook_schedule(
-        conn,
-        "pb_sched_detail",
-        schedule_expression="0 0 * * *",
-        enabled=True,
-        max_catchup_runs=1,
-        max_concurrent_runs=1,
-    )
-    conn.commit()
-
-    _login_super_admin(client)
-    with _patched_app_db(conn):
-        found = client.get(f"/playbook-schedules/{schedule['id']}")
-        missing = client.get("/playbook-schedules/999999")
-
-    assert found.status_code == 200
-    data = found.get_json()
-    assert set(data.keys()) == _schedule_keys()
-    assert data["id"] == schedule["id"]
-    assert data["playbook_id"] == "pb_sched_detail"
-    assert data["schedule_expression"] == "0 0 * * *"
-    assert data["enabled"] is True
-    assert data["max_catchup_runs"] == 1
-
-    assert missing.status_code == 404
-    assert missing.get_json()["error"] == "playbook schedule not found"
-
-
-@pytest.mark.usefixtures("postgres_db")
-def test_playbook_schedule_read_routes_do_not_create_executions_or_touch_queue(client, postgres_db):
-    conn, cur = postgres_db
-    playbook_store.create_playbook_definition(conn, "pb_sched_readonly", "ReadOnly", steps=_valid_steps())
-    schedule = playbook_store.create_playbook_schedule(
-        conn,
-        "pb_sched_readonly",
-        schedule_expression="0 * * * *",
-        enabled=True,
-    )
-    conn.commit()
-    cur.execute("SELECT COUNT(*) FROM playbook_executions")
-    executions_before = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM response_actions_queue")
-    queue_before = cur.fetchone()[0]
-
-    _login_super_admin(client)
-    with _patched_app_db(conn):
-        list_resp = client.get("/playbook-schedules")
-        detail_resp = client.get(f"/playbook-schedules/{schedule['id']}")
-
-    assert list_resp.status_code == 200
-    assert detail_resp.status_code == 200
-    cur.execute("SELECT COUNT(*) FROM playbook_executions")
-    assert cur.fetchone()[0] == executions_before
-    cur.execute("SELECT COUNT(*) FROM response_actions_queue")
-    assert cur.fetchone()[0] == queue_before
-
-
 @pytest.mark.usefixtures("postgres_db")
 def test_analyst_can_read_playbooks(client, postgres_db):
     conn, _cur = postgres_db
@@ -608,26 +439,6 @@ def test_analyst_can_read_playbooks(client, postgres_db):
     finally:
         _stop_patchers(patchers)
     assert resp.status_code == 200
-
-
-@pytest.mark.usefixtures("postgres_db")
-def test_analyst_can_read_playbook_schedules(client, postgres_db):
-    conn, _cur = postgres_db
-    playbook_store.create_playbook_definition(conn, "pb_sched_an", "Analyst", steps=_valid_steps())
-    playbook_store.create_playbook_schedule(
-        conn,
-        "pb_sched_an",
-        schedule_expression="0 * * * *",
-    )
-    conn.commit()
-    patchers = _login_role(client, username="pbschedanalyst", password="apass", role="analyst")
-    try:
-        with _patched_app_db(conn):
-            resp = client.get("/playbook-schedules")
-    finally:
-        _stop_patchers(patchers)
-    assert resp.status_code == 200
-    assert len(resp.get_json()["items"]) == 1
 
 
 # --- Execution controls (super_admin only, simulation-only) ---

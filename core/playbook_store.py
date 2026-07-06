@@ -29,12 +29,6 @@ _EXECUTION_COLUMNS_SQL = (
     "lease_owner, lease_acquired_at, lease_heartbeat_at, lease_expires_at, recovery_count, "
     "decision_id, soar_correlation_id"
 )
-_SCHEDULE_COLUMNS_SQL = (
-    "id, playbook_id, schedule_expression, timezone, enabled, paused, "
-    "next_run_at, last_run_at, last_success_at, last_failure_at, "
-    "last_scheduled_execution_id, missed_run_policy, max_catchup_runs, "
-    "max_concurrent_runs, created_at, updated_at"
-)
 
 
 class _UnsetType:
@@ -59,7 +53,6 @@ _VALID_EXECUTION_STATUSES = frozenset(
 )
 
 _PERMANENT_FAIL_ELIGIBLE_STATUSES = frozenset({"running", "failed", "awaiting_approval"})
-_VALID_MISSED_RUN_POLICIES = frozenset({"skip", "record_only", "run_once"})
 
 
 def _utc_naive(dt: datetime) -> datetime:
@@ -759,172 +752,6 @@ def _execution_row_to_dict(record: tuple[Any, ...]) -> dict[str, Any]:
         "decision_id": decision_id,
         "soar_correlation_id": soar_correlation_id,
     }
-
-
-def _schedule_row_to_dict(record: tuple[Any, ...]) -> dict[str, Any]:
-    (
-        row_id,
-        playbook_id,
-        schedule_expression,
-        timezone_name,
-        enabled,
-        paused,
-        next_run_at,
-        last_run_at,
-        last_success_at,
-        last_failure_at,
-        last_scheduled_execution_id,
-        missed_run_policy,
-        max_catchup_runs,
-        max_concurrent_runs,
-        created_at,
-        updated_at,
-    ) = record
-    return {
-        "id": row_id,
-        "playbook_id": playbook_id,
-        "schedule_expression": schedule_expression,
-        "timezone": timezone_name,
-        "enabled": enabled,
-        "paused": paused,
-        "next_run_at": next_run_at,
-        "last_run_at": last_run_at,
-        "last_success_at": last_success_at,
-        "last_failure_at": last_failure_at,
-        "last_scheduled_execution_id": last_scheduled_execution_id,
-        "missed_run_policy": missed_run_policy,
-        "max_catchup_runs": max_catchup_runs,
-        "max_concurrent_runs": max_concurrent_runs,
-        "created_at": created_at,
-        "updated_at": updated_at,
-    }
-
-
-def _validate_schedule_metadata(
-    *,
-    schedule_expression: str,
-    timezone_name: str,
-    missed_run_policy: str,
-    max_catchup_runs: int,
-    max_concurrent_runs: int,
-) -> None:
-    if not isinstance(schedule_expression, str) or not schedule_expression.strip():
-        raise ValueError("schedule_expression is required")
-    if not isinstance(timezone_name, str) or not timezone_name.strip():
-        raise ValueError("timezone is required")
-    if missed_run_policy not in _VALID_MISSED_RUN_POLICIES:
-        raise ValueError("invalid missed_run_policy")
-    if max_catchup_runs < 0:
-        raise ValueError("max_catchup_runs must be non-negative")
-    if max_concurrent_runs < 1:
-        raise ValueError("max_concurrent_runs must be at least 1")
-
-
-def create_playbook_schedule(
-    conn,
-    playbook_id: str,
-    *,
-    schedule_expression: str,
-    timezone_name: str = "UTC",
-    enabled: bool = False,
-    paused: bool = False,
-    next_run_at: datetime | None = None,
-    missed_run_policy: str = "skip",
-    max_catchup_runs: int = 0,
-    max_concurrent_runs: int = 1,
-) -> dict[str, Any]:
-    """
-    Create scheduled-playbook metadata only. Does not execute or enqueue anything.
-
-    Caller owns commit/rollback.
-    """
-    _validate_schedule_metadata(
-        schedule_expression=schedule_expression,
-        timezone_name=timezone_name,
-        missed_run_policy=missed_run_policy,
-        max_catchup_runs=max_catchup_runs,
-        max_concurrent_runs=max_concurrent_runs,
-    )
-
-    with conn.cursor() as cur:
-        cur.execute(
-            f"""
-            INSERT INTO playbook_schedules (
-                playbook_id, schedule_expression, timezone, enabled, paused,
-                next_run_at, missed_run_policy, max_catchup_runs, max_concurrent_runs
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING {_SCHEDULE_COLUMNS_SQL}
-            """,
-            (
-                playbook_id,
-                schedule_expression.strip(),
-                timezone_name.strip(),
-                enabled,
-                paused,
-                next_run_at,
-                missed_run_policy,
-                max_catchup_runs,
-                max_concurrent_runs,
-            ),
-        )
-        row = cur.fetchone()
-        if row is None:
-            raise RuntimeError("INSERT playbook_schedules returned no row")
-        return _schedule_row_to_dict(row)
-
-
-def get_playbook_schedule(conn, schedule_id: int) -> dict[str, Any] | None:
-    """Read scheduled-playbook metadata by id. Does not execute anything."""
-    with conn.cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT {_SCHEDULE_COLUMNS_SQL}
-            FROM playbook_schedules
-            WHERE id = %s
-            """,
-            (schedule_id,),
-        )
-        row = cur.fetchone()
-        if row is None:
-            return None
-        return _schedule_row_to_dict(row)
-
-
-def list_playbook_schedules(
-    conn,
-    *,
-    playbook_id: str | None = None,
-    enabled: bool | None = None,
-    limit: int = 50,
-) -> list[dict[str, Any]]:
-    """List scheduled-playbook metadata. Read-only; does not execute anything."""
-    if limit < 0:
-        raise ValueError("limit must be non-negative")
-
-    clauses: list[str] = []
-    params: list[Any] = []
-    if playbook_id is not None:
-        clauses.append("playbook_id = %s")
-        params.append(playbook_id)
-    if enabled is not None:
-        clauses.append("enabled = %s")
-        params.append(enabled)
-
-    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    params.append(limit)
-    with conn.cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT {_SCHEDULE_COLUMNS_SQL}
-            FROM playbook_schedules
-            {where_sql}
-            ORDER BY id ASC
-            LIMIT %s
-            """,
-            tuple(params),
-        )
-        return [_schedule_row_to_dict(row) for row in cur.fetchall()]
 
 
 def update_playbook_definition(

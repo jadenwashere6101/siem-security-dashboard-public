@@ -1,4 +1,4 @@
-This spec's authoring step (creating proposal.md/design.md/tasks.md/specs/) makes no code, schema, or UI changes. Section 1 reflects the inventory/verification work completed to write this spec. Section 2 lists this same spec's own future retirement work — owned here, not deferred to another child spec — to be executed only in a separate, later, explicitly-requested implementation pass. No scheduler is built, nothing is deleted, no migration runs, and no frontend file is edited by creating this spec.
+This spec retires the unused `playbook_schedules` surface while preserving existing playbook runtime behavior. No scheduler is built, no migration runs, and the existing `playbook_schedules` table is left as intentionally inert legacy schema unless a future approved scheduler or cleanup spec changes that disposition.
 
 ## 1. Inventory and Verification (completed as part of writing this spec)
 
@@ -11,16 +11,16 @@ This spec's authoring step (creating proposal.md/design.md/tasks.md/specs/) make
 - [x] 1.7 Confirm which tests reference schedule behavior (`tests/test_playbook_store.py`, `tests/test_playbook_routes.py`).
 - [x] 1.8 Record the recommendation (retire), alternatives considered, and rejection rationale in `design.md`.
 
-## 2. Retirement Implementation (this spec's own future work — not started, not deferred to another spec)
+## 2. Retirement Implementation
 
-- [ ] 2.1 Remove `GET /playbook-schedules` and `GET /playbook-schedules/<id>` from `routes/playbook_routes.py`.
-- [ ] 2.2 Remove or clearly deprecate `create_playbook_schedule`, `get_playbook_schedule`, `list_playbook_schedules` in `core/playbook_store.py` once their only callers are removed/updated.
-- [ ] 2.3 Remove the "Schedules" tab and detail view from `frontend/src/components/PlaybooksPanel.js`.
-- [ ] 2.4 Remove the schedule fetch wrappers from `frontend/src/services/playbookService.js`.
-- [ ] 2.5 Update or remove the schedule-specific tests in `tests/test_playbook_routes.py` and `tests/test_playbook_store.py` so the suite reflects the retired surface.
-- [ ] 2.6 Run the full existing playbook test suite and confirm no unrelated regressions.
-- [ ] 2.7 Decide (optional, lower priority) whether to drop the `playbook_schedules` table via a separate forward-only migration, or leave it as intentionally inert schema.
-- [ ] 2.8 Update any documentation that references scheduled playbooks as a working or in-progress feature.
+- [x] 2.1 Remove `GET /playbook-schedules` and `GET /playbook-schedules/<id>` from `routes/playbook_routes.py`.
+- [x] 2.2 Remove or clearly deprecate `create_playbook_schedule`, `get_playbook_schedule`, `list_playbook_schedules` in `core/playbook_store.py` once their only callers are removed/updated.
+- [x] 2.3 Remove the "Schedules" tab and detail view from `frontend/src/components/PlaybooksPanel.js`.
+- [x] 2.4 Remove the schedule fetch wrappers from `frontend/src/services/playbookService.js`.
+- [x] 2.5 Update or remove the schedule-specific tests in `tests/test_playbook_routes.py` and `tests/test_playbook_store.py` so the suite reflects the retired surface.
+- [x] 2.6 Run the full existing playbook test suite and confirm no unrelated regressions.
+- [x] 2.7 Decide (optional, lower priority) whether to drop the `playbook_schedules` table via a separate forward-only migration, or leave it as intentionally inert schema.
+- [x] 2.8 Update any documentation that references scheduled playbooks as a working or in-progress feature.
 
 ## Safety Boundaries (for this authoring step)
 

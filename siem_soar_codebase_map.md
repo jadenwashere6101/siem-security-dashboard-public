@@ -269,10 +269,9 @@ Source: `schema.sql` lines 18–38
 | `GET /playbook-executions` | 581 | List execution instances |
 | `GET /playbook-executions/<id>` | 635 | Single execution detail |
 | `POST /playbook-executions/<id>/retry` | 654 | Retry failed execution |
-| `POST /playbook-schedules` | 297 | List schedules |
 
-- **Displays:** Definitions (name, description, enabled, trigger_config, steps); executions (status, timestamps, last_completed_step); step log (step_index, status, adapter result, approval outcome); scheduled playbooks
-- **User actions:** Create/edit/disable playbooks; view/retry executions; view step logs and delivery attempts; manage schedules
+- **Displays:** Definitions (name, description, enabled, trigger_config, steps); executions (status, timestamps, last_completed_step); step log (step_index, status, adapter result, approval outcome)
+- **User actions:** Create/edit/disable playbooks; view/retry executions; view step logs and delivery attempts
 - **Role gate:** `analyst` or `super_admin`
 
 ---
@@ -473,7 +472,7 @@ Source: `schema.sql` lines 96–108
 ### Backend Features With No Corresponding Frontend (Deferred)
 - `notification_delivery` retry-execute — permanently deferred
 - `response_action` and `approval` dead-letter retry-execute — permanently deferred
-- `playbook_schedules` management controls — metadata-only; no scheduler reads these rows; no management UI yet
+- `playbook_schedules` table — intentionally inert legacy schema; no scheduler, route, store helper, or management UI remains
 - CI migration validation (blank DB apply + prohibited keyword grep) — defined in OpenSpec tasks but not yet implemented
 
 ### Implemented But Not Deployed
@@ -522,7 +521,7 @@ Source: `schema.sql` lines 96–108
 | `0003_auth_rbac_and_metadata.sql` | `users`, `audit_log`, `alert_notes`, `detection_config`, `blocked_ips` |
 | `0004_soar_incidents.sql` | `incidents`, `incident_alerts` |
 | `0005_soar_approvals.sql` | `approval_requests`, `approval_request_events` |
-| `0006_soar_playbooks.sql` | `playbook_definitions`, `playbook_executions`, `playbook_schedules` |
+| `0006_soar_playbooks.sql` | `playbook_definitions`, `playbook_executions`, `playbook_schedules` (inert legacy table) |
 | `0007_soar_approval_playbook_wiring.sql` | Add `playbook_execution_id`, `playbook_step_index` to `approval_requests` |
 | `0008_soar_notification_delivery.sql` | `notification_delivery_attempts` table |
 | `0009_soar_execution_leases.sql` | Add `lease_owner`, `lease_acquired_at`, `lease_heartbeat_at`, `lease_expires_at`, `recovery_count` to `playbook_executions` |
