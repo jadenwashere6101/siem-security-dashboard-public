@@ -1022,6 +1022,66 @@ def test_list_stale_running_playbook_execution_ids(postgres_db):
 
 
 @pytest.mark.usefixtures("postgres_db")
+def test_stale_recovery_increments_attempt_count_until_max_attempts(postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(conn, "pb_stale_attempts", "A", steps=_valid_steps())
+    eid = playbook_store.create_playbook_execution(conn, "pb_stale_attempts", alert_id=None)
+    first_start = datetime(2026, 3, 1, 0, 0, 0, tzinfo=timezone.utc)
+
+    playbook_store.acquire_execution_lease(
+        conn, eid, "worker-a", lease_duration_seconds=1, now=first_start
+    )
+    first_recovered = playbook_store.mark_stale_execution_for_recovery(
+        conn,
+        eid,
+        now=first_start + timedelta(minutes=5),
+    )
+    assert first_recovered["status"] == "pending"
+    assert first_recovered["attempt_count"] == 1
+    assert first_recovered["recovery_count"] == 1
+
+    second_start = first_start + timedelta(minutes=10)
+    playbook_store.acquire_execution_lease(
+        conn, eid, "worker-a", lease_duration_seconds=1, now=second_start
+    )
+    second_recovered = playbook_store.mark_stale_execution_for_recovery(
+        conn,
+        eid,
+        now=second_start + timedelta(minutes=5),
+    )
+    assert second_recovered["status"] == "pending"
+    assert second_recovered["attempt_count"] == 2
+    assert second_recovered["recovery_count"] == 2
+
+    third_start = first_start + timedelta(minutes=20)
+    playbook_store.acquire_execution_lease(
+        conn, eid, "worker-a", lease_duration_seconds=1, now=third_start
+    )
+    third_recovered = playbook_store.mark_stale_execution_for_recovery(
+        conn,
+        eid,
+        now=third_start + timedelta(minutes=5),
+    )
+    assert third_recovered["status"] == "pending"
+    assert third_recovered["attempt_count"] == 3
+    assert third_recovered["recovery_count"] == 3
+
+    fourth_start = first_start + timedelta(minutes=30)
+    playbook_store.acquire_execution_lease(
+        conn, eid, "worker-a", lease_duration_seconds=1, now=fourth_start
+    )
+    exhausted = playbook_store.mark_stale_execution_for_recovery(
+        conn,
+        eid,
+        now=fourth_start + timedelta(minutes=5),
+    )
+    assert exhausted["status"] == "failed"
+    assert exhausted["attempt_count"] == 3
+    assert exhausted["recovery_count"] == 4
+    assert exhausted["failure_reason"] == "stale lease exceeded max attempts"
+
+
+@pytest.mark.usefixtures("postgres_db")
 def test_mark_playbook_execution_permanently_failed_and_idempotent(postgres_db):
     conn, _cur = postgres_db
     playbook_store.create_playbook_definition(conn, "pb_pf", "PF", steps=_valid_steps())

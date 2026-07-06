@@ -554,10 +554,12 @@ def mark_stale_execution_for_recovery(
             new_status = "pending"
             reason = failure_reason or "stale lease recovered for retry"
             completed_at = None
+            increment_attempt_count = True
         else:
             new_status = "failed"
             reason = failure_reason or "stale lease exceeded max attempts"
             completed_at = now
+            increment_attempt_count = False
 
         cur.execute(
             f"""
@@ -566,6 +568,7 @@ def mark_stale_execution_for_recovery(
                 completed_at = %s,
                 failure_reason = %s,
                 recovery_count = recovery_count + 1,
+                attempt_count = attempt_count + %s,
                 lease_owner = NULL,
                 lease_acquired_at = NULL,
                 lease_heartbeat_at = NULL,
@@ -576,7 +579,14 @@ def mark_stale_execution_for_recovery(
               AND lease_expires_at <= %s
             RETURNING {_EXECUTION_COLUMNS_SQL}
             """,
-            (new_status, completed_at, reason, execution_id, now),
+            (
+                new_status,
+                completed_at,
+                reason,
+                1 if increment_attempt_count else 0,
+                execution_id,
+                now,
+            ),
         )
         updated = cur.fetchone()
         if updated is None:

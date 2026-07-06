@@ -1,4 +1,9 @@
-from engines.playbook_registry import SUPPORTED_ACTIONS, validate_playbook_steps
+from engines.playbook_registry import (
+    ADAPTER_ACTIONS,
+    KNOWN_PLAYBOOK_ACTIONS,
+    SUPPORTED_ACTIONS,
+    validate_playbook_steps,
+)
 
 
 def test_validate_empty_steps():
@@ -11,6 +16,7 @@ def test_validate_supported_actions_ok():
         {"action": "monitor", "on_failure": "continue"},
         {"action": "flag_high_priority"},
         {"action": "notify_slack", "params": {"message": "hello"}},
+        {"action": "notify_teams", "params": {"message": "hello"}},
         {"action": "notify_email", "params": {"subject": "alert"}},
         {"action": "notify_webhook", "params": {"payload": {"event": "alert"}}},
         {
@@ -67,9 +73,15 @@ def test_validate_invalid_on_failure():
 
 
 def test_supported_actions_is_frozen():
+    assert SUPPORTED_ACTIONS is KNOWN_PLAYBOOK_ACTIONS
     assert isinstance(SUPPORTED_ACTIONS, frozenset)
     assert "block_ip" in SUPPORTED_ACTIONS
     assert "require_approval" in SUPPORTED_ACTIONS
     assert "notify_slack" in SUPPORTED_ACTIONS
+    assert "notify_teams" in SUPPORTED_ACTIONS
     assert "notify_email" in SUPPORTED_ACTIONS
     assert "notify_webhook" in SUPPORTED_ACTIONS
+
+
+def test_known_playbook_actions_include_adapter_actions():
+    assert set(ADAPTER_ACTIONS).issubset(KNOWN_PLAYBOOK_ACTIONS)

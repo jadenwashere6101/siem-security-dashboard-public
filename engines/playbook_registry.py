@@ -7,18 +7,27 @@ that step definitions reference known action names before definitions are persis
 
 from __future__ import annotations
 
-# spec: SPEC-PLAYBOOK-001
-SUPPORTED_ACTIONS: frozenset[str] = frozenset(
+CORE_ACTIONS: frozenset[str] = frozenset(
     {
-        "block_ip",
         "monitor",
         "flag_high_priority",
         "require_approval",
-        "notify_slack",
-        "notify_email",
-        "notify_webhook",
     }
 )
+
+# spec: SPEC-PLAYBOOK-001 / SPEC-INTEG-002
+ADAPTER_ACTIONS = {
+    "notify_slack": ("slack", "send_message"),
+    "notify_teams": ("teams", "send_message"),
+    "notify_email": ("email", "send_email"),
+    "block_ip": ("firewall", "block_ip"),
+    "notify_webhook": ("webhook", "post_event"),
+}
+
+KNOWN_PLAYBOOK_ACTIONS: frozenset[str] = frozenset(
+    {*CORE_ACTIONS, *ADAPTER_ACTIONS.keys()}
+)
+SUPPORTED_ACTIONS = KNOWN_PLAYBOOK_ACTIONS
 
 APPROVAL_RISK_LEVELS: frozenset[str] = frozenset({"medium", "high", "critical"})
 APPROVAL_TERMINAL_BEHAVIORS: frozenset[str] = frozenset({"fail"})
@@ -48,7 +57,7 @@ def validate_playbook_steps(steps: list[dict]) -> list[str]:
         if not isinstance(action, str):
             errors.append(f"{prefix}: 'action' must be a string")
             continue
-        if action not in SUPPORTED_ACTIONS:
+        if action not in KNOWN_PLAYBOOK_ACTIONS:
             errors.append(f"{prefix}: unsupported action {action!r}")
             continue
 

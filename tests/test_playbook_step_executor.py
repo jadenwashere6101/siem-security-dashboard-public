@@ -659,6 +659,39 @@ def test_adapter_backed_steps_are_simulated_through_registry(postgres_db, no_net
     assert _count(cur, "response_actions_queue") == before["response_actions_queue"]
 
 
+def test_block_ip_step_rejects_protected_target_before_adapter_dispatch(
+    postgres_db, monkeypatch, no_network
+):
+    conn, cur = postgres_db
+    protected_ip = "203.0.113.10"
+    eid = _create_execution(
+        conn,
+        cur,
+        "pb_protected_block",
+        steps=[{"action": "block_ip", "params": {"source_ip": protected_ip}}],
+    )
+    monkeypatch.setenv("SOAR_PROTECTED_IPS", protected_ip)
+
+    def fail_adapter(*_args, **_kwargs):
+        raise AssertionError("adapter dispatch should not be reached")
+
+    monkeypatch.setattr(
+        "engines.playbook_step_executor.execute_playbook_simulated_adapter",
+        fail_adapter,
+    )
+
+    result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "failed"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    assert row["status"] == "failed"
+    entry = row["steps_log"][0]
+    assert entry["action"] == "block_ip"
+    assert entry["status"] == "failed"
+    assert entry["error"]["code"] == "protected_target"
+    assert "protected target" in entry["message"].lower()
+
+
 def test_adapter_failure_marks_step_failed_and_respects_continue(postgres_db):
     conn, cur = postgres_db
     eid = _create_execution(conn, cur, "pb_adapter_failure")
@@ -1538,11 +1571,11 @@ def test_real_success_missing_provider_evidence_does_not_mark_external_executed(
 
 def test_notify_teams_step_creates_delivery_record(postgres_db, no_network):
     conn, cur = postgres_db
-    eid = _create_execution(conn, cur, "pb_teams_delivery")
-    _set_playbook_steps(
+    eid = _create_execution(
+        conn,
         cur,
         "pb_teams_delivery",
-        [{"action": "notify_teams", "params": {"message": "test alert"}}],
+        steps=[{"action": "notify_teams", "params": {"message": "test alert"}}],
     )
 
     result = playbook_step_executor.process_playbook_execution(conn, eid)

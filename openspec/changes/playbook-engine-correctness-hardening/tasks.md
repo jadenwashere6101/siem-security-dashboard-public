@@ -11,14 +11,14 @@ This spec's authoring step (creating proposal.md/design.md/tasks.md/specs/) make
 
 ## 2. Implementation (this spec's own future work — not started, not deferred to another spec)
 
-- [ ] 2.1 Add a `require_unprotected_target` (or equivalent) call to the playbook `block_ip` step handler in `engines/playbook_step_executor.py`, before the adapter dispatch, matching the queue path's enforcement.
-- [ ] 2.2 Add a test asserting playbook `block_ip` is rejected/blocked for a protected-target IP, mirroring the equivalent existing queue-path test.
-- [ ] 2.3 Introduce one canonical action-vocabulary constant combining the current `SUPPORTED_ACTIONS` and `ADAPTER_ACTIONS` action names; update `engines/playbook_registry.py` and `engines/playbook_step_executor.py` to both read from it.
-- [ ] 2.4 Add `notify_teams` acceptance to definition-time validation via the canonical vocabulary change in 2.3.
-- [ ] 2.5 Add a test confirming a `notify_teams` step is accepted at definition-save time and dispatches correctly at execution time.
-- [ ] 2.6 Increment `attempt_count` inside `mark_stale_execution_for_recovery` at the point an execution is requeued to `pending`, alongside the existing `recovery_count` increment.
-- [ ] 2.7 Add a test confirming an execution that repeatedly goes stale reaches `failed` once `attempt_count` reaches `max_attempts`, where today it would recover indefinitely.
-- [ ] 2.8 Run the full existing playbook test suite (`tests/test_playbook_registry.py`, `tests/test_playbook_step_executor.py`, `tests/test_playbook_store.py`, `tests/test_soar_playbook_orchestrator.py`, `tests/test_soar_playbook_worker.py`) and confirm no regressions.
+- [x] 2.1 Add a `require_unprotected_target` (or equivalent) call to the playbook `block_ip` step handler in `engines/playbook_step_executor.py`, before the adapter dispatch, matching the queue path's enforcement.
+- [x] 2.2 Add a test asserting playbook `block_ip` is rejected/blocked for a protected-target IP, mirroring the equivalent existing queue-path test.
+- [x] 2.3 Introduce one canonical action-vocabulary constant combining the current `SUPPORTED_ACTIONS` and `ADAPTER_ACTIONS` action names; update `engines/playbook_registry.py` and `engines/playbook_step_executor.py` to both read from it.
+- [x] 2.4 Add `notify_teams` acceptance to definition-time validation via the canonical vocabulary change in 2.3.
+- [x] 2.5 Add a test confirming a `notify_teams` step is accepted at definition-save time and dispatches correctly at execution time.
+- [x] 2.6 Increment `attempt_count` inside `mark_stale_execution_for_recovery` at the point an execution is requeued to `pending`, alongside the existing `recovery_count` increment.
+- [x] 2.7 Add a test confirming an execution that repeatedly goes stale reaches `failed` once `attempt_count` reaches `max_attempts`, where today it would recover indefinitely.
+- [x] 2.8 Run the full existing playbook test suite (`tests/test_playbook_registry.py`, `tests/test_playbook_step_executor.py`, `tests/test_playbook_store.py`, `tests/test_soar_playbook_orchestrator.py`, `tests/test_soar_playbook_worker.py`) and confirm no regressions.
 - [ ] 2.9 Land 2.1–2.2, 2.3–2.5, and 2.6–2.7 as three independently revertible commits/PRs, per the Migration Plan in `design.md`.
 
 ## Safety Boundaries (for this authoring step)

@@ -19,8 +19,10 @@ from core import dead_letter_store
 from core import notification_delivery_store
 from core import playbook_store
 from core.playbook_worker_identity import generate_playbook_worker_id
+from core.soar_protected_targets import require_unprotected_target
 from core.soar_response_outcomes import append_outcome_event
-from engines.playbook_registry import SUPPORTED_ACTIONS
+from engines.soar_errors import SkippedAction
+from engines.playbook_registry import ADAPTER_ACTIONS, KNOWN_PLAYBOOK_ACTIONS
 from integrations.base_integration import (
     FAILURE_CLASSIFICATION_CIRCUIT_OPEN,
     FAILURE_CLASSIFICATION_CIRCUIT_STATE_INVALID,
@@ -36,16 +38,6 @@ DEFAULT_PLAYBOOK_LEASE_SECONDS = 60
 
 # spec: SPEC-PLAYBOOK-003
 TERMINAL_STATUSES = frozenset({"success", "failed", "abandoned", "permanently_failed"})
-# spec: SPEC-PLAYBOOK-001
-# spec: SPEC-INTEG-002
-ADAPTER_ACTIONS = {
-    "notify_slack": ("slack", "send_message"),
-    "notify_teams": ("teams", "send_message"),
-    "notify_email": ("email", "send_email"),
-    "block_ip": ("firewall", "block_ip"),
-    "notify_webhook": ("webhook", "post_event"),
-}
-
 _NOTIFICATION_ACTIONS = frozenset(
     {"notify_slack", "notify_teams", "notify_email", "notify_webhook"}
 )
@@ -955,7 +947,7 @@ def _simulate_step(
     if action in ADAPTER_ACTIONS:
         return _simulate_adapter_step(conn, step, step_index, now, execution)
 
-    if action not in SUPPORTED_ACTIONS:
+    if action not in KNOWN_PLAYBOOK_ACTIONS:
         return _failure_entry(
             step_index=step_index,
             action=action,
@@ -1030,6 +1022,18 @@ def _simulate_adapter_step(
                 "error": None,
             }
     params = step.get("params") if isinstance(step.get("params"), dict) else {}
+    if action == "block_ip":
+        try:
+            require_unprotected_target(params.get("source_ip"))
+        except SkippedAction as error:
+            return _failure_entry(
+                step_index=step_index,
+                action=action,
+                message=str(error),
+                code=error.code,
+                now=now,
+            )
+
     context = {
         "execution_id": execution["id"],
         "playbook_id": execution["playbook_id"],
