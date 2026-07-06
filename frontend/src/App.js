@@ -32,6 +32,7 @@ import {
   loginToDashboard,
   logoutFromDashboard,
 } from "./services/authService";
+import { isSectionVisible, sectionsConfig } from "./utils/sectionsConfig";
 
 function App() {
   const [alerts, setAlerts] = useState([]);
@@ -206,6 +207,10 @@ function App() {
   const isSuperAdmin = userRole === "super_admin";
   const isAnalyst = userRole === "analyst";
   const canTakeAlertActions = isSuperAdmin || isAnalyst;
+  const roleFlags = useMemo(
+    () => ({ isSuperAdmin, isAnalyst, canTakeAlertActions }),
+    [isSuperAdmin, isAnalyst, canTakeAlertActions]
+  );
   const displayRoleLabel =
     userRole === "super_admin"
       ? "Super Admin"
@@ -459,155 +464,24 @@ function App() {
           {sessionNotice && <div style={sessionNoticeStyle}>{sessionNotice}</div>}
         </header>
         <div style={sectionNavStyle}>
-          <button
-            type="button"
-            onClick={() => setActiveSection("dashboard")}
-            style={{
-              ...sectionTabStyle,
-              ...(activeSection === "dashboard" ? activeSectionTabStyle : inactiveSectionTabStyle),
-            }}
-          >
-            Dashboard
-          </button>
-          {canTakeAlertActions && (
-            <button
-              type="button"
-              onClick={() => setActiveSection("soc-command-center")}
-              style={{
-                ...sectionTabStyle,
-                ...(activeSection === "soc-command-center"
-                  ? activeSectionTabStyle
-                  : inactiveSectionTabStyle),
-              }}
-            >
-              SOC Command Center
-            </button>
-          )}
-          {canTakeAlertActions && (
-            <button
-              type="button"
-              onClick={() => setActiveSection("blocklist")}
-              style={{
-                ...sectionTabStyle,
-                ...(activeSection === "blocklist" ? activeSectionTabStyle : inactiveSectionTabStyle),
-              }}
-            >
-              Blocklist
-            </button>
-          )}
-          {canTakeAlertActions && (
-            <button
-              type="button"
-              onClick={() => setActiveSection("threat-hunt")}
-              style={{
-                ...sectionTabStyle,
-                ...(activeSection === "threat-hunt" ? activeSectionTabStyle : inactiveSectionTabStyle),
-              }}
-            >
-              Threat Hunt
-            </button>
-          )}
-          {isSuperAdmin && (
-            <button
-              type="button"
-              onClick={() => setActiveSection("administration")}
-              style={{
-                ...sectionTabStyle,
-                ...(activeSection === "administration" ? activeSectionTabStyle : inactiveSectionTabStyle),
-              }}
-            >
-              Administration
-            </button>
-          )}
-          {isSuperAdmin && (
-            <button
-              type="button"
-              onClick={() => setActiveSection("soar-queue")}
-              style={{
-                ...sectionTabStyle,
-                ...(activeSection === "soar-queue" ? activeSectionTabStyle : inactiveSectionTabStyle),
-              }}
-            >
-              SOAR Queue
-            </button>
-          )}
-          {canTakeAlertActions && (
-            <button
-              type="button"
-              onClick={() => setActiveSection("soar-incidents")}
-              style={{
-                ...sectionTabStyle,
-                ...(activeSection === "soar-incidents" ? activeSectionTabStyle : inactiveSectionTabStyle),
-              }}
-            >
-              SOAR Incidents
-            </button>
-          )}
-          {canTakeAlertActions && (
-            <button
-              type="button"
-              onClick={() => setActiveSection("soar-approvals")}
-              style={{
-                ...sectionTabStyle,
-                ...(activeSection === "soar-approvals" ? activeSectionTabStyle : inactiveSectionTabStyle),
-              }}
-            >
-              SOAR Approvals
-            </button>
-          )}
-          {canTakeAlertActions && (
-            <button
-              type="button"
-              onClick={() => setActiveSection("soar-playbooks")}
-              style={{
-                ...sectionTabStyle,
-                ...(activeSection === "soar-playbooks" ? activeSectionTabStyle : inactiveSectionTabStyle),
-              }}
-            >
-              SOAR Playbooks
-            </button>
-          )}
-          {canTakeAlertActions && (
-            <button
-              type="button"
-              onClick={() => setActiveSection("soar-playbook-metrics")}
-              style={{
-                ...sectionTabStyle,
-                ...(activeSection === "soar-playbook-metrics"
-                  ? activeSectionTabStyle
-                  : inactiveSectionTabStyle),
-              }}
-            >
-              SOAR Metrics
-            </button>
-          )}
-          {canTakeAlertActions && (
-            <button
-              type="button"
-              onClick={() => setActiveSection("soar-integrations")}
-              style={{
-                ...sectionTabStyle,
-                ...(activeSection === "soar-integrations" ? activeSectionTabStyle : inactiveSectionTabStyle),
-              }}
-            >
-              SOAR Integrations
-            </button>
-          )}
-          {canTakeAlertActions && (
-            <button
-              type="button"
-              onClick={() => setActiveSection("soar-operations")}
-              style={{
-                ...sectionTabStyle,
-                ...(activeSection === "soar-operations" ? activeSectionTabStyle : inactiveSectionTabStyle),
-              }}
-            >
-              SOAR Operations
-            </button>
+          {sectionsConfig.map(({ id, label, visibleWhen }) =>
+            visibleWhen(roleFlags) ? (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setActiveSection(id)}
+                style={{
+                  ...sectionTabStyle,
+                  ...(activeSection === id ? activeSectionTabStyle : inactiveSectionTabStyle),
+                }}
+              >
+                {label}
+              </button>
+            ) : null
           )}
         </div>
 
-        {activeSection === "dashboard" && (
+        {activeSection === "dashboard" && isSectionVisible("dashboard", roleFlags) && (
           <DashboardSection
             metrics={metrics}
             topIPChartData={topIPChartData}
@@ -660,7 +534,7 @@ function App() {
           />
         )}
 
-        {canTakeAlertActions && activeSection === "threat-hunt" && (
+        {activeSection === "threat-hunt" && isSectionVisible("threat-hunt", roleFlags) && (
           <ThreatHuntPanel
             cardStyle={cardStyle}
             cardHeaderStyle={cardHeaderStyle}
@@ -672,7 +546,7 @@ function App() {
           />
         )}
 
-        {canTakeAlertActions && activeSection === "soc-command-center" && (
+        {activeSection === "soc-command-center" && isSectionVisible("soc-command-center", roleFlags) && (
           <SocCommandCenter
             alerts={alerts}
             userRole={userRole}
@@ -681,7 +555,7 @@ function App() {
           />
         )}
 
-        {canTakeAlertActions && activeSection === "blocklist" && (
+        {activeSection === "blocklist" && isSectionVisible("blocklist", roleFlags) && (
           <BlocklistManagerPanel
             cardStyle={cardStyle}
             cardHeaderStyle={cardHeaderStyle}
@@ -692,7 +566,7 @@ function App() {
           />
         )}
 
-        {isSuperAdmin && activeSection === "administration" && (
+        {activeSection === "administration" && isSectionVisible("administration", roleFlags) && (
           <>
             <DetectionRulesPanel
               cardStyle={cardStyle}
@@ -717,7 +591,7 @@ function App() {
           </>
         )}
 
-        {isSuperAdmin && activeSection === "soar-queue" && (
+        {activeSection === "soar-queue" && isSectionVisible("soar-queue", roleFlags) && (
           <SoarQueuePanel
             cardStyle={cardStyle}
             cardHeaderStyle={cardHeaderStyle}
@@ -728,7 +602,7 @@ function App() {
           />
         )}
 
-        {canTakeAlertActions && activeSection === "soar-incidents" && (
+        {activeSection === "soar-incidents" && isSectionVisible("soar-incidents", roleFlags) && (
           <IncidentsPanel
             cardStyle={cardStyle}
             cardHeaderStyle={cardHeaderStyle}
@@ -740,7 +614,7 @@ function App() {
           />
         )}
 
-        {canTakeAlertActions && activeSection === "soar-approvals" && (
+        {activeSection === "soar-approvals" && isSectionVisible("soar-approvals", roleFlags) && (
           <ApprovalsPanel
             cardStyle={cardStyle}
             cardHeaderStyle={cardHeaderStyle}
@@ -752,7 +626,7 @@ function App() {
           />
         )}
 
-        {canTakeAlertActions && activeSection === "soar-playbooks" && (
+        {activeSection === "soar-playbooks" && isSectionVisible("soar-playbooks", roleFlags) && (
           <PlaybooksPanel
             cardStyle={cardStyle}
             cardHeaderStyle={cardHeaderStyle}
@@ -765,7 +639,7 @@ function App() {
           />
         )}
 
-        {canTakeAlertActions && activeSection === "soar-integrations" && (
+        {activeSection === "soar-integrations" && isSectionVisible("soar-integrations", roleFlags) && (
           <IntegrationStatusPanel
             cardStyle={cardStyle}
             cardHeaderStyle={cardHeaderStyle}
@@ -774,7 +648,7 @@ function App() {
           />
         )}
 
-        {canTakeAlertActions && activeSection === "soar-playbook-metrics" && (
+        {activeSection === "soar-playbook-metrics" && isSectionVisible("soar-playbook-metrics", roleFlags) && (
           <SoarMetricsDashboard
             cardStyle={cardStyle}
             cardHeaderStyle={cardHeaderStyle}
@@ -784,7 +658,7 @@ function App() {
           />
         )}
 
-        {canTakeAlertActions && activeSection === "soar-operations" && (
+        {activeSection === "soar-operations" && isSectionVisible("soar-operations", roleFlags) && (
           <DeadLettersPanel
             cardStyle={cardStyle}
             cardHeaderStyle={cardHeaderStyle}
