@@ -27,6 +27,12 @@ from engines.soar_log_writer import log_response_action
 
 logger = logging.getLogger(__name__)
 
+# Frozen path notice:
+# The response-action queue worker remains for existing queued work and audit
+# compatibility. `soar-automation-path-consolidation-decision` designates the
+# playbook engine as authoritative for new SOAR automation; queue retirement or
+# removal is a separately approved future stage, not part of ongoing worker changes.
+
 APPROVAL_REQUIRED_ACTIONS = frozenset({"block_ip"})
 
 

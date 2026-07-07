@@ -27,6 +27,7 @@ def test_validate_supported_actions_ok():
             "on_denied": "fail",
             "on_expired": "fail",
         },
+        {"action": "trigger_playbook", "params": {"playbook_id": "child_pb"}},
     ]
     assert validate_playbook_steps(steps) == []
 
@@ -134,6 +135,26 @@ def test_validate_rejects_unknown_branch_goto_label():
     assert any("unknown label" in error for error in errors)
 
 
+def test_validate_trigger_playbook_rejects_self_reference():
+    errors = validate_playbook_steps(
+        [{"action": "trigger_playbook", "params": {"playbook_id": "parent_pb"}}],
+        playbook_id="parent_pb",
+    )
+
+    assert errors
+    assert any("cannot reference its own playbook id" in error for error in errors)
+
+
+def test_validate_trigger_playbook_requires_target_params():
+    errors = validate_playbook_steps([{"action": "trigger_playbook"}])
+
+    assert errors
+    assert any("requires params object" in error for error in errors)
+
+    errors = validate_playbook_steps([{"action": "trigger_playbook", "params": {}}])
+    assert any("requires params.playbook_id" in error for error in errors)
+
+
 def test_supported_actions_is_frozen():
     assert SUPPORTED_ACTIONS is KNOWN_PLAYBOOK_ACTIONS
     assert isinstance(SUPPORTED_ACTIONS, frozenset)
@@ -143,6 +164,7 @@ def test_supported_actions_is_frozen():
     assert "notify_teams" in SUPPORTED_ACTIONS
     assert "notify_email" in SUPPORTED_ACTIONS
     assert "notify_webhook" in SUPPORTED_ACTIONS
+    assert "trigger_playbook" in SUPPORTED_ACTIONS
 
 
 def test_known_playbook_actions_include_adapter_actions():

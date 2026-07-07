@@ -73,6 +73,42 @@ def test_enqueue_committed_alerts_missing_alert_id_skips_without_enqueue():
     assert results[0]["skip_reason"] == "missing_alert_id"
 
 
+def test_enqueue_committed_alerts_playbook_precedence_skips_without_enqueue():
+    conn, _cur = make_conn()
+    alert = {"alert_id": "1", "source_ip": "1.2.3.4", "response_action": "block_ip"}
+
+    with patch("engines.soar_enqueue_orchestrator.enqueue_response_action") as enqueue:
+        results = enqueue_committed_alerts([alert], conn, exclude_alert_ids={1})
+
+    enqueue.assert_not_called()
+    assert results == [
+        {
+            "alert_id": "1",
+            "source_ip": "1.2.3.4",
+            "action": "block_ip",
+            "queue_id": None,
+            "skipped": True,
+            "status": "skipped",
+            "skip_reason": "playbook_precedence",
+            "index": 0,
+        }
+    ]
+
+
+def test_enqueue_committed_alerts_unmatched_exclusion_still_enqueues():
+    conn, cur = make_conn()
+    alert = {"alert_id": 1, "source_ip": "1.2.3.4", "response_action": "block_ip"}
+
+    with patch(
+        "engines.soar_enqueue_orchestrator.enqueue_response_action",
+        return_value=101,
+    ) as enqueue:
+        results = enqueue_committed_alerts([alert], conn, exclude_alert_ids={2})
+
+    enqueue.assert_called_once_with(cur, 1, "1.2.3.4", "block_ip")
+    assert results[0]["status"] == "enqueued"
+
+
 def test_enqueue_committed_alerts_missing_source_ip_skips_without_enqueue():
     conn, _cur = make_conn()
     alert = {"alert_id": 1, "response_action": "block_ip"}

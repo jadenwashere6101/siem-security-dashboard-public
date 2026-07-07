@@ -20,6 +20,7 @@ CORE_ACTIONS: frozenset[str] = frozenset(
         "flag_high_priority",
         "require_approval",
         "branch",
+        "trigger_playbook",
     }
 )
 
@@ -43,7 +44,7 @@ MIN_APPROVAL_TTL_MINUTES = 1
 MAX_APPROVAL_TTL_MINUTES = 10080
 
 
-def validate_playbook_steps(steps: list[dict]) -> list[str]:
+def validate_playbook_steps(steps: list[dict], *, playbook_id: str | None = None) -> list[str]:
     """
     Return a list of validation error strings. Empty list means valid.
 
@@ -92,6 +93,15 @@ def validate_playbook_steps(steps: list[dict]) -> list[str]:
                 validate_branch_step(step, step_index=index, label_map=label_map)
             )
 
+        if action == "trigger_playbook":
+            errors.extend(
+                _validate_trigger_playbook_step(
+                    step,
+                    prefix=prefix,
+                    playbook_id=playbook_id,
+                )
+            )
+
         if action == "require_approval":
             risk_level = step.get("risk_level", "high")
             if risk_level not in APPROVAL_RISK_LEVELS:
@@ -131,3 +141,20 @@ def validate_playbook_steps(steps: list[dict]) -> list[str]:
         errors.extend(validate_step_param_bindings(step, prefix=prefix))
 
     return errors
+
+
+def _validate_trigger_playbook_step(
+    step: dict,
+    *,
+    prefix: str,
+    playbook_id: str | None,
+) -> list[str]:
+    params = step.get("params")
+    if not isinstance(params, dict):
+        return [f"{prefix}: trigger_playbook requires params object"]
+    target = params.get("playbook_id")
+    if not isinstance(target, str) or not target.strip():
+        return [f"{prefix}: trigger_playbook requires params.playbook_id"]
+    if playbook_id is not None and target.strip() == playbook_id:
+        return [f"{prefix}: trigger_playbook cannot reference its own playbook id"]
+    return []

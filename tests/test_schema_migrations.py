@@ -156,7 +156,7 @@ def test_schema_snapshot_marker_matches_latest_migration():
         migrations_dir=repo_root / "migrations",
     )
 
-    assert version == 12
+    assert version == 13
 
 
 def test_schema_snapshot_validator_rejects_missing_marker(tmp_path):
@@ -638,4 +638,17 @@ def test_soar_response_outcomes_migration_scope():
     assert "ADD COLUMN IF NOT EXISTS decision_id INTEGER" in sql
     assert "ADD COLUMN IF NOT EXISTS soar_correlation_id VARCHAR(128)" in sql
     assert "idx_soar_response_outcome_events_decision_latest" in sql
+    assert "DROP" not in sql.upper()
+
+
+def test_playbook_chaining_migration_scope():
+    migration_path = (
+        Path(__file__).resolve().parent.parent / "migrations" / "0013_playbook_chaining.sql"
+    )
+    sql = migration_path.read_text(encoding="utf-8")
+
+    assert "ADD COLUMN IF NOT EXISTS parent_execution_id INTEGER" in sql
+    assert "REFERENCES playbook_executions(id) ON DELETE SET NULL" in sql
+    assert "ADD COLUMN IF NOT EXISTS chain_depth INTEGER NOT NULL DEFAULT 0" in sql
+    assert "idx_playbook_executions_parent_execution_id" in sql
     assert "DROP" not in sql.upper()

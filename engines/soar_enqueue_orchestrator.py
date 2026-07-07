@@ -7,10 +7,17 @@ from core.response_action_queue_store import set_queue_linkage
 
 logger = logging.getLogger(__name__)
 
+# Frozen path notice:
+# The response-action queue remains for historical processing and compatibility, but
+# `soar-automation-path-consolidation-decision` designates the playbook engine as
+# the authoritative path for new SOAR automation. New ingest-time automation should
+# prefer playbooks; queue retirement/removal requires a separately approved change.
 
-def enqueue_committed_alerts(alerts_created, conn):
+
+def enqueue_committed_alerts(alerts_created, conn, *, exclude_alert_ids=None):
     results = []
     cur = conn.cursor()
+    excluded_ids = _normalize_excluded_alert_ids(exclude_alert_ids)
 
     for index, alert in enumerate(alerts_created or []):
         if not isinstance(alert, dict):
@@ -36,6 +43,27 @@ def enqueue_committed_alerts(alerts_created, conn):
         alert_id = alert.get("alert_id")
         source_ip = alert.get("source_ip")
         action = alert.get("response_action")
+
+        normalized_alert_id = _normalize_alert_id(alert_id)
+        if normalized_alert_id is not None and normalized_alert_id in excluded_ids:
+            source_ip_text = str(source_ip) if source_ip is not None else None
+            logger.info(
+                "[SOAR ENQUEUE] alert_id=%s skipped by playbook precedence",
+                alert_id,
+            )
+            results.append(
+                {
+                    "alert_id": alert_id,
+                    "source_ip": source_ip_text,
+                    "action": action,
+                    "queue_id": None,
+                    "skipped": True,
+                    "status": "skipped",
+                    "skip_reason": "playbook_precedence",
+                    "index": index,
+                }
+            )
+            continue
 
         missing_field = _first_missing_required_field(alert_id, source_ip, action)
         if missing_field is not None:
@@ -120,6 +148,22 @@ def enqueue_committed_alerts(alerts_created, conn):
         )
 
     return results
+
+
+def _normalize_excluded_alert_ids(exclude_alert_ids) -> set[int]:
+    normalized: set[int] = set()
+    for raw in exclude_alert_ids or []:
+        alert_id = _normalize_alert_id(raw)
+        if alert_id is not None:
+            normalized.add(alert_id)
+    return normalized
+
+
+def _normalize_alert_id(raw):
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 def _first_missing_required_field(alert_id, source_ip, action):

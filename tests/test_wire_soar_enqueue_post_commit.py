@@ -44,8 +44,9 @@ def test_enqueue_called_after_first_commit(client, monkeypatch):
     mock_conn = _build_mock_connection()
     commit_count_at_enqueue = {"value": 0}
 
-    def enqueue_side_effect(_alerts_created, conn):
+    def enqueue_side_effect(_alerts_created, conn, **kwargs):
         commit_count_at_enqueue["value"] = conn.commit.call_count
+        assert "exclude_alert_ids" in kwargs
         return []
 
     with patch("routes.ingest_routes.get_db_connection", return_value=mock_conn), patch(
@@ -142,9 +143,10 @@ def test_enqueue_receives_correlation_alerts_returned_by_ingest_after_commit(cli
     commit_count_at_enqueue = {"value": 0}
     commit_count_at_playbook = {"value": 0}
 
-    def enqueue_side_effect(received_alerts, conn):
+    def enqueue_side_effect(received_alerts, conn, **kwargs):
         commit_count_at_enqueue["value"] = conn.commit.call_count
         assert received_alerts == alerts_created
+        assert kwargs["exclude_alert_ids"] == set()
         return []
 
     def playbook_side_effect(received_alerts, conn):
@@ -173,6 +175,7 @@ def test_enqueue_receives_correlation_alerts_returned_by_ingest_after_commit(cli
     playbook_mock.assert_called_once()
     assert commit_count_at_enqueue["value"] >= 1
     assert commit_count_at_playbook["value"] >= 1
+    assert commit_count_at_playbook["value"] <= commit_count_at_enqueue["value"]
 
 
 def test_azure_batch_enqueue_called_once_with_full_alert_list(client, monkeypatch):

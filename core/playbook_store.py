@@ -27,7 +27,7 @@ _EXECUTION_COLUMNS_SQL = (
     "started_at, completed_at, last_completed_step, steps_log, created_at, "
     "attempt_count, max_attempts, last_attempted_at, failure_reason, stale_after, timeout_seconds, "
     "lease_owner, lease_acquired_at, lease_heartbeat_at, lease_expires_at, recovery_count, "
-    "decision_id, soar_correlation_id"
+    "decision_id, soar_correlation_id, parent_execution_id, chain_depth"
 )
 
 
@@ -726,6 +726,8 @@ def _execution_row_to_dict(record: tuple[Any, ...]) -> dict[str, Any]:
         recovery_count,
         decision_id,
         soar_correlation_id,
+        parent_execution_id,
+        chain_depth,
     ) = record
     return {
         "id": row_id,
@@ -751,6 +753,8 @@ def _execution_row_to_dict(record: tuple[Any, ...]) -> dict[str, Any]:
         "recovery_count": recovery_count,
         "decision_id": decision_id,
         "soar_correlation_id": soar_correlation_id,
+        "parent_execution_id": parent_execution_id,
+        "chain_depth": chain_depth,
     }
 
 
@@ -771,7 +775,7 @@ def update_playbook_definition(
     """
     if not isinstance(trigger_config, dict):
         raise ValueError("trigger_config must be a dict")
-    step_errors = validate_playbook_steps(steps)
+    step_errors = validate_playbook_steps(steps, playbook_id=playbook_id)
     if step_errors:
         raise ValueError("; ".join(step_errors))
 
@@ -847,7 +851,7 @@ def create_playbook_definition(
     if not isinstance(trigger_config, dict):
         raise ValueError("trigger_config must be a dict")
 
-    step_errors = validate_playbook_steps(steps)
+    step_errors = validate_playbook_steps(steps, playbook_id=playbook_id)
     if step_errors:
         raise ValueError("; ".join(step_errors))
 
@@ -916,18 +920,28 @@ def create_playbook_execution(
     *,
     decision_id: int | None = None,
     soar_correlation_id: str | None = None,
+    parent_execution_id: int | None = None,
+    chain_depth: int = 0,
 ) -> int:
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO playbook_executions (
                 playbook_id, alert_id, incident_id, status,
-                decision_id, soar_correlation_id
+                decision_id, soar_correlation_id, parent_execution_id, chain_depth
             )
-            VALUES (%s, %s, %s, 'pending', %s, %s)
+            VALUES (%s, %s, %s, 'pending', %s, %s, %s, %s)
             RETURNING id
             """,
-            (playbook_id, alert_id, incident_id, decision_id, soar_correlation_id),
+            (
+                playbook_id,
+                alert_id,
+                incident_id,
+                decision_id,
+                soar_correlation_id,
+                parent_execution_id,
+                chain_depth,
+            ),
         )
         row = cur.fetchone()
         if row is None:
@@ -943,6 +957,8 @@ def create_pending_playbook_execution_once(
     *,
     decision_id: int | None = None,
     soar_correlation_id: str | None = None,
+    parent_execution_id: int | None = None,
+    chain_depth: int = 0,
 ) -> int | None:
     """
     Insert one pending execution for a playbook/alert pair.
@@ -958,21 +974,74 @@ def create_pending_playbook_execution_once(
             """
             INSERT INTO playbook_executions (
                 playbook_id, alert_id, incident_id, status,
-                decision_id, soar_correlation_id
+                decision_id, soar_correlation_id, parent_execution_id, chain_depth
             )
-            VALUES (%s, %s, %s, 'pending', %s, %s)
+            VALUES (%s, %s, %s, 'pending', %s, %s, %s, %s)
             ON CONFLICT (playbook_id, alert_id)
                 WHERE alert_id IS NOT NULL
                   AND status IN ('pending', 'running', 'awaiting_approval')
                 DO NOTHING
             RETURNING id
             """,
-            (playbook_id, alert_id, incident_id, decision_id, soar_correlation_id),
+            (
+                playbook_id,
+                alert_id,
+                incident_id,
+                decision_id,
+                soar_correlation_id,
+                parent_execution_id,
+                chain_depth,
+            ),
         )
         row = cur.fetchone()
         if row is None:
             return None
         return int(row[0])
+
+
+def get_active_playbook_execution_for_pair(
+    conn,
+    playbook_id: str,
+    alert_id: int | None,
+) -> dict[str, Any] | None:
+    if alert_id is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT {_EXECUTION_COLUMNS_SQL}
+            FROM playbook_executions
+            WHERE playbook_id = %s
+              AND alert_id = %s
+              AND status IN ('pending', 'running', 'awaiting_approval')
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (playbook_id, alert_id),
+        )
+        row = cur.fetchone()
+    return _execution_row_to_dict(row) if row else None
+
+
+def get_playbook_execution_ancestor_chain(
+    conn,
+    execution_id: int,
+    *,
+    max_hops: int,
+) -> list[dict[str, Any]]:
+    ancestors: list[dict[str, Any]] = []
+    current = get_playbook_execution(conn, execution_id)
+    hops = 0
+    while current is not None and current.get("parent_execution_id") is not None:
+        if hops >= max_hops:
+            break
+        parent = get_playbook_execution(conn, int(current["parent_execution_id"]))
+        if parent is None:
+            break
+        ancestors.append(parent)
+        current = parent
+        hops += 1
+    return ancestors
 
 
 def _active_execution_exists_for_pair(

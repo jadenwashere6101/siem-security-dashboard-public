@@ -107,12 +107,16 @@ def _validate_trigger_config_field(raw: Any) -> tuple[dict[str, Any] | None, str
     return raw, None
 
 
-def _validate_steps_field(raw: Any) -> tuple[list[dict] | None, str | None]:
+def _validate_steps_field(
+    raw: Any,
+    *,
+    playbook_id: str | None = None,
+) -> tuple[list[dict] | None, str | None]:
     if raw is None:
         return None, "steps is required"
     if not isinstance(raw, list):
         return None, "steps must be a list"
-    errs = validate_playbook_steps(raw)
+    errs = validate_playbook_steps(raw, playbook_id=playbook_id)
     if errs:
         return None, "; ".join(errs)
     return raw, None
@@ -377,7 +381,7 @@ def create_playbook_route():
         if tc_err:
             return jsonify({"error": tc_err}), 400
 
-        steps, steps_err = _validate_steps_field(data.get("steps"))
+        steps, steps_err = _validate_steps_field(data.get("steps"), playbook_id=pid)
         if steps_err:
             return jsonify({"error": steps_err}), 400
 
@@ -458,7 +462,7 @@ def update_playbook_route(playbook_id):
         if tc_err:
             return jsonify({"error": tc_err}), 400
 
-        steps, steps_err = _validate_steps_field(data.get("steps"))
+        steps, steps_err = _validate_steps_field(data.get("steps"), playbook_id=playbook_id)
         if steps_err:
             return jsonify({"error": steps_err}), 400
 

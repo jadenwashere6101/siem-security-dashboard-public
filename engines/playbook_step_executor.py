@@ -29,6 +29,7 @@ from engines.playbook_branch_conditions import (
 )
 from engines.playbook_param_binding import PlaybookParamBindingError, resolve_step_params
 from engines.playbook_registry import ADAPTER_ACTIONS, KNOWN_PLAYBOOK_ACTIONS
+from engines.soar_playbook_orchestrator import create_and_link_playbook_execution_decision
 from integrations.base_integration import (
     FAILURE_CLASSIFICATION_CIRCUIT_OPEN,
     FAILURE_CLASSIFICATION_CIRCUIT_STATE_INVALID,
@@ -41,6 +42,7 @@ from integrations.integration_registry import execute_playbook_simulated_adapter
 logger = logging.getLogger(__name__)
 
 DEFAULT_PLAYBOOK_LEASE_SECONDS = 60
+MAX_CHAIN_DEPTH = 3
 
 # spec: SPEC-PLAYBOOK-003
 TERMINAL_STATUSES = frozenset({"success", "failed", "abandoned", "permanently_failed"})
@@ -911,6 +913,49 @@ def _process_steps(
             index += 1
             continue
 
+        if isinstance(step, dict) and step.get("action") == "trigger_playbook":
+            entry = _execute_trigger_playbook_step(conn, step, index, execution, timestamp)
+            steps_log.append(entry)
+            _append_non_adapter_playbook_step_outcome_event(conn, execution, entry)
+            if entry["status"] == "success":
+                last_completed_step = index
+                if (
+                    playbook_store.update_playbook_execution_step_log(
+                        conn,
+                        execution_id,
+                        steps_log,
+                        last_completed_step=last_completed_step,
+                        lease_owner=worker_id,
+                    )
+                    is None
+                ):
+                    logger.warning(
+                        "[PLAYBOOK SIMULATION] lease lost while saving trigger_playbook progress "
+                        "execution_id=%s worker_id=%s step_index=%s",
+                        execution_id,
+                        worker_id,
+                        index,
+                    )
+                    return _result(
+                        execution,
+                        prior,
+                        execution.get("status") or "running",
+                        "skipped",
+                        len(steps_log),
+                        "Playbook execution lease was lost while saving trigger_playbook progress.",
+                        reason="lease_lost",
+                    )
+                index += 1
+                continue
+
+            failed = True
+            failure_message = entry["message"]
+            on_failure = step.get("on_failure", "abort")
+            if on_failure != "continue":
+                break
+            index += 1
+            continue
+
         try:
             entry = _simulate_step(conn, step, index, timestamp, execution)
         except Exception as error:
@@ -1459,6 +1504,165 @@ def _execute_branch_step(
         "error": None,
     }
     return entry, skip_entries, goto_step_index
+
+
+def _execute_trigger_playbook_step(
+    conn,
+    step: dict[str, Any],
+    step_index: int,
+    execution: dict[str, Any],
+    now: datetime,
+) -> dict[str, Any]:
+    params = step.get("params")
+    if not isinstance(params, dict):
+        return _failure_entry(
+            step_index=step_index,
+            action="trigger_playbook",
+            message="trigger_playbook requires params object.",
+            code="invalid_trigger_playbook_params",
+            now=now,
+        )
+
+    target_playbook_id = params.get("playbook_id")
+    if not isinstance(target_playbook_id, str) or not target_playbook_id.strip():
+        return _failure_entry(
+            step_index=step_index,
+            action="trigger_playbook",
+            message="trigger_playbook requires params.playbook_id.",
+            code="invalid_trigger_playbook_target",
+            now=now,
+        )
+    target_playbook_id = target_playbook_id.strip()
+
+    target_definition = playbook_store.get_playbook_definition(conn, target_playbook_id)
+    if target_definition is None:
+        return _failure_entry(
+            step_index=step_index,
+            action="trigger_playbook",
+            message=f"Target playbook {target_playbook_id!r} was not found.",
+            code="trigger_playbook_not_found",
+            now=now,
+        )
+    if target_definition.get("enabled") is not True:
+        return _failure_entry(
+            step_index=step_index,
+            action="trigger_playbook",
+            message=f"Target playbook {target_playbook_id!r} is disabled.",
+            code="trigger_playbook_disabled",
+            now=now,
+        )
+
+    parent_depth = int(execution.get("chain_depth") or 0)
+    if parent_depth >= MAX_CHAIN_DEPTH:
+        return _failure_entry(
+            step_index=step_index,
+            action="trigger_playbook",
+            message="Maximum playbook chain depth exceeded.",
+            code="chain_depth_exceeded",
+            now=now,
+        )
+
+    if _target_in_execution_ancestry(conn, execution, target_playbook_id):
+        return _failure_entry(
+            step_index=step_index,
+            action="trigger_playbook",
+            message="Playbook chain cycle detected.",
+            code="chain_cycle_detected",
+            now=now,
+        )
+
+    alert_id = execution.get("alert_id")
+    if alert_id is None:
+        return _failure_entry(
+            step_index=step_index,
+            action="trigger_playbook",
+            message="trigger_playbook requires an alert_id on the parent execution.",
+            code="trigger_playbook_alert_context_missing",
+            now=now,
+        )
+
+    child_depth = parent_depth + 1
+    child_execution_id = playbook_store.create_pending_playbook_execution_once(
+        conn,
+        target_playbook_id,
+        int(alert_id),
+        incident_id=execution.get("incident_id"),
+        parent_execution_id=execution["id"],
+        chain_depth=child_depth,
+    )
+    duplicate = child_execution_id is None
+    child_row: dict[str, Any] | None = None
+    if duplicate:
+        child_row = playbook_store.get_active_playbook_execution_for_pair(
+            conn,
+            target_playbook_id,
+            int(alert_id),
+        )
+        child_execution_id = child_row["id"] if child_row else None
+    else:
+        create_and_link_playbook_execution_decision(
+            conn,
+            int(child_execution_id),
+            playbook_id=target_playbook_id,
+            alert_id=int(alert_id),
+            incident_id=execution.get("incident_id"),
+            parent_soar_correlation_id=execution.get("soar_correlation_id"),
+            initial_event_type="chained",
+            initial_idempotency_key=f"playbook-chained-{child_execution_id}",
+            initial_event_metadata={
+                "triggered_by_execution_id": execution["id"],
+                "triggered_by_step_index": step_index,
+                "parent_playbook_id": execution.get("playbook_id"),
+                "chain_depth": child_depth,
+            },
+        )
+
+    message = (
+        f"Triggered playbook {target_playbook_id}."
+        if not duplicate
+        else f"Target playbook {target_playbook_id} already has an active execution for this alert."
+    )
+    return {
+        "step_index": step_index,
+        "action": "trigger_playbook",
+        "status": "success",
+        "event": "playbook_triggered",
+        "mode": "simulation",
+        "simulated": True,
+        "executed": False,
+        "started_at": _iso(now),
+        "completed_at": _iso(now),
+        "message": message,
+        "child_execution_id": child_execution_id,
+        "child_playbook_id": target_playbook_id,
+        "chain_depth": child_depth,
+        "output": {
+            "simulated": True,
+            "executed": False,
+            "child_execution_id": child_execution_id,
+            "child_playbook_id": target_playbook_id,
+            "chain_depth": child_depth,
+            "duplicate": duplicate,
+        },
+        "error": None,
+    }
+
+
+def _target_in_execution_ancestry(
+    conn,
+    execution: dict[str, Any],
+    target_playbook_id: str,
+) -> bool:
+    if target_playbook_id == execution.get("playbook_id"):
+        return True
+    for ancestor in playbook_store.get_playbook_execution_ancestor_chain(
+        conn,
+        int(execution["id"]),
+        max_hops=MAX_CHAIN_DEPTH,
+    ):
+        if ancestor.get("playbook_id") == target_playbook_id:
+            return True
+    return False
 
 
 def _skipped_branch_step_entries(

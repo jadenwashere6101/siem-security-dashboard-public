@@ -87,7 +87,7 @@ def _valid_ingest_payload():
     }
 
 
-def test_ingest_schedules_playbooks_after_existing_post_commit_work(client, monkeypatch):
+def test_ingest_schedules_playbooks_before_queue_precedence_work(client, monkeypatch):
     monkeypatch.setenv("SIEM_INGEST_API_KEY", VALID_API_KEY)
     import routes.ingest_routes as ingest_routes
 
@@ -133,7 +133,7 @@ def test_ingest_schedules_playbooks_after_existing_post_commit_work(client, monk
         "message": "Event added successfully",
         "alerts_created": alerts_created,
     }
-    assert playbook_call_commit_count == [3]
+    assert playbook_call_commit_count == [1]
     assert conn.commit.call_count == 4
     conn.rollback.assert_not_called()
 

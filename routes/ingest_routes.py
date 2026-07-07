@@ -91,14 +91,35 @@ def _create_incidents_for_alerts(alerts_created, conn):
 
 def _create_playbook_executions_for_alerts(alerts_created, conn):
     try:
-        create_pending_executions_for_committed_alerts(alerts_created, conn)
+        result = create_pending_executions_for_committed_alerts(alerts_created, conn)
         conn.commit()
+        return result
     except Exception as playbook_error:
         conn.rollback()
         current_app.logger.error(
             "[PLAYBOOK ORCHESTRATION ERROR] Post-commit playbook scheduling failed — ingest was committed: %s",
             playbook_error,
         )
+        return {"summary": {"errors": 1}, "results": []}
+
+
+def _playbook_claimed_alert_ids(playbook_result):
+    claimed = set()
+    if not isinstance(playbook_result, dict):
+        return claimed
+    for item in playbook_result.get("results") or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("status") not in {"created", "duplicate"}:
+            continue
+        alert_id = item.get("alert_id")
+        if alert_id is None:
+            continue
+        try:
+            claimed.add(int(alert_id))
+        except (TypeError, ValueError):
+            continue
+    return claimed
 
 
 def _normalize_honeypot_event(data):
@@ -238,8 +259,15 @@ def add_event():
 
         conn.commit()
 
+        playbook_result = _create_playbook_executions_for_alerts(alerts_created, conn)
+        playbook_claimed_alert_ids = _playbook_claimed_alert_ids(playbook_result)
+
         try:
-            enqueue_committed_alerts(alerts_created, conn)
+            enqueue_committed_alerts(
+                alerts_created,
+                conn,
+                exclude_alert_ids=playbook_claimed_alert_ids,
+            )
             conn.commit()
         except Exception as enqueue_error:
             current_app.logger.error(
@@ -256,8 +284,6 @@ def add_event():
                 incident_error,
                 [(a.get("alert_id"), a.get("source_ip"), a.get("severity")) for a in alerts_created],
             )
-
-        _create_playbook_executions_for_alerts(alerts_created, conn)
 
         return jsonify({
             "message": "Event added successfully",
@@ -305,8 +331,15 @@ def add_honeypot_event():
 
         conn.commit()
 
+        playbook_result = _create_playbook_executions_for_alerts(alerts_created, conn)
+        playbook_claimed_alert_ids = _playbook_claimed_alert_ids(playbook_result)
+
         try:
-            enqueue_committed_alerts(alerts_created, conn)
+            enqueue_committed_alerts(
+                alerts_created,
+                conn,
+                exclude_alert_ids=playbook_claimed_alert_ids,
+            )
             conn.commit()
         except Exception as enqueue_error:
             current_app.logger.error(
@@ -323,8 +356,6 @@ def add_honeypot_event():
                 incident_error,
                 [(a.get("alert_id"), a.get("source_ip"), a.get("severity")) for a in alerts_created],
             )
-
-        _create_playbook_executions_for_alerts(alerts_created, conn)
 
         return jsonify({
             "message": "Honeypot event ingested successfully",
@@ -416,8 +447,15 @@ def add_web_log_event():
 
         conn.commit()
 
+        playbook_result = _create_playbook_executions_for_alerts(alerts_created, conn)
+        playbook_claimed_alert_ids = _playbook_claimed_alert_ids(playbook_result)
+
         try:
-            enqueue_committed_alerts(alerts_created, conn)
+            enqueue_committed_alerts(
+                alerts_created,
+                conn,
+                exclude_alert_ids=playbook_claimed_alert_ids,
+            )
             conn.commit()
         except Exception as enqueue_error:
             current_app.logger.error(
@@ -434,8 +472,6 @@ def add_web_log_event():
                 incident_error,
                 [(a.get("alert_id"), a.get("source_ip"), a.get("severity")) for a in alerts_created],
             )
-
-        _create_playbook_executions_for_alerts(alerts_created, conn)
 
         return jsonify({
             "message": "Event added successfully",
@@ -523,8 +559,15 @@ def add_azure_event():
 
         conn.commit()
 
+        playbook_result = _create_playbook_executions_for_alerts(alerts_created, conn)
+        playbook_claimed_alert_ids = _playbook_claimed_alert_ids(playbook_result)
+
         try:
-            enqueue_committed_alerts(alerts_created, conn)
+            enqueue_committed_alerts(
+                alerts_created,
+                conn,
+                exclude_alert_ids=playbook_claimed_alert_ids,
+            )
             conn.commit()
         except Exception as enqueue_error:
             current_app.logger.error(
@@ -541,8 +584,6 @@ def add_azure_event():
                 incident_error,
                 [(a.get("alert_id"), a.get("source_ip"), a.get("severity")) for a in alerts_created],
             )
-
-        _create_playbook_executions_for_alerts(alerts_created, conn)
 
         success_message = "Events added successfully" if len(normalized_events) > 1 else "Event added successfully"
         return jsonify({
@@ -617,8 +658,15 @@ def add_otel_event():
 
         conn.commit()
 
+        playbook_result = _create_playbook_executions_for_alerts(alerts_created, conn)
+        playbook_claimed_alert_ids = _playbook_claimed_alert_ids(playbook_result)
+
         try:
-            enqueue_committed_alerts(alerts_created, conn)
+            enqueue_committed_alerts(
+                alerts_created,
+                conn,
+                exclude_alert_ids=playbook_claimed_alert_ids,
+            )
             conn.commit()
         except Exception as enqueue_error:
             current_app.logger.error(
@@ -635,8 +683,6 @@ def add_otel_event():
                 incident_error,
                 [(a.get("alert_id"), a.get("source_ip"), a.get("severity")) for a in alerts_created],
             )
-
-        _create_playbook_executions_for_alerts(alerts_created, conn)
 
         success_message = "Events added successfully" if len(normalized_events) > 1 else "Event added successfully"
         return jsonify({

@@ -1,4 +1,4 @@
--- Schema snapshot version: 0012
+-- Schema snapshot version: 0013
 
 CREATE TABLE IF NOT EXISTS events (
     id SERIAL PRIMARY KEY,
@@ -382,7 +382,9 @@ CREATE TABLE IF NOT EXISTS playbook_executions (
     lease_acquired_at TIMESTAMPTZ,
     lease_heartbeat_at TIMESTAMPTZ,
     lease_expires_at TIMESTAMPTZ,
-    recovery_count INTEGER NOT NULL DEFAULT 0
+    recovery_count INTEGER NOT NULL DEFAULT 0,
+    parent_execution_id INTEGER REFERENCES playbook_executions(id) ON DELETE SET NULL,
+    chain_depth INTEGER NOT NULL DEFAULT 0
 );
 
 ALTER TABLE playbook_executions
@@ -407,6 +409,10 @@ ALTER TABLE playbook_executions
     ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
 ALTER TABLE playbook_executions
     ADD COLUMN IF NOT EXISTS recovery_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE playbook_executions
+    ADD COLUMN IF NOT EXISTS parent_execution_id INTEGER REFERENCES playbook_executions(id) ON DELETE SET NULL;
+ALTER TABLE playbook_executions
+    ADD COLUMN IF NOT EXISTS chain_depth INTEGER NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_playbook_executions_playbook_id
     ON playbook_executions (playbook_id);
@@ -423,6 +429,8 @@ CREATE INDEX IF NOT EXISTS idx_playbook_executions_lease_owner
     WHERE lease_owner IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_playbook_executions_status_created_at
     ON playbook_executions (status, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_playbook_executions_parent_execution_id
+    ON playbook_executions (parent_execution_id);
 
 DROP INDEX IF EXISTS idx_playbook_executions_playbook_alert_unique;
 

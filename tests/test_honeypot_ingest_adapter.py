@@ -366,5 +366,5 @@ def test_alerts_created_soar_handoff_shape_is_preserved(client, monkeypatch):
 
     assert response.status_code == 201
     assert response.get_json()["alerts_created"] == alerts_created
-    enqueue_mock.assert_called_once_with(alerts_created, conn)
+    enqueue_mock.assert_called_once_with(alerts_created, conn, exclude_alert_ids=set())
     playbook_mock.assert_called_once_with(alerts_created, conn)

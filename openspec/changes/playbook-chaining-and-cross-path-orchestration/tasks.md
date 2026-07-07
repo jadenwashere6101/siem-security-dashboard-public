@@ -17,16 +17,16 @@ This spec's authoring step (creating proposal.md/design.md/tasks.md/specs/) make
 
 ## 2. Implementation (this spec's own future work — not started, not part of this authoring step)
 
-- [ ] 2.1 Add a migration extending `playbook_executions` with `parent_execution_id INTEGER REFERENCES playbook_executions(id) ON DELETE SET NULL` and `chain_depth INTEGER NOT NULL DEFAULT 0`, plus an index on `parent_execution_id`; update `schema.sql`.
-- [ ] 2.2 Add `trigger_playbook` to `engines/playbook_registry.py`'s `CORE_ACTIONS`, and add the definition-time self-reference rejection rule to `validate_playbook_steps`.
-- [ ] 2.3 Implement `trigger_playbook` dispatch in `engines/playbook_step_executor.py`: special-case it in the step loop, reuse `create_pending_playbook_execution_once` for the child insert, set `parent_execution_id`/`chain_depth`, and link the child's canonical decision via `parent_soar_correlation_id` using the existing `create_and_link_playbook_execution_decision` entry point.
-- [ ] 2.4 Implement the depth cap (`MAX_CHAIN_DEPTH`) and bounded ancestor-cycle walk, both fail-closed with defined error codes.
-- [ ] 2.5 Add the `exclude_alert_ids` parameter to `engines/soar_enqueue_orchestrator.enqueue_committed_alerts` and the `"playbook_precedence"` skip path.
-- [ ] 2.6 Reorder the five `routes/ingest_routes.py` call sites so playbook orchestration runs before queue enqueue, and thread the matched-alert-id set between them.
-- [ ] 2.7 Add the freeze/deprecation notice (referencing the consolidation decision) to `engines/soar_enqueue_orchestrator.py` and `engines/soar_action_worker.py`.
-- [ ] 2.8 Resolve or explicitly accept-and-record the coverage map's severity-floor gap on the `block_ip` band (a `core-playbook-pack-v1` content decision, tracked here as a dependency, not resolved by this spec's engine work).
-- [ ] 2.9 Add tests: registry self-reference rejection, executor dispatch/linkage/depth-cap/ancestor-cycle cases, parent-success-independent-of-child-outcome, orchestrator precedence-guard cases (skip when matched, unchanged when not matched).
-- [ ] 2.10 Run the full existing playbook, queue, and ingest test suites and confirm zero regressions for every alert and playbook that predates this capability.
+- [x] 2.1 Add a migration extending `playbook_executions` with `parent_execution_id INTEGER REFERENCES playbook_executions(id) ON DELETE SET NULL` and `chain_depth INTEGER NOT NULL DEFAULT 0`, plus an index on `parent_execution_id`; update `schema.sql`.
+- [x] 2.2 Add `trigger_playbook` to `engines/playbook_registry.py`'s `CORE_ACTIONS`, and add the definition-time self-reference rejection rule to `validate_playbook_steps`.
+- [x] 2.3 Implement `trigger_playbook` dispatch in `engines/playbook_step_executor.py`: special-case it in the step loop, reuse `create_pending_playbook_execution_once` for the child insert, set `parent_execution_id`/`chain_depth`, and link the child's canonical decision via `parent_soar_correlation_id` using the existing `create_and_link_playbook_execution_decision` entry point.
+- [x] 2.4 Implement the depth cap (`MAX_CHAIN_DEPTH`) and bounded ancestor-cycle walk, both fail-closed with defined error codes.
+- [x] 2.5 Add the `exclude_alert_ids` parameter to `engines/soar_enqueue_orchestrator.enqueue_committed_alerts` and the `"playbook_precedence"` skip path.
+- [x] 2.6 Reorder the five `routes/ingest_routes.py` call sites so playbook orchestration runs before queue enqueue, and thread the matched-alert-id set between them.
+- [x] 2.7 Add the freeze/deprecation notice (referencing the consolidation decision) to `engines/soar_enqueue_orchestrator.py` and `engines/soar_action_worker.py`.
+- [x] 2.8 Resolve or explicitly accept-and-record the coverage map's severity-floor gap on the `block_ip` band (a `core-playbook-pack-v1` content decision, tracked here as a dependency, not resolved by this spec's engine work). Accepted as a content-pack dependency; no engine or playbook-content change is included here.
+- [x] 2.9 Add tests: registry self-reference rejection, executor dispatch/linkage/depth-cap/ancestor-cycle cases, parent-success-independent-of-child-outcome, orchestrator precedence-guard cases (skip when matched, unchanged when not matched).
+- [x] 2.10 Run the full existing playbook, queue, and ingest test suites and confirm zero regressions for every alert and playbook that predates this capability.
 
 ## Safety Boundaries (for this authoring step)
 
