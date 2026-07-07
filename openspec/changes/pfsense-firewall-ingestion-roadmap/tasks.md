@@ -216,18 +216,30 @@ Track child specs/milestones separately. Each milestone must stop for validation
 
 ## 9. Phase 6 - Runtime Validation
 
-- [ ] 9.1 Inject realistic fake pfSense syslog lines.
-- [ ] 9.2 Confirm UDP listener receives packet.
-- [ ] 9.3 Confirm parser extracts action/interface/protocol/source IP/destination IP/destination port/direction.
-- [ ] 9.4 Confirm normalized event inserted.
-- [ ] 9.5 Confirm dashboard shows `source=pfsense`.
-- [ ] 9.6 Confirm detection rules fire where expected.
-- [ ] 9.7 Confirm playbook execution if applicable.
-- [ ] 9.8 Test malformed input.
-- [ ] 9.9 Test oversized input.
-- [ ] 9.10 Test unauthorized source IP rejection.
-- [ ] 9.11 Test listener restart behavior.
-- [ ] 9.12 Test service logs.
+- [x] 9.1 Inject realistic fake pfSense syslog lines.
+  - 2026-07-07 status: completed with synthetic pfSense syslog validation.
+- [x] 9.2 Confirm UDP listener receives packet.
+  - 2026-07-07 status: listener receipt confirmed during runtime validation.
+- [x] 9.3 Confirm parser extracts action/interface/protocol/source IP/destination IP/destination port/direction.
+  - 2026-07-07 status: parser extraction confirmed through listener/runtime validation.
+- [x] 9.4 Confirm normalized event inserted.
+  - 2026-07-07 status: normalized pfSense event insertion confirmed.
+- [x] 9.5 Confirm dashboard shows `source=pfsense`.
+  - 2026-07-07 status: dashboard visibility confirmed for pfSense events.
+- [x] 9.6 Confirm detection rules fire where expected.
+  - 2026-07-07 status: pfSense detection firing confirmed.
+- [x] 9.7 Confirm playbook execution if applicable.
+  - 2026-07-07 status: pfSense SOAR/playbook path fixed and validated; suspicious-allow now uses supported `block_ip` action with approval-gated containment playbook.
+- [x] 9.8 Test malformed input.
+  - 2026-07-07 status: malformed input handling validated.
+- [x] 9.9 Test oversized input.
+  - 2026-07-07 status: oversized input handling validated.
+- [x] 9.10 Test unauthorized source IP rejection.
+  - 2026-07-07 status: unauthorized source rejection validated.
+- [x] 9.11 Test listener restart behavior.
+  - 2026-07-07 status: listener restart behavior validated.
+- [x] 9.12 Test service logs.
+  - 2026-07-07 status: service log validation completed.
 
 ## 10. Phase 7 - Production Readiness / Uncle Handoff
 
