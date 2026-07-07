@@ -14,6 +14,7 @@ import DeadLettersPanel from "./components/DeadLettersPanel";
 import SocCommandCenter from "./components/SocCommandCenter";
 import ThreatHuntPanel from "./components/ThreatHuntPanel";
 import BlocklistManagerPanel from "./components/BlocklistManagerPanel";
+import LiveLogsPanel from "./components/LiveLogsPanel";
 import SidebarLayout from "./components/SidebarLayout";
 import {
   readStoredSessionIdentity,
@@ -221,6 +222,9 @@ function App() {
       : userRole === "viewer"
       ? "Auditor"
       : userRole || "unknown";
+  const activeLiveLogsSection = sectionsConfig.find(
+    (section) => section.id === activeSection && section.group === "live logs"
+  );
 
   const handleUpdateStatus = async (id, status) => {
     try {
@@ -547,6 +551,17 @@ function App() {
             cardSubtitleStyle={cardSubtitleStyle}
             filterLabelStyle={filterLabelStyle}
             selectStyle={selectStyle}
+          />
+        )}
+
+        {activeLiveLogsSection && isSectionVisible(activeLiveLogsSection.id, roleFlags) && (
+          <LiveLogsPanel
+            source={activeLiveLogsSection.source}
+            label={activeLiveLogsSection.label}
+            cardStyle={cardStyle}
+            cardHeaderStyle={cardHeaderStyle}
+            cardTitleStyle={cardTitleStyle}
+            cardSubtitleStyle={cardSubtitleStyle}
           />
         )}
 

@@ -3,6 +3,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import Sidebar, { SIDEBAR_NAV_ID } from "./Sidebar";
+import { sectionsConfig } from "../utils/sectionsConfig";
 
 const mockSections = [
   { id: "alpha", label: "Alpha", group: "Overview", visibleWhen: () => true },
@@ -240,6 +241,23 @@ test("sidebar width does not vary with which section is active", () => {
   );
 
   expect(aside.style.width).toBe(widthWithAlphaActive);
+});
+
+test("renders LIVE LOGS group from sections config for analysts", () => {
+  render(
+    <Sidebar
+      sections={sectionsConfig}
+      roleFlags={{ isSuperAdmin: false, isAnalyst: true, canTakeAlertActions: true }}
+      activeSectionId="live-logs-pfsense"
+      onNavigate={() => {}}
+    />
+  );
+
+  expect(screen.getByRole("group", { name: "live logs" })).toBeInTheDocument();
+  expect(screen.getByText("live logs")).toBeInTheDocument();
+  for (const label of ["Honeypot", "Bank App", "pfSense", "NGINX", "Azure", "OTEL"]) {
+    expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
+  }
 });
 
 test("renders no clipped footer text when collapsed, using a decorative status indicator instead", () => {

@@ -6,6 +6,7 @@ from scripts import migrate
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MIGRATION_PATH = REPO_ROOT / "migrations" / "0012_soar_response_outcomes.sql"
+EVENTS_SOURCE_INDEX_MIGRATION_PATH = REPO_ROOT / "migrations" / "0014_events_source_index.sql"
 
 
 def test_soar_response_outcomes_migration_scope():
@@ -61,6 +62,15 @@ def test_soar_response_outcomes_migration_scope():
     assert "DELETE FROM" not in sql.upper()
 
 
+def test_events_source_index_migration_scope():
+    sql = EVENTS_SOURCE_INDEX_MIGRATION_PATH.read_text(encoding="utf-8")
+
+    assert "CREATE INDEX IF NOT EXISTS idx_events_source ON events(source);" in sql
+    assert "DROP" not in sql.upper()
+    assert "TRUNCATE" not in sql.upper()
+    assert "DELETE FROM" not in sql.upper()
+
+
 def test_migration_0012_is_pending_when_db_at_0011(capsys):
     conn = MagicMock()
     cur = MagicMock()
@@ -74,7 +84,8 @@ def test_migration_0012_is_pending_when_db_at_0011(capsys):
     output = capsys.readouterr().out
     assert "Would apply migration 0012 0012_soar_response_outcomes" in output
     assert "Would apply migration 0013 0013_playbook_chaining" in output
-    assert "Dry run complete. 2 pending migration(s)." in output
+    assert "Would apply migration 0014 0014_events_source_index" in output
+    assert "Dry run complete. 3 pending migration(s)." in output
 
 
 def test_migration_0013_is_pending_when_db_at_0012(capsys):
@@ -88,10 +99,23 @@ def test_migration_0013_is_pending_when_db_at_0012(capsys):
     assert code == 0
     output = capsys.readouterr().out
     assert "Would apply migration 0013 0013_playbook_chaining" in output
-    assert "Dry run complete. 1 pending migration(s)." in output
+    assert "Would apply migration 0014 0014_events_source_index" in output
+    assert "Dry run complete. 2 pending migration(s)." in output
 
 
 def test_migration_0013_is_noop_when_already_applied(capsys):
+    conn = MagicMock()
+    cur = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cur
+    cur.fetchall.return_value = [(version,) for version in range(1, 15)]
+
+    code = migrate.run(conn, migrations_dir=REPO_ROOT / "migrations", dry_run=True)
+
+    assert code == 0
+    assert "Nothing to apply. DB at version 0014." in capsys.readouterr().out
+
+
+def test_migration_0014_is_pending_when_db_at_0013(capsys):
     conn = MagicMock()
     cur = MagicMock()
     conn.cursor.return_value.__enter__.return_value = cur
@@ -100,4 +124,6 @@ def test_migration_0013_is_noop_when_already_applied(capsys):
     code = migrate.run(conn, migrations_dir=REPO_ROOT / "migrations", dry_run=True)
 
     assert code == 0
-    assert "Nothing to apply. DB at version 0013." in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "Would apply migration 0014 0014_events_source_index" in output
+    assert "Dry run complete. 1 pending migration(s)." in output

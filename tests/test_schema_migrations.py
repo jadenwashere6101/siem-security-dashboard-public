@@ -156,7 +156,7 @@ def test_schema_snapshot_marker_matches_latest_migration():
         migrations_dir=repo_root / "migrations",
     )
 
-    assert version == 13
+    assert version == 14
 
 
 def test_schema_snapshot_validator_rejects_missing_marker(tmp_path):

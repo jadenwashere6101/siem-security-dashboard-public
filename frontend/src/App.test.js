@@ -48,6 +48,12 @@ jest.mock('./components/AuditLogPanel', () => () => (
   <div data-testid="audit-log-panel">Audit Log Panel Mock</div>
 ));
 
+jest.mock('./components/LiveLogsPanel', () => (props) => (
+  <div data-testid="live-logs-panel">
+    Live Logs Panel Mock {props.label} {props.source}
+  </div>
+));
+
 beforeEach(() => {
   jest.clearAllMocks();
   loadCurrentSession.mockResolvedValue({ authenticated: false });
@@ -205,4 +211,41 @@ test('does not render SOAR Operations nav for viewer', async () => {
   expect(screen.queryByTestId('dead-letters-panel')).not.toBeInTheDocument();
   expect(screen.queryByTestId('soar-metrics-dashboard')).not.toBeInTheDocument();
   expect(screen.queryByTestId('soc-command-center')).not.toBeInTheDocument();
+});
+
+test.each([
+  [/honeypot/i, "Honeypot", "honeypot"],
+  [/bank app/i, "Bank App", "bank_app"],
+  [/pfsense/i, "pfSense", "pfsense"],
+  [/nginx/i, "NGINX", "nginx"],
+  [/azure/i, "Azure", "azure_insights"],
+  [/otel/i, "OTEL", "opentelemetry"],
+])('renders Live Logs nav item %s and passes source to panel', async (buttonName, label, source) => {
+  loadCurrentSession.mockResolvedValue({
+    authenticated: true,
+    user: 'analyst1',
+    role: 'analyst',
+  });
+
+  render(<App />);
+
+  await userEvent.click(await screen.findByRole('button', { name: buttonName }));
+
+  expect(await screen.findByTestId('live-logs-panel')).toHaveTextContent(
+    `Live Logs Panel Mock ${label} ${source}`
+  );
+});
+
+test('does not render Live Logs nav for viewer', async () => {
+  loadCurrentSession.mockResolvedValue({
+    authenticated: true,
+    user: 'viewer1',
+    role: 'viewer',
+  });
+
+  render(<App />);
+
+  expect(await screen.findByRole('button', { name: /^dashboard$/i })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /pfsense/i })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /honeypot/i })).not.toBeInTheDocument();
 });

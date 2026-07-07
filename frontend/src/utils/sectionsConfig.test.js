@@ -5,6 +5,12 @@ const EXPECTED_SECTION_IDS = [
   "soc-command-center",
   "blocklist",
   "threat-hunt",
+  "live-logs-honeypot",
+  "live-logs-bank-app",
+  "live-logs-pfsense",
+  "live-logs-nginx",
+  "live-logs-azure",
+  "live-logs-otel",
   "detection-rules",
   "admin-users",
   "admin-audit-logs",
@@ -60,6 +66,42 @@ const expectedVisibility = {
     unauthenticated: false,
   },
   "threat-hunt": {
+    super_admin: true,
+    analyst: true,
+    viewer: false,
+    unauthenticated: false,
+  },
+  "live-logs-honeypot": {
+    super_admin: true,
+    analyst: true,
+    viewer: false,
+    unauthenticated: false,
+  },
+  "live-logs-bank-app": {
+    super_admin: true,
+    analyst: true,
+    viewer: false,
+    unauthenticated: false,
+  },
+  "live-logs-pfsense": {
+    super_admin: true,
+    analyst: true,
+    viewer: false,
+    unauthenticated: false,
+  },
+  "live-logs-nginx": {
+    super_admin: true,
+    analyst: true,
+    viewer: false,
+    unauthenticated: false,
+  },
+  "live-logs-azure": {
+    super_admin: true,
+    analyst: true,
+    viewer: false,
+    unauthenticated: false,
+  },
+  "live-logs-otel": {
     super_admin: true,
     analyst: true,
     viewer: false,
@@ -129,7 +171,7 @@ const expectedVisibility = {
 
 describe("sectionsConfig", () => {
   test("contains exactly the expected section ids", () => {
-    expect(sectionsConfig).toHaveLength(14);
+    expect(sectionsConfig).toHaveLength(20);
     expect(sectionsConfig.map((section) => section.id)).toEqual(EXPECTED_SECTION_IDS);
   });
 
@@ -154,5 +196,18 @@ describe("sectionsConfig", () => {
         );
       });
     });
+  });
+
+  test("live logs entries map labels to raw event source values", () => {
+    const liveLogEntries = sectionsConfig.filter((section) => section.group === "live logs");
+
+    expect(liveLogEntries).toEqual([
+      expect.objectContaining({ id: "live-logs-honeypot", label: "Honeypot", source: "honeypot" }),
+      expect.objectContaining({ id: "live-logs-bank-app", label: "Bank App", source: "bank_app" }),
+      expect.objectContaining({ id: "live-logs-pfsense", label: "pfSense", source: "pfsense" }),
+      expect.objectContaining({ id: "live-logs-nginx", label: "NGINX", source: "nginx" }),
+      expect.objectContaining({ id: "live-logs-azure", label: "Azure", source: "azure_insights" }),
+      expect.objectContaining({ id: "live-logs-otel", label: "OTEL", source: "opentelemetry" }),
+    ]);
   });
 });

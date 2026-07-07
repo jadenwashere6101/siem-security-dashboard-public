@@ -27,7 +27,7 @@ VALID_EVENT_SEARCH_TYPES = VALID_EVENT_TYPES | {
     "application_exception",
     "availability_failure",
 }
-VALID_EVENT_SOURCES = {"bank_app", "nginx", "azure_insights", "opentelemetry"}
+VALID_EVENT_SOURCES = {"honeypot", "bank_app", "pfsense", "nginx", "azure_insights", "opentelemetry"}
 
 _ALERT_SELECT = """
     SELECT
@@ -277,6 +277,7 @@ def search_events():
         event_type = (request.args.get("event_type") or "").strip()
         start_time = (request.args.get("start_time") or "").strip()
         end_time = (request.args.get("end_time") or "").strip()
+        after_id = (request.args.get("after_id") or "").strip()
 
         clauses = []
         params = []
@@ -300,6 +301,16 @@ def search_events():
                 return jsonify({"error": "Invalid event_type"}), 400
             clauses.append("event_type = %s")
             params.append(event_type)
+
+        if after_id:
+            try:
+                parsed_after_id = int(after_id)
+            except ValueError:
+                return jsonify({"error": "Invalid after_id"}), 400
+            if parsed_after_id < 0:
+                return jsonify({"error": "Invalid after_id"}), 400
+            clauses.append("id > %s")
+            params.append(parsed_after_id)
 
         if start_time:
             try:
@@ -336,7 +347,7 @@ def search_events():
         if clauses:
             query += " WHERE " + " AND ".join(clauses)
 
-        query += " ORDER BY created_at DESC LIMIT 100"
+        query += " ORDER BY id DESC LIMIT 100"
 
         conn = get_db_connection()
         cur = conn.cursor()
