@@ -7,13 +7,6 @@ that step definitions reference known action names before definitions are persis
 
 from __future__ import annotations
 
-from engines.playbook_branch_conditions import (
-    build_label_index_map,
-    validate_branch_step,
-    validate_step_label,
-)
-from engines.playbook_param_binding import validate_step_param_bindings
-
 CORE_ACTIONS: frozenset[str] = frozenset(
     {
         "monitor",
@@ -21,6 +14,7 @@ CORE_ACTIONS: frozenset[str] = frozenset(
         "require_approval",
         "branch",
         "trigger_playbook",
+        "enrich_context",
     }
 )
 
@@ -102,6 +96,9 @@ def validate_playbook_steps(steps: list[dict], *, playbook_id: str | None = None
                 )
             )
 
+        if action == "enrich_context":
+            errors.extend(_validate_enrich_context_step(step, prefix=prefix))
+
         if action == "require_approval":
             risk_level = step.get("risk_level", "high")
             if risk_level not in APPROVAL_RISK_LEVELS:
@@ -143,6 +140,21 @@ def validate_playbook_steps(steps: list[dict], *, playbook_id: str | None = None
     return errors
 
 
+def _validate_enrich_context_step(step: dict, *, prefix: str) -> list[str]:
+    params = step.get("params", {})
+    if params is None:
+        return []
+    if not isinstance(params, dict):
+        return [f"{prefix}: enrich_context params must be an object"]
+    if "limit" in params:
+        limit = params["limit"]
+        if not isinstance(limit, int) or isinstance(limit, bool):
+            return [f"{prefix}: enrich_context params.limit must be an integer"]
+        if limit < 1 or limit > 25:
+            return [f"{prefix}: enrich_context params.limit must be between 1 and 25"]
+    return []
+
+
 def _validate_trigger_playbook_step(
     step: dict,
     *,
@@ -158,3 +170,17 @@ def _validate_trigger_playbook_step(
     if playbook_id is not None and target.strip() == playbook_id:
         return [f"{prefix}: trigger_playbook cannot reference its own playbook id"]
     return []
+
+
+# Imported here (after validate_playbook_steps and its validation helpers are
+# defined) rather than at module top, to break a circular import:
+# playbook_branch_conditions -> playbook_engine -> core.playbook_store ->
+# playbook_registry.validate_playbook_steps. Importing these at the top would
+# make Python reach core.playbook_store before validate_playbook_steps exists
+# in this module's namespace, whenever playbook_registry is imported directly.
+from engines.playbook_branch_conditions import (  # noqa: E402
+    build_label_index_map,
+    validate_branch_step,
+    validate_step_label,
+)
+from engines.playbook_param_binding import validate_step_param_bindings  # noqa: E402

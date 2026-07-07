@@ -1,3 +1,7 @@
+import subprocess
+import sys
+from pathlib import Path
+
 from engines.playbook_registry import (
     ADAPTER_ACTIONS,
     KNOWN_PLAYBOOK_ACTIONS,
@@ -155,6 +159,19 @@ def test_validate_trigger_playbook_requires_target_params():
     assert any("requires params.playbook_id" in error for error in errors)
 
 
+def test_validate_enrich_context_accepts_optional_bounded_limit():
+    assert validate_playbook_steps([{"action": "enrich_context"}]) == []
+    assert validate_playbook_steps([{"action": "enrich_context", "params": {"limit": 10}}]) == []
+
+
+def test_validate_enrich_context_rejects_invalid_params():
+    errors = validate_playbook_steps([{"action": "enrich_context", "params": []}])
+    assert any("params must be an object" in error for error in errors)
+
+    errors = validate_playbook_steps([{"action": "enrich_context", "params": {"limit": 0}}])
+    assert any("params.limit must be between 1 and 25" in error for error in errors)
+
+
 def test_supported_actions_is_frozen():
     assert SUPPORTED_ACTIONS is KNOWN_PLAYBOOK_ACTIONS
     assert isinstance(SUPPORTED_ACTIONS, frozenset)
@@ -165,7 +182,23 @@ def test_supported_actions_is_frozen():
     assert "notify_email" in SUPPORTED_ACTIONS
     assert "notify_webhook" in SUPPORTED_ACTIONS
     assert "trigger_playbook" in SUPPORTED_ACTIONS
+    assert "enrich_context" in SUPPORTED_ACTIONS
 
 
 def test_known_playbook_actions_include_adapter_actions():
     assert set(ADAPTER_ACTIONS).issubset(KNOWN_PLAYBOOK_ACTIONS)
+
+
+def test_direct_import_does_not_raise_circular_import_error():
+    """Regression test for a circular import between playbook_registry,
+    playbook_branch_conditions/playbook_param_binding, playbook_engine, and
+    core.playbook_store. Importing playbook_registry directly (e.g. in a fresh
+    interpreter, before any other project module has been imported) must not
+    raise ImportError due to validate_playbook_steps not yet being defined."""
+    result = subprocess.run(
+        [sys.executable, "-c", "import engines.playbook_registry"],
+        cwd=Path(__file__).resolve().parent.parent,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
