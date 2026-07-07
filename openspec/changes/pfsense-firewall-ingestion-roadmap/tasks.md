@@ -160,6 +160,7 @@ Phase 3 does not implement anything, does not create code, does not open Azure/V
   - 2026-07-07 implementation update: repeated-deny, port-scan, suspicious-allow, and noisy-source detectors, MITRE mapping, correlation wiring, and four Core Playbook Pack v1 playbooks (investigation and approval-gated containment) completed in the Mac repo only, with 21 new tests and a full-suite regression pass (1554 passed). Deployment/runtime readiness, Azure NSG, VM firewall, live exposure, and uncle/pfSense handoff remain separate future child specs.
 - [x] 6.12 Create `pfsense-deployment-runtime-readiness` later.
   - 2026-07-07 update: child spec created at `openspec/changes/pfsense-deployment-runtime-readiness/` and scoped to deployment sequencing, infrastructure gating, runtime validation, production readiness, and pfSense handoff only. It does not implement parser, ingest, listener, detection, SOAR, or firewall-rule code, does not create Azure NSG rules, and does not perform live deployment or handle production traffic.
+  - 2026-07-07 implementation update: deployment/runtime readiness runbook, non-mutating readiness helper, and validation tests completed in the Mac repo only. Phase 5 deployment, Phase 6 runtime validation, Phase 7 production readiness, Azure NSG, VM firewall, live exposure, and uncle handoff remain future operator-controlled execution gates.
 
 ## 7. Phase 4 - Milestone Implementation Plan
 
