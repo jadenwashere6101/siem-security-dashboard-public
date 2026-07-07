@@ -32,7 +32,7 @@ def _pfsense_escalated_severity(base_severity, *, count, threshold, reputation_s
 
 def _pfsense_response_action_for_severity(severity):
     if severity == "high":
-        return "request_firewall_block_approval"
+        return "block_ip"
     if severity == "medium":
         return "enrich_source_ip"
     return "monitor_only"

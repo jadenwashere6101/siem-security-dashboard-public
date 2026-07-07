@@ -261,7 +261,7 @@ def test_repeated_deny_escalates_to_high_severity_with_high_reputation(postgres_
 
     assert len(alerts_created) == 1
     assert alerts_created[0]["severity"] == "high"
-    assert alerts_created[0]["response_action"] == "request_firewall_block_approval"
+    assert alerts_created[0]["response_action"] == "block_ip"
 
 
 def test_repeated_deny_duplicate_suppression_keeps_single_open_alert(postgres_db):
@@ -387,7 +387,7 @@ def test_port_scan_breadth_escalates_to_high_severity(postgres_db):
 
     assert len(alerts_created) == 1
     assert alerts_created[0]["severity"] == "high"
-    assert alerts_created[0]["response_action"] == "request_firewall_block_approval"
+    assert alerts_created[0]["response_action"] == "block_ip"
 
 
 # ---------------------------------------------------------------------------
@@ -397,6 +397,7 @@ def test_port_scan_breadth_escalates_to_high_severity(postgres_db):
 
 def test_suspicious_allow_sensitive_port_inbound_creates_high_severity_alert(postgres_db):
     conn, cur = postgres_db
+    seed_core_playbook_pack_v1(conn)
     source_ip = "198.51.100.50"
 
     insert_pfsense_event(
@@ -416,16 +417,24 @@ def test_suspicious_allow_sensitive_port_inbound_creates_high_severity_alert(pos
 
     assert len(alerts_created) == 1
     assert alerts_created[0]["severity"] == "high"
-    assert alerts_created[0]["response_action"] == "request_firewall_block_approval"
+    assert alerts_created[0]["response_action"] == "block_ip"
 
     alert = fetch_alert_by_type(cur, source_ip, "pfsense_firewall_suspicious_allow")
     assert alert is not None
     _, alert_type, severity, response_action, _, context = alert
+    assert response_action == "block_ip"
     assert context["destination_port"] == "3389"
     assert context["direction"] == "in"
 
     mitre = enrich_alert_with_mitre({"alert_type": alert_type})
     assert mitre["mitre_technique_id"] is None
+
+    conn.commit()
+    matches = match_playbooks(conn, alerts_created[0]["alert_id"])
+    assert any(
+        match["id"] == CORE_V1_PFSENSE_SUSPICIOUS_ALLOW_CONTAINMENT_ID
+        for match in matches
+    )
 
 
 def test_suspicious_allow_outbound_sensitive_port_does_not_alert(postgres_db):
@@ -629,7 +638,7 @@ def test_ingest_normalized_event_dispatches_firewall_allow_detectors(postgres_db
         result = ingest_normalized_event(event, conn, cur)
 
     assert len(result) == 1
-    assert result[0]["response_action"] == "request_firewall_block_approval"
+    assert result[0]["response_action"] == "block_ip"
 
 
 # ---------------------------------------------------------------------------
