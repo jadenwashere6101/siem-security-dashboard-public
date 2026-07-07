@@ -108,6 +108,23 @@ This is a coordination-only parent roadmap. It may track non-repo operational ta
 - [ ] 5.21 If a temporary broader Azure NSG source is approved for testing, add an explicit cleanup/removal task.
 - [ ] 5.22 Draft uncle handoff message later, after deployment/runtime validation gates pass.
 
+## 5.5. Phase 2.5 - Threat Model
+
+- [x] 5.5.1 Threat model completed.
+  - 2026-07-07 finding: parent-level threat model created in `phase-2.5-threat-model.md`.
+- [x] 5.5.2 Assets documented.
+  - 2026-07-07 finding: protected assets include the Azure VM, SIEM backend, PostgreSQL database, SOAR worker, future listener/adapter, detection/playbook engines, firewall telemetry, business metadata, deployment pipeline, and GitHub source repository.
+- [x] 5.5.3 Trust boundaries documented.
+  - 2026-07-07 finding: trust boundaries are documented from Internet ingress through Azure NSG, VM networking, listener, parser, normalizer, Flask ingest, database, detection, SOAR, and dashboard.
+- [x] 5.5.4 Threats documented.
+  - 2026-07-07 finding: network, parser, application, operational, and privacy threats are documented.
+- [x] 5.5.5 Mitigations documented.
+  - 2026-07-07 finding: network, listener, parser, pipeline, and operational mitigations are documented.
+- [x] 5.5.6 Security principles documented.
+  - 2026-07-07 finding: least privilege, defense in depth, fail-safely behavior, centralized validation, explicit trust boundaries, source-of-truth architecture, reproducible deployment, and auditable runtime behavior are documented.
+- [x] 5.5.7 Child-spec inheritance documented.
+  - 2026-07-07 finding: future child specs must inherit this threat model and reference it instead of redefining shared mitigations.
+
 ## 6. Phase 3 - Detailed OpenSpec Creation
 
 - [ ] 6.1 Create actual child implementation specs only after Phase 0 and Phase 1 audits are complete.
