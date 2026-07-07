@@ -17,20 +17,34 @@ This is a coordination-only parent roadmap. It may track non-repo operational ta
 
 ## 3. Phase 0 - Read-only Environment Audit
 
-- [ ] 3.1 Check Mac repo clean.
-- [ ] 3.2 Check GitHub up to date.
-- [ ] 3.3 Check VM repo synced and clean.
-- [ ] 3.4 Check backend health.
-- [ ] 3.5 Check `soar-playbook-worker.service`.
-- [ ] 3.6 Check `soar-response-action-worker.timer/service`.
-- [ ] 3.7 Check current open/listening ports.
-- [ ] 3.8 Check whether UDP 514 conflicts with anything.
-- [ ] 3.9 Check whether any syslog listener already exists.
-- [ ] 3.10 Check existing adapters/listeners.
-- [ ] 3.11 Check honeypot listener/deployment patterns.
-- [ ] 3.12 Check existing normalization helpers.
-- [ ] 3.13 Check existing detection rules overlapping firewall behavior.
-- [ ] 3.14 Check existing tests that can be reused.
+- [x] 3.1 Check Mac repo clean.
+  - 2026-07-07 finding: not clean because roadmap/policy files are uncommitted; no application source files are dirty from this audit.
+- [x] 3.2 Check GitHub up to date.
+  - 2026-07-07 finding: Mac `HEAD`, local `origin/main`, and remote `origin/main` all resolve to `af24fae54ad1a1c91e7e62c2d52921793fe42321`.
+- [x] 3.3 Check VM repo synced and clean.
+  - 2026-07-07 finding: VM working tree is clean, but VM Git history is not synced with GitHub `main`. VM `HEAD` is `489e4ed4be2789e82709af77ccce84c6da930d45`; current remote `origin/main` is `af24fae54ad1a1c91e7e62c2d52921793fe42321`. Do not merge/deploy until this divergence is intentionally handled.
+- [x] 3.4 Check backend health.
+  - 2026-07-07 finding: `curl http://127.0.0.1:5051/health` returned HTTP 200 with `status=ok`.
+- [x] 3.5 Check `soar-playbook-worker.service`.
+  - 2026-07-07 finding: active/running.
+- [x] 3.6 Check `soar-response-action-worker.timer/service`.
+  - 2026-07-07 finding: timer active/waiting; one-shot service inactive/dead after last successful run, which matches timer-triggered service behavior.
+- [x] 3.7 Check current open/listening ports.
+  - 2026-07-07 finding: listening ports observed include TCP 22, 80, 443, 5051, 5052, 8080, local PostgreSQL 5432, local MySQL 3306/33060, local DNS 53, DHCP UDP 68, and chrony UDP 323.
+- [x] 3.8 Check whether UDP 514 conflicts with anything.
+  - 2026-07-07 finding: no UDP 514 listener found.
+- [x] 3.9 Check whether any syslog listener already exists.
+  - 2026-07-07 finding: `rsyslogd` process exists for host logging, but no UDP 514 socket is listening.
+- [x] 3.10 Check existing adapters/listeners.
+  - 2026-07-07 finding: active ingestion adapters are request/normalizer based (`adapters/nginx_adapter.py`, `adapters/azure_insights_adapter.py`, `adapters/otel_adapter.py`) and feed Flask ingest routes; no existing raw UDP/syslog listener was found.
+- [x] 3.11 Check honeypot listener/deployment patterns.
+  - 2026-07-07 finding: honeypot is a separate runtime service on TCP 8080 that posts normalized events to `/ingest/honeypot`; backend stores `source=honeypot` and `source_type=honeypot`.
+- [x] 3.12 Check existing normalization helpers.
+  - 2026-07-07 finding: reusable pieces include `engines/ingest_engine.ingest_normalized_event`, `helpers/ingest_normalizers`, and the narrow adapter normalizers for nginx/Azure/OTEL.
+- [x] 3.13 Check existing detection rules overlapping firewall behavior.
+  - 2026-07-07 finding: overlapping detections include `port_scan`, `failed_login`/`unauthorized_access`, `http_error`, scanner/admin/env probe honeypot detections, correlated activity, and targeted correlation.
+- [x] 3.14 Check existing tests that can be reused.
+  - 2026-07-07 finding: reusable tests/patterns include `tests/test_ingest_api_contracts.py`, `tests/test_ingest_normalized_event.py`, `tests/test_port_scan_detection.py`, `tests/test_honeypot_ingest_adapter.py`, `tests/test_honeypot_event_detections.py`, `tests/test_correlated_activity.py`, `tests/test_targeted_correlation.py`, `tests/test_deploy_backend_vm_script.py`, and `tests/test_response_action_worker_deployment.py`.
 
 ## 4. Phase 1 - Architecture Audit
 
@@ -147,4 +161,3 @@ Track child specs/milestones separately. Each milestone must stop for validation
 - [ ] Do not request uncle/pfSense configuration as part of this parent roadmap.
 - [ ] Do not commit.
 - [ ] Do not push.
-
