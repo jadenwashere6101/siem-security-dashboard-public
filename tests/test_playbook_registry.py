@@ -2,6 +2,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from engines.playbook_registry import (
     ADAPTER_ACTIONS,
     KNOWN_PLAYBOOK_ACTIONS,
@@ -197,6 +199,23 @@ def test_direct_import_does_not_raise_circular_import_error():
     raise ImportError due to validate_playbook_steps not yet being defined."""
     result = subprocess.run(
         [sys.executable, "-c", "import engines.playbook_registry"],
+        cwd=Path(__file__).resolve().parent.parent,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    "module_name",
+    [
+        "engines.playbook_param_binding",
+        "engines.playbook_branch_conditions",
+    ],
+)
+def test_support_modules_import_standalone_without_circular_import_error(module_name):
+    result = subprocess.run(
+        [sys.executable, "-c", f"import {module_name}"],
         cwd=Path(__file__).resolve().parent.parent,
         capture_output=True,
         text=True,

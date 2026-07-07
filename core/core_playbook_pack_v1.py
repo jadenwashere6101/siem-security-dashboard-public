@@ -1,7 +1,7 @@
 """
 Core Playbook Pack v1 definitions.
 
-Five production playbooks authored as data for `playbook_definitions`. Notification
+Ten production playbooks authored as data for `playbook_definitions`. Notification
 params use whole-value dynamic bindings (`{{alert.<field>}}`) per the parameter-binding
 engine; composite inline templates are not supported at save time.
 """
@@ -18,13 +18,25 @@ CORE_V1_PASSWORD_SPRAY_INVESTIGATION_ID = "core-v1-password-spray-investigation"
 CORE_V1_SPRAY_SUCCESS_RESPONSE_ID = "core-v1-spray-success-response"
 CORE_V1_MALICIOUS_IP_CONTAINMENT_ID = "core-v1-malicious-ip-containment"
 CORE_V1_REPUTATION_INVESTIGATION_ID = "core-v1-reputation-investigation"
+CORE_V1_WEB_TO_APP_ATTACK_INVESTIGATION_ID = "core-v1-web-to-app-attack-investigation"
+CORE_V1_CLOUD_APP_ERROR_CORRELATION_INVESTIGATION_ID = (
+    "core-v1-cloud-app-error-correlation-investigation"
+)
+CORE_V1_SPRAY_THEN_SUCCESS_CORRELATION_INVESTIGATION_ID = (
+    "core-v1-spray-then-success-correlation-investigation"
+)
+CORE_V1_HONEYPOT_SCANNER_REVIEW_ID = "core-v1-honeypot-scanner-review"
+CORE_V1_HONEYPOT_CREDENTIAL_STUFFING_CONTAINMENT_ID = (
+    "core-v1-honeypot-credential-stuffing-containment"
+)
 
 CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
     {
         "id": CORE_V1_BRUTE_FORCE_CONTAINMENT_ID,
         "name": "Brute Force Containment",
         "description": (
-            "Escalate sustained failed-login patterns with approval-gated IP containment."
+            "Escalate sustained failed-login patterns with enriched context and "
+            "approval-gated IP containment."
         ),
         "trigger_config": {
             "alert_type": "failed_login_threshold",
@@ -32,6 +44,7 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
         },
         "steps": [
             {"action": "flag_high_priority"},
+            {"action": "enrich_context"},
             {
                 "action": "require_approval",
                 "risk_level": "high",
@@ -46,10 +59,12 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
         "id": CORE_V1_PASSWORD_SPRAY_INVESTIGATION_ID,
         "name": "Password Spray Investigation",
         "description": (
-            "Investigate password-spray activity without automatic blocking."
+            "Investigate password-spray activity with enriched alert context and "
+            "no automatic blocking."
         ),
         "trigger_config": {"alert_type": "password_spraying_threshold"},
         "steps": [
+            {"action": "enrich_context"},
             {"action": "monitor"},
             {
                 "action": "notify_slack",
@@ -59,9 +74,10 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
     },
     {
         "id": CORE_V1_SPRAY_SUCCESS_RESPONSE_ID,
-        "name": "Successful Login After Spray Response",
+        "name": "Password Spray Compromise Containment",
         "description": (
-            "Fastest approval-gated containment for post-spray successful login signals."
+            "Contain likely account compromise after password spraying using "
+            "enriched context and approval-gated IP blocking."
         ),
         "trigger_config": {
             "alert_type": "successful_login_after_spray",
@@ -69,6 +85,7 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
         },
         "steps": [
             {"action": "flag_high_priority"},
+            {"action": "enrich_context"},
             {
                 "action": "require_approval",
                 "risk_level": "critical",
@@ -93,7 +110,8 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
         "id": CORE_V1_MALICIOUS_IP_CONTAINMENT_ID,
         "name": "Malicious IP Containment",
         "description": (
-            "Approval-gated containment for alerts from known-malicious source IPs."
+            "Approval-gated containment for medium-or-higher alerts from "
+            "high-reputation-risk source IPs, with enriched context."
         ),
         "trigger_config": {
             "reputation_score_min": 80,
@@ -101,6 +119,7 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
         },
         "steps": [
             {"action": "flag_high_priority"},
+            {"action": "enrich_context"},
             {
                 "action": "require_approval",
                 "risk_level": "high",
@@ -112,20 +131,121 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
     },
     {
         "id": CORE_V1_REPUTATION_INVESTIGATION_ID,
-        "name": "Reputation-Only Investigation",
+        "name": "High Reputation Review",
         "description": (
-            "Low-bar reputation nudge for alerts worth reviewing without escalation."
+            "Review low-severity alerts that carry elevated reputation risk, "
+            "with enriched context and no containment."
         ),
         "trigger_config": {
             "reputation_score_min": 40,
             "min_severity": "low",
         },
         "steps": [
+            {"action": "enrich_context"},
             {"action": "monitor"},
             {
                 "action": "notify_slack",
                 "params": {"message": "{{alert.reputation_summary}}"},
             },
+        ],
+    },
+    {
+        "id": CORE_V1_WEB_TO_APP_ATTACK_INVESTIGATION_ID,
+        "name": "Web-to-App Attack Investigation",
+        "description": (
+            "Investigate correlated web-to-application attack patterns with "
+            "enriched context and analyst notification."
+        ),
+        "trigger_config": {
+            "alert_type": "web_to_app_attack_pattern",
+            "min_severity": "critical",
+        },
+        "steps": [
+            {"action": "enrich_context"},
+            {"action": "monitor"},
+            {"action": "notify_slack", "params": {"message": "{{alert.message}}"}},
+        ],
+    },
+    {
+        "id": CORE_V1_CLOUD_APP_ERROR_CORRELATION_INVESTIGATION_ID,
+        "name": "Cloud/App Error Correlation Investigation",
+        "description": (
+            "Investigate correlated cloud and web application error patterns "
+            "with enriched context."
+        ),
+        "trigger_config": {
+            "alert_type": "cloud_app_error_pattern",
+            "min_severity": "high",
+        },
+        "steps": [
+            {"action": "enrich_context"},
+            {"action": "monitor"},
+            {"action": "notify_slack", "params": {"message": "{{alert.message}}"}},
+        ],
+    },
+    {
+        "id": CORE_V1_SPRAY_THEN_SUCCESS_CORRELATION_INVESTIGATION_ID,
+        "name": "Spray-Then-Success Correlation Investigation",
+        "description": (
+            "Contain high-confidence spray-then-success correlation alerts with "
+            "enriched context and approval-gated IP blocking."
+        ),
+        "trigger_config": {
+            "alert_type": "spray_then_success_pattern",
+            "min_severity": "critical",
+        },
+        "steps": [
+            {"action": "flag_high_priority"},
+            {"action": "enrich_context"},
+            {
+                "action": "require_approval",
+                "risk_level": "critical",
+                "expires_in_minutes": 15,
+                "reason": "Spray-then-success correlation detected — approve IP block",
+            },
+            {"action": "block_ip", "params": {"source_ip": "{{alert.source_ip}}"}},
+            {"action": "notify_slack", "params": {"message": "{{alert.message}}"}},
+        ],
+    },
+    {
+        "id": CORE_V1_HONEYPOT_SCANNER_REVIEW_ID,
+        "name": "Honeypot Scanner Review",
+        "description": (
+            "Review scanner activity detected by honeypot telemetry using "
+            "enriched context and analyst notification."
+        ),
+        "trigger_config": {
+            "alert_type": "honeypot_scanner_detected",
+            "min_severity": "medium",
+        },
+        "steps": [
+            {"action": "enrich_context"},
+            {"action": "monitor"},
+            {"action": "notify_slack", "params": {"message": "{{alert.message}}"}},
+        ],
+    },
+    {
+        "id": CORE_V1_HONEYPOT_CREDENTIAL_STUFFING_CONTAINMENT_ID,
+        "name": "Honeypot Credential Stuffing Containment",
+        "description": (
+            "Contain honeypot credential-stuffing alerts with enriched context "
+            "and approval-gated IP blocking."
+        ),
+        "trigger_config": {
+            "alert_type": "honeypot_credential_stuffing_threshold",
+            "min_severity": "high",
+        },
+        "steps": [
+            {"action": "flag_high_priority"},
+            {"action": "enrich_context"},
+            {
+                "action": "require_approval",
+                "risk_level": "high",
+                "expires_in_minutes": 30,
+                "reason": "Honeypot credential stuffing detected — approve IP block",
+            },
+            {"action": "block_ip", "params": {"source_ip": "{{alert.source_ip}}"}},
+            {"action": "notify_slack", "params": {"message": "{{alert.message}}"}},
         ],
     },
 )

@@ -12,8 +12,6 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from engines.playbook_engine import _fetch_alert
-
 BINDING_EXPRESSION_RE = re.compile(r"^\{\{(alert|execution)\.([a-z][a-z0-9_]*)\}\}$")
 
 ALERT_BINDING_FIELDS: frozenset[str] = frozenset(
@@ -127,6 +125,10 @@ def resolve_step_params(
                 "binding_alert_context_missing",
                 "Dynamic alert binding requires an alert_id on the execution.",
             )
+        # Import lazily to avoid a standalone import cycle through
+        # playbook_engine -> playbook_store -> playbook_registry.
+        from engines.playbook_engine import _fetch_alert
+
         alert = _fetch_alert(conn, alert_id)
         if alert is None:
             raise PlaybookParamBindingError(

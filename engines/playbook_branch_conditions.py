@@ -1,8 +1,8 @@
 """
 Playbook branch condition evaluation and validation helpers.
 
-Reuses ALERT_BINDING_FIELDS from playbook_param_binding and SEVERITY_RANK from
-playbook_engine — no second field surface.
+Reuses ALERT_BINDING_FIELDS from playbook_param_binding. The alert fetch helper
+is imported lazily to keep this module importable standalone.
 """
 
 from __future__ import annotations
@@ -11,7 +11,6 @@ import re
 from decimal import Decimal
 from typing import Any
 
-from engines.playbook_engine import SEVERITY_RANK, _fetch_alert
 from engines.playbook_param_binding import ALERT_BINDING_FIELDS
 
 LABEL_RE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -31,6 +30,13 @@ STRING_ALERT_FIELDS: frozenset[str] = ALERT_BINDING_FIELDS - NUMERIC_ALERT_FIELD
 
 PREVIOUS_STEP_STATUS_VALUES: frozenset[str] = frozenset({"success", "failed", "skipped"})
 APPROVAL_STATUS_VALUES: frozenset[str] = frozenset({"approved", "denied", "expired"})
+
+SEVERITY_RANK: dict[str, int] = {
+    "low": 1,
+    "medium": 2,
+    "high": 3,
+    "critical": 4,
+}
 
 
 class PlaybookBranchConditionError(Exception):
@@ -253,6 +259,10 @@ def _resolve_alert_field(conn, execution: dict[str, Any], field: str) -> Any:
             "binding_alert_context_missing",
             "Alert-sourced branch condition requires an alert_id on the execution.",
         )
+    # Import lazily to avoid a standalone import cycle through
+    # playbook_engine -> playbook_store -> playbook_registry.
+    from engines.playbook_engine import _fetch_alert
+
     alert = _fetch_alert(conn, alert_id)
     if alert is None:
         raise PlaybookBranchConditionError(

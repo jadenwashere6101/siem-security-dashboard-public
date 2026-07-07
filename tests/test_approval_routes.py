@@ -295,6 +295,32 @@ def test_super_admin_approve_succeeds(client, postgres_db):
     assert data["approval"]["decided_by"] is not None
 
 
+def test_super_admin_approve_succeeds_without_preexisting_admin_db_user(client, postgres_db):
+    conn, cur = postgres_db
+    incident_id = _insert_incident(cur, source_ip="203.0.114.150")
+    conn.commit()
+    approval = _insert_approval(conn, incident_id)
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.post(
+            f"/approvals/{approval['id']}/decision",
+            json={"decision": "approved", "reason": "Sentinel admin path"},
+        )
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["approval"]["status"] == "approved"
+    assert data["approval"]["approved_by"] is not None
+    assert data["approval"]["decided_by"] is not None
+
+    cur.execute("SELECT id, role, is_active FROM users WHERE username = 'admin'")
+    admin_row = cur.fetchone()
+    assert admin_row is not None
+    assert admin_row[1] == "super_admin"
+    assert admin_row[2] is True
+
+
 def test_super_admin_approve_creates_approved_event(client, postgres_db):
     conn, cur = postgres_db
     _insert_admin_db_user(cur)

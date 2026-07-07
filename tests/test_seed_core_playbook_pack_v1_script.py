@@ -85,8 +85,8 @@ def test_success_summary_reports_inserted_and_existing(monkeypatch, capsys):
     assert code == 0
     out = capsys.readouterr().out
     assert "Inserted playbooks (2):" in out
-    assert "Already-existing playbooks (3):" in out
-    assert "Final totals: inserted=2 existing=3 total=5" in out
+    assert "Already-existing playbooks (8):" in out
+    assert "Final totals: inserted=2 existing=8 total=10" in out
     for playbook_id in inserted:
         assert playbook_id in out
 
@@ -107,7 +107,7 @@ def test_noop_summary_reports_all_existing(monkeypatch, capsys):
     assert code == 0
     out = capsys.readouterr().out
     assert "Inserted playbooks (0): none" in out
-    assert "Already-existing playbooks (5):" in out
+    assert "Already-existing playbooks (10):" in out
     assert "No changes made; all Core Playbook Pack v1 playbooks already exist." in out
 
 

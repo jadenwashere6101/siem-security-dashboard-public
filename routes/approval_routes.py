@@ -26,6 +26,34 @@ def _resolve_actor_user_id(conn, username):
         return row[0] if row else None
 
 
+def _resolve_or_create_actor_user_id(conn, username, role):
+    actor_user_id = _resolve_actor_user_id(conn, username)
+    if actor_user_id is not None:
+        return actor_user_id
+
+    # The built-in super-admin login uses the Flask-Login sentinel "admin"
+    # without requiring a pre-existing users row. Approval decisions persist a
+    # users.id foreign key and the database requires approved_by for approved
+    # requests, so materialize that sentinel on demand.
+    if username != "admin" or role != "super_admin":
+        return None
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO users (username, password_hash, role, is_active)
+            VALUES (%s, %s, %s, TRUE)
+            ON CONFLICT (username) DO UPDATE
+            SET role = EXCLUDED.role,
+                is_active = TRUE
+            RETURNING id
+            """,
+            ("admin", "sentinel_admin_no_direct_login", "super_admin"),
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
 def _parse_non_negative_int(value, default, field_name):
     if value is None:
         return default, None
@@ -137,7 +165,11 @@ def decision_approval_route(approval_id):
             return jsonify({"error": "invalid decision"}), 400
 
         conn = get_db_connection()
-        actor_user_id = _resolve_actor_user_id(conn, current_user.id)
+        actor_user_id = _resolve_or_create_actor_user_id(
+            conn,
+            current_user.id,
+            getattr(current_user, "role", None),
+        )
 
         if decision == "approved":
             updated = approve_request(
