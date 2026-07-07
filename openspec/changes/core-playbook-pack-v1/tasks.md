@@ -18,13 +18,13 @@ This spec's authoring step (creating proposal.md/design.md/tasks.md/specs/) make
 
 **Prerequisite:** `dynamic-playbook-parameter-binding` implementation complete (roadmap item 2.4).
 
-- [ ] 2.1 Create the `Brute Force Containment` playbook via `POST /playbooks` with `block_ip` (`source_ip: "{{alert.source_ip}}"`) and dynamic notification params per `design.md`.
-- [ ] 2.2 Create the `Password Spray Investigation` playbook with dynamic notification params (no `block_ip` — intentional restraint).
-- [ ] 2.3 Create the `Successful Login After Spray Response` playbook with approval-gated `block_ip` and dual-channel dynamic notifications.
-- [ ] 2.4 Create the `Malicious IP Containment` playbook with approval-gated `block_ip` and dynamic notifications.
-- [ ] 2.5 Create the `Reputation-Only Investigation` playbook with dynamic notification params.
-- [ ] 2.6 Exercise each playbook end-to-end against a synthetic alert matching its trigger; confirm resolved `block_ip` targets the alert's `source_ip` and notifications contain alert-specific values.
-- [ ] 2.7 Confirm no regression to existing playbook definition/execution tests from adding these five rows.
+- [x] 2.1 Create the `Brute Force Containment` playbook via `POST /playbooks` with `block_ip` (`source_ip: "{{alert.source_ip}}"`) and dynamic notification params per `design.md`.
+- [x] 2.2 Create the `Password Spray Investigation` playbook with dynamic notification params (no `block_ip` — intentional restraint).
+- [x] 2.3 Create the `Successful Login After Spray Response` playbook with approval-gated `block_ip` and dual-channel dynamic notifications.
+- [x] 2.4 Create the `Malicious IP Containment` playbook with approval-gated `block_ip` and dynamic notifications.
+- [x] 2.5 Create the `Reputation-Only Investigation` playbook with dynamic notification params.
+- [x] 2.6 Exercise each playbook end-to-end against a synthetic alert matching its trigger; confirm resolved `block_ip` targets the alert's `source_ip` and notifications contain alert-specific values.
+- [x] 2.7 Confirm no regression to existing playbook definition/execution tests from adding these five rows.
 
 ## Safety Boundaries (for this authoring step)
 
