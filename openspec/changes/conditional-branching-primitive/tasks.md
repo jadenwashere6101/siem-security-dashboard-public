@@ -12,13 +12,13 @@ This spec's authoring step (creating proposal.md/design.md/tasks.md/specs/) make
 
 ## 2. Implementation (this spec's own future work — not started, not part of this authoring step)
 
-- [ ] 2.1 Add a new module (e.g. `engines/playbook_branch_conditions.py`) that evaluates `alert`/`previous_step`/`approval`-sourced conditions, reusing `ALERT_BINDING_FIELDS` and `SEVERITY_RANK` rather than redefining either.
-- [ ] 2.2 Extend `engines/playbook_registry.py`'s `validate_playbook_steps` with all branch validation rules: shape, condition source/field/op/value typing, label uniqueness, forward-only target resolution; extend `APPROVAL_TERMINAL_BEHAVIORS` to `{"fail", "branch"}`.
-- [ ] 2.3 Convert `engines/playbook_step_executor.py`'s `_process_steps` loop from a fixed `enumerate` iterator to an explicit, redirectable index cursor, preserving byte-for-byte behavior when no `branch` steps are present.
-- [ ] 2.4 Implement `branch` step evaluation: append the evaluation entry, append `"skipped"` entries for every step jumped over, and redirect the cursor to the resolved target index.
-- [ ] 2.5 Implement the `on_denied`/`on_expired: "branch"` continuation path in `_process_awaiting_approval_execution`, leaving the default (`"fail"`) path unchanged.
-- [ ] 2.6 Add tests: registry validation (all rules, positive and negative), executor branch-taken/fall-through/goto_false/skip-logging/outcome-event cases, all fail-closed cases, and the approval-branch interaction.
-- [ ] 2.7 Run the full existing playbook-related test suite and confirm zero regressions for playbook definitions containing no `branch` steps.
+- [x] 2.1 Add a new module (e.g. `engines/playbook_branch_conditions.py`) that evaluates `alert`/`previous_step`/`approval`-sourced conditions, reusing `ALERT_BINDING_FIELDS` and `SEVERITY_RANK` rather than redefining either.
+- [x] 2.2 Extend `engines/playbook_registry.py`'s `validate_playbook_steps` with all branch validation rules: shape, condition source/field/op/value typing, label uniqueness, forward-only target resolution; extend `APPROVAL_TERMINAL_BEHAVIORS` to `{"fail", "branch"}`.
+- [x] 2.3 Convert `engines/playbook_step_executor.py`'s `_process_steps` loop from a fixed `enumerate` iterator to an explicit, redirectable index cursor, preserving byte-for-byte behavior when no `branch` steps are present.
+- [x] 2.4 Implement `branch` step evaluation: append the evaluation entry, append `"skipped"` entries for every step jumped over, and redirect the cursor to the resolved target index.
+- [x] 2.5 Implement the `on_denied`/`on_expired: "branch"` continuation path in `_process_awaiting_approval_execution`, leaving the default (`"fail"`) path unchanged.
+- [x] 2.6 Add tests: registry validation (all rules, positive and negative), executor branch-taken/fall-through/goto_false/skip-logging/outcome-event cases, all fail-closed cases, and the approval-branch interaction.
+- [x] 2.7 Run the full existing playbook-related test suite and confirm zero regressions for playbook definitions containing no `branch` steps.
 
 ## Safety Boundaries (for this authoring step)
 

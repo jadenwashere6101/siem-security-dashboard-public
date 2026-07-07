@@ -7,6 +7,11 @@ that step definitions reference known action names before definitions are persis
 
 from __future__ import annotations
 
+from engines.playbook_branch_conditions import (
+    build_label_index_map,
+    validate_branch_step,
+    validate_step_label,
+)
 from engines.playbook_param_binding import validate_step_param_bindings
 
 CORE_ACTIONS: frozenset[str] = frozenset(
@@ -14,6 +19,7 @@ CORE_ACTIONS: frozenset[str] = frozenset(
         "monitor",
         "flag_high_priority",
         "require_approval",
+        "branch",
     }
 )
 
@@ -32,7 +38,7 @@ KNOWN_PLAYBOOK_ACTIONS: frozenset[str] = frozenset(
 SUPPORTED_ACTIONS = KNOWN_PLAYBOOK_ACTIONS
 
 APPROVAL_RISK_LEVELS: frozenset[str] = frozenset({"medium", "high", "critical"})
-APPROVAL_TERMINAL_BEHAVIORS: frozenset[str] = frozenset({"fail"})
+APPROVAL_TERMINAL_BEHAVIORS: frozenset[str] = frozenset({"fail", "branch"})
 MIN_APPROVAL_TTL_MINUTES = 1
 MAX_APPROVAL_TTL_MINUTES = 10080
 
@@ -47,6 +53,21 @@ def validate_playbook_steps(steps: list[dict]) -> list[str]:
     errors: list[str] = []
     if not isinstance(steps, list):
         return ["steps must be a list"]
+
+    label_map = build_label_index_map(steps)
+    label_counts: dict[str, int] = {}
+    for step in steps:
+        if isinstance(step, dict) and isinstance(step.get("label"), str) and step.get("label"):
+            label = step["label"]
+            label_counts[label] = label_counts.get(label, 0) + 1
+    duplicate_labels = sorted(label for label, count in label_counts.items() if count > 1)
+    if duplicate_labels:
+        errors = [
+            f"duplicate label {label!r} appears more than once in steps"
+            for label in duplicate_labels
+        ]
+    else:
+        errors = []
 
     for index, step in enumerate(steps):
         prefix = f"step[{index}]"
@@ -63,6 +84,13 @@ def validate_playbook_steps(steps: list[dict]) -> list[str]:
         if action not in KNOWN_PLAYBOOK_ACTIONS:
             errors.append(f"{prefix}: unsupported action {action!r}")
             continue
+
+        errors.extend(validate_step_label(step, prefix=prefix))
+
+        if action == "branch":
+            errors.extend(
+                validate_branch_step(step, step_index=index, label_map=label_map)
+            )
 
         if action == "require_approval":
             risk_level = step.get("risk_level", "high")

@@ -22,6 +22,11 @@ from core.playbook_worker_identity import generate_playbook_worker_id
 from core.soar_protected_targets import require_unprotected_target
 from core.soar_response_outcomes import append_outcome_event
 from engines.soar_errors import SkippedAction
+from engines.playbook_branch_conditions import (
+    PlaybookBranchConditionError,
+    evaluate_branch_condition,
+    resolve_label_target_index,
+)
 from engines.playbook_param_binding import PlaybookParamBindingError, resolve_step_params
 from engines.playbook_registry import ADAPTER_ACTIONS, KNOWN_PLAYBOOK_ACTIONS
 from integrations.base_integration import (
@@ -630,15 +635,27 @@ def _process_awaiting_approval_execution(
 
     if approval_request["status"] in {"denied", "expired"}:
         event = f"approval_{approval_request['status']}"
+        definition = playbook_store.get_playbook_definition(conn, execution["playbook_id"])
+        steps = definition.get("steps") if definition else []
+        gate_step = (
+            steps[gate_index]
+            if isinstance(steps, list)
+            and 0 <= gate_index < len(steps)
+            and isinstance(steps[gate_index], dict)
+            else {}
+        )
+        terminal_key = "on_denied" if approval_request["status"] == "denied" else "on_expired"
+        terminal_behavior = gate_step.get(terminal_key, "fail")
+        branch_continue = terminal_behavior == "branch" and isinstance(steps, list)
         _append_playbook_approval_decision_outcome_event(
             conn,
             execution,
             approval_request=approval_request,
             event_type=event,
-            execution_state="blocked",
+            execution_state="running" if branch_continue else "blocked",
             summary=(
-                f"Approval {approval_request['status']}; "
-                "simulated playbook stopped safely."
+                f"Approval {approval_request['status']}; simulated playbook "
+                f"{'continuing to branch path.' if branch_continue else 'stopped safely.'}"
             ),
         )
         if not _has_gate_event(steps_log, gate_index, approval_request["id"], event):
@@ -653,8 +670,40 @@ def _process_awaiting_approval_execution(
                 )
             )
 
-        definition = playbook_store.get_playbook_definition(conn, execution["playbook_id"])
-        steps = definition.get("steps") if definition else []
+        if branch_continue:
+            resumed = playbook_store.acquire_awaiting_approval_resume_lease(
+                conn,
+                execution["id"],
+                owner,
+                steps_log,
+                gate_index,
+                lease_duration_seconds=duration,
+                now=timestamp,
+            )
+            if resumed is None:
+                latest = playbook_store.get_playbook_execution(conn, execution["id"]) or execution
+                return _skip_result(
+                    execution,
+                    "awaiting_approval",
+                    "lease_not_acquired",
+                    "Playbook execution could not be leased for approval branch resume.",
+                    new_status=latest.get("status"),
+                )
+
+            _append_playbook_running_outcome_event(conn, resumed)
+            return _process_steps(
+                conn,
+                resumed,
+                steps,
+                timestamp,
+                "awaiting_approval",
+                start_index=gate_index + 1,
+                steps_log=steps_log,
+                last_completed_step=gate_index,
+                worker_id=owner,
+                lease_duration_seconds=duration,
+            )
+
         if isinstance(steps, list):
             steps_log.extend(
                 _skipped_later_step_entries(
@@ -712,13 +761,20 @@ def _process_steps(
     failed = False
     failure_message = None
 
-    for index, step in enumerate(steps[start_index:], start=start_index):
+    index = start_index
+    while index < len(steps):
+        step = steps[index]
         # spec: SPEC-PLAYBOOK-003
         # Defensive guard: if steps_log already has a success entry for this index (e.g.
         # last_completed_step and steps_log diverged after a crash + recovery), skip the
         # step entirely so notification/remediation side effects are never duplicated.
         if _step_already_succeeded_in_log(steps_log, index):
             last_completed_step = index
+            index += 1
+            continue
+
+        if _step_already_skipped_in_log(steps_log, index):
+            index += 1
             continue
 
         if not _heartbeat_lease(
@@ -804,6 +860,57 @@ def _process_steps(
                 "Approval requested before continuing simulated playbook.",
             )
 
+        if isinstance(step, dict) and step.get("action") == "branch":
+            entry, skip_entries, next_index = _execute_branch_step(
+                conn,
+                step,
+                index,
+                steps,
+                steps_log,
+                execution,
+                timestamp,
+            )
+            steps_log.append(entry)
+            steps_log.extend(skip_entries)
+            _append_non_adapter_playbook_step_outcome_event(conn, execution, entry)
+            if entry["status"] == "success":
+                last_completed_step = index
+                if (
+                    playbook_store.update_playbook_execution_step_log(
+                        conn,
+                        execution_id,
+                        steps_log,
+                        last_completed_step=last_completed_step,
+                        lease_owner=worker_id,
+                    )
+                    is None
+                ):
+                    logger.warning(
+                        "[PLAYBOOK SIMULATION] lease lost while saving branch progress execution_id=%s worker_id=%s step_index=%s",
+                        execution_id,
+                        worker_id,
+                        index,
+                    )
+                    return _result(
+                        execution,
+                        prior,
+                        execution.get("status") or "running",
+                        "skipped",
+                        len(steps_log),
+                        "Playbook execution lease was lost while saving branch progress.",
+                        reason="lease_lost",
+                    )
+                index = next_index
+                continue
+
+            failed = True
+            failure_message = entry["message"]
+            on_failure = step.get("on_failure", "abort")
+            if on_failure != "continue":
+                break
+            index += 1
+            continue
+
         try:
             entry = _simulate_step(conn, step, index, timestamp, execution)
         except Exception as error:
@@ -858,6 +965,7 @@ def _process_steps(
                     reason="lease_lost",
                 )
             _append_non_adapter_playbook_step_outcome_event(conn, execution, entry)
+            index += 1
             continue
 
         _append_non_adapter_playbook_step_outcome_event(conn, execution, entry)
@@ -866,6 +974,7 @@ def _process_steps(
         on_failure = step.get("on_failure", "abort") if isinstance(step, dict) else "abort"
         if on_failure != "continue":
             break
+        index += 1
 
     if failed:
         _finalize_failed(
@@ -962,7 +1071,7 @@ def _simulate_step(
         "flag_high_priority": "[SIMULATED PLAYBOOK STEP] flag_high_priority",
         "block_ip": "[SIMULATED PLAYBOOK STEP] block_ip",
     }
-    return {
+    entry = {
         "step_index": step_index,
         "action": action,
         "status": "success",
@@ -976,6 +1085,9 @@ def _simulate_step(
         },
         "error": None,
     }
+    if isinstance(step.get("label"), str) and step.get("label"):
+        entry["label"] = step["label"]
+    return entry
 
 
 def _simulate_adapter_step(
@@ -998,7 +1110,7 @@ def _simulate_adapter_step(
             step_index,
         )
         if existing_delivery is not None:
-            return {
+            entry = {
                 "step_index": step_index,
                 "action": action,
                 "status": "success",
@@ -1022,6 +1134,9 @@ def _simulate_adapter_step(
                 },
                 "error": None,
             }
+            if isinstance(step.get("label"), str) and step.get("label"):
+                entry["label"] = step["label"]
+            return entry
     raw_params = step.get("params") if isinstance(step.get("params"), dict) else {}
     try:
         params = resolve_step_params(conn, raw_params, execution=execution)
@@ -1092,7 +1207,7 @@ def _simulate_adapter_step(
             err_code = "circuit_breaker_invalid"
         elif fc == FAILURE_CLASSIFICATION_CIRCUIT_OPEN:
             err_code = "circuit_breaker_open"
-    return {
+    entry = {
         "step_index": step_index,
         "action": action,
         "status": status,
@@ -1116,6 +1231,9 @@ def _simulate_adapter_step(
             "message": adapter_result.get("message") or message,
         },
     }
+    if isinstance(step.get("label"), str) and step.get("label"):
+        entry["label"] = step["label"]
+    return entry
 
 
 def _failure_entry(
@@ -1205,6 +1323,186 @@ def _approval_decision_entry(
         },
         "error": None,
     }
+
+
+def _execute_branch_step(
+    conn,
+    step: dict[str, Any],
+    step_index: int,
+    steps: list[dict[str, Any]],
+    steps_log: list[dict[str, Any]],
+    execution: dict[str, Any],
+    now: datetime,
+) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
+    condition = step.get("condition")
+    if not isinstance(condition, dict):
+        return (
+            _failure_entry(
+                step_index=step_index,
+                action="branch",
+                message="Branch step condition must be an object.",
+                code="invalid_branch",
+                now=now,
+            ),
+            [],
+            step_index + 1,
+        )
+
+    try:
+        result = evaluate_branch_condition(
+            conn,
+            condition,
+            execution=execution,
+            steps_log=steps_log,
+        )
+    except PlaybookBranchConditionError as error:
+        return (
+            _failure_entry(
+                step_index=step_index,
+                action="branch",
+                message=error.message,
+                code=error.code,
+                now=now,
+            ),
+            [],
+            step_index + 1,
+        )
+
+    goto_label: str | None
+    if result:
+        goto_label = step.get("goto_true")
+        if not isinstance(goto_label, str) or not goto_label:
+            return (
+                _failure_entry(
+                    step_index=step_index,
+                    action="branch",
+                    message="Branch step goto_true is missing.",
+                    code="branch_target_not_found",
+                    now=now,
+                ),
+                [],
+                step_index + 1,
+            )
+        goto_step_index = resolve_label_target_index(
+            steps,
+            goto_label,
+            branch_index=step_index,
+        )
+    else:
+        if "goto_false" in step:
+            goto_false = step.get("goto_false")
+            if not isinstance(goto_false, str) or not goto_false:
+                return (
+                    _failure_entry(
+                        step_index=step_index,
+                        action="branch",
+                        message="Branch step goto_false is invalid.",
+                        code="branch_target_not_found",
+                        now=now,
+                    ),
+                    [],
+                    step_index + 1,
+                )
+            goto_label = goto_false
+            goto_step_index = resolve_label_target_index(
+                steps,
+                goto_label,
+                branch_index=step_index,
+            )
+        else:
+            goto_label = None
+            goto_step_index = step_index + 1
+
+    if goto_step_index is None:
+        return (
+            _failure_entry(
+                step_index=step_index,
+                action="branch",
+                message="Branch target label could not be resolved.",
+                code="branch_target_not_found",
+                now=now,
+            ),
+            [],
+            step_index + 1,
+        )
+
+    skip_entries = _skipped_branch_step_entries(
+        steps,
+        start_index=step_index + 1,
+        end_index=goto_step_index,
+        now=now,
+    )
+    entry = {
+        "step_index": step_index,
+        "action": "branch",
+        "label": step.get("label"),
+        "status": "success",
+        "event": "branch_evaluated",
+        "condition": condition,
+        "result": result,
+        "goto_label": goto_label,
+        "goto_step_index": goto_step_index,
+        "mode": "simulation",
+        "simulated": True,
+        "executed": False,
+        "started_at": _iso(now),
+        "completed_at": _iso(now),
+        "message": "Branch condition evaluated.",
+        "output": {
+            "simulated": True,
+            "executed": False,
+            "condition": condition,
+            "result": result,
+            "goto_label": goto_label,
+            "goto_step_index": goto_step_index,
+        },
+        "error": None,
+    }
+    return entry, skip_entries, goto_step_index
+
+
+def _skipped_branch_step_entries(
+    steps: list[dict[str, Any]],
+    *,
+    start_index: int,
+    end_index: int,
+    now: datetime,
+) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for index in range(start_index, end_index):
+        step = steps[index] if 0 <= index < len(steps) else {}
+        action = step.get("action") if isinstance(step, dict) else None
+        entries.append(
+            {
+                "step_index": index,
+                "action": action,
+                "status": "skipped",
+                "event": "skipped_by_branch",
+                "skip_reason": "branch_not_taken",
+                "mode": "simulation",
+                "simulated": True,
+                "executed": False,
+                "started_at": None,
+                "completed_at": _iso(now),
+                "message": "Step skipped because branch chose another path.",
+                "output": {
+                    "simulated": True,
+                    "executed": False,
+                    "skip_reason": "branch_not_taken",
+                },
+                "error": None,
+            }
+        )
+    return entries
+
+
+def _step_already_skipped_in_log(steps_log: list[dict[str, Any]], step_index: int) -> bool:
+    return any(
+        isinstance(entry, dict)
+        and entry.get("step_index") == step_index
+        and entry.get("status") == "skipped"
+        for entry in steps_log
+    )
 
 
 def _skipped_later_step_entries(

@@ -93,6 +93,47 @@ def test_validate_rejects_malformed_binding_expression():
     assert any("invalid binding expression" in error for error in errors)
 
 
+def test_validate_branch_playbook_and_approval_branch_option():
+    steps = [
+        {
+            "action": "require_approval",
+            "on_denied": "branch",
+            "on_expired": "branch",
+        },
+        {
+            "action": "branch",
+            "condition": {
+                "source": "approval",
+                "field": "status",
+                "op": "==",
+                "value": "denied",
+            },
+            "goto_true": "notify_denied",
+        },
+        {"label": "notify_denied", "action": "monitor"},
+    ]
+    assert validate_playbook_steps(steps) == []
+
+
+def test_validate_rejects_unknown_branch_goto_label():
+    errors = validate_playbook_steps(
+        [
+            {
+                "action": "branch",
+                "condition": {
+                    "source": "alert",
+                    "field": "severity",
+                    "op": ">=",
+                    "value": "high",
+                },
+                "goto_true": "missing_label",
+            }
+        ]
+    )
+    assert errors
+    assert any("unknown label" in error for error in errors)
+
+
 def test_supported_actions_is_frozen():
     assert SUPPORTED_ACTIONS is KNOWN_PLAYBOOK_ACTIONS
     assert isinstance(SUPPORTED_ACTIONS, frozenset)
