@@ -72,6 +72,27 @@ def test_validate_invalid_on_failure():
     assert "on_failure" in errors[0].lower()
 
 
+def test_validate_dynamic_binding_on_block_ip():
+    steps = [{"action": "block_ip", "params": {"source_ip": "{{alert.source_ip}}"}}]
+    assert validate_playbook_steps(steps) == []
+
+
+def test_validate_rejects_unknown_binding_field():
+    errors = validate_playbook_steps(
+        [{"action": "block_ip", "params": {"source_ip": "{{alert.nonexistent_field}}"}}]
+    )
+    assert errors
+    assert any("unsupported alert binding field" in error for error in errors)
+
+
+def test_validate_rejects_malformed_binding_expression():
+    errors = validate_playbook_steps(
+        [{"action": "notify_slack", "params": {"message": "Alert from {{alert.source_ip}}"}}]
+    )
+    assert errors
+    assert any("invalid binding expression" in error for error in errors)
+
+
 def test_supported_actions_is_frozen():
     assert SUPPORTED_ACTIONS is KNOWN_PLAYBOOK_ACTIONS
     assert isinstance(SUPPORTED_ACTIONS, frozenset)

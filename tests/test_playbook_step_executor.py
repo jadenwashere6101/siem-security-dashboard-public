@@ -692,6 +692,107 @@ def test_block_ip_step_rejects_protected_target_before_adapter_dispatch(
     assert "protected target" in entry["message"].lower()
 
 
+def test_block_ip_step_resolves_dynamic_source_ip_from_alert(postgres_db, no_network):
+    conn, cur = postgres_db
+    offender_ip = "198.51.100.77"
+    aid = _insert_alert(cur, source_ip=offender_ip)
+    playbook_store.create_playbook_definition(
+        conn,
+        "pb_dynamic_block",
+        "pb_dynamic_block",
+        steps=[{"action": "block_ip", "params": {"source_ip": "{{alert.source_ip}}"}}],
+    )
+    eid = playbook_store.create_pending_playbook_execution_once(conn, "pb_dynamic_block", aid)
+
+    captured = {}
+
+    def capture_adapter(*_args, **kwargs):
+        captured["params"] = kwargs.get("params")
+        return {
+            "adapter": "firewall",
+            "action": "block_ip",
+            "mode": "simulation",
+            "simulated": True,
+            "executed": False,
+            "success": True,
+            "message": "Simulated block completed.",
+            "params": kwargs.get("params") or {},
+            "context": kwargs.get("context") or {},
+            "metadata": {},
+        }
+
+    with patch(
+        "engines.playbook_step_executor.execute_playbook_simulated_adapter",
+        side_effect=capture_adapter,
+    ):
+        result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "success"
+    assert captured["params"]["source_ip"] == offender_ip
+    row = playbook_store.get_playbook_execution(conn, eid)
+    entry = row["steps_log"][0]
+    assert entry["output"]["resolved_params"]["source_ip"] == offender_ip
+
+
+def test_block_ip_step_rejects_protected_target_after_dynamic_resolution(
+    postgres_db, monkeypatch, no_network
+):
+    conn, cur = postgres_db
+    protected_ip = "203.0.113.10"
+    aid = _insert_alert(cur, source_ip=protected_ip)
+    playbook_store.create_playbook_definition(
+        conn,
+        "pb_dynamic_protected_block",
+        "pb_dynamic_protected_block",
+        steps=[{"action": "block_ip", "params": {"source_ip": "{{alert.source_ip}}"}}],
+    )
+    eid = playbook_store.create_pending_playbook_execution_once(
+        conn, "pb_dynamic_protected_block", aid
+    )
+    monkeypatch.setenv("SOAR_PROTECTED_IPS", protected_ip)
+
+    def fail_adapter(*_args, **_kwargs):
+        raise AssertionError("adapter dispatch should not be reached")
+
+    monkeypatch.setattr(
+        "engines.playbook_step_executor.execute_playbook_simulated_adapter",
+        fail_adapter,
+    )
+
+    result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "failed"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    entry = row["steps_log"][0]
+    assert entry["error"]["code"] == "protected_target"
+
+
+def test_adapter_step_fails_on_missing_nullable_binding_field(postgres_db, no_network):
+    conn, cur = postgres_db
+    aid = _insert_alert(cur)
+    playbook_store.create_playbook_definition(
+        conn,
+        "pb_missing_binding",
+        "pb_missing_binding",
+        steps=[{"action": "notify_slack", "params": {"message": "{{alert.reputation_score}}"}}],
+    )
+    eid = playbook_store.create_pending_playbook_execution_once(conn, "pb_missing_binding", aid)
+
+    def fail_adapter(*_args, **_kwargs):
+        raise AssertionError("adapter dispatch should not be reached")
+
+    with patch(
+        "engines.playbook_step_executor.execute_playbook_simulated_adapter",
+        side_effect=fail_adapter,
+    ):
+        result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "failed"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    entry = row["steps_log"][0]
+    assert entry["error"]["code"] == "binding_field_missing"
+
+
 def test_adapter_failure_marks_step_failed_and_respects_continue(postgres_db):
     conn, cur = postgres_db
     eid = _create_execution(conn, cur, "pb_adapter_failure")

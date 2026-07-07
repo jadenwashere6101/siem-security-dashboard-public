@@ -7,6 +7,8 @@ that step definitions reference known action names before definitions are persis
 
 from __future__ import annotations
 
+from engines.playbook_param_binding import validate_step_param_bindings
+
 CORE_ACTIONS: frozenset[str] = frozenset(
     {
         "monitor",
@@ -39,7 +41,8 @@ def validate_playbook_steps(steps: list[dict]) -> list[str]:
     """
     Return a list of validation error strings. Empty list means valid.
 
-    Does not validate params — param shapes are action-specific and belong at execution time.
+    Validates dynamic parameter binding syntax for string params; param shapes are
+    action-specific and belong at execution time.
     """
     errors: list[str] = []
     if not isinstance(steps, list):
@@ -96,5 +99,7 @@ def validate_playbook_steps(steps: list[dict]) -> list[str]:
                     f"{prefix}: invalid on_failure {step['on_failure']!r}; "
                     f"must be one of {sorted(allowed)}"
                 )
+
+        errors.extend(validate_step_param_bindings(step, prefix=prefix))
 
     return errors

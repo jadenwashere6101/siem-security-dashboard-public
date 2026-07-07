@@ -11,12 +11,12 @@ This spec's authoring step (creating proposal.md/design.md/tasks.md/specs/) make
 
 ## 2. Implementation (this spec's own future work — not started, not deferred to another spec)
 
-- [ ] 2.1 Implement a parameter-binding resolver that recognizes `{{alert.<field>}}` (and optionally `{{execution.<field>}}`) expressions and resolves them against the execution's alert row.
-- [ ] 2.2 Integrate resolution into `engines/playbook_step_executor.py` immediately before action validation and adapter dispatch.
-- [ ] 2.3 Add definition-time validation in `engines/playbook_registry.py` for binding syntax and allowed field names.
-- [ ] 2.4 Ensure `require_unprotected_target` and all adapter dispatches receive resolved (concrete) values only.
-- [ ] 2.5 Add tests: static params unchanged; dynamic `block_ip` targets triggering alert IP; protected IP rejected post-resolution; unknown field rejected at save time; missing nullable field fails at execution time.
-- [ ] 2.6 Run the full existing playbook test suite and confirm no regressions for static-only definitions.
+- [x] 2.1 Implement a parameter-binding resolver that recognizes `{{alert.<field>}}` (and optionally `{{execution.<field>}}`) expressions and resolves them against the execution's alert row.
+- [x] 2.2 Integrate resolution into `engines/playbook_step_executor.py` immediately before action validation and adapter dispatch.
+- [x] 2.3 Add definition-time validation in `engines/playbook_registry.py` for binding syntax and allowed field names.
+- [x] 2.4 Ensure `require_unprotected_target` and all adapter dispatches receive resolved (concrete) values only.
+- [x] 2.5 Add tests: static params unchanged; dynamic `block_ip` targets triggering alert IP; protected IP rejected post-resolution; unknown field rejected at save time; missing nullable field fails at execution time.
+- [x] 2.6 Run the full existing playbook test suite and confirm no regressions for static-only definitions.
 
 ## Safety Boundaries (for this authoring step)
 

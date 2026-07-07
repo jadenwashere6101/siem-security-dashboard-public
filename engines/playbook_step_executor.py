@@ -22,6 +22,7 @@ from core.playbook_worker_identity import generate_playbook_worker_id
 from core.soar_protected_targets import require_unprotected_target
 from core.soar_response_outcomes import append_outcome_event
 from engines.soar_errors import SkippedAction
+from engines.playbook_param_binding import PlaybookParamBindingError, resolve_step_params
 from engines.playbook_registry import ADAPTER_ACTIONS, KNOWN_PLAYBOOK_ACTIONS
 from integrations.base_integration import (
     FAILURE_CLASSIFICATION_CIRCUIT_OPEN,
@@ -1021,7 +1022,18 @@ def _simulate_adapter_step(
                 },
                 "error": None,
             }
-    params = step.get("params") if isinstance(step.get("params"), dict) else {}
+    raw_params = step.get("params") if isinstance(step.get("params"), dict) else {}
+    try:
+        params = resolve_step_params(conn, raw_params, execution=execution)
+    except PlaybookParamBindingError as error:
+        return _failure_entry(
+            step_index=step_index,
+            action=action,
+            message=error.message,
+            code=error.code,
+            now=now,
+        )
+
     if action == "block_ip":
         try:
             require_unprotected_target(params.get("source_ip"))
@@ -1093,6 +1105,7 @@ def _simulate_adapter_step(
         "output": {
             "simulated": True,
             "executed": False,
+            "resolved_params": params,
             "adapter_result": adapter_result,
             "circuit_breaker": circuit_snapshot,
         },
