@@ -146,7 +146,8 @@ Phase 3 does not implement anything, does not create code, does not open Azure/V
 
 ### Phase 3 Future Child Specs - Not Created Yet
 
-- [ ] 6.8 Create `pfsense-filterlog-parser-normalizer` later.
+- [x] 6.8 Create `pfsense-filterlog-parser-normalizer` later.
+  - 2026-07-07 update: child spec created at `openspec/changes/pfsense-filterlog-parser-normalizer/` and scoped to parser/normalizer only. It does not implement a listener, Flask route, detection rules, deployment, Azure NSG changes, VM firewall changes, or uncle/pfSense handoff.
 - [ ] 6.9 Create `pfsense-ingest-route-pipeline` later.
 - [ ] 6.10 Create `pfsense-udp-listener-daemon` later.
 - [ ] 6.11 Create `pfsense-firewall-detections-soar` later.
