@@ -31,6 +31,11 @@ MITRE_ATTACK_MAPPINGS = {
         "mitre_technique_name": "Password Spraying",
         "mitre_tactic": "Credential Access",
     },
+    "pfsense_firewall_port_scan": {
+        "mitre_technique_id": "T1046",
+        "mitre_technique_name": "Network Service Discovery",
+        "mitre_tactic": "Discovery",
+    },
 }
 
 # These alert types intentionally keep null MITRE fields. Their current
@@ -42,6 +47,9 @@ INTENTIONALLY_UNMAPPED_MITRE_ALERT_TYPES = {
     "correlated_activity",
     "web_to_app_attack_pattern",
     "cloud_app_error_pattern",
+    "pfsense_firewall_repeated_deny",
+    "pfsense_firewall_suspicious_allow",
+    "pfsense_firewall_noisy_source",
 }
 
 CORRELATION_ALERT_TYPES = frozenset(

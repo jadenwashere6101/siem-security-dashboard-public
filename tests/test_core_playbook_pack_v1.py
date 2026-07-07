@@ -48,7 +48,7 @@ def test_core_pack_seed_is_idempotent(postgres_db):
     conn, _cur = postgres_db
     first = seed_core_playbook_pack_v1(conn)
     second = seed_core_playbook_pack_v1(conn)
-    assert len(first) == 10
+    assert len(first) == len(CORE_PLAYBOOK_PACK_V1)
     assert second == []
 
 

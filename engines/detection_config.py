@@ -41,6 +41,33 @@ HONEYPOT_SCANNER_DETECTED_WINDOW_MINUTES = 10
 HONEYPOT_CREDENTIAL_STUFFING_THRESHOLD = 5
 HONEYPOT_CREDENTIAL_STUFFING_WINDOW_MINUTES = 15
 
+PFSENSE_REPEATED_DENY_THRESHOLD = 5
+PFSENSE_REPEATED_DENY_WINDOW_MINUTES = 15
+
+PFSENSE_PORT_SCAN_THRESHOLD = 2
+PFSENSE_PORT_SCAN_WINDOW_MINUTES = 15
+
+PFSENSE_NOISY_SOURCE_THRESHOLD = 20
+PFSENSE_NOISY_SOURCE_WINDOW_MINUTES = 15
+
+PFSENSE_SUSPICIOUS_ALLOW_THRESHOLD = 1
+PFSENSE_SUSPICIOUS_ALLOW_WINDOW_MINUTES = 15
+
+# Sensitive/management-style destination ports. A `firewall_allow` event that lets
+# inbound traffic reach one of these ports is contextually risky even though a
+# single allow is not inherently malicious (see pfsense-firewall-detections-soar spec).
+PFSENSE_SUSPICIOUS_ALLOW_SENSITIVE_PORTS = frozenset(
+    {21, 22, 23, 25, 445, 1433, 3306, 3389, 5432, 5900}
+)
+
+# Escalation multiplier: repeated-deny/port-scan alerts escalate from medium to
+# high severity when observed volume/breadth reaches this multiple of the
+# configured threshold, independent of reputation-based escalation.
+PFSENSE_SEVERITY_ESCALATION_MULTIPLIER = 3
+
+# Reputation score at/above which a pfSense alert escalates to high severity.
+PFSENSE_HIGH_REPUTATION_SCORE = 70
+
 # Shared validation bounds for admin-configurable detector settings.
 DETECTION_THRESHOLD_MIN = 1
 DETECTION_THRESHOLD_MAX = 100
@@ -161,6 +188,46 @@ def get_detection_rule_defaults():
             },
             "active": True,
             "description": "Triggers when one source IP attempts logins across multiple distinct usernames within a time window.",
+        },
+        "pfsense_firewall_repeated_deny": {
+            "rule_id": "pfsense_firewall_repeated_deny",
+            "display_name": "pfSense Firewall Repeated Deny",
+            "parameters": {
+                "threshold": PFSENSE_REPEATED_DENY_THRESHOLD,
+                "window_minutes": PFSENSE_REPEATED_DENY_WINDOW_MINUTES,
+            },
+            "active": True,
+            "description": "Triggers when pfSense blocks repeated equivalent traffic from the same source within a time window.",
+        },
+        "pfsense_firewall_port_scan": {
+            "rule_id": "pfsense_firewall_port_scan",
+            "display_name": "pfSense Firewall Port Scan",
+            "parameters": {
+                "threshold": PFSENSE_PORT_SCAN_THRESHOLD,
+                "window_minutes": PFSENSE_PORT_SCAN_WINDOW_MINUTES,
+            },
+            "active": True,
+            "description": "Triggers when pfSense firewall events show one source contacting multiple distinct destination ports.",
+        },
+        "pfsense_firewall_noisy_source": {
+            "rule_id": "pfsense_firewall_noisy_source",
+            "display_name": "pfSense Firewall Noisy Source",
+            "parameters": {
+                "threshold": PFSENSE_NOISY_SOURCE_THRESHOLD,
+                "window_minutes": PFSENSE_NOISY_SOURCE_WINDOW_MINUTES,
+            },
+            "active": True,
+            "description": "Suppresses duplicate low-value pfSense firewall alerts while retaining source activity counters.",
+        },
+        "pfsense_firewall_suspicious_allow": {
+            "rule_id": "pfsense_firewall_suspicious_allow",
+            "display_name": "pfSense Firewall Suspicious Allow",
+            "parameters": {
+                "threshold": PFSENSE_SUSPICIOUS_ALLOW_THRESHOLD,
+                "window_minutes": PFSENSE_SUSPICIOUS_ALLOW_WINDOW_MINUTES,
+            },
+            "active": True,
+            "description": "Triggers when pfSense allows inbound traffic to a sensitive destination port.",
         },
     }
 

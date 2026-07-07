@@ -10,6 +10,10 @@ from engines.detection_engine import (
     _generate_high_request_rate_alerts_core,
     _generate_http_error_alerts_core,
     _generate_password_spraying_alerts_core,
+    _generate_pfsense_noisy_source_alerts_core,
+    _generate_pfsense_port_scan_alerts_core,
+    _generate_pfsense_repeated_deny_alerts_core,
+    _generate_pfsense_suspicious_allow_alerts_core,
     _generate_port_scan_alerts_core,
     _generate_scanner_detected_alerts_core,
     _generate_successful_login_after_spray_alerts_core,
@@ -104,6 +108,19 @@ def ingest_normalized_event(event_dict, conn, cur):
         alerts_created = _generate_scanner_detected_alerts_core(cur, conn, source=source, source_type=source_type)
     elif event_type == "credential_stuffing":
         alerts_created = _generate_credential_stuffing_alerts_core(cur, conn, source=source, source_type=source_type)
+    elif event_type == "firewall_block":
+        alerts_created = _generate_pfsense_repeated_deny_alerts_core(cur, conn, source=source, source_type=source_type)
+        alerts_created.extend(
+            _generate_pfsense_port_scan_alerts_core(cur, conn, source=source, source_type=source_type)
+        )
+        alerts_created.extend(
+            _generate_pfsense_noisy_source_alerts_core(cur, conn, source=source, source_type=source_type)
+        )
+    elif event_type == "firewall_allow":
+        alerts_created = _generate_pfsense_suspicious_allow_alerts_core(cur, conn, source=source, source_type=source_type)
+        alerts_created.extend(
+            _generate_pfsense_noisy_source_alerts_core(cur, conn, source=source, source_type=source_type)
+        )
 
     for correlated_source_ip in {
         str(alert.get("source_ip"))

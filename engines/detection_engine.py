@@ -1,9 +1,41 @@
 from flask import current_app
+from psycopg2.extras import Json
 
 from engines.detection_config import (
+    PFSENSE_HIGH_REPUTATION_SCORE,
+    PFSENSE_SEVERITY_ESCALATION_MULTIPLIER,
+    PFSENSE_SUSPICIOUS_ALLOW_SENSITIVE_PORTS,
     get_effective_detection_rule,
 )
 from core.ip_helpers import determine_response_action, lookup_ip_reputation
+
+
+PFSENSE_ESCALATION_ALERT_TYPES = (
+    "pfsense_firewall_repeated_deny",
+    "pfsense_firewall_port_scan",
+    "pfsense_firewall_suspicious_allow",
+)
+PFSENSE_NOISY_SOURCE_GUARD_ALERT_TYPES = PFSENSE_ESCALATION_ALERT_TYPES + (
+    "pfsense_firewall_noisy_source",
+)
+
+
+def _pfsense_escalated_severity(base_severity, *, count, threshold, reputation_score):
+    if base_severity != "medium":
+        return base_severity
+    if reputation_score is not None and reputation_score >= PFSENSE_HIGH_REPUTATION_SCORE:
+        return "high"
+    if threshold and count >= threshold * PFSENSE_SEVERITY_ESCALATION_MULTIPLIER:
+        return "high"
+    return "medium"
+
+
+def _pfsense_response_action_for_severity(severity):
+    if severity == "high":
+        return "request_firewall_block_approval"
+    if severity == "medium":
+        return "enrich_source_ip"
+    return "monitor_only"
 
 
 # spec: SPEC-INGEST-001
@@ -1479,6 +1511,603 @@ def _generate_credential_stuffing_alerts_core(cur, conn, source=None, source_typ
                 "alert_id": alert_id,
                 "response_action": response_action,
                 "severity": "high",
+            }
+        )
+
+    return alerts_created
+
+
+def _generate_pfsense_repeated_deny_alerts_core(cur, conn, source=None, source_type=None):
+    rule_config = get_effective_detection_rule("pfsense_firewall_repeated_deny", cur=cur)
+    threshold = rule_config["parameters"]["threshold"]
+    window_minutes = rule_config["parameters"]["window_minutes"]
+
+    cur.execute(
+        f"""
+        SELECT
+            source_ip,
+            raw_payload->>'destination_ip' AS destination_ip,
+            raw_payload->>'destination_port' AS destination_port,
+            raw_payload->>'protocol' AS protocol,
+            raw_payload->>'interface' AS interface,
+            raw_payload->>'direction' AS direction,
+            COUNT(*) AS event_count,
+            MIN(created_at) AS first_seen,
+            MAX(created_at) AS last_seen
+        FROM events
+        WHERE event_type = 'firewall_block'
+          AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
+        GROUP BY source_ip, destination_ip, destination_port, protocol, interface, direction
+        HAVING COUNT(*) >= %s
+        """,
+        (threshold,),
+    )
+
+    rows = cur.fetchall()
+    alerts_created = []
+
+    for row in rows:
+        (
+            source_ip,
+            destination_ip,
+            destination_port,
+            protocol,
+            interface,
+            direction,
+            event_count,
+            first_seen,
+            last_seen,
+        ) = row
+
+        cur.execute(
+            """
+            SELECT 1 FROM alerts
+            WHERE source_ip = %s
+              AND alert_type = %s
+              AND status = 'open'
+            """,
+            (source_ip, "pfsense_firewall_repeated_deny"),
+        )
+        if cur.fetchone():
+            continue
+
+        reputation = lookup_ip_reputation(str(source_ip))
+        reputation_score = reputation["reputation_score"]
+        reputation_label = reputation["reputation_label"]
+        reputation_source = reputation["reputation_source"]
+        reputation_summary = reputation["reputation_summary"]
+
+        severity = _pfsense_escalated_severity(
+            "medium",
+            count=event_count,
+            threshold=threshold,
+            reputation_score=reputation_score,
+        )
+        response_action = _pfsense_response_action_for_severity(severity)
+        response_status = "pending"
+
+        country, city, latitude, longitude = _fetch_latest_honeypot_location(cur, source_ip, "firewall_block")
+
+        destination_text = destination_ip or "unknown destination"
+        if destination_port:
+            destination_text = f"{destination_text}:{destination_port}"
+        message = (
+            f"pfSense blocked {event_count} connections from {source_ip} to "
+            f"{destination_text} ({protocol or 'unknown protocol'})"
+        )
+
+        context = {
+            "action": "block",
+            "destination_ip": destination_ip,
+            "destination_port": destination_port,
+            "protocol": protocol,
+            "interface": interface,
+            "direction": direction,
+            "event_count": event_count,
+            "first_seen": str(first_seen) if first_seen else None,
+            "last_seen": str(last_seen) if last_seen else None,
+        }
+
+        cur.execute(
+            """
+            INSERT INTO alerts (
+                source_ip,
+                alert_type,
+                severity,
+                source,
+                source_type,
+                message,
+                status,
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary,
+                context
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                source_ip,
+                "pfsense_firewall_repeated_deny",
+                severity,
+                source,
+                source_type,
+                message,
+                "open",
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary,
+                Json(context),
+            ),
+        )
+
+        cur.execute("SELECT currval(pg_get_serial_sequence('alerts', 'id'))")
+        alert_id = cur.fetchone()[0]
+
+        alerts_created.append(
+            {
+                "source_ip": source_ip,
+                "event_count": event_count,
+                "alert_id": alert_id,
+                "response_action": response_action,
+                "severity": severity,
+            }
+        )
+
+    return alerts_created
+
+
+def _generate_pfsense_port_scan_alerts_core(cur, conn, source=None, source_type=None):
+    rule_config = get_effective_detection_rule("pfsense_firewall_port_scan", cur=cur)
+    threshold = rule_config["parameters"]["threshold"]
+    window_minutes = rule_config["parameters"]["window_minutes"]
+
+    cur.execute(
+        f"""
+        WITH scan_events AS (
+            SELECT
+                source_ip,
+                raw_payload->>'destination_ip' AS destination_ip,
+                raw_payload->>'destination_port' AS destination_port_text,
+                created_at
+            FROM events
+            WHERE event_type = 'firewall_block'
+              AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
+        ),
+        normalized_ports AS (
+            SELECT
+                source_ip,
+                destination_ip,
+                created_at,
+                CASE
+                    WHEN destination_port_text ~ '^\\d{{1,5}}$'
+                    THEN destination_port_text::integer
+                    ELSE NULL
+                END AS destination_port
+            FROM scan_events
+        )
+        SELECT
+            source_ip,
+            COUNT(DISTINCT destination_port) AS distinct_port_count,
+            COUNT(DISTINCT destination_ip) AS distinct_destination_count,
+            MIN(created_at) AS first_seen,
+            MAX(created_at) AS last_seen
+        FROM normalized_ports
+        WHERE destination_port BETWEEN 1 AND 65535
+        GROUP BY source_ip
+        HAVING COUNT(DISTINCT destination_port) >= %s
+        """,
+        (threshold,),
+    )
+
+    rows = cur.fetchall()
+    alerts_created = []
+
+    for row in rows:
+        source_ip, distinct_port_count, distinct_destination_count, first_seen, last_seen = row
+
+        cur.execute(
+            """
+            SELECT 1 FROM alerts
+            WHERE source_ip = %s
+              AND alert_type = %s
+              AND status = 'open'
+            """,
+            (source_ip, "pfsense_firewall_port_scan"),
+        )
+        if cur.fetchone():
+            continue
+
+        reputation = lookup_ip_reputation(str(source_ip))
+        reputation_score = reputation["reputation_score"]
+        reputation_label = reputation["reputation_label"]
+        reputation_source = reputation["reputation_source"]
+        reputation_summary = reputation["reputation_summary"]
+
+        severity = _pfsense_escalated_severity(
+            "medium",
+            count=distinct_port_count,
+            threshold=threshold,
+            reputation_score=reputation_score,
+        )
+        response_action = _pfsense_response_action_for_severity(severity)
+        response_status = "pending"
+
+        country, city, latitude, longitude = _fetch_latest_honeypot_location(cur, source_ip, "firewall_block")
+
+        message = (
+            f"pfSense firewall port scan suspected from {source_ip}: "
+            f"{distinct_port_count} distinct destination ports"
+        )
+
+        context = {
+            "action": "block",
+            "distinct_port_count": distinct_port_count,
+            "distinct_destination_count": distinct_destination_count,
+            "event_count": distinct_port_count,
+            "first_seen": str(first_seen) if first_seen else None,
+            "last_seen": str(last_seen) if last_seen else None,
+        }
+
+        cur.execute(
+            """
+            INSERT INTO alerts (
+                source_ip,
+                alert_type,
+                severity,
+                source,
+                source_type,
+                message,
+                status,
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary,
+                context
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                source_ip,
+                "pfsense_firewall_port_scan",
+                severity,
+                source,
+                source_type,
+                message,
+                "open",
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary,
+                Json(context),
+            ),
+        )
+
+        cur.execute("SELECT currval(pg_get_serial_sequence('alerts', 'id'))")
+        alert_id = cur.fetchone()[0]
+
+        alerts_created.append(
+            {
+                "source_ip": source_ip,
+                "distinct_port_count": distinct_port_count,
+                "alert_id": alert_id,
+                "response_action": response_action,
+                "severity": severity,
+            }
+        )
+
+    return alerts_created
+
+
+def _generate_pfsense_suspicious_allow_alerts_core(cur, conn, source=None, source_type=None):
+    rule_config = get_effective_detection_rule("pfsense_firewall_suspicious_allow", cur=cur)
+    threshold = rule_config["parameters"]["threshold"]
+    window_minutes = rule_config["parameters"]["window_minutes"]
+    sensitive_ports = list(PFSENSE_SUSPICIOUS_ALLOW_SENSITIVE_PORTS)
+
+    cur.execute(
+        f"""
+        WITH allow_events AS (
+            SELECT
+                source_ip,
+                raw_payload->>'destination_ip' AS destination_ip,
+                raw_payload->>'destination_port' AS destination_port_text,
+                raw_payload->>'protocol' AS protocol,
+                raw_payload->>'interface' AS interface,
+                COALESCE(raw_payload->>'direction', '') AS direction,
+                created_at
+            FROM events
+            WHERE event_type = 'firewall_allow'
+              AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
+        ),
+        qualifying_events AS (
+            SELECT *
+            FROM allow_events
+            WHERE direction = 'in'
+              AND destination_port_text ~ '^\\d{{1,5}}$'
+              AND destination_port_text::integer = ANY(%s)
+        )
+        SELECT
+            source_ip,
+            COUNT(*) AS event_count,
+            MIN(created_at) AS first_seen,
+            MAX(created_at) AS last_seen,
+            (ARRAY_AGG(destination_ip ORDER BY created_at DESC))[1] AS destination_ip,
+            (ARRAY_AGG(destination_port_text ORDER BY created_at DESC))[1] AS destination_port,
+            (ARRAY_AGG(protocol ORDER BY created_at DESC))[1] AS protocol,
+            (ARRAY_AGG(interface ORDER BY created_at DESC))[1] AS interface
+        FROM qualifying_events
+        GROUP BY source_ip
+        HAVING COUNT(*) >= %s
+        """,
+        (sensitive_ports, threshold),
+    )
+
+    rows = cur.fetchall()
+    alerts_created = []
+
+    for row in rows:
+        (
+            source_ip,
+            event_count,
+            first_seen,
+            last_seen,
+            destination_ip,
+            destination_port,
+            protocol,
+            interface,
+        ) = row
+
+        cur.execute(
+            """
+            SELECT 1 FROM alerts
+            WHERE source_ip = %s
+              AND alert_type = %s
+              AND status = 'open'
+            """,
+            (source_ip, "pfsense_firewall_suspicious_allow"),
+        )
+        if cur.fetchone():
+            continue
+
+        reputation = lookup_ip_reputation(str(source_ip))
+        reputation_score = reputation["reputation_score"]
+        reputation_label = reputation["reputation_label"]
+        reputation_source = reputation["reputation_source"]
+        reputation_summary = reputation["reputation_summary"]
+
+        # A single allow of inbound traffic to a sensitive management port is
+        # treated as high-confidence per the pfsense-firewall-detections-soar
+        # spec's "contextual allow" guidance, independent of reputation.
+        severity = "high"
+        response_action = _pfsense_response_action_for_severity(severity)
+        response_status = "pending"
+
+        country, city, latitude, longitude = _fetch_latest_honeypot_location(cur, source_ip, "firewall_allow")
+
+        message = (
+            f"pfSense allowed inbound traffic from {source_ip} to sensitive port "
+            f"{destination_port} ({protocol or 'unknown protocol'})"
+        )
+
+        context = {
+            "action": "pass",
+            "destination_ip": destination_ip,
+            "destination_port": destination_port,
+            "protocol": protocol,
+            "interface": interface,
+            "direction": "in",
+            "event_count": event_count,
+            "first_seen": str(first_seen) if first_seen else None,
+            "last_seen": str(last_seen) if last_seen else None,
+        }
+
+        cur.execute(
+            """
+            INSERT INTO alerts (
+                source_ip,
+                alert_type,
+                severity,
+                source,
+                source_type,
+                message,
+                status,
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary,
+                context
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                source_ip,
+                "pfsense_firewall_suspicious_allow",
+                severity,
+                source,
+                source_type,
+                message,
+                "open",
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary,
+                Json(context),
+            ),
+        )
+
+        cur.execute("SELECT currval(pg_get_serial_sequence('alerts', 'id'))")
+        alert_id = cur.fetchone()[0]
+
+        alerts_created.append(
+            {
+                "source_ip": source_ip,
+                "event_count": event_count,
+                "alert_id": alert_id,
+                "response_action": response_action,
+                "severity": severity,
+            }
+        )
+
+    return alerts_created
+
+
+def _generate_pfsense_noisy_source_alerts_core(cur, conn, source=None, source_type=None):
+    rule_config = get_effective_detection_rule("pfsense_firewall_noisy_source", cur=cur)
+    threshold = rule_config["parameters"]["threshold"]
+    window_minutes = rule_config["parameters"]["window_minutes"]
+
+    cur.execute(
+        f"""
+        SELECT
+            source_ip,
+            COUNT(*) AS event_count,
+            MIN(created_at) AS first_seen,
+            MAX(created_at) AS last_seen
+        FROM events
+        WHERE event_type IN ('firewall_block', 'firewall_allow')
+          AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
+        GROUP BY source_ip
+        HAVING COUNT(*) >= %s
+        """,
+        (threshold,),
+    )
+
+    rows = cur.fetchall()
+    alerts_created = []
+
+    for row in rows:
+        source_ip, event_count, first_seen, last_seen = row
+
+        # Suppress this roll-up if the source already has an open alert of any
+        # pfSense firewall type, escalated or otherwise, so noisy-source noise
+        # never masks or duplicates a more specific detection.
+        cur.execute(
+            """
+            SELECT 1 FROM alerts
+            WHERE source_ip = %s
+              AND status = 'open'
+              AND alert_type IN %s
+            """,
+            (source_ip, PFSENSE_NOISY_SOURCE_GUARD_ALERT_TYPES),
+        )
+        if cur.fetchone():
+            continue
+
+        reputation = lookup_ip_reputation(str(source_ip))
+        reputation_score = reputation["reputation_score"]
+        reputation_label = reputation["reputation_label"]
+        reputation_source = reputation["reputation_source"]
+        reputation_summary = reputation["reputation_summary"]
+
+        severity = "low"
+        response_action = "suppress_noisy_source"
+        response_status = "pending"
+
+        country, city, latitude, longitude = _fetch_latest_honeypot_location(cur, source_ip, "firewall_block")
+
+        message = f"pfSense firewall noise suppressed from {source_ip}: {event_count} routine events"
+
+        context = {
+            "event_count": event_count,
+            "first_seen": str(first_seen) if first_seen else None,
+            "last_seen": str(last_seen) if last_seen else None,
+            "suppressed": True,
+        }
+
+        cur.execute(
+            """
+            INSERT INTO alerts (
+                source_ip,
+                alert_type,
+                severity,
+                source,
+                source_type,
+                message,
+                status,
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary,
+                context
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                source_ip,
+                "pfsense_firewall_noisy_source",
+                severity,
+                source,
+                source_type,
+                message,
+                "open",
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary,
+                Json(context),
+            ),
+        )
+
+        cur.execute("SELECT currval(pg_get_serial_sequence('alerts', 'id'))")
+        alert_id = cur.fetchone()[0]
+
+        alerts_created.append(
+            {
+                "source_ip": source_ip,
+                "event_count": event_count,
+                "alert_id": alert_id,
+                "response_action": response_action,
+                "severity": severity,
             }
         )
 

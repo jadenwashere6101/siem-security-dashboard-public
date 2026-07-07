@@ -29,6 +29,10 @@ CORE_V1_HONEYPOT_SCANNER_REVIEW_ID = "core-v1-honeypot-scanner-review"
 CORE_V1_HONEYPOT_CREDENTIAL_STUFFING_CONTAINMENT_ID = (
     "core-v1-honeypot-credential-stuffing-containment"
 )
+CORE_V1_PFSENSE_REPEATED_DENY_INVESTIGATION_ID = "core-v1-pfsense-repeated-deny-investigation"
+CORE_V1_PFSENSE_PORT_SCAN_INVESTIGATION_ID = "core-v1-pfsense-port-scan-investigation"
+CORE_V1_PFSENSE_PORT_SCAN_CONTAINMENT_ID = "core-v1-pfsense-port-scan-containment"
+CORE_V1_PFSENSE_SUSPICIOUS_ALLOW_CONTAINMENT_ID = "core-v1-pfsense-suspicious-allow-containment"
 
 CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
     {
@@ -243,6 +247,88 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
                 "risk_level": "high",
                 "expires_in_minutes": 30,
                 "reason": "Honeypot credential stuffing detected — approve IP block",
+            },
+            {"action": "block_ip", "params": {"source_ip": "{{alert.source_ip}}"}},
+            {"action": "notify_slack", "params": {"message": "{{alert.message}}"}},
+        ],
+    },
+    {
+        "id": CORE_V1_PFSENSE_REPEATED_DENY_INVESTIGATION_ID,
+        "name": "pfSense Repeated Deny Investigation",
+        "description": (
+            "Investigate repeated pfSense firewall denies with enriched context "
+            "and no automatic blocking."
+        ),
+        "trigger_config": {
+            "alert_type": "pfsense_firewall_repeated_deny",
+            "min_severity": "medium",
+        },
+        "steps": [
+            {"action": "enrich_context"},
+            {"action": "monitor"},
+            {"action": "notify_slack", "params": {"message": "{{alert.message}}"}},
+        ],
+    },
+    {
+        "id": CORE_V1_PFSENSE_PORT_SCAN_INVESTIGATION_ID,
+        "name": "pfSense Port Scan Investigation",
+        "description": (
+            "Investigate medium-severity pfSense firewall port scan activity "
+            "with enriched context and no automatic blocking."
+        ),
+        "trigger_config": {
+            "alert_type": "pfsense_firewall_port_scan",
+            "min_severity": "medium",
+        },
+        "steps": [
+            {"action": "enrich_context"},
+            {"action": "monitor"},
+            {"action": "notify_slack", "params": {"message": "{{alert.message}}"}},
+        ],
+    },
+    {
+        "id": CORE_V1_PFSENSE_PORT_SCAN_CONTAINMENT_ID,
+        "name": "pfSense Port Scan Containment",
+        "description": (
+            "Contain high-confidence pfSense firewall port scan activity with "
+            "enriched context and approval-gated IP blocking."
+        ),
+        "trigger_config": {
+            "alert_type": "pfsense_firewall_port_scan",
+            "min_severity": "high",
+        },
+        "steps": [
+            {"action": "flag_high_priority"},
+            {"action": "enrich_context"},
+            {
+                "action": "require_approval",
+                "risk_level": "high",
+                "expires_in_minutes": 30,
+                "reason": "High-confidence pfSense port scan detected — approve IP block",
+            },
+            {"action": "block_ip", "params": {"source_ip": "{{alert.source_ip}}"}},
+            {"action": "notify_slack", "params": {"message": "{{alert.message}}"}},
+        ],
+    },
+    {
+        "id": CORE_V1_PFSENSE_SUSPICIOUS_ALLOW_CONTAINMENT_ID,
+        "name": "pfSense Suspicious Allow Containment",
+        "description": (
+            "Contain pfSense firewall allow events reaching sensitive destination "
+            "ports with enriched context and approval-gated IP blocking."
+        ),
+        "trigger_config": {
+            "alert_type": "pfsense_firewall_suspicious_allow",
+            "min_severity": "high",
+        },
+        "steps": [
+            {"action": "flag_high_priority"},
+            {"action": "enrich_context"},
+            {
+                "action": "require_approval",
+                "risk_level": "high",
+                "expires_in_minutes": 30,
+                "reason": "pfSense allowed inbound traffic to a sensitive port — approve IP block",
             },
             {"action": "block_ip", "params": {"source_ip": "{{alert.source_ip}}"}},
             {"action": "notify_slack", "params": {"message": "{{alert.message}}"}},

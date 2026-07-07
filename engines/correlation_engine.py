@@ -82,6 +82,9 @@ def generate_correlated_activity_alerts(cur, conn, source_ip):
         "port_scan_threshold",
         "http_error_threshold",
         "high_request_rate_threshold",
+        "pfsense_firewall_repeated_deny",
+        "pfsense_firewall_port_scan",
+        "pfsense_firewall_suspicious_allow",
     )
 
     current_app.logger.info("[CORRELATION] Evaluating IP: %s", source_ip)
