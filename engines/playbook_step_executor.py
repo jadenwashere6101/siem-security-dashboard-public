@@ -22,6 +22,7 @@ from core.playbook_worker_identity import generate_playbook_worker_id
 from core.soar_protected_targets import require_unprotected_target
 from core.soar_response_outcomes import append_outcome_event
 from engines.soar_errors import SkippedAction
+from helpers.playbook_enrichment_context import build_playbook_enrichment_context
 from engines.playbook_branch_conditions import (
     PlaybookBranchConditionError,
     evaluate_branch_condition,
@@ -956,6 +957,49 @@ def _process_steps(
             index += 1
             continue
 
+        if isinstance(step, dict) and step.get("action") == "enrich_context":
+            entry = _execute_enrich_context_step(conn, step, index, execution, timestamp)
+            steps_log.append(entry)
+            _append_non_adapter_playbook_step_outcome_event(conn, execution, entry)
+            if entry["status"] == "success":
+                last_completed_step = index
+                if (
+                    playbook_store.update_playbook_execution_step_log(
+                        conn,
+                        execution_id,
+                        steps_log,
+                        last_completed_step=last_completed_step,
+                        lease_owner=worker_id,
+                    )
+                    is None
+                ):
+                    logger.warning(
+                        "[PLAYBOOK SIMULATION] lease lost while saving enrich_context progress "
+                        "execution_id=%s worker_id=%s step_index=%s",
+                        execution_id,
+                        worker_id,
+                        index,
+                    )
+                    return _result(
+                        execution,
+                        prior,
+                        execution.get("status") or "running",
+                        "skipped",
+                        len(steps_log),
+                        "Playbook execution lease was lost while saving enrich_context progress.",
+                        reason="lease_lost",
+                    )
+                index += 1
+                continue
+
+            failed = True
+            failure_message = entry["message"]
+            on_failure = step.get("on_failure", "abort")
+            if on_failure != "continue":
+                break
+            index += 1
+            continue
+
         try:
             entry = _simulate_step(conn, step, index, timestamp, execution)
         except Exception as error:
@@ -1646,6 +1690,64 @@ def _execute_trigger_playbook_step(
         },
         "error": None,
     }
+
+
+def _execute_enrich_context_step(
+    conn,
+    step: dict[str, Any],
+    step_index: int,
+    execution: dict[str, Any],
+    now: datetime,
+) -> dict[str, Any]:
+    params = step.get("params") or {}
+    if not isinstance(params, dict):
+        return _failure_entry(
+            step_index=step_index,
+            action="enrich_context",
+            message="enrich_context params must be an object.",
+            code="invalid_enrich_context_params",
+            now=now,
+        )
+
+    try:
+        context = build_playbook_enrichment_context(
+            conn,
+            execution,
+            limit=params.get("limit"),
+        )
+    except Exception as error:
+        logger.exception(
+            "[PLAYBOOK SIMULATION] enrich_context failed execution_id=%s step_index=%s",
+            execution.get("id"),
+            step_index,
+        )
+        return _failure_entry(
+            step_index=step_index,
+            action="enrich_context",
+            message=str(error),
+            code="enrich_context_failed",
+            now=now,
+        )
+
+    entry = {
+        "step_index": step_index,
+        "action": "enrich_context",
+        "status": "success",
+        "mode": "simulation",
+        "started_at": _iso(now),
+        "completed_at": _iso(now),
+        "message": "[SIMULATED PLAYBOOK STEP] enrich_context",
+        "output": {
+            "simulated": True,
+            "executed": False,
+            "read_only": True,
+            "context": context,
+        },
+        "error": None,
+    }
+    if isinstance(step.get("label"), str) and step.get("label"):
+        entry["label"] = step["label"]
+    return entry
 
 
 def _target_in_execution_ancestry(

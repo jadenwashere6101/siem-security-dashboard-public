@@ -7,6 +7,7 @@ import {
   createPlaybookDefinition,
   updatePlaybookDefinition,
   setPlaybookDefinitionEnabled,
+  launchPlaybookExecution,
   retryExecution,
   abandonExecution,
   resumeExecution,
@@ -194,6 +195,7 @@ function PlaybooksPanel({
   userRole,
 }) {
   const isSuperAdmin = userRole === "super_admin";
+  const canLaunchPlaybooks = userRole === "analyst" || userRole === "super_admin";
   const [activePanel, setActivePanel] = useState("definitions");
 
   const [definitions, setDefinitions] = useState([]);
@@ -235,6 +237,13 @@ function PlaybooksPanel({
   const [formSubmitting, setFormSubmitting] = useState(false);
   const [formSubmitError, setFormSubmitError] = useState("");
   const [formSubmitSuccess, setFormSubmitSuccess] = useState("");
+
+  const [launchPlaybookId, setLaunchPlaybookId] = useState("");
+  const [launchTargetType, setLaunchTargetType] = useState("alert");
+  const [launchTargetId, setLaunchTargetId] = useState("");
+  const [launchSubmitting, setLaunchSubmitting] = useState(false);
+  const [launchError, setLaunchError] = useState("");
+  const [launchSuccess, setLaunchSuccess] = useState("");
 
   const loadDefinitions = useCallback(
     async ({ quiet = false } = {}) => {
@@ -597,6 +606,48 @@ function PlaybooksPanel({
     }
   };
 
+  const handleOpenLaunchForm = (definition) => {
+    setLaunchPlaybookId(definition.id);
+    setLaunchTargetType("alert");
+    setLaunchTargetId("");
+    setLaunchError("");
+    setLaunchSuccess("");
+  };
+
+  const handleCloseLaunchForm = () => {
+    setLaunchPlaybookId("");
+    setLaunchTargetType("alert");
+    setLaunchTargetId("");
+    setLaunchError("");
+    setLaunchSuccess("");
+  };
+
+  const handleSubmitLaunch = async () => {
+    const targetId = launchTargetId.trim();
+    if (!targetId || !/^\d+$/.test(targetId) || Number(targetId) <= 0) {
+      setLaunchError("Target ID must be a positive integer.");
+      setLaunchSuccess("");
+      return;
+    }
+
+    setLaunchSubmitting(true);
+    setLaunchError("");
+    setLaunchSuccess("");
+    try {
+      const target =
+        launchTargetType === "incident"
+          ? { incident_id: Number(targetId) }
+          : { alert_id: Number(targetId) };
+      const result = await launchPlaybookExecution(launchPlaybookId, target);
+      setLaunchSuccess(`Started execution ${result.execution_id || result.id}.`);
+      await loadExecutions({ quiet: true });
+    } catch (err) {
+      setLaunchError(err.message || "Unable to launch playbook execution.");
+    } finally {
+      setLaunchSubmitting(false);
+    }
+  };
+
   useEffect(() => {
     loadDefinitions();
   }, [loadDefinitions]);
@@ -702,6 +753,7 @@ function PlaybooksPanel({
                       <th style={headerCellStyle}>Steps</th>
                       <th style={headerCellStyle}>Created</th>
                       <th style={headerCellStyle}>Updated</th>
+                      {canLaunchPlaybooks && <th style={headerCellStyle}>Launch</th>}
                       {isSuperAdmin && <th style={headerCellStyle}>Actions</th>}
                       <th style={headerCellStyle}>View</th>
                     </tr>
@@ -716,6 +768,21 @@ function PlaybooksPanel({
                         <td style={bodyCellStyle}>{stepCount(row.steps)}</td>
                         <td style={bodyCellStyle}>{formatAdminTimestamp(row.created_at, "—")}</td>
                         <td style={bodyCellStyle}>{formatAdminTimestamp(row.updated_at, "—")}</td>
+                        {canLaunchPlaybooks && (
+                          <td style={bodyCellStyle}>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenLaunchForm(row)}
+                              disabled={!row.enabled}
+                              style={{
+                                ...smallActionButtonStyle,
+                                opacity: row.enabled ? 1 : 0.55,
+                              }}
+                            >
+                              Run
+                            </button>
+                          </td>
+                        )}
                         {isSuperAdmin && (
                           <td style={bodyCellStyle}>
                             <div style={actionButtonsWrapperStyle}>
@@ -751,6 +818,57 @@ function PlaybooksPanel({
                 </table>
               </div>
             )}
+            {launchPlaybookId ? (
+              <div style={launchPanelStyle}>
+                <div style={launchHeaderStyle}>
+                  <div>
+                    <span style={detailLabelStyle}>Manual launch</span>
+                    <div style={{ ...detailValueStyle, ...mono }}>{launchPlaybookId}</div>
+                  </div>
+                  <button type="button" style={detailCloseButtonStyle} onClick={handleCloseLaunchForm}>
+                    Close
+                  </button>
+                </div>
+                <div style={toolbarStyle}>
+                  <label style={filterWrapperStyle}>
+                    <span style={filterLabelStyle}>Target</span>
+                    <select
+                      value={launchTargetType}
+                      onChange={(e) => setLaunchTargetType(e.target.value)}
+                      style={selectStyle}
+                    >
+                      <option value="alert">Alert</option>
+                      <option value="incident">Incident</option>
+                    </select>
+                  </label>
+                  <label style={filterWrapperStyle}>
+                    <span style={filterLabelStyle}>
+                      {launchTargetType === "incident" ? "Incident ID" : "Alert ID"}
+                    </span>
+                    <input
+                      type="number"
+                      min="1"
+                      value={launchTargetId}
+                      onChange={(e) => setLaunchTargetId(e.target.value)}
+                      style={textInputStyle}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleSubmitLaunch}
+                    disabled={launchSubmitting}
+                    style={{
+                      ...applyButtonStyle,
+                      opacity: launchSubmitting ? 0.65 : 1,
+                    }}
+                  >
+                    {launchSubmitting ? "Starting…" : "Start execution"}
+                  </button>
+                </div>
+                {launchError ? <div style={errorStateStyle}>{launchError}</div> : null}
+                {launchSuccess ? <div style={successStateStyle}>{launchSuccess}</div> : null}
+              </div>
+            ) : null}
           </>
         ) : activePanel === "executions" ? (
           <>
@@ -1752,6 +1870,22 @@ const actionErrorStyle = {
   fontSize: "12px",
   lineHeight: 1.35,
   overflowWrap: "anywhere",
+};
+
+const launchPanelStyle = {
+  marginTop: "16px",
+  padding: "14px",
+  borderRadius: "8px",
+  border: "1px solid rgba(88, 166, 255, 0.35)",
+  backgroundColor: "rgba(31, 111, 235, 0.08)",
+};
+
+const launchHeaderStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: "12px",
+  marginBottom: "10px",
 };
 
 const formPanelStyle = {

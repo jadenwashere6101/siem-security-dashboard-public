@@ -1023,6 +1023,35 @@ def get_active_playbook_execution_for_pair(
     return _execution_row_to_dict(row) if row else None
 
 
+def get_active_playbook_execution_for_target(
+    conn,
+    playbook_id: str,
+    *,
+    alert_id: int | None = None,
+    incident_id: int | None = None,
+) -> dict[str, Any] | None:
+    if (alert_id is None) == (incident_id is None):
+        raise ValueError("exactly one of alert_id or incident_id is required")
+
+    field = "alert_id" if alert_id is not None else "incident_id"
+    value = alert_id if alert_id is not None else incident_id
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT {_EXECUTION_COLUMNS_SQL}
+            FROM playbook_executions
+            WHERE playbook_id = %s
+              AND {field} = %s
+              AND status IN ('pending', 'running', 'awaiting_approval')
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (playbook_id, value),
+        )
+        row = cur.fetchone()
+    return _execution_row_to_dict(row) if row else None
+
+
 def get_playbook_execution_ancestor_chain(
     conn,
     execution_id: int,

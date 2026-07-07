@@ -20,11 +20,14 @@ from core.auth import analyst_or_super_admin_required, super_admin_required
 from core.audit_helpers import log_audit_event
 from core.approval_store import get_latest_playbook_step_approval_request
 from core.db import get_db_connection
+from core.incident_store import get_incident_detail
 from core.playbook_store import (
     abandon_playbook_execution,
     active_playbook_execution_exists,
+    create_playbook_execution,
     create_playbook_definition,
     create_retry_execution,
+    get_active_playbook_execution_for_target,
     get_playbook_definition,
     get_playbook_execution,
     list_playbook_executions,
@@ -250,6 +253,43 @@ def _parse_enabled_filter(raw: str | None) -> tuple[bool | None, str | None]:
     return None, "invalid enabled filter"
 
 
+def _parse_positive_int_field(data: dict[str, Any], field: str) -> tuple[int | None, str | None]:
+    raw = data.get(field)
+    if raw is None:
+        return None, None
+    if isinstance(raw, bool):
+        return None, f"{field} must be a positive integer"
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        return None, f"{field} must be a positive integer"
+    if parsed <= 0:
+        return None, f"{field} must be a positive integer"
+    return parsed, None
+
+
+def _parse_manual_execution_target(
+    data: dict[str, Any],
+) -> tuple[str | None, int | None, str | None]:
+    alert_id, alert_err = _parse_positive_int_field(data, "alert_id")
+    if alert_err:
+        return None, None, alert_err
+    incident_id, incident_err = _parse_positive_int_field(data, "incident_id")
+    if incident_err:
+        return None, None, incident_err
+    if (alert_id is None) == (incident_id is None):
+        return None, None, "exactly one of alert_id or incident_id is required"
+    if alert_id is not None:
+        return "alert", alert_id, None
+    return "incident", incident_id, None
+
+
+def _alert_exists(conn, alert_id: int) -> bool:
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM alerts WHERE id = %s", (alert_id,))
+        return cur.fetchone() is not None
+
+
 def _derive_gating_step_index(execution: dict[str, Any]) -> int:
     steps_log = execution.get("steps_log")
     if isinstance(steps_log, list):
@@ -436,6 +476,115 @@ def get_playbook_route(playbook_id):
     except Exception as error:
         current_app.logger.error("Error in get_playbook_route: %s", error)
         return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@playbook_bp.route("/playbooks/<string:playbook_id>/executions", methods=["POST"])
+@login_required
+@analyst_or_super_admin_required
+def create_manual_playbook_execution_route(playbook_id):
+    if not request.is_json:
+        return jsonify({"error": "request body must be JSON"}), 400
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "request body must be a JSON object"}), 400
+
+    target_type, target_id, target_err = _parse_manual_execution_target(data)
+    if target_err:
+        return jsonify({"error": target_err}), 400
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        definition = get_playbook_definition(conn, playbook_id)
+        if definition is None:
+            return jsonify({"error": "playbook not found"}), 404
+        if definition.get("enabled") is not True:
+            return jsonify({"error": "playbook is disabled"}), 409
+
+        alert_id = target_id if target_type == "alert" else None
+        incident_id = target_id if target_type == "incident" else None
+        if alert_id is not None:
+            if not _alert_exists(conn, alert_id):
+                return jsonify({"error": "alert not found"}), 404
+        elif incident_id is not None and get_incident_detail(conn, incident_id) is None:
+            return jsonify({"error": "incident not found"}), 404
+
+        existing = get_active_playbook_execution_for_target(
+            conn,
+            playbook_id,
+            alert_id=alert_id,
+            incident_id=incident_id,
+        )
+        if existing is not None:
+            return (
+                jsonify(
+                    {
+                        "error": "active execution already exists for playbook and target",
+                        "execution_id": existing["id"],
+                    }
+                ),
+                409,
+            )
+
+        execution_id = create_playbook_execution(
+            conn,
+            playbook_id,
+            alert_id,
+            incident_id=incident_id,
+        )
+        actor_role = getattr(current_user, "role", None)
+        manual_metadata = {
+            "trigger_type": "manual",
+            "manual_actor_username": current_user.id,
+            "manual_actor_role": actor_role,
+            "target_type": target_type,
+            "target_id": target_id,
+            "alert_id": alert_id,
+            "incident_id": incident_id,
+        }
+        create_and_link_playbook_execution_decision(
+            conn,
+            execution_id,
+            playbook_id=playbook_id,
+            alert_id=alert_id,
+            incident_id=incident_id,
+            initial_event_type="manual_triggered",
+            initial_idempotency_key=f"playbook-manual-triggered-{execution_id}",
+            initial_event_metadata=manual_metadata,
+        )
+        _write_playbook_execution_audit(
+            "PLAYBOOK_EXECUTION_MANUAL_TRIGGER",
+            {
+                **manual_metadata,
+                "playbook_id": playbook_id,
+                "execution_id": execution_id,
+            },
+        )
+        conn.commit()
+        return (
+            jsonify(
+                {
+                    "id": execution_id,
+                    "execution_id": execution_id,
+                    "playbook_id": playbook_id,
+                    "status": "pending",
+                    "trigger_type": "manual",
+                    "target_type": target_type,
+                    "target_id": target_id,
+                    "alert_id": alert_id,
+                    "incident_id": incident_id,
+                }
+            ),
+            201,
+        )
+    except psycopg2.Error as exc:
+        current_app.logger.exception("manual playbook execution create failed: %s", exc)
+        if conn is not None:
+            conn.rollback()
+        return jsonify({"error": "database error"}), 500
     finally:
         if conn:
             conn.close()

@@ -1,5 +1,6 @@
 import {
   createPlaybookDefinition,
+  launchPlaybookExecution,
   updatePlaybookDefinition,
   setPlaybookDefinitionEnabled,
 } from "./playbookService";
@@ -68,6 +69,50 @@ describe("createPlaybookDefinition", () => {
     await expect(
       createPlaybookDefinition({ id: "pb", name: "Test" })
     ).rejects.toThrow();
+  });
+});
+
+describe("launchPlaybookExecution", () => {
+  test("sends POST request to /playbooks/<id>/executions", async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: jest.fn().mockResolvedValueOnce({ execution_id: 12 }),
+    });
+
+    await launchPlaybookExecution("pb_one", { alert_id: 55 });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/playbooks/pb_one/executions"),
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    expect(global.fetch.mock.calls[0][1].body).toEqual(JSON.stringify({ alert_id: 55 }));
+  });
+
+  test("URL-encodes playbook id and supports incident target", async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: jest.fn().mockResolvedValueOnce({ execution_id: 13 }),
+    });
+
+    await launchPlaybookExecution("pb one", { incident_id: 7 });
+
+    expect(global.fetch.mock.calls[0][0]).toContain("/playbooks/pb%20one/executions");
+    expect(global.fetch.mock.calls[0][1].body).toEqual(JSON.stringify({ incident_id: 7 }));
+  });
+
+  test("throws error on non-OK response", async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: false,
+      json: jest.fn().mockResolvedValueOnce({ error: "playbook is disabled" }),
+    });
+
+    await expect(launchPlaybookExecution("pb_one", { alert_id: 55 })).rejects.toThrow(
+      /playbook is disabled/i
+    );
   });
 });
 

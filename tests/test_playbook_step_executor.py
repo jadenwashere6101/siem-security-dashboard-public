@@ -221,6 +221,115 @@ def _insert_user(cur, username="playbook-approver"):
     return cur.fetchone()[0]
 
 
+def test_enrich_context_step_outputs_alert_context_without_external_lookup(postgres_db):
+    conn, cur = postgres_db
+    cur.execute(
+        """
+        INSERT INTO alerts (
+            alert_type, severity, source_ip, message, source, source_type,
+            country, city, latitude, longitude,
+            reputation_score, reputation_label, reputation_source, reputation_summary,
+            context
+        )
+        VALUES (
+            'password_spraying_threshold', 'HIGH', '203.0.113.44'::inet,
+            'spray detected', 'nginx', 'web_log',
+            'United States', 'New York', 40.7, -74.0,
+            72, 'High Risk', 'abuseipdb', 'stored snapshot',
+            %s
+        )
+        RETURNING id
+        """,
+        (
+            Json(
+                {
+                    "username": "alice",
+                    "correlation_type": "auth",
+                    "matched_rule_id": "spray-rule",
+                    "matched_alert_count": 3,
+                    "contributing_alert_types": ["failed_login_threshold"],
+                }
+            ),
+        ),
+    )
+    alert_id = cur.fetchone()[0]
+    playbook_store.create_playbook_definition(
+        conn,
+        "pb_enrich_alert",
+        "Enrich Alert",
+        steps=[{"action": "enrich_context", "params": {"limit": 3}}],
+    )
+    execution_id = playbook_store.create_playbook_execution(conn, "pb_enrich_alert", alert_id)
+    conn.commit()
+
+    with patch("core.ip_helpers.lookup_ip_reputation", side_effect=AssertionError("external lookup")):
+        result = playbook_step_executor.process_playbook_execution(conn, execution_id)
+
+    assert result["outcome"] == "success"
+    row = playbook_store.get_playbook_execution(conn, execution_id)
+    entry = row["steps_log"][0]
+    assert entry["action"] == "enrich_context"
+    assert entry["status"] == "success"
+    output = entry["output"]
+    assert output["read_only"] is True
+    context = output["context"]
+    assert context["target"] == {
+        "target_type": "alert",
+        "target_id": alert_id,
+        "alert_id": alert_id,
+        "incident_id": None,
+        "source_ip": "203.0.113.44",
+    }
+    assert context["alert"]["alert_type"] == "password_spraying_threshold"
+    assert context["mitre"]["technique_id"] == "T1110.003"
+    assert context["reputation"]["alert_snapshot"]["score"] == 72
+    assert context["reputation"]["latest_external"]["source"] == "abuseipdb"
+    assert context["source_ip_context"]["alert_counts"]["total"] == 1
+    assert context["usernames"] == ["alice"]
+
+
+def test_enrich_context_step_outputs_incident_and_linked_alert_context(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur, source_ip="198.51.100.88")
+    cur.execute(
+        """
+        INSERT INTO incidents (title, severity, priority, status, source_ip)
+        VALUES ('Linked incident', 'HIGH', 'P2', 'open', '198.51.100.88'::inet)
+        RETURNING id
+        """
+    )
+    incident_id = cur.fetchone()[0]
+    cur.execute(
+        "INSERT INTO incident_alerts (incident_id, alert_id) VALUES (%s, %s)",
+        (incident_id, alert_id),
+    )
+    playbook_store.create_playbook_definition(
+        conn,
+        "pb_enrich_incident",
+        "Enrich Incident",
+        steps=[{"action": "enrich_context"}],
+    )
+    execution_id = playbook_store.create_playbook_execution(
+        conn,
+        "pb_enrich_incident",
+        alert_id=None,
+        incident_id=incident_id,
+    )
+    conn.commit()
+
+    result = playbook_step_executor.process_playbook_execution(conn, execution_id)
+
+    assert result["outcome"] == "success"
+    row = playbook_store.get_playbook_execution(conn, execution_id)
+    context = row["steps_log"][0]["output"]["context"]
+    assert context["target"]["target_type"] == "incident"
+    assert context["target"]["incident_id"] == incident_id
+    assert context["incident"]["id"] == incident_id
+    assert context["linked_alerts"][0]["id"] == alert_id
+    assert context["source_ip_context"]["source_ip"] == "198.51.100.88"
+    assert context["previous_incidents"]["count"] >= 1
+
+
 def test_no_pending_execution_returns_empty_batch(postgres_db):
     conn, _cur = postgres_db
 

@@ -11,6 +11,7 @@ import {
   createPlaybookDefinition,
   updatePlaybookDefinition,
   setPlaybookDefinitionEnabled,
+  launchPlaybookExecution,
   retryExecution,
   abandonExecution,
   resumeExecution,
@@ -26,6 +27,7 @@ jest.mock("../services/playbookService", () => ({
   createPlaybookDefinition: jest.fn(),
   updatePlaybookDefinition: jest.fn(),
   setPlaybookDefinitionEnabled: jest.fn(),
+  launchPlaybookExecution: jest.fn(),
   retryExecution: jest.fn(),
   abandonExecution: jest.fn(),
   resumeExecution: jest.fn(),
@@ -95,6 +97,24 @@ test("shows loading then definitions after load", async () => {
 
   expect(await screen.findByText("pb_one")).toBeInTheDocument();
   expect(screen.getByText("Test playbook")).toBeInTheDocument();
+});
+
+test("analyst can launch enabled playbook for concrete alert target", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50, enabled: null });
+  listPlaybookExecutions.mockResolvedValue({ items: [], limit: 50 });
+  launchPlaybookExecution.mockResolvedValue({ execution_id: 1234 });
+
+  render(<PlaybooksPanel {...styleProps} userRole="analyst" />);
+
+  expect(await screen.findByText("pb_one")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: /^run$/i }));
+  await userEvent.type(screen.getByLabelText(/alert id/i), "77");
+  await userEvent.click(screen.getByRole("button", { name: /start execution/i }));
+
+  await waitFor(() =>
+    expect(launchPlaybookExecution).toHaveBeenCalledWith("pb_one", { alert_id: 77 })
+  );
+  expect(await screen.findByText(/started execution 1234/i)).toBeInTheDocument();
 });
 
 test("renders executions after switching panel", async () => {

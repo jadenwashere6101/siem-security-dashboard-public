@@ -172,6 +172,10 @@ def test_playbook_executions_without_session_returns_401(client):
     assert client.get("/playbook-executions").status_code == 401
 
 
+def test_manual_playbook_execution_without_session_returns_401(client):
+    assert client.post("/playbooks/pb/executions", json={"alert_id": 1}).status_code == 401
+
+
 def test_playbook_schedules_routes_are_retired(client):
     routes = {str(rule) for rule in client.application.url_map.iter_rules()}
     assert "/playbook-schedules" not in routes
@@ -321,6 +325,247 @@ def test_get_playbook_detail_authorized_and_404(client, postgres_db):
     assert isinstance(body["steps"], list)
 
     assert missing.status_code == 404
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_manual_playbook_execution_alert_target_creates_pending_with_traceability(client, postgres_db):
+    conn, cur = postgres_db
+    playbook_store.create_playbook_definition(
+        conn,
+        "pb_manual_alert",
+        "Manual Alert",
+        steps=_valid_steps(),
+        enabled=True,
+    )
+    alert_id = _insert_alert(cur)
+    conn.commit()
+
+    patchers = _login_role(
+        client,
+        username="manual_analyst",
+        password="apass",
+        role="analyst",
+    )
+    try:
+        with _patched_app_db(conn):
+            resp = client.post(
+                "/playbooks/pb_manual_alert/executions",
+                json={"alert_id": alert_id},
+            )
+    finally:
+        _stop_patchers(patchers)
+
+    assert resp.status_code == 201
+    body = resp.get_json()
+    assert body["status"] == "pending"
+    assert body["trigger_type"] == "manual"
+    assert body["target_type"] == "alert"
+    assert body["alert_id"] == alert_id
+
+    cur.execute(
+        """
+        SELECT status, alert_id, incident_id, decision_id, soar_correlation_id
+        FROM playbook_executions
+        WHERE id = %s
+        """,
+        (body["execution_id"],),
+    )
+    status, stored_alert_id, stored_incident_id, decision_id, correlation_id = cur.fetchone()
+    assert status == "pending"
+    assert stored_alert_id == alert_id
+    assert stored_incident_id is None
+    assert decision_id is not None
+    assert correlation_id
+
+    cur.execute(
+        """
+        SELECT metadata
+        FROM soar_response_outcome_events
+        WHERE decision_id = %s AND event_type = 'manual_triggered'
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (decision_id,),
+    )
+    metadata = cur.fetchone()[0]
+    assert metadata["trigger_type"] == "manual"
+    assert metadata["manual_actor_username"] == "manual_analyst"
+    assert metadata["manual_actor_role"] == "analyst"
+    assert metadata["target_type"] == "alert"
+    assert metadata["target_id"] == alert_id
+
+    cur.execute(
+        """
+        SELECT actor_username, details
+        FROM audit_log
+        WHERE event_type = 'PLAYBOOK_EXECUTION_MANUAL_TRIGGER'
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    )
+    actor_username, details = cur.fetchone()
+    assert actor_username == "manual_analyst"
+    assert details["trigger_type"] == "manual"
+    assert details["playbook_id"] == "pb_manual_alert"
+    assert details["execution_id"] == body["execution_id"]
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_manual_playbook_execution_incident_target_creates_pending(client, postgres_db):
+    conn, cur = postgres_db
+    playbook_store.create_playbook_definition(
+        conn,
+        "pb_manual_incident",
+        "Manual Incident",
+        steps=_valid_steps(),
+        enabled=True,
+    )
+    cur.execute(
+        """
+        INSERT INTO incidents (title, severity, priority, status, source_ip)
+        VALUES ('Incident', 'HIGH', 'P2', 'open', '10.0.0.99'::inet)
+        RETURNING id
+        """
+    )
+    incident_id = cur.fetchone()[0]
+    conn.commit()
+
+    patchers = _login_role(
+        client,
+        username="incident_analyst",
+        password="ipass",
+        role="analyst",
+    )
+    try:
+        with _patched_app_db(conn):
+            resp = client.post(
+                "/playbooks/pb_manual_incident/executions",
+                json={"incident_id": incident_id},
+            )
+    finally:
+        _stop_patchers(patchers)
+
+    assert resp.status_code == 201
+    body = resp.get_json()
+    assert body["target_type"] == "incident"
+    assert body["incident_id"] == incident_id
+    cur.execute(
+        "SELECT status, alert_id, incident_id FROM playbook_executions WHERE id = %s",
+        (body["execution_id"],),
+    )
+    assert cur.fetchone() == ("pending", None, incident_id)
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_manual_playbook_execution_rejects_invalid_target_shape(client, postgres_db):
+    conn, cur = postgres_db
+    playbook_store.create_playbook_definition(
+        conn,
+        "pb_manual_invalid",
+        "Manual Invalid",
+        steps=_valid_steps(),
+        enabled=True,
+    )
+    alert_id = _insert_alert(cur)
+    cur.execute(
+        """
+        INSERT INTO incidents (title, severity, priority, status, source_ip)
+        VALUES ('Incident', 'HIGH', 'P2', 'open', '10.0.0.98'::inet)
+        RETURNING id
+        """
+    )
+    incident_id = cur.fetchone()[0]
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        neither = client.post("/playbooks/pb_manual_invalid/executions", json={})
+        both = client.post(
+            "/playbooks/pb_manual_invalid/executions",
+            json={"alert_id": alert_id, "incident_id": incident_id},
+        )
+
+    assert neither.status_code == 400
+    assert both.status_code == 400
+    cur.execute("SELECT COUNT(*) FROM playbook_executions WHERE playbook_id = 'pb_manual_invalid'")
+    assert cur.fetchone()[0] == 0
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_manual_playbook_execution_rejects_disabled_missing_and_duplicate(client, postgres_db):
+    conn, cur = postgres_db
+    playbook_store.create_playbook_definition(
+        conn,
+        "pb_manual_disabled",
+        "Manual Disabled",
+        steps=_valid_steps(),
+        enabled=False,
+    )
+    playbook_store.create_playbook_definition(
+        conn,
+        "pb_manual_dupe",
+        "Manual Dupe",
+        steps=_valid_steps(),
+        enabled=True,
+    )
+    alert_id = _insert_alert(cur)
+    existing_id = playbook_store.create_playbook_execution(conn, "pb_manual_dupe", alert_id)
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        disabled = client.post(
+            "/playbooks/pb_manual_disabled/executions",
+            json={"alert_id": alert_id},
+        )
+        missing = client.post(
+            "/playbooks/pb_does_not_exist/executions",
+            json={"alert_id": alert_id},
+        )
+        duplicate = client.post(
+            "/playbooks/pb_manual_dupe/executions",
+            json={"alert_id": alert_id},
+        )
+
+    assert disabled.status_code == 409
+    assert missing.status_code == 404
+    assert duplicate.status_code == 409
+    assert duplicate.get_json()["execution_id"] == existing_id
+    cur.execute("SELECT COUNT(*) FROM playbook_executions WHERE playbook_id = 'pb_manual_dupe'")
+    assert cur.fetchone()[0] == 1
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_manual_playbook_execution_viewer_forbidden(client, postgres_db):
+    conn, cur = postgres_db
+    playbook_store.create_playbook_definition(
+        conn,
+        "pb_manual_viewer",
+        "Manual Viewer",
+        steps=_valid_steps(),
+        enabled=True,
+    )
+    alert_id = _insert_alert(cur)
+    conn.commit()
+
+    patchers = _login_role(
+        client,
+        username="manual_viewer",
+        password="vpass",
+        role="viewer",
+    )
+    try:
+        with _patched_app_db(conn):
+            resp = client.post(
+                "/playbooks/pb_manual_viewer/executions",
+                json={"alert_id": alert_id},
+            )
+    finally:
+        _stop_patchers(patchers)
+
+    assert resp.status_code == 403
+    cur.execute("SELECT COUNT(*) FROM playbook_executions WHERE playbook_id = 'pb_manual_viewer'")
+    assert cur.fetchone()[0] == 0
 
 
 # --- Executions list / detail ---

@@ -11,14 +11,14 @@ This is a design-only child spec. Creating these OpenSpec artifacts does not imp
 - [x] 1.7 Inspect enrichment helpers, AbuseIPDB/reputation helpers, MITRE enrichment, source-IP context, and alert context.
 - [x] 1.8 Document the smallest manual trigger and enrichment design in `design.md`.
 
-## 2. Future implementation scope (not started)
+## 2. Future implementation scope (completed)
 
-- [ ] 2.1 Add one authenticated manual execution API endpoint that accepts an enabled playbook and exactly one existing alert or incident target.
-- [ ] 2.2 Reuse existing execution store and canonical outcome linkage, adding manual trigger metadata and audit logging.
-- [ ] 2.3 Add a read-only `enrich_context` action to registry validation and executor handling.
-- [ ] 2.4 Reuse or extract existing source-IP context, MITRE, correlation, and reputation helpers for enrichment output.
-- [ ] 2.5 Add minimal UI launch affordances only for concrete alert or incident targets.
-- [ ] 2.6 Add focused backend and frontend tests listed in the validation plan.
+- [x] 2.1 Add one authenticated manual execution API endpoint that accepts an enabled playbook and exactly one existing alert or incident target.
+- [x] 2.2 Reuse existing execution store and canonical outcome linkage, adding manual trigger metadata and audit logging.
+- [x] 2.3 Add a read-only `enrich_context` action to registry validation and executor handling.
+- [x] 2.4 Reuse or extract existing source-IP context, MITRE, correlation, and reputation helpers for enrichment output.
+- [x] 2.5 Add minimal UI launch affordances only for concrete alert or incident targets.
+- [x] 2.6 Add focused backend and frontend tests listed in the validation plan.
 
 ## Safety Boundaries
 

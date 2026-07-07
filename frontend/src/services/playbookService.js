@@ -79,6 +79,23 @@ export async function getPlaybookExecution(executionId) {
   return data;
 }
 
+export async function launchPlaybookExecution(playbookId, target) {
+  const encoded = encodeURIComponent(playbookId);
+  const res = await fetch(buildSiemPath(`/playbooks/${encoded}/executions`), {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(target || {}),
+  });
+  const data = await parseJsonResponse(res, {});
+  if (!res.ok) {
+    throw new Error(
+      getApiErrorMessage(data, "Unable to launch playbook execution", ["error", "message"])
+    );
+  }
+  return data;
+}
+
 async function postExecutionControl(executionId, action, fallbackMessage) {
   const res = await fetch(buildSiemPath(`/playbook-executions/${executionId}/${action}`), {
     method: "POST",
