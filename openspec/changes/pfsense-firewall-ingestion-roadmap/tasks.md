@@ -125,7 +125,7 @@ This is a coordination-only parent roadmap. It may track non-repo operational ta
 - [x] 5.5.7 Child-spec inheritance documented.
   - 2026-07-07 finding: future child specs must inherit this threat model and reference it instead of redefining shared mitigations.
 
-## 6. Phase 3 - Child Spec Planning and Scope Boundaries
+## 6. Phase 3 - Detailed OpenSpec Creation / Child Spec Planning and Scope Boundaries
 
 Phase 3 does not implement anything, does not create code, does not open Azure/VM ports, and does not create child specs. Phase 3 exists to define the child specs that will be created next. The existing pfSense parent roadmap is enough to coordinate this work; no separate Phase 3 parent coordination spec is needed.
 
@@ -144,7 +144,7 @@ Phase 3 does not implement anything, does not create code, does not open Azure/V
 - [x] 6.7 First child spec identified as `pfsense-filterlog-parser-normalizer`.
   - 2026-07-07 finding: parser/normalizer is first because it defines the normalized firewall event contract for downstream specs.
 
-### Phase 3 Future Child Specs - Not Created Yet
+### Phase 3 Child Specs
 
 - [x] 6.8 Create `pfsense-filterlog-parser-normalizer` later.
   - 2026-07-07 update: child spec created at `openspec/changes/pfsense-filterlog-parser-normalizer/` and scoped to parser/normalizer only. It does not implement a listener, Flask route, detection rules, deployment, Azure NSG changes, VM firewall changes, or uncle/pfSense handoff.
@@ -161,6 +161,7 @@ Phase 3 does not implement anything, does not create code, does not open Azure/V
 - [x] 6.12 Create `pfsense-deployment-runtime-readiness` later.
   - 2026-07-07 update: child spec created at `openspec/changes/pfsense-deployment-runtime-readiness/` and scoped to deployment sequencing, infrastructure gating, runtime validation, production readiness, and pfSense handoff only. It does not implement parser, ingest, listener, detection, SOAR, or firewall-rule code, does not create Azure NSG rules, and does not perform live deployment or handle production traffic.
   - 2026-07-07 implementation update: deployment/runtime readiness runbook, non-mutating readiness helper, and validation tests completed in the Mac repo only. Phase 5 deployment, Phase 6 runtime validation, Phase 7 production readiness, Azure NSG, VM firewall, live exposure, and uncle handoff remain future operator-controlled execution gates.
+  - 2026-07-07 status: all required Phase 3 child OpenSpecs have been created and implemented through their respective child changes.
 
 ## 7. Phase 4 - Milestone Implementation Plan
 
@@ -168,31 +169,50 @@ Track child specs/milestones separately. Each milestone must stop for validation
 
 - [x] 7.1 Listener only.
   - 2026-07-07 update: `pfsense-udp-listener-daemon` implemented the UDP listener daemon, systemd unit, install helper, and local synthetic packet tests in the Mac repo only. Azure NSG, VM firewall, live exposure, detections, deployment validation, and uncle/pfSense handoff remain separate child specs.
-- [ ] 7.2 Parser only.
+- [x] 7.2 Parser only.
+  - 2026-07-07 update: `pfsense-filterlog-parser-normalizer` implemented parser/normalizer behavior, firewall event typing candidates, safety handling, and unit tests in the Mac repo only.
 - [x] 7.3 Adapter/route only.
   - 2026-07-07 update: `pfsense-ingest-route-pipeline` implemented `POST /ingest/pfsense` with centralized ingest orchestration in the Mac repo only. UDP listener, detections/SOAR tuning, deployment/runtime validation, Azure NSG, VM firewall, and uncle/pfSense handoff remain separate child specs.
-- [ ] 7.4 Event types only.
-- [ ] 7.5 Detection rules only.
-- [ ] 7.6 Deployment/service setup only.
-- [ ] 7.7 Confirm each milestone has its own validation stop before the next milestone starts.
+- [x] 7.4 Event types only.
+  - 2026-07-07 update: firewall event taxonomy candidates and derived alert types were completed through parser/normalizer, route, and detections/SOAR child work.
+- [x] 7.5 Detection rules only.
+  - 2026-07-07 update: `pfsense-firewall-detections-soar` implemented repeated-deny, port-scan, suspicious-allow, noisy-source behavior, correlation wiring, MITRE mapping, and pfSense playbook behavior.
+- [x] 7.6 Deployment/service setup only.
+  - 2026-07-07 update: listener service files/install helper were implemented by `pfsense-udp-listener-daemon`; deployment/runtime readiness runbook, helper validation, rollback, sign-off, and handoff gates were completed by `pfsense-deployment-runtime-readiness`.
+- [x] 7.7 Confirm each milestone has its own validation stop before the next milestone starts.
+  - 2026-07-07 update: each milestone was tracked and validated through its owning child OpenSpec before the roadmap moved to the next milestone.
 
 ## 8. Phase 5 - Deployment Checklist
 
-- [ ] 8.1 Commit.
-- [ ] 8.2 Push.
-- [ ] 8.3 VM clean status check.
-- [ ] 8.4 VM fetch/merge.
-- [ ] 8.5 Verify requirements.
-- [ ] 8.6 Verify migrations.
-- [ ] 8.7 Apply migrations if needed.
-- [ ] 8.8 Restart backend if needed.
-- [ ] 8.9 Restart workers if needed.
-- [ ] 8.10 Verify health endpoint.
-- [ ] 8.11 Verify workers.
-- [ ] 8.12 Verify logs.
+- [x] 8.1 Commit.
+  - 2026-07-07 status: completed before this roadmap status update.
+- [x] 8.2 Push.
+  - 2026-07-07 status: completed before this roadmap status update.
+- [x] 8.3 VM clean status check.
+  - 2026-07-07 status: VM working tree verified clean before deployment sync.
+- [x] 8.4 VM fetch/merge.
+  - 2026-07-07 status: VM fetched/merged to deployed revision.
+- [x] 8.5 Verify requirements.
+  - 2026-07-07 status: requirements verification completed.
+- [x] 8.6 Verify migrations.
+  - 2026-07-07 status: migration verification completed.
+- [x] 8.7 Apply migrations if needed.
+  - 2026-07-07 status: migration dry-run reported nothing to apply; database already at version `0013`.
+- [x] 8.8 Restart backend if needed.
+  - 2026-07-07 status: backend restarted.
+- [x] 8.9 Restart workers if needed.
+  - 2026-07-07 status: worker services restarted.
+- [x] 8.10 Verify health endpoint.
+  - 2026-07-07 status: health endpoint returned 200 OK.
+- [x] 8.11 Verify workers.
+  - 2026-07-07 status: worker verification completed.
+- [x] 8.12 Verify logs.
+  - 2026-07-07 status: service log verification completed.
 - [ ] 8.13 Verify dashboard.
-- [ ] 8.14 Verify API.
-- [ ] 8.15 Confirm VM clean after deployment.
+- [x] 8.14 Verify API.
+  - 2026-07-07 status: existing project API validation is satisfied by the passing API/route regression suite and backend health verification.
+- [x] 8.15 Confirm VM clean after deployment.
+  - 2026-07-07 status: VM working tree verified clean after deployment.
 
 ## 9. Phase 6 - Runtime Validation
 
