@@ -155,8 +155,10 @@ Phase 3 does not implement anything, does not create code, does not open Azure/V
 - [x] 6.10 Create `pfsense-udp-listener-daemon` later.
   - 2026-07-07 update: child spec created at `openspec/changes/pfsense-udp-listener-daemon/` and scoped to listener daemon only. It does not implement detections, Azure NSG changes, VM firewall changes, live external exposure, or uncle/pfSense handoff.
   - 2026-07-07 implementation update: listener engine, daemon entrypoint, systemd unit, install helper, and synthetic UDP tests completed in the Mac repo only. Detections, deployment/runtime readiness, Azure NSG, VM firewall, live exposure, and uncle/pfSense handoff remain separate future child specs.
-- [ ] 6.11 Create `pfsense-firewall-detections-soar` later.
-- [ ] 6.12 Create `pfsense-deployment-runtime-readiness` later.
+- [x] 6.11 Create `pfsense-firewall-detections-soar` later.
+  - 2026-07-07 update: child spec created at `openspec/changes/pfsense-firewall-detections-soar/` and scoped to firewall detections and SOAR behavior only after pfSense events have already entered centralized ingest. It does not implement parser, UDP listener, `/ingest/pfsense`, Azure NSG, VM firewall, systemd, deployment, runtime validation, or uncle/pfSense handoff.
+- [x] 6.12 Create `pfsense-deployment-runtime-readiness` later.
+  - 2026-07-07 update: child spec created at `openspec/changes/pfsense-deployment-runtime-readiness/` and scoped to deployment sequencing, infrastructure gating, runtime validation, production readiness, and pfSense handoff only. It does not implement parser, ingest, listener, detection, SOAR, or firewall-rule code, does not create Azure NSG rules, and does not perform live deployment or handle production traffic.
 
 ## 7. Phase 4 - Milestone Implementation Plan
 
