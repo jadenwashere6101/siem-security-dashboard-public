@@ -151,6 +151,7 @@ Phase 3 does not implement anything, does not create code, does not open Azure/V
   - 2026-07-07 implementation update: parser/normalizer implementation and unit tests completed in the Mac repo only. Listener, route, detections, deployment, Azure NSG, VM firewall, and uncle/pfSense handoff remain separate future child specs.
 - [x] 6.9 Create `pfsense-ingest-route-pipeline` later.
   - 2026-07-07 update: child spec created at `openspec/changes/pfsense-ingest-route-pipeline/` and scoped to backend route/pipeline only. It does not implement a listener, detection rules, deployment, Azure NSG changes, VM firewall changes, or uncle/pfSense handoff.
+  - 2026-07-07 implementation update: `POST /ingest/pfsense` route, validation helper, and API tests completed in the Mac repo only. UDP listener, detections, deployment, Azure NSG, VM firewall, and uncle/pfSense handoff remain separate future child specs.
 - [ ] 6.10 Create `pfsense-udp-listener-daemon` later.
 - [ ] 6.11 Create `pfsense-firewall-detections-soar` later.
 - [ ] 6.12 Create `pfsense-deployment-runtime-readiness` later.
@@ -161,7 +162,8 @@ Track child specs/milestones separately. Each milestone must stop for validation
 
 - [ ] 7.1 Listener only.
 - [ ] 7.2 Parser only.
-- [ ] 7.3 Adapter/route only.
+- [x] 7.3 Adapter/route only.
+  - 2026-07-07 update: `pfsense-ingest-route-pipeline` implemented `POST /ingest/pfsense` with centralized ingest orchestration in the Mac repo only. UDP listener, detections/SOAR tuning, deployment/runtime validation, Azure NSG, VM firewall, and uncle/pfSense handoff remain separate child specs.
 - [ ] 7.4 Event types only.
 - [ ] 7.5 Detection rules only.
 - [ ] 7.6 Deployment/service setup only.

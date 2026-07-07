@@ -20,6 +20,13 @@ ACTION_SEVERITIES = {
     "pass": "low",
 }
 
+PFSENSE_INGEST_EVENT_TYPES = frozenset(ACTION_EVENT_TYPE_CANDIDATES.values())
+PFSENSE_VALID_ACTIONS = frozenset(ACTION_EVENT_TYPE_CANDIDATES.keys())
+PFSENSE_VALID_PROTOCOLS = frozenset({"tcp", "udp"})
+PFSENSE_VALID_DIRECTIONS = frozenset({"in", "out"})
+PFSENSE_VALID_SEVERITIES = frozenset({"low", "medium", "high", "critical"})
+MAX_PFSENSE_INGEST_BYTES = 65536
+
 
 def parse_pfsense_filterlog_packet(packet, *, environment="prod", event_timestamp=None, sender_ip=None):
     byte_length = _packet_byte_length(packet)
@@ -264,3 +271,124 @@ def _bounded_summary(value):
     if not summary:
         return None
     return summary[:MAX_SUMMARY_CHARS]
+
+
+def validate_pfsense_normalized_event(data):
+    if not isinstance(data, dict):
+        raise ValueError("Invalid JSON")
+
+    required_fields = (
+        "event_type",
+        "severity",
+        "source_ip",
+        "source",
+        "source_type",
+        "message",
+        "app_name",
+        "environment",
+        "raw_payload",
+    )
+    for field_name in required_fields:
+        value = data.get(field_name)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            raise ValueError("Missing required fields")
+
+    event_type = str(data.get("event_type")).strip()
+    if event_type not in PFSENSE_INGEST_EVENT_TYPES:
+        raise ValueError("Invalid event_type")
+
+    severity = str(data.get("severity")).strip().lower()
+    if severity not in PFSENSE_VALID_SEVERITIES:
+        raise ValueError("Invalid severity")
+
+    source = str(data.get("source")).strip()
+    source_type = str(data.get("source_type")).strip()
+    if source != "pfsense" or source_type != "firewall":
+        raise ValueError("Invalid source fields")
+
+    source_ip = _validated_ip(data.get("source_ip"))
+    if source_ip is None:
+        raise ValueError("Invalid source_ip")
+
+    raw_payload = data.get("raw_payload")
+    if not isinstance(raw_payload, dict):
+        raise ValueError("Invalid raw_payload")
+
+    _validate_pfsense_raw_payload(raw_payload, event_type)
+
+    return {
+        "event_type": event_type,
+        "severity": severity,
+        "source_ip": source_ip,
+        "source": source,
+        "source_type": source_type,
+        "event_timestamp": data.get("event_timestamp"),
+        "message": str(data.get("message")).strip(),
+        "app_name": str(data.get("app_name")).strip(),
+        "environment": sanitize_pfsense_text(data.get("environment")) or "prod",
+        "raw_payload": raw_payload,
+    }
+
+
+def _validate_pfsense_raw_payload(raw_payload, event_type):
+    required_fields = (
+        "action",
+        "interface",
+        "direction",
+        "ip_version",
+        "protocol",
+        "source_ip",
+        "destination_ip",
+    )
+    for field_name in required_fields:
+        if field_name not in raw_payload:
+            raise ValueError("Invalid raw_payload")
+
+    action = _clean(raw_payload.get("action")).lower()
+    if action not in PFSENSE_VALID_ACTIONS:
+        raise ValueError("Invalid raw_payload")
+    if ACTION_EVENT_TYPE_CANDIDATES.get(action) != event_type:
+        raise ValueError("Invalid raw_payload")
+
+    interface = _clean(raw_payload.get("interface"))
+    if not interface:
+        raise ValueError("Invalid raw_payload")
+
+    direction = raw_payload.get("direction")
+    if direction is not None:
+        direction_text = _clean(direction).lower()
+        if direction_text and direction_text not in PFSENSE_VALID_DIRECTIONS:
+            raise ValueError("Invalid raw_payload")
+
+    ip_version = _clean(raw_payload.get("ip_version"))
+    if ip_version != "4":
+        raise ValueError("Invalid raw_payload")
+
+    protocol = _clean(raw_payload.get("protocol")).lower()
+    if protocol not in PFSENSE_VALID_PROTOCOLS:
+        raise ValueError("Invalid raw_payload")
+
+    if _validated_ip(raw_payload.get("source_ip")) is None:
+        raise ValueError("Invalid raw_payload")
+    if _validated_ip(raw_payload.get("destination_ip")) is None:
+        raise ValueError("Invalid raw_payload")
+
+    for port_field in ("source_port", "destination_port"):
+        if port_field not in raw_payload:
+            continue
+        port_value = raw_payload.get(port_field)
+        if port_value is None:
+            continue
+        if _optional_port(port_value) is None:
+            raise ValueError("Invalid raw_payload")
+
+    for identifier_field in ("rule_id", "tracker"):
+        if identifier_field not in raw_payload:
+            continue
+        identifier_value = raw_payload.get(identifier_field)
+        if identifier_value is None:
+            continue
+        if not isinstance(identifier_value, (str, int)):
+            raise ValueError("Invalid raw_payload")
+        if isinstance(identifier_value, str) and not sanitize_pfsense_text(identifier_value):
+            raise ValueError("Invalid raw_payload")

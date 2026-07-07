@@ -9,6 +9,10 @@ from adapters.azure_insights_adapter import (
 )
 from adapters.nginx_adapter import parse_nginx_access_log_line
 from adapters.otel_adapter import normalize_otel_telemetry
+from adapters.pfsense_filterlog_adapter import (
+    MAX_PFSENSE_INGEST_BYTES,
+    validate_pfsense_normalized_event,
+)
 from helpers.api_guards import require_api_key, require_azure_api_key, require_otel_api_key
 from core.db import get_db_connection
 from core.extensions import limiter
@@ -693,6 +697,84 @@ def add_otel_event():
         if conn:
             conn.rollback()
         current_app.logger.error("Error in add_otel_event: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+
+@ingest_bp.route("/ingest/pfsense", methods=["POST"])
+def add_pfsense_event():
+    api_key_error = require_api_key()
+    if api_key_error:
+        return api_key_error
+
+    content_length = request.content_length
+    if content_length is not None and content_length > MAX_PFSENSE_INGEST_BYTES:
+        return jsonify({"error": "Payload too large"}), 413
+
+    request_data = request.get_data()
+    if len(request_data) > MAX_PFSENSE_INGEST_BYTES:
+        return jsonify({"error": "Payload too large"}), 413
+
+    conn = None
+    cur = None
+
+    try:
+        data = request.get_json()
+        if not isinstance(data, dict):
+            return jsonify({"error": "Invalid JSON"}), 400
+
+        try:
+            normalized_event = validate_pfsense_normalized_event(data)
+        except ValueError as error:
+            return jsonify({"error": str(error)}), 400
+
+        _add_location_to_normalized_event(normalized_event)
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        alerts_created = ingest_normalized_event(normalized_event, conn, cur)
+
+        conn.commit()
+
+        playbook_result = _create_playbook_executions_for_alerts(alerts_created, conn)
+        playbook_claimed_alert_ids = _playbook_claimed_alert_ids(playbook_result)
+
+        try:
+            enqueue_committed_alerts(
+                alerts_created,
+                conn,
+                exclude_alert_ids=playbook_claimed_alert_ids,
+            )
+            conn.commit()
+        except Exception as enqueue_error:
+            current_app.logger.error(
+                "[SOAR ENQUEUE ERROR] Post-commit enqueue failed — ingest was committed: %s",
+                enqueue_error,
+            )
+
+        try:
+            _create_incidents_for_alerts(alerts_created, conn)
+            conn.commit()
+        except Exception as incident_error:
+            current_app.logger.error(
+                "[SOAR INCIDENT FAILED] Post-commit incident creation failed — ingest was committed: %s | alerts=%s",
+                incident_error,
+                [(a.get("alert_id"), a.get("source_ip"), a.get("severity")) for a in alerts_created],
+            )
+
+        return jsonify({
+            "message": "pfSense event ingested successfully",
+            "alerts_created": alerts_created,
+        }), 201
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        current_app.logger.error("Error in add_pfsense_event: %s", error)
         return jsonify({"error": "Internal server error"}), 500
     finally:
         if cur:
