@@ -67,21 +67,46 @@ This is a coordination-only parent roadmap. It may track non-repo operational ta
 
 ## 5. Phase 2 - Security Review
 
-- [ ] 5.1 Create Azure NSG rule plan.
-- [ ] 5.2 Create VM firewall rule plan.
-- [ ] 5.3 Make UDP exposure decision.
-- [ ] 5.4 Define source IP allow-list.
-- [ ] 5.5 Define expected pfSense public IP handling.
-- [ ] 5.6 Define packet size limit.
-- [ ] 5.7 Define malformed syslog handling.
-- [ ] 5.8 Define malformed UTF-8 handling.
-- [ ] 5.9 Define control-character stripping.
-- [ ] 5.10 Define rate limiting.
-- [ ] 5.11 Review spoofing/replay considerations.
-- [ ] 5.12 Define logging/monitoring.
-- [ ] 5.13 Complete DoS/storage-risk review.
-- [ ] 5.14 Complete data retention and privacy review.
-- [ ] 5.15 Confirm what to tell uncle about where logs are stored.
+- [x] 5.1 Create Azure NSG rule plan.
+  - 2026-07-07 decision: Azure NSG must be the primary network allow-list layer. No Azure NSG rule should be opened until the listener is implemented and locally tested with synthetic packets. Eventual inbound rule must restrict UDP listener traffic to the expected pfSense public IP if possible; do not use `Any` source unless explicitly accepted as a temporary test exception with cleanup/removal task.
+- [x] 5.2 Create VM firewall rule plan.
+  - 2026-07-07 finding: UFW is inactive; iptables/ip6tables exist; INPUT policy is ACCEPT with no custom inbound restrictions shown; Docker-related FORWARD chains exist. VM-local filtering should be considered defense-in-depth but must not be assumed to already protect the listener. Do not implement VM firewall rules in Phase 2.
+- [x] 5.3 Make UDP exposure decision.
+  - 2026-07-07 decision: prefer a high unprivileged UDP port such as 5514 instead of privileged UDP 514 unless pfSense cannot send to a custom port. UDP 514 is currently unused and reserved.
+- [x] 5.4 Define source IP allow-list.
+  - 2026-07-07 decision: listener/adapter must validate packet sender source IP against an allow-list before parsing/ingest; unexpected sources must be rejected before parsing, with rejected counts logged/metriced without full attacker-controlled payload storage.
+- [x] 5.5 Define expected pfSense public IP handling.
+  - 2026-07-07 decision: allow-list must include the expected pfSense public IP. Final pfSense public IP confirmation remains a future gate before Azure NSG changes or uncle handoff.
+- [x] 5.6 Define packet size limit.
+  - 2026-07-07 decision: define maximum UDP packet length before parsing; recommended initial limit is 4096 bytes unless implementation audit justifies another value. Oversized packets must be rejected or truncated before parsing.
+- [x] 5.7 Define malformed syslog handling.
+  - 2026-07-07 decision: malformed syslog/filterlog lines must not crash the listener. Count/log malformed lines and either reject or store only sanitized parse-failure telemetry depending on child spec decision.
+- [x] 5.8 Define malformed UTF-8 handling.
+  - 2026-07-07 decision: decode syslog as UTF-8 with strict or safe replacement behavior, but never crash on malformed UTF-8.
+- [x] 5.9 Define control-character stripping.
+  - 2026-07-07 decision: strip unsafe control characters before logging/storing while preserving enough parseable context for debugging.
+- [x] 5.10 Define rate limiting.
+  - 2026-07-07 decision: UDP syslog is unauthenticated and spoofable, so listener/application-level rate limiting is required. Include per-source and global bounds if possible.
+- [x] 5.11 Review spoofing/replay considerations.
+  - 2026-07-07 decision: treat source IP allow-list and Azure NSG restriction as mandatory controls, but still assume UDP can be spoofed/noisy. Avoid unbounded DB writes from malformed or repeated noise.
+- [x] 5.12 Define logging/monitoring.
+  - 2026-07-07 decision: log/metric accepted packets, rejected source IP counts, malformed counts, oversized counts, parser failures, and ingest failures without storing full attacker-controlled payloads by default.
+- [x] 5.13 Complete DoS/storage-risk review.
+  - 2026-07-07 decision: storage growth must be monitored. Prefer normalized event storage over raw full-payload retention and avoid unbounded writes from malformed or repeated noise.
+- [x] 5.14 Complete data retention and privacy review.
+  - 2026-07-07 decision: pfSense logs may contain real business network metadata. Logs will be stored on the Azure VM in the SIEM PostgreSQL database. Decide later whether raw syslog is retained temporarily, redacted, or dropped after parsing.
+- [x] 5.15 Confirm what to tell uncle about where logs are stored.
+  - 2026-07-07 decision: before asking uncle to configure pfSense, tell him logs are stored on the Azure VM in the SIEM PostgreSQL database and describe what types of firewall logs are being sent.
+
+### Phase 2 Future Gates - Not Executed In Parent Roadmap
+
+- [ ] 5.16 Confirm final listener port selection, including whether pfSense supports the selected custom port.
+- [ ] 5.17 If pfSense requires UDP 514, document the privilege/capability plan before implementation.
+- [ ] 5.18 Confirm expected pfSense public IP for Azure NSG and listener allow-list.
+- [ ] 5.19 Create Azure NSG rule later only after listener implementation and local synthetic packet testing.
+- [ ] 5.20 Decide later whether to add VM firewall defense-in-depth rules for the selected UDP port.
+- [ ] 5.21 If a temporary broader Azure NSG source is approved for testing, add an explicit cleanup/removal task.
+- [ ] 5.22 Draft uncle handoff message later, after deployment/runtime validation gates pass.
 
 ## 6. Phase 3 - Detailed OpenSpec Creation
 
