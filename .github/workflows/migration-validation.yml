@@ -124,16 +124,24 @@ jobs:
       - name: Install PostgreSQL client
         run: |
           set -euo pipefail
+          shopt -s nullglob
 
-          for source_file in /etc/apt/sources.list /etc/apt/sources.list.d/*; do
+          if [[ -f /etc/apt/sources.list.d/azure-cli.sources ]]; then
+            echo "Disabling Azure CLI apt source: /etc/apt/sources.list.d/azure-cli.sources"
+            sudo mv /etc/apt/sources.list.d/azure-cli.sources \
+              /etc/apt/sources.list.d/azure-cli.sources.disabled
+          fi
+
+          apt_source_files=(/etc/apt/sources.list /etc/apt/sources.list.d/*)
+          for source_file in "${apt_source_files[@]}"; do
             [[ -f "$source_file" ]] || continue
-            if sudo grep -q "packages.microsoft.com/repos/azure-cli" "$source_file"; then
-              echo "Disabling broken azure-cli apt source in ${source_file}"
+            if sudo grep -q "packages.microsoft.com" "$source_file"; then
+              echo "Disabling Microsoft apt source in ${source_file}"
               if [[ "$source_file" == *.sources ]]; then
                 sudo mv "$source_file" "${source_file}.disabled"
               else
                 sudo sed -i.bak \
-                  '/packages.microsoft.com\/repos\/azure-cli/s/^/# disabled for migration validation CI: /' \
+                  '/packages.microsoft.com/s/^/# disabled for migration validation CI: /' \
                   "$source_file"
               fi
             fi
