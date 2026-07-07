@@ -1,0 +1,36 @@
+[Unit]
+Description=pfSense UDP Syslog Listener Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jaden
+Group=jaden
+WorkingDirectory=/home/jaden/siem-security-dashboard
+EnvironmentFile=/home/jaden/siem-security-dashboard/.env
+Environment=PYTHONUNBUFFERED=1
+# Listener configuration (override in .env as needed):
+# PFSENSE_LISTENER_BIND_HOST=0.0.0.0
+# PFSENSE_LISTENER_PORT=5514
+# PFSENSE_ALLOWED_SOURCE_IPS=<expected-pfsense-public-ip>
+# PFSENSE_BACKEND_URL=http://127.0.0.1:5051/ingest/pfsense
+# PFSENSE_INGEST_API_KEY=<ingest-api-key>
+# PFSENSE_API_KEY_HEADER=X-API-Key
+# PFSENSE_MAX_PACKET_BYTES=4096
+# PFSENSE_GLOBAL_RATE_LIMIT=200
+# PFSENSE_PER_SOURCE_RATE_LIMIT=50
+# PFSENSE_RATE_LIMIT_WINDOW_SECONDS=1.0
+# PFSENSE_BACKEND_TIMEOUT_SECONDS=5.0
+# PFSENSE_RECV_TIMEOUT_SECONDS=1.0
+# PFSENSE_ENVIRONMENT=prod
+ExecStart=/home/jaden/siem-security-dashboard/venv/bin/python3 /home/jaden/siem-security-dashboard/scripts/pfsense_syslog_listener_daemon.py --log-level INFO
+Restart=on-failure
+RestartSec=15
+KillSignal=SIGTERM
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
