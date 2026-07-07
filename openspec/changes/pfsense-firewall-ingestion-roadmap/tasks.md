@@ -125,24 +125,32 @@ This is a coordination-only parent roadmap. It may track non-repo operational ta
 - [x] 5.5.7 Child-spec inheritance documented.
   - 2026-07-07 finding: future child specs must inherit this threat model and reference it instead of redefining shared mitigations.
 
-## 6. Phase 3 - Detailed OpenSpec Creation
+## 6. Phase 3 - Child Spec Planning and Scope Boundaries
 
-- [ ] 6.1 Create actual child implementation specs only after Phase 0 and Phase 1 audits are complete.
-- [ ] 6.2 Ensure listener flow documents:
-  - listener
-  - validate source IP
-  - validate packet length
-  - strip control characters
-  - reject malformed syslog
-  - parse pfSense filterlog
-  - normalize
-  - validate schema
-  - ingest
-  - detection engine
-  - SOAR/playbooks
-- [ ] 6.3 Include explicit acceptance criteria in each child spec.
-- [ ] 6.4 Include explicit validation plan in each child spec.
-- [ ] 6.5 Confirm child specs do not skip security/deployment prerequisites.
+Phase 3 does not implement anything, does not create code, does not open Azure/VM ports, and does not create child specs. Phase 3 exists to define the child specs that will be created next. The existing pfSense parent roadmap is enough to coordinate this work; no separate Phase 3 parent coordination spec is needed.
+
+- [x] 6.1 Phase 3 remodeled inside parent roadmap.
+  - 2026-07-07 finding: Phase 3 now defines the five future child specs and scope boundaries in `phase-3-child-spec-plan.md`.
+- [x] 6.2 Child spec categories recorded.
+  - 2026-07-07 finding: child specs are categorized as CODE SPEC, CODE + DEPLOYMENT SPEC, or NON-CODE + DEPLOYMENT SPEC.
+- [x] 6.3 Code vs non-code/operator topics recorded.
+  - 2026-07-07 finding: each child spec has explicit implementation and operator/deployment boundaries.
+- [x] 6.4 Sequencing recorded.
+  - 2026-07-07 finding: sequence is parser/normalizer, ingest route, UDP listener, detections/SOAR, deployment/runtime readiness.
+- [x] 6.5 Dependencies recorded.
+  - 2026-07-07 finding: ingest route depends on parser contract; UDP listener depends on parser and route contracts; detections/SOAR depend on stable taxonomy; deployment depends on code specs.
+- [x] 6.6 No separate Phase 3 parent spec needed.
+  - 2026-07-07 finding: existing parent roadmap will track the five child specs.
+- [x] 6.7 First child spec identified as `pfsense-filterlog-parser-normalizer`.
+  - 2026-07-07 finding: parser/normalizer is first because it defines the normalized firewall event contract for downstream specs.
+
+### Phase 3 Future Child Specs - Not Created Yet
+
+- [ ] 6.8 Create `pfsense-filterlog-parser-normalizer` later.
+- [ ] 6.9 Create `pfsense-ingest-route-pipeline` later.
+- [ ] 6.10 Create `pfsense-udp-listener-daemon` later.
+- [ ] 6.11 Create `pfsense-firewall-detections-soar` later.
+- [ ] 6.12 Create `pfsense-deployment-runtime-readiness` later.
 
 ## 7. Phase 4 - Milestone Implementation Plan
 
