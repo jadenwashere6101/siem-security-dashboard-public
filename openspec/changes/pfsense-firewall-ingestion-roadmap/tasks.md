@@ -48,14 +48,22 @@ This is a coordination-only parent roadmap. It may track non-repo operational ta
 
 ## 4. Phase 1 - Architecture Audit
 
-- [ ] 4.1 Decide where listener should live.
-- [ ] 4.2 Decide daemon vs one-shot service.
-- [ ] 4.3 Decide POST-to-Flask vs direct ingest pattern.
-- [ ] 4.4 Audit reusable systemd patterns.
-- [ ] 4.5 Audit reusable adapter utilities.
-- [ ] 4.6 Audit parser/sanitization helpers.
-- [ ] 4.7 Audit validation and normalization functions.
-- [ ] 4.8 Define exact ingestion flow.
+- [x] 4.1 Decide where listener should live.
+  - 2026-07-07 finding: future child spec should place the UDP listener outside Flask as a repo-owned script/daemon, with reusable parser/normalizer code in an adapter module. Do not bind UDP 514 inside the Flask app.
+- [x] 4.2 Decide daemon vs one-shot service.
+  - 2026-07-07 finding: listener should be a long-running `Type=simple` systemd daemon, not a one-shot/timer. UDP packet listening is continuous runtime behavior.
+- [x] 4.3 Decide POST-to-Flask vs direct ingest pattern.
+  - 2026-07-07 finding: recommended pattern is listener parses/normalizes/validates and POSTs to a future Flask `/ingest/pfsense` route with an ingest API key. Avoid direct DB ingest from the listener so post-commit playbook, queue, incident, and response orchestration remain centralized in backend route logic.
+- [x] 4.4 Audit reusable systemd patterns.
+  - 2026-07-07 finding: reuse `deploy/systemd/soar-playbook-worker.service` as the daemon template and `scripts/install_soar_playbook_worker_service.sh` as the install/update/rollback template. Reuse `scripts/deploy_backend_vm.sh` health/migration preflight style for deployment validation.
+- [x] 4.5 Audit reusable adapter utilities.
+  - 2026-07-07 finding: active ingest adapters are narrow parser/normalizer modules under `adapters/`; future pfSense code should follow that style rather than integration-action adapter style under `integrations/`.
+- [x] 4.6 Audit parser/sanitization helpers.
+  - 2026-07-07 finding: no generic syslog parser/control-character sanitizer exists. Future child specs must add focused helpers for packet length, source allow-list, UTF-8 handling, control-character stripping, syslog envelope validation, and pfSense filterlog parsing.
+- [x] 4.7 Audit validation and normalization functions.
+  - 2026-07-07 finding: reuse IP validation patterns, `helpers/ingest_normalizers`, and `engines/ingest_engine.ingest_normalized_event`. Existing port-scan detection reads destination ports from `raw_payload.destination_port`, `dest_port`, `dst_port`, or `port`.
+- [x] 4.8 Define exact ingestion flow.
+  - 2026-07-07 finding: recommended flow is listener -> source IP allow-list -> packet length limit -> UTF-8 decode policy -> strip unsafe control characters -> validate syslog envelope -> parse pfSense filterlog -> normalize to `source=pfsense`, `source_type=firewall`, event type, IPs, protocol, direction, interface, action, destination port -> validate schema -> POST to `/ingest/pfsense` -> `ingest_normalized_event` -> detection/correlation -> playbook/SOAR orchestration.
 
 ## 5. Phase 2 - Security Review
 
