@@ -300,7 +300,7 @@ def _post_webhook_request(
 # spec: SPEC-INTEG-005 / SPEC-UI-004 - guarded real webhook path only; simulation-safe remains default.
 class WebhookSimulationAdapter(BaseIntegration):
     adapter_name = "webhook"
-    supported_actions = frozenset({"post_event", "send_webhook", "notify_webhook"})
+    supported_actions = frozenset({"post_event", "send_webhook", "notify_webhook", "test_notification"})
     allow_real_mode = True
 
     def _simulate(self, action, params, context):

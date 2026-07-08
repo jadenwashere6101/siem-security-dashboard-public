@@ -8,7 +8,9 @@ import {
   enableHalfOpenIntegrationCircuitBreaker,
   forceOpenIntegrationCircuitBreaker,
   getIntegrationStatus,
+  getNotificationReadiness,
   resetIntegrationCircuitBreaker,
+  sendNotificationTest,
 } from "../services/integrationService";
 
 jest.mock("../utils/sessionIdentity", () => ({
@@ -17,9 +19,11 @@ jest.mock("../utils/sessionIdentity", () => ({
 
 jest.mock("../services/integrationService", () => ({
   getIntegrationStatus: jest.fn(),
+  getNotificationReadiness: jest.fn(),
   resetIntegrationCircuitBreaker: jest.fn(),
   forceOpenIntegrationCircuitBreaker: jest.fn(),
   enableHalfOpenIntegrationCircuitBreaker: jest.fn(),
+  sendNotificationTest: jest.fn(),
 }));
 
 const styleProps = {
@@ -88,8 +92,67 @@ const sampleStatusSingleAdapter = {
   adapters: [sampleStatus.adapters[0]],
 };
 
+const sampleReadiness = {
+  providers: [
+    {
+      provider: "slack",
+      label: "Slack",
+      configured: true,
+      missing_configuration: [],
+      tested: "passed",
+      ready: true,
+      last_test_at: "2026-07-08T00:00:00+00:00",
+      last_test_status: "success",
+      last_test_message: null,
+    },
+    {
+      provider: "teams",
+      label: "Teams",
+      configured: true,
+      missing_configuration: [],
+      tested: "never_tested",
+      ready: false,
+      last_test_at: "2026-07-08T00:01:00+00:00",
+      last_test_status: "blocked",
+      last_test_message: "Teams real mode failed closed: blocked by guard.",
+    },
+    {
+      provider: "email",
+      label: "Email",
+      configured: false,
+      missing_configuration: ["SMTP_PASSWORD"],
+      tested: "failed",
+      ready: false,
+      last_test_at: "2026-07-08T00:02:00+00:00",
+      last_test_status: "failed",
+      last_test_message: "Email test failed.",
+    },
+    {
+      provider: "webhook",
+      label: "Webhook",
+      configured: true,
+      missing_configuration: [],
+      tested: "never_tested",
+      ready: false,
+      last_test_at: null,
+      last_test_status: null,
+      last_test_message: null,
+    },
+  ],
+};
+
 beforeEach(() => {
   jest.clearAllMocks();
+  getNotificationReadiness.mockResolvedValue(sampleReadiness);
+  sendNotificationTest.mockResolvedValue({
+    provider: "slack",
+    label: "Slack",
+    configured: true,
+    tested: "passed",
+    ready: true,
+    outcome: "success",
+    message: "Slack real-mode notification sent.",
+  });
   readStoredSessionIdentity.mockReturnValue({
     authenticated: true,
     role: "analyst",
@@ -112,7 +175,7 @@ test("shows loading state while request is in flight", async () => {
   expect(screen.getByText("Execution Safety Model")).toBeInTheDocument();
 
   await waitFor(() => {
-    expect(screen.getByText("Slack")).toBeInTheDocument();
+    expect(screen.getAllByText("Slack").length).toBeGreaterThan(0);
   });
 });
 
@@ -172,12 +235,87 @@ test("operational summary shows mode, simulation safety, delivery, and readiness
   expect(screen.getByText("disabled", { exact: true })).toBeInTheDocument();
 });
 
+test("notification readiness renders providers, outcomes, and excludes firewall", async () => {
+  getIntegrationStatus.mockResolvedValueOnce(sampleStatus);
+
+  render(<IntegrationStatusPanel {...styleProps} />);
+
+  expect(await screen.findByText("Notification readiness")).toBeInTheDocument();
+  expect(screen.getAllByText("Slack").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("Teams").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("Email").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("Webhook").length).toBeGreaterThan(0);
+  expect(screen.queryByText("Firewall", { selector: "span" })).not.toBeInTheDocument();
+  expect(screen.getAllByText("Passed").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("Failed").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("Never Tested (Guard Blocked)").length).toBeGreaterThan(0);
+  expect(screen.getByText("SMTP_PASSWORD")).toBeInTheDocument();
+  expect(screen.getByText("Teams real mode failed closed: blocked by guard.")).toBeInTheDocument();
+});
+
+test("notification readiness disables test button when provider is not configured", async () => {
+  getIntegrationStatus.mockResolvedValueOnce(sampleStatus);
+  readStoredSessionIdentity.mockReturnValue({
+    authenticated: true,
+    role: "super_admin",
+    username: "admin",
+  });
+
+  render(<IntegrationStatusPanel {...styleProps} />);
+
+  expect(await screen.findByText("Notification readiness")).toBeInTheDocument();
+  const buttons = screen.getAllByRole("button", { name: "Test" });
+  expect(buttons[2]).toBeDisabled();
+  expect(screen.getByText("Not Configured")).toBeInTheDocument();
+});
+
+test("notification test requires confirmation before sending", async () => {
+  getIntegrationStatus.mockResolvedValue(sampleStatus);
+  getNotificationReadiness.mockResolvedValue(sampleReadiness);
+  readStoredSessionIdentity.mockReturnValue({
+    authenticated: true,
+    role: "super_admin",
+    username: "admin",
+  });
+  const confirmSpy = jest.spyOn(window, "confirm").mockReturnValueOnce(false);
+
+  render(<IntegrationStatusPanel {...styleProps} />);
+
+  expect(await screen.findByText("Notification readiness")).toBeInTheDocument();
+  await userEvent.click(screen.getAllByRole("button", { name: "Test" })[0]);
+
+  expect(confirmSpy).toHaveBeenCalledWith(
+    "Send one manual readiness test notification to Slack?"
+  );
+  expect(sendNotificationTest).not.toHaveBeenCalled();
+});
+
+test("notification test sends and refreshes after confirmation", async () => {
+  getIntegrationStatus.mockResolvedValue(sampleStatus);
+  getNotificationReadiness.mockResolvedValue(sampleReadiness);
+  readStoredSessionIdentity.mockReturnValue({
+    authenticated: true,
+    role: "super_admin",
+    username: "admin",
+  });
+  jest.spyOn(window, "confirm").mockReturnValueOnce(true);
+
+  render(<IntegrationStatusPanel {...styleProps} />);
+
+  expect(await screen.findByText("Notification readiness")).toBeInTheDocument();
+  await userEvent.click(screen.getAllByRole("button", { name: "Test" })[0]);
+
+  await waitFor(() => expect(sendNotificationTest).toHaveBeenCalledWith("slack"));
+  expect(await screen.findByText("Slack real-mode notification sent.")).toBeInTheDocument();
+  expect(getNotificationReadiness).toHaveBeenCalledTimes(2);
+});
+
 test("each integration card shows operational fields, description, and supported actions", async () => {
   getIntegrationStatus.mockResolvedValueOnce(sampleStatus);
 
   render(<IntegrationStatusPanel {...styleProps} />);
 
-  expect(await screen.findByText("Slack")).toBeInTheDocument();
+  expect((await screen.findAllByText("Slack")).length).toBeGreaterThan(0);
   expect(screen.getByText(/Slack incoming webhook/i)).toBeInTheDocument();
   expect(screen.getByText("14 core playbooks")).toBeInTheDocument();
   expect(screen.getAllByText("Ready for real mode").length).toBeGreaterThanOrEqual(1);
@@ -185,7 +323,7 @@ test("each integration card shows operational fields, description, and supported
   expect(screen.getAllByText("Last delivery").length).toBeGreaterThanOrEqual(1);
   expect(screen.getAllByText("Last tested").length).toBeGreaterThanOrEqual(1);
   expect(screen.getByText("send_message")).toBeInTheDocument();
-  expect(screen.getByText("Email")).toBeInTheDocument();
+  expect(screen.getAllByText("Email").length).toBeGreaterThan(0);
   expect(screen.getByText("send_email")).toBeInTheDocument();
 });
 
@@ -215,7 +353,7 @@ test("shows missing env variable names without secret values", async () => {
 
   render(<IntegrationStatusPanel {...styleProps} />);
 
-  expect(await screen.findByText("Teams")).toBeInTheDocument();
+  expect((await screen.findAllByText("Teams")).length).toBeGreaterThan(0);
   expect(screen.getByText("Missing config")).toBeInTheDocument();
   expect(screen.getByText("SOAR_REAL_TEAMS_ENABLED")).toBeInTheDocument();
   expect(screen.getByText("TEAMS_WEBHOOK_URL")).toBeInTheDocument();
@@ -258,7 +396,7 @@ test("keeps circuit breaker fields inside collapsed Advanced details", async () 
 
   render(<IntegrationStatusPanel {...styleProps} />);
 
-  expect(await screen.findByText("Webhook")).toBeInTheDocument();
+  expect((await screen.findAllByText("Webhook")).length).toBeGreaterThan(0);
   const advanced = screen.getByText("Advanced");
   expect(advanced.closest("details")).not.toHaveAttribute("open");
   await userEvent.click(advanced);
@@ -306,7 +444,7 @@ test("simulation notice remains visible when data is loaded", async () => {
 
   render(<IntegrationStatusPanel {...styleProps} />);
 
-  await screen.findByText("Slack");
+  await screen.findAllByText("Slack");
 
   expect(screen.getByRole("note")).toHaveTextContent(/does not test, send, or execute/i);
   expect(screen.getByText("Per-adapter guards")).toBeInTheDocument();
@@ -319,7 +457,7 @@ test("does not render test-connection, run, or execute controls", async () => {
 
   render(<IntegrationStatusPanel {...styleProps} />);
 
-  await screen.findByText("Slack");
+  await screen.findAllByText("Slack");
 
   expect(screen.queryByRole("button", { name: /test connection/i })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /run adapter/i })).not.toBeInTheDocument();
@@ -332,7 +470,7 @@ test("analyst does not see simulation circuit breaker control buttons", async ()
 
   render(<IntegrationStatusPanel {...styleProps} />);
 
-  await screen.findByText("Slack");
+  await screen.findAllByText("Slack");
 
   expect(screen.queryByRole("button", { name: /restore healthy state/i })).not.toBeInTheDocument();
   expect(screen.getByText(/analysts have read-only access/i)).toBeInTheDocument();
@@ -348,7 +486,7 @@ test("super admin sees simulation circuit breaker controls", async () => {
 
   render(<IntegrationStatusPanel {...styleProps} />);
 
-  await screen.findByText("Slack");
+  await screen.findAllByText("Slack");
   await userEvent.click(screen.getAllByText("Advanced")[0]);
 
   expect(
@@ -374,7 +512,7 @@ test("super admin must enter a reason before submitting a control", async () => 
 
   render(<IntegrationStatusPanel {...styleProps} />);
 
-  await screen.findByText("Slack");
+  await screen.findAllByText("Slack");
   await userEvent.click(screen.getByText("Advanced"));
   await userEvent.click(screen.getByRole("button", { name: /restore healthy state/i }));
 
@@ -396,7 +534,7 @@ test("super admin reset calls API and reloads status", async () => {
 
   render(<IntegrationStatusPanel {...styleProps} />);
 
-  await screen.findByText("Slack");
+  await screen.findAllByText("Slack");
   await userEvent.click(screen.getByText("Advanced"));
   await userEvent.type(
     screen.getByPlaceholderText(/describe why you are changing simulation breaker state/i),

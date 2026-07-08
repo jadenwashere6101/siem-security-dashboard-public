@@ -5,7 +5,7 @@ import socket
 import urllib.request
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 from werkzeug.security import generate_password_hash
@@ -111,18 +111,28 @@ def _assert_status_shape(data):
     assert data["real_mode_ready"] in {True, False}
     adapters = {adapter["name"]: adapter for adapter in data["adapters"]}
     assert set(adapters) == {"email", "firewall", "slack", "teams", "webhook"}
-    assert adapters["slack"]["supported_actions"] == ["notify_channel", "send_message"]
+    assert adapters["slack"]["supported_actions"] == [
+        "notify_channel",
+        "send_message",
+        "test_notification",
+    ]
     assert adapters["teams"]["supported_actions"] == [
         "notify_channel",
         "notify_teams",
         "send_message",
+        "test_notification",
     ]
-    assert adapters["email"]["supported_actions"] == ["notify_owner", "send_email"]
+    assert adapters["email"]["supported_actions"] == [
+        "notify_owner",
+        "send_email",
+        "test_notification",
+    ]
     assert adapters["firewall"]["supported_actions"] == ["block_ip", "tag_ip", "unblock_ip"]
     assert adapters["webhook"]["supported_actions"] == [
         "notify_webhook",
         "post_event",
         "send_webhook",
+        "test_notification",
     ]
     assert {adapter["mode"] for adapter in adapters.values()} == {"simulation"}
     assert {adapter["simulated"] for adapter in adapters.values()} == {True}
@@ -491,6 +501,124 @@ def test_integration_status_slack_and_teams_config_are_independent(
 def test_circuit_breaker_reset_requires_auth(client):
     resp = client.post("/integrations/slack/circuit-breaker/reset", json={"reason": "x"})
     assert resp.status_code == 401
+
+
+def test_notification_readiness_requires_login(client):
+    resp = client.get("/integrations/notification-readiness")
+
+    assert resp.status_code == 401
+
+
+def test_notification_readiness_viewer_forbidden(client, mock_db):
+    patchers = _login_role(client, username="ready_viewer", password="p", role="viewer")
+    try:
+        resp = client.get("/integrations/notification-readiness")
+    finally:
+        _stop_patchers(patchers)
+
+    assert resp.status_code == 403
+
+
+def test_notification_readiness_route_returns_provider_shape(client, mock_db):
+    _login_super_admin(client)
+    payload = {
+        "providers": [
+            {
+                "provider": "slack",
+                "label": "Slack",
+                "configured": True,
+                "missing_configuration": [],
+                "tested": "passed",
+                "ready": True,
+                "last_test_at": "2026-07-08T00:00:00+00:00",
+                "last_test_status": "success",
+                "last_test_message": None,
+                "last_test_failure_code": None,
+            },
+            {
+                "provider": "teams",
+                "label": "Teams",
+                "configured": True,
+                "missing_configuration": [],
+                "tested": "never_tested",
+                "ready": False,
+                "last_test_at": "2026-07-08T00:01:00+00:00",
+                "last_test_status": "blocked",
+                "last_test_message": "blocked by guard",
+                "last_test_failure_code": "guard_failed",
+            },
+        ]
+    }
+    conn = Mock()
+    with patch("routes.integration_routes.get_db_connection", return_value=conn), patch(
+        "routes.integration_routes.get_notification_readiness",
+        return_value=payload,
+    ) as readiness:
+        resp = client.get("/integrations/notification-readiness")
+
+    assert resp.status_code == 200
+    assert resp.get_json() == payload
+    readiness.assert_called_once_with(conn)
+    conn.close.assert_called_once()
+
+
+def test_notification_test_send_requires_super_admin(client, mock_db):
+    patchers = _login_role(client, username="ready_analyst", password="p", role="analyst")
+    try:
+        resp = client.post("/integrations/slack/test-send", json={})
+    finally:
+        _stop_patchers(patchers)
+
+    assert resp.status_code == 403
+
+
+@pytest.mark.parametrize("adapter_name", ["firewall", "unknown"])
+def test_notification_test_send_rejects_firewall_and_unknown(client, mock_db, adapter_name):
+    _login_super_admin(client)
+    conn = Mock()
+    with patch("routes.integration_routes.get_db_connection", return_value=conn):
+        resp = client.post(f"/integrations/{adapter_name}/test-send", json={})
+
+    assert resp.status_code == 404
+    assert resp.get_json()["error"] == "not_found"
+    conn.rollback.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("outcome", "tested", "attempt_status"),
+    [
+        ("success", "passed", "success"),
+        ("test_failed", "failed", "failed"),
+        ("guard_blocked", "never_tested", "blocked"),
+        ("not_configured", "never_tested", None),
+    ],
+)
+def test_notification_test_send_route_returns_outcome_shape(
+    client, mock_db, outcome, tested, attempt_status
+):
+    _login_super_admin(client)
+    conn = Mock()
+    payload = {
+        "provider": "slack",
+        "label": "Slack",
+        "configured": outcome != "not_configured",
+        "missing_configuration": [] if outcome != "not_configured" else ["SLACK_WEBHOOK_URL"],
+        "tested": tested,
+        "ready": tested == "passed",
+        "outcome": outcome,
+        "message": "result",
+        "attempt": None if attempt_status is None else {"status": attempt_status},
+    }
+    with patch("routes.integration_routes.get_db_connection", return_value=conn), patch(
+        "routes.integration_routes.send_notification_test",
+        return_value=payload,
+    ) as send_test:
+        resp = client.post("/integrations/slack/test-send", json={})
+
+    assert resp.status_code == 200
+    assert resp.get_json() == payload
+    send_test.assert_called_once_with(conn, "slack")
+    conn.commit.assert_called_once()
 
 
 def test_circuit_breaker_reset_forbidden_for_viewer(client, mock_db):

@@ -401,6 +401,41 @@ def test_list_filter_by_adapter_name(postgres_db):
     assert rows[0]["adapter_name"] == "teams"
 
 
+@pytest.mark.usefixtures("postgres_db")
+def test_list_filter_by_action_is_additive(postgres_db):
+    conn, _cur = postgres_db
+    notification_delivery_store.create_notification_delivery_attempt(
+        conn,
+        correlation_id="action-a",
+        idempotency_key="action-ia",
+        provider="slack",
+        mode="simulation",
+        status="success",
+        adapter_name="slack",
+        action="send_message",
+    )
+    notification_delivery_store.create_notification_delivery_attempt(
+        conn,
+        correlation_id="action-b",
+        idempotency_key="action-ib",
+        provider="slack",
+        mode="simulation",
+        status="success",
+        adapter_name="slack",
+        action="test_notification",
+    )
+    conn.commit()
+
+    all_rows = notification_delivery_store.list_notification_delivery_attempts(conn, provider="slack")
+    test_rows = notification_delivery_store.list_notification_delivery_attempts(
+        conn, provider="slack", action="test_notification"
+    )
+
+    assert len(all_rows) == 2
+    assert len(test_rows) == 1
+    assert test_rows[0]["action"] == "test_notification"
+
+
 def test_redact_metadata_rejects_non_dict():
     with pytest.raises(TypeError):
         notification_delivery_store.redact_notification_delivery_metadata("bad")  # type: ignore[arg-type]

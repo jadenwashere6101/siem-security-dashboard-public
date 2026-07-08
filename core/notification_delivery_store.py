@@ -325,6 +325,7 @@ def list_notification_delivery_attempts(
     approval_request_id: int | None = None,
     alert_id: int | None = None,
     adapter_name: str | None = None,
+    action: str | None = None,
 ) -> list[dict[str, Any]]:
     """
     List attempts newest-first with optional filters. Read-only.
@@ -374,6 +375,12 @@ def list_notification_delivery_attempts(
     if adapter_name is not None:
         clauses.append("adapter_name = %s")
         params.append(adapter_name.strip())
+    if action is not None:
+        normalized_action = str(action or "").strip()
+        if not normalized_action:
+            raise ValueError("action must be non-empty when provided")
+        clauses.append("action = %s")
+        params.append(normalized_action)
 
     where_sql = " AND ".join(clauses) if clauses else "TRUE"
     params.extend([cap, offset])

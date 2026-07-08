@@ -2,7 +2,9 @@ import {
   enableHalfOpenIntegrationCircuitBreaker,
   forceOpenIntegrationCircuitBreaker,
   getIntegrationStatus,
+  getNotificationReadiness,
   resetIntegrationCircuitBreaker,
+  sendNotificationTest,
 } from "./integrationService";
 
 describe("getIntegrationStatus", () => {
@@ -101,6 +103,78 @@ describe("resetIntegrationCircuitBreaker", () => {
     });
 
     await expect(resetIntegrationCircuitBreaker("email", "x")).rejects.toThrow("Cooldown active");
+  });
+});
+
+describe("getNotificationReadiness", () => {
+  beforeEach(() => {
+    global.fetch = jest.fn();
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test("calls GET /integrations/notification-readiness", async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ providers: [] }),
+    });
+
+    await getNotificationReadiness();
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const [url, options] = global.fetch.mock.calls[0];
+    expect(url).toEqual(expect.stringContaining("/integrations/notification-readiness"));
+    expect(options.credentials).toBe("include");
+    expect(options.method).toBeUndefined();
+  });
+
+  test("throws on non-OK response", async () => {
+    global.fetch.mockResolvedValue({
+      ok: false,
+      json: () => Promise.resolve({ message: "No session" }),
+    });
+
+    await expect(getNotificationReadiness()).rejects.toThrow("No session");
+  });
+});
+
+describe("sendNotificationTest", () => {
+  beforeEach(() => {
+    global.fetch = jest.fn();
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test("POST /integrations/:name/test-send", async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ provider: "slack", outcome: "success" }),
+    });
+
+    await sendNotificationTest("slack");
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const [url, options] = global.fetch.mock.calls[0];
+    expect(url).toEqual(expect.stringContaining("/integrations/slack/test-send"));
+    expect(options.method).toBe("POST");
+    expect(options.credentials).toBe("include");
+    expect(options.headers["Content-Type"]).toBe("application/json");
+    expect(JSON.parse(options.body)).toEqual({});
+  });
+
+  test("throws using API message on failure", async () => {
+    global.fetch.mockResolvedValue({
+      ok: false,
+      json: () => Promise.resolve({ message: "Unknown notification test provider." }),
+    });
+
+    await expect(sendNotificationTest("firewall")).rejects.toThrow(
+      "Unknown notification test provider."
+    );
   });
 });
 

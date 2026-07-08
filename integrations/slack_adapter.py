@@ -131,7 +131,7 @@ def _post_slack_webhook(webhook_url: str, payload: dict[str, str], timeout_secon
 
 class SlackSimulationAdapter(BaseIntegration):
     adapter_name = "slack"
-    supported_actions = frozenset({"send_message", "notify_channel"})
+    supported_actions = frozenset({"send_message", "notify_channel", "test_notification"})
     allow_real_mode = True
 
     def _simulate(self, action, params, context):

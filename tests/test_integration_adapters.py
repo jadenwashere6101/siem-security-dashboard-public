@@ -284,18 +284,28 @@ def test_integration_status_metadata_is_offline_and_simulation_only(monkeypatch,
     assert status["real_mode_status"] == "disabled"
     adapters = {adapter["name"]: adapter for adapter in status["adapters"]}
     assert set(adapters) == {"email", "firewall", "slack", "teams", "webhook"}
-    assert adapters["slack"]["supported_actions"] == ["notify_channel", "send_message"]
+    assert adapters["slack"]["supported_actions"] == [
+        "notify_channel",
+        "send_message",
+        "test_notification",
+    ]
     assert adapters["teams"]["supported_actions"] == [
         "notify_channel",
         "notify_teams",
         "send_message",
+        "test_notification",
     ]
-    assert adapters["email"]["supported_actions"] == ["notify_owner", "send_email"]
+    assert adapters["email"]["supported_actions"] == [
+        "notify_owner",
+        "send_email",
+        "test_notification",
+    ]
     assert adapters["firewall"]["supported_actions"] == ["block_ip", "tag_ip", "unblock_ip"]
     assert adapters["webhook"]["supported_actions"] == [
         "notify_webhook",
         "post_event",
         "send_webhook",
+        "test_notification",
     ]
     assert {adapter["real_client"] for adapter in adapters.values()} == {False}
 

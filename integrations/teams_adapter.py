@@ -145,7 +145,7 @@ def _post_teams_webhook(webhook_url: str, payload: dict[str, str], timeout_secon
 
 class TeamsSimulationAdapter(BaseIntegration):
     adapter_name = "teams"
-    supported_actions = frozenset({"send_message", "notify_channel", "notify_teams"})
+    supported_actions = frozenset({"send_message", "notify_channel", "notify_teams", "test_notification"})
     allow_real_mode = True
 
     def _simulate(self, action, params, context):

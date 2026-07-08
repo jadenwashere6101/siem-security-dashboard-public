@@ -34,6 +34,38 @@ export async function getIntegrationStatus() {
   return data;
 }
 
+export async function getNotificationReadiness() {
+  const res = await fetch(buildSiemPath("/integrations/notification-readiness"), {
+    credentials: "include",
+  });
+  const data = await parseJsonResponse(res, {});
+  if (!res.ok) {
+    throw new Error(
+      getApiErrorMessage(data, "Unable to load notification readiness", ["error", "message"])
+    );
+  }
+  return data;
+}
+
+export async function sendNotificationTest(adapterName) {
+  const name = String(adapterName || "").trim();
+  const res = await fetch(buildSiemPath(`/integrations/${encodeURIComponent(name)}/test-send`), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({}),
+  });
+  const data = await parseJsonResponse(res, {});
+  if (!res.ok) {
+    throw new Error(
+      getApiErrorMessage(data, "Notification test failed", ["message", "error"])
+    );
+  }
+  return data;
+}
+
 export async function resetIntegrationCircuitBreaker(adapterName, reason) {
   const name = String(adapterName || "").trim();
   return postCircuitControl(`/integrations/${encodeURIComponent(name)}/circuit-breaker/reset`, {

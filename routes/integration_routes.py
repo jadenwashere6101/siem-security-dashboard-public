@@ -5,6 +5,12 @@ from flask_login import current_user, login_required
 
 from core.audit_helpers import log_audit_event
 from core.auth import analyst_or_super_admin_required, super_admin_required
+from core.db import get_db_connection
+from core.notification_test_service import (
+    NotificationTestError,
+    get_notification_readiness,
+    send_notification_test,
+)
 from integrations.base_integration import (
     SimulatedCircuitBreakerControlError,
     get_simulated_circuit_breaker_dict,
@@ -93,6 +99,46 @@ def integration_status_route():
     except Exception as error:
         current_app.logger.error("Error in integration_status_route: %s", error)
         return jsonify({"error": "Internal server error"}), 500
+
+
+@integration_bp.route("/integrations/notification-readiness", methods=["GET"])
+@login_required
+@analyst_or_super_admin_required
+def notification_readiness_route():
+    conn = None
+    try:
+        conn = get_db_connection()
+        return jsonify(get_notification_readiness(conn)), 200
+    except Exception as error:
+        current_app.logger.error("Error in notification_readiness_route: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+@integration_bp.route("/integrations/<adapter_name>/test-send", methods=["POST"])
+@login_required
+@super_admin_required
+def integration_test_send_route(adapter_name: str):
+    conn = None
+    try:
+        conn = get_db_connection()
+        result = send_notification_test(conn, adapter_name)
+        conn.commit()
+        return jsonify(result), 200
+    except NotificationTestError:
+        if conn is not None:
+            conn.rollback()
+        return jsonify({"error": "not_found", "message": "Unknown notification test provider."}), 404
+    except Exception as error:
+        if conn is not None:
+            conn.rollback()
+        current_app.logger.error("Error in integration_test_send_route: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 @integration_bp.route("/integrations/<adapter_name>/circuit-breaker/reset", methods=["POST"])

@@ -3,7 +3,9 @@ import {
   enableHalfOpenIntegrationCircuitBreaker,
   forceOpenIntegrationCircuitBreaker,
   getIntegrationStatus,
+  getNotificationReadiness,
   resetIntegrationCircuitBreaker,
+  sendNotificationTest,
 } from "../services/integrationService";
 import { readStoredSessionIdentity } from "../utils/sessionIdentity";
 import ExecutionSafetyModelPanel from "./ExecutionSafetyModelPanel";
@@ -200,6 +202,172 @@ function firstAvailable(...values) {
   return "Not available";
 }
 
+function normalizeReadinessProviders(raw) {
+  if (!raw || !Array.isArray(raw.providers)) {
+    return [];
+  }
+  return raw.providers;
+}
+
+function readinessProviderKey(provider, index) {
+  return provider && provider.provider != null && provider.provider !== ""
+    ? String(provider.provider).trim().toLowerCase()
+    : `readiness-${index}`;
+}
+
+function testedLabel(provider) {
+  const status = String(provider?.last_test_status || "").toLowerCase();
+  const tested = String(provider?.tested || "").toLowerCase();
+  if (status === "blocked") {
+    return "Never Tested (Guard Blocked)";
+  }
+  if (tested === "passed") return "Passed";
+  if (tested === "failed") return "Failed";
+  return "Never Tested";
+}
+
+function formatLastTest(value) {
+  if (!value) {
+    return "Never";
+  }
+  return String(value);
+}
+
+function NotificationReadinessPanel({ readiness, loading, error, canTest, onRefresh }) {
+  const providers = normalizeReadinessProviders(readiness);
+  const [busyProvider, setBusyProvider] = useState(null);
+  const [testError, setTestError] = useState("");
+  const [testMessage, setTestMessage] = useState("");
+
+  const runTest = async (provider) => {
+    const key = String(provider?.provider || "").trim().toLowerCase();
+    const label = provider?.label || key;
+    if (!key || provider?.configured !== true) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `Send one manual readiness test notification to ${label}?`
+    );
+    if (!confirmed) {
+      return;
+    }
+    setBusyProvider(key);
+    setTestError("");
+    setTestMessage("");
+    try {
+      const result = await sendNotificationTest(key);
+      setTestMessage(result?.message || "Notification test completed.");
+      if (typeof onRefresh === "function") {
+        await onRefresh();
+      }
+    } catch (err) {
+      setTestError(err.message || "Notification test failed.");
+    } finally {
+      setBusyProvider(null);
+    }
+  };
+
+  return (
+    <div style={readinessPanelStyle}>
+      <div style={readinessHeaderStyle}>
+        <div>
+          <h3 style={subsectionTitleStyle}>Notification readiness</h3>
+        </div>
+        <button type="button" style={refreshReadinessButtonStyle} onClick={onRefresh}>
+          Refresh
+        </button>
+      </div>
+      {error ? <div style={readinessErrorStyle}>Error: {error}</div> : null}
+      {testError ? <div style={readinessErrorStyle}>Error: {testError}</div> : null}
+      {testMessage ? <div style={readinessMessageStyle}>{testMessage}</div> : null}
+      {loading ? <p style={emptyTextStyle}>Loading notification readiness...</p> : null}
+      {!loading && !error && providers.length === 0 ? (
+        <p style={emptyTextStyle}>No notification readiness providers returned.</p>
+      ) : null}
+      {!loading && !error && providers.length > 0 ? (
+        <ul style={readinessListStyle}>
+          {providers.map((provider, index) => {
+            const key = readinessProviderKey(provider, index);
+            const missing = Array.isArray(provider?.missing_configuration)
+              ? provider.missing_configuration
+              : [];
+            const configured = provider?.configured === true;
+            const ready = provider?.ready === true;
+            const busy = busyProvider === key;
+            return (
+              <li key={key} style={readinessCardStyle}>
+                <div style={adapterHeaderRowStyle}>
+                  <span style={adapterNameStyle}>{provider?.label || key}</span>
+                  <div style={badgeRowStyle}>
+                    <span style={statusBadgeStyle(configured ? "yes" : "no")}>
+                      Configured {configured ? "Yes" : "No"}
+                    </span>
+                    <span style={statusBadgeStyle(provider?.tested)}>
+                      {testedLabel(provider)}
+                    </span>
+                    <span style={statusBadgeStyle(ready ? "yes" : "no")}>
+                      Ready {ready ? "Yes" : "No"}
+                    </span>
+                  </div>
+                </div>
+                <div style={readinessGridStyle}>
+                  <div style={operationalFieldStyle}>
+                    <span style={summaryLabelStyle}>Configured</span>
+                    <span style={metaValueStyle}>{configured ? "Yes" : "No"}</span>
+                  </div>
+                  <div style={operationalFieldStyle}>
+                    <span style={summaryLabelStyle}>Tested</span>
+                    <span style={metaValueStyle}>{testedLabel(provider)}</span>
+                  </div>
+                  <div style={operationalFieldStyle}>
+                    <span style={summaryLabelStyle}>Ready</span>
+                    <span style={metaValueStyle}>{ready ? "Yes" : "No"}</span>
+                  </div>
+                  <div style={operationalFieldStyle}>
+                    <span style={summaryLabelStyle}>Last Test</span>
+                    <span style={metaValueStyle}>{formatLastTest(provider?.last_test_at)}</span>
+                  </div>
+                </div>
+                {provider?.last_test_status === "blocked" && provider?.last_test_message ? (
+                  <div style={guardBlockedStyle}>{provider.last_test_message}</div>
+                ) : null}
+                <div style={readinessFooterStyle}>
+                  <div style={missingConfigInlineStyle}>
+                    <span style={actionsLabelStyle}>Missing Configuration</span>
+                    {missing.length === 0 ? (
+                      <span style={metaMutedStyle}>None</span>
+                    ) : (
+                      <div style={actionTagsStyle}>
+                        {missing.map((envName) => (
+                          <span key={envName} style={missingTagStyle}>
+                            {envName}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    style={configured ? testButtonStyle : disabledTestButtonStyle}
+                    disabled={!canTest || !configured || busy}
+                    title={!configured ? "Provider is not configured." : undefined}
+                    onClick={() => runTest(provider)}
+                  >
+                    {busy ? "Sending..." : "Test"}
+                  </button>
+                </div>
+                {!configured ? (
+                  <p style={notConfiguredHelpStyle}>Not Configured</p>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 function CircuitBreakerPanel({ circuit, adapterName, canManageCircuit = false, onCircuitUpdated }) {
   const [reason, setReason] = useState("");
   const [overrideCooldown, setOverrideCooldown] = useState(false);
@@ -361,8 +529,11 @@ function IntegrationStatusPanel({
   cardSubtitleStyle,
 }) {
   const [status, setStatus] = useState(null);
+  const [readiness, setReadiness] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [readinessLoading, setReadinessLoading] = useState(true);
   const [error, setError] = useState("");
+  const [readinessError, setReadinessError] = useState("");
   const [sessionRole, setSessionRole] = useState(
     () => readStoredSessionIdentity()?.role ?? null
   );
@@ -384,9 +555,24 @@ function IntegrationStatusPanel({
     }
   }, []);
 
+  const loadReadiness = useCallback(async () => {
+    try {
+      setReadinessLoading(true);
+      setReadinessError("");
+      const data = await getNotificationReadiness();
+      setReadiness(data && typeof data === "object" ? data : null);
+    } catch (err) {
+      setReadinessError(err.message || "Unable to load notification readiness.");
+      setReadiness(null);
+    } finally {
+      setReadinessLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadStatus();
-  }, [loadStatus]);
+    loadReadiness();
+  }, [loadStatus, loadReadiness]);
 
   const adapters = normalizeAdapters(status?.adapters);
   const showModeSummary = Boolean(status) && !loading && !error;
@@ -425,6 +611,16 @@ function IntegrationStatusPanel({
 
         {loading ? (
           <p style={emptyTextStyle}>Loading integration status...</p>
+        ) : null}
+
+        {showModeSummary ? (
+          <NotificationReadinessPanel
+            readiness={readiness}
+            loading={readinessLoading}
+            error={readinessError}
+            canTest={isSuperAdmin}
+            onRefresh={loadReadiness}
+          />
         ) : null}
 
         {showModeSummary ? (
@@ -642,6 +838,135 @@ const retryButtonStyle = {
 
 const modeSummaryStyle = {
   marginBottom: "20px",
+};
+
+const readinessPanelStyle = {
+  marginBottom: "22px",
+  padding: "14px",
+  borderRadius: "8px",
+  border: "1px solid #30363d",
+  backgroundColor: "#0d1117",
+};
+
+const readinessHeaderStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: "12px",
+  marginBottom: "12px",
+  flexWrap: "wrap",
+};
+
+const refreshReadinessButtonStyle = {
+  minHeight: "34px",
+  padding: "7px 12px",
+  borderRadius: "8px",
+  border: "1px solid #30363d",
+  backgroundColor: "#161b22",
+  color: "#e6edf3",
+  fontSize: "12px",
+  fontWeight: "700",
+  cursor: "pointer",
+};
+
+const readinessListStyle = {
+  listStyle: "none",
+  margin: 0,
+  padding: 0,
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+  gap: "12px",
+};
+
+const readinessCardStyle = {
+  border: "1px solid rgba(48, 54, 61, 0.95)",
+  borderRadius: "8px",
+  padding: "12px",
+  backgroundColor: "rgba(1, 4, 9, 0.38)",
+};
+
+const readinessGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+  gap: "10px",
+  margin: "12px 0",
+};
+
+const readinessFooterStyle = {
+  display: "flex",
+  alignItems: "flex-end",
+  justifyContent: "space-between",
+  gap: "12px",
+  flexWrap: "wrap",
+};
+
+const missingConfigInlineStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "8px",
+  minWidth: "180px",
+  flex: "1 1 180px",
+};
+
+const testButtonStyle = {
+  minHeight: "36px",
+  padding: "8px 14px",
+  borderRadius: "8px",
+  border: "1px solid rgba(88, 166, 255, 0.45)",
+  backgroundColor: "rgba(31, 111, 235, 0.18)",
+  color: "#dbeafe",
+  fontSize: "12px",
+  fontWeight: "700",
+  cursor: "pointer",
+};
+
+const disabledTestButtonStyle = {
+  ...testButtonStyle,
+  border: "1px solid #30363d",
+  backgroundColor: "#161b22",
+  color: "#8b949e",
+  cursor: "not-allowed",
+};
+
+const notConfiguredHelpStyle = {
+  margin: "10px 0 0",
+  color: "#e6c35c",
+  fontSize: "12px",
+  fontWeight: "700",
+};
+
+const guardBlockedStyle = {
+  margin: "0 0 12px",
+  padding: "8px 10px",
+  borderRadius: "8px",
+  border: "1px solid rgba(210, 153, 34, 0.32)",
+  backgroundColor: "rgba(210, 153, 34, 0.08)",
+  color: "#e6c35c",
+  fontSize: "12px",
+  fontWeight: "600",
+  lineHeight: 1.45,
+};
+
+const readinessErrorStyle = {
+  marginBottom: "10px",
+  padding: "8px 10px",
+  borderRadius: "8px",
+  fontSize: "12px",
+  fontWeight: "600",
+  backgroundColor: "rgba(239, 68, 68, 0.12)",
+  border: "1px solid rgba(239, 68, 68, 0.28)",
+  color: "#fca5a5",
+};
+
+const readinessMessageStyle = {
+  marginBottom: "10px",
+  padding: "8px 10px",
+  borderRadius: "8px",
+  fontSize: "12px",
+  fontWeight: "600",
+  backgroundColor: "rgba(46, 160, 67, 0.12)",
+  border: "1px solid rgba(63, 185, 80, 0.28)",
+  color: "#8ddb8c",
 };
 
 const subsectionTitleStyle = {

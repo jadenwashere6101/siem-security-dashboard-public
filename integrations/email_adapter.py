@@ -179,7 +179,7 @@ def _send_smtp_message(message: EmailMessage, timeout_seconds: int) -> dict[str,
 # spec: SPEC-INTEG-005 / SPEC-UI-004 - guarded real email path only; simulation-safe remains default.
 class EmailSimulationAdapter(BaseIntegration):
     adapter_name = "email"
-    supported_actions = frozenset({"send_email", "notify_owner"})
+    supported_actions = frozenset({"send_email", "notify_owner", "test_notification"})
     allow_real_mode = True
 
     def _simulate(self, action, params, context):
