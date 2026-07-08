@@ -37,25 +37,32 @@ Track the full SIEM Settings feature suite from audit through future child imple
 
 ## 4. Phase 1 - Child Spec Creation
 
-- [ ] 4.1 Create `siem-settings-foundation`.
+- [x] 4.1 Create `siem-settings-foundation`.
   - Scope: Settings sidebar/section, localStorage settings model, default values, malformed localStorage handling, default landing page, auto-refresh interval.
-- [ ] 4.2 Create `siem-display-preferences`.
+- [x] 4.2 Create `siem-display-preferences`.
   - Scope: timezone display, timestamp format, rows per page/event limit, Live Logs font size, default Live Logs view, severity color presets, column visibility, Live Log highlighting rules.
-- [ ] 4.3 Create `siem-alert-notification-preferences`.
+- [x] 4.3 Create `siem-alert-notification-preferences`.
   - Scope: alert sound preference, browser notification preference, mocked Notification/audio tests, future alert-trigger integration.
-- [ ] 4.4 Confirm each child spec repeats the dark-mode-only boundary and excludes a light/dark theme switch.
-- [ ] 4.5 Confirm each child spec states which settings are frontend-only and which require backend support.
+- [x] 4.4 Confirm each child spec repeats the dark-mode-only boundary and excludes a light/dark theme switch.
+- [x] 4.5 Confirm each child spec states which settings are frontend-only and which require backend support.
 
 ## 5. Phase 2 - Implementation Sequencing
 
-- [ ] 5.1 Implement `siem-settings-foundation` first.
+- [x] 5.1 Implement `siem-settings-foundation` first.
   - Reason: later specs should reuse the settings store, defaults, and Settings section.
-- [ ] 5.2 Implement `siem-display-preferences` second.
+- [x] 5.2 Implement `siem-display-preferences` second.
   - Reason: display preferences depend on shared settings access and default preservation.
-- [ ] 5.3 Implement `siem-alert-notification-preferences` third.
+- [x] 5.3 Implement `siem-alert-notification-preferences` third.
   - Reason: notification/audio preferences require careful browser API mocking and future trigger definition.
-- [ ] 5.4 Defer backend/user-scoped settings until localStorage v1 behavior is validated.
-- [ ] 5.5 Keep each child implementation separately validated before starting the next child implementation.
+- [x] 5.4 Defer backend/user-scoped settings until localStorage v1 behavior is validated.
+- [x] 5.5 Keep each child implementation separately validated before starting the next child implementation.
+
+### V1 Settings Implementation Status
+
+- [x] `siem-settings-foundation` complete.
+- [x] `siem-display-preferences` complete.
+- [x] `siem-alert-notification-preferences` complete.
+- [x] Backend/user-scoped expansion deferred.
 
 ## 6. Phase 3 - Validation Plan
 
@@ -81,11 +88,16 @@ Track the full SIEM Settings feature suite from audit through future child imple
 
 ## 8. Phase 5 - Future Backend / User-Preference Expansion
 
-- [ ] 8.1 Decide whether settings need to follow users across browsers/devices.
+- [x] 8.1 Decide whether settings need to follow users across browsers/devices.
+  - Status: Not required for v1. V1 settings remain localStorage/browser-local.
 - [ ] 8.2 If yes, create a separate backend child spec for user-scoped settings.
+  - Deferred/not applicable for v1. No backend child spec is required now.
 - [ ] 8.3 Scope any settings table, migration, settings API, RBAC, audit behavior, and fallback/merge behavior.
+  - Deferred/not applicable for v1. These belong to a future backend settings spec only if cross-device/user-scoped settings become required.
 - [ ] 8.4 Scope backend-supported event limits or alert pagination separately from frontend-only visible-row limits.
+  - Deferred/future. V1 uses frontend-visible row limits only.
 - [ ] 8.5 Scope durable alert-trigger behavior for real sound/browser notifications before enabling repeated notifications.
+  - Deferred/future. V1 only includes preferences and test buttons, not real alert-triggered notification delivery.
 
 ## Safety Boundaries
 
