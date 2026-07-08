@@ -49,6 +49,7 @@ const sampleCircuitClosed = {
 
 const sampleStatus = {
   mode: "simulation",
+  configured_mode: "simulation",
   simulated: true,
   real_mode_enabled: false,
   real_mode_status: "disabled",
@@ -58,6 +59,9 @@ const sampleStatus = {
       mode: "simulation",
       simulated: true,
       real_client: false,
+      real_mode_ready: false,
+      real_mode_allowed: false,
+      webhook_configured: false,
       supported_actions: ["send_message"],
       circuit_breaker: sampleCircuitClosed,
     },
@@ -65,6 +69,13 @@ const sampleStatus = {
       name: "email",
       mode: "simulation",
       simulated: true,
+      real_client: false,
+      real_mode_ready: false,
+      real_mode_allowed: false,
+      smtp_host_configured: true,
+      smtp_username_configured: true,
+      smtp_from_configured: true,
+      smtp_to_configured: true,
       supported_actions: ["send_email"],
       circuit_breaker: sampleCircuitClosed,
     },
@@ -97,11 +108,11 @@ test("shows loading state while request is in flight", async () => {
   render(<IntegrationStatusPanel {...styleProps} />);
 
   expect(screen.getByText(/loading integration status/i)).toBeInTheDocument();
-  expect(screen.getByRole("note")).toHaveTextContent(/adapter-specific and guard-controlled/i);
+  expect(screen.getByRole("note")).toHaveTextContent(/operational view/i);
   expect(screen.getByText("Execution Safety Model")).toBeInTheDocument();
 
   await waitFor(() => {
-    expect(screen.getByText("slack")).toBeInTheDocument();
+    expect(screen.getByText("Slack")).toBeInTheDocument();
   });
 });
 
@@ -111,13 +122,13 @@ test("renders error state on API failure and allows retry", async () => {
   render(<IntegrationStatusPanel {...styleProps} />);
 
   expect(await screen.findByText(/error: network down/i)).toBeInTheDocument();
-  expect(screen.queryByText(/mode summary/i)).not.toBeInTheDocument();
-  expect(screen.getByRole("note")).toHaveTextContent(/simulation-safe execution is the default/i);
+  expect(screen.queryByText(/operational summary/i)).not.toBeInTheDocument();
+  expect(screen.getByRole("note")).toHaveTextContent(/does not test, send, or execute/i);
 
   getIntegrationStatus.mockResolvedValueOnce(sampleStatus);
   await userEvent.click(screen.getByRole("button", { name: /retry/i }));
 
-  expect(await screen.findByText(/mode summary/i)).toBeInTheDocument();
+  expect(await screen.findByText(/operational summary/i)).toBeInTheDocument();
 });
 
 test("renders empty state when adapters is empty or missing", async () => {
@@ -132,7 +143,7 @@ test("renders empty state when adapters is empty or missing", async () => {
   render(<IntegrationStatusPanel {...styleProps} />);
 
   expect(await screen.findByText(/no integration adapters registered/i)).toBeInTheDocument();
-  expect(screen.getByText("simulation")).toBeInTheDocument();
+  expect(screen.getByText("Simulation")).toBeInTheDocument();
 });
 
 test("renders empty state when adapters is null", async () => {
@@ -149,32 +160,73 @@ test("renders empty state when adapters is null", async () => {
   expect(await screen.findByText(/no integration adapters registered/i)).toBeInTheDocument();
 });
 
-test("mode summary shows mode, simulated, real mode disabled, and real_mode_status", async () => {
+test("operational summary shows mode, simulation safety, delivery, and readiness", async () => {
   getIntegrationStatus.mockResolvedValueOnce(sampleStatus);
 
   render(<IntegrationStatusPanel {...styleProps} />);
 
-  expect(await screen.findByText(/mode summary/i)).toBeInTheDocument();
-  expect(screen.getAllByText("simulation").length).toBeGreaterThanOrEqual(1);
+  expect(await screen.findByText(/operational summary/i)).toBeInTheDocument();
+  expect(screen.getAllByText("Simulation").length).toBeGreaterThanOrEqual(1);
   expect(screen.getAllByText("Yes").length).toBeGreaterThanOrEqual(1);
-  expect(screen.getAllByText("Real Integration Disabled").length).toBeGreaterThanOrEqual(1);
+  expect(screen.getAllByText("Disabled").length).toBeGreaterThanOrEqual(1);
   expect(screen.getByText("disabled", { exact: true })).toBeInTheDocument();
 });
 
-test("each adapter row shows name and supported actions", async () => {
+test("each integration card shows operational fields, description, and supported actions", async () => {
   getIntegrationStatus.mockResolvedValueOnce(sampleStatus);
 
   render(<IntegrationStatusPanel {...styleProps} />);
 
-  expect(await screen.findByText("slack")).toBeInTheDocument();
+  expect(await screen.findByText("Slack")).toBeInTheDocument();
+  expect(screen.getByText(/Slack incoming webhook/i)).toBeInTheDocument();
+  expect(screen.getByText("14 core playbooks")).toBeInTheDocument();
+  expect(screen.getAllByText("Ready for real mode").length).toBeGreaterThanOrEqual(1);
+  expect(screen.getAllByText("External delivery").length).toBeGreaterThanOrEqual(1);
+  expect(screen.getAllByText("Last delivery").length).toBeGreaterThanOrEqual(1);
+  expect(screen.getAllByText("Last tested").length).toBeGreaterThanOrEqual(1);
   expect(screen.getByText("send_message")).toBeInTheDocument();
-  expect(screen.getByText("email")).toBeInTheDocument();
+  expect(screen.getByText("Email")).toBeInTheDocument();
   expect(screen.getByText("send_email")).toBeInTheDocument();
 });
 
-test("renders circuit breaker fields and in-memory simulation copy when present", async () => {
+test("shows missing env variable names without secret values", async () => {
   getIntegrationStatus.mockResolvedValueOnce({
     mode: "simulation",
+    configured_mode: "real",
+    simulated: true,
+    real_mode_enabled: false,
+    real_mode_status: "disabled",
+    adapters: [
+      {
+        name: "teams",
+        mode: "simulation",
+        simulated: true,
+        real_client: false,
+        real_mode_ready: false,
+        real_mode_allowed: false,
+        real_mode_status:
+          "blocked: teams real mode requires guard(s): SOAR_REAL_TEAMS_ENABLED, TEAMS_WEBHOOK_URL",
+        webhook_configured: false,
+        supported_actions: ["send_message"],
+        circuit_breaker: sampleCircuitClosed,
+      },
+    ],
+  });
+
+  render(<IntegrationStatusPanel {...styleProps} />);
+
+  expect(await screen.findByText("Teams")).toBeInTheDocument();
+  expect(screen.getByText("Missing config")).toBeInTheDocument();
+  expect(screen.getByText("SOAR_REAL_TEAMS_ENABLED")).toBeInTheDocument();
+  expect(screen.getByText("TEAMS_WEBHOOK_URL")).toBeInTheDocument();
+  expect(document.body).not.toHaveTextContent("https://contoso.webhook.office.com/webhookb2/SECRET");
+  expect(document.body).not.toHaveTextContent("SECRET");
+});
+
+test("keeps circuit breaker fields inside collapsed Advanced details", async () => {
+  getIntegrationStatus.mockResolvedValueOnce({
+    mode: "simulation",
+    configured_mode: "simulation",
     simulated: true,
     real_mode_enabled: false,
     real_mode_status: "disabled",
@@ -184,6 +236,9 @@ test("renders circuit breaker fields and in-memory simulation copy when present"
         mode: "simulation",
         simulated: true,
         real_client: false,
+        real_mode_ready: false,
+        real_mode_allowed: false,
+        webhook_url_configured: false,
         supported_actions: ["post_event"],
         circuit_breaker: {
           state: "open",
@@ -203,10 +258,14 @@ test("renders circuit breaker fields and in-memory simulation copy when present"
 
   render(<IntegrationStatusPanel {...styleProps} />);
 
-  expect(await screen.findByText("webhook")).toBeInTheDocument();
+  expect(await screen.findByText("Webhook")).toBeInTheDocument();
+  const advanced = screen.getByText("Advanced");
+  expect(advanced.closest("details")).not.toHaveAttribute("open");
+  await userEvent.click(advanced);
+  expect(screen.getByText(/reliability internals/i)).toBeInTheDocument();
   expect(screen.getByText(/circuit breaker state is simulation-only/i)).toBeInTheDocument();
-  expect(screen.getByText(/stored in memory on the server/i)).toBeInTheDocument();
   expect(screen.getByText("open")).toBeInTheDocument();
+  expect(screen.getAllByText("Error").length).toBeGreaterThanOrEqual(1);
   expect(screen.getByText("3")).toBeInTheDocument();
   expect(screen.getByText("5")).toBeInTheDocument();
   expect(screen.getByText("120")).toBeInTheDocument();
@@ -220,6 +279,7 @@ test("renders circuit breaker fields and in-memory simulation copy when present"
 test("omits circuit breaker block when adapter has no circuit_breaker", async () => {
   getIntegrationStatus.mockResolvedValueOnce({
     mode: "simulation",
+    configured_mode: "simulation",
     simulated: true,
     real_mode_enabled: false,
     real_mode_status: "disabled",
@@ -228,6 +288,7 @@ test("omits circuit breaker block when adapter has no circuit_breaker", async ()
         name: "firewall",
         mode: "simulation",
         simulated: true,
+        real_client: false,
         supported_actions: ["block_ip"],
       },
     ],
@@ -235,8 +296,8 @@ test("omits circuit breaker block when adapter has no circuit_breaker", async ()
 
   render(<IntegrationStatusPanel {...styleProps} />);
 
-  expect(await screen.findByText("firewall")).toBeInTheDocument();
-  expect(screen.getByText("Dry-Run Only")).toBeInTheDocument();
+  expect(await screen.findByText("Firewall")).toBeInTheDocument();
+  expect(screen.getByText(/does not change firewall rules/i)).toBeInTheDocument();
   expect(screen.queryByText(/circuit breaker state is simulation-only/i)).not.toBeInTheDocument();
 });
 
@@ -245,10 +306,9 @@ test("simulation notice remains visible when data is loaded", async () => {
 
   render(<IntegrationStatusPanel {...styleProps} />);
 
-  await screen.findByText("slack");
+  await screen.findByText("Slack");
 
-  expect(screen.getByRole("note")).toHaveTextContent(/guard-controlled/i);
-  expect(screen.getByRole("note")).toHaveTextContent(/firewall remains dry-run only/i);
+  expect(screen.getByRole("note")).toHaveTextContent(/does not test, send, or execute/i);
   expect(screen.getByText("Per-adapter guards")).toBeInTheDocument();
   expect(document.body).not.toHaveTextContent(/global.*toggle/i);
   expect(document.body).not.toHaveTextContent(/fake/i);
@@ -259,11 +319,12 @@ test("does not render test-connection, run, or execute controls", async () => {
 
   render(<IntegrationStatusPanel {...styleProps} />);
 
-  await screen.findByText("slack");
+  await screen.findByText("Slack");
 
   expect(screen.queryByRole("button", { name: /test connection/i })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /run adapter/i })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /execute/i })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /send notification/i })).not.toBeInTheDocument();
 });
 
 test("analyst does not see simulation circuit breaker control buttons", async () => {
@@ -271,9 +332,9 @@ test("analyst does not see simulation circuit breaker control buttons", async ()
 
   render(<IntegrationStatusPanel {...styleProps} />);
 
-  await screen.findByText("slack");
+  await screen.findByText("Slack");
 
-  expect(screen.queryByRole("button", { name: /reset to closed/i })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /restore healthy state/i })).not.toBeInTheDocument();
   expect(screen.getByText(/analysts have read-only access/i)).toBeInTheDocument();
 });
 
@@ -287,17 +348,20 @@ test("super admin sees simulation circuit breaker controls", async () => {
 
   render(<IntegrationStatusPanel {...styleProps} />);
 
-  await screen.findByText("slack");
+  await screen.findByText("Slack");
+  await userEvent.click(screen.getAllByText("Advanced")[0]);
 
   expect(
-    screen.getAllByText(/simulation circuit breaker controls \(super admin\)/i).length
+    screen.getAllByText(/advanced simulation controls \(super admin\)/i).length
   ).toBeGreaterThanOrEqual(1);
-  expect(screen.getAllByRole("button", { name: /reset to closed/i }).length).toBeGreaterThanOrEqual(1);
-  expect(screen.getAllByRole("button", { name: /force open/i }).length).toBeGreaterThanOrEqual(1);
   expect(
-    screen.getAllByRole("button", { name: /enable half-open probe/i }).length
+    screen.getAllByRole("button", { name: /restore healthy state/i }).length
   ).toBeGreaterThanOrEqual(1);
-  expect(screen.getByText(/super admins can adjust simulation circuit breakers/i)).toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: /simulate failure/i }).length).toBeGreaterThanOrEqual(1);
+  expect(
+    screen.getAllByRole("button", { name: /simulate recovery/i }).length
+  ).toBeGreaterThanOrEqual(1);
+  expect(screen.getByText(/super admins can adjust advanced simulation state/i)).toBeInTheDocument();
 });
 
 test("super admin must enter a reason before submitting a control", async () => {
@@ -310,8 +374,9 @@ test("super admin must enter a reason before submitting a control", async () => 
 
   render(<IntegrationStatusPanel {...styleProps} />);
 
-  await screen.findByText("slack");
-  await userEvent.click(screen.getByRole("button", { name: /reset to closed/i }));
+  await screen.findByText("Slack");
+  await userEvent.click(screen.getByText("Advanced"));
+  await userEvent.click(screen.getByRole("button", { name: /restore healthy state/i }));
 
   expect(await screen.findByText(/non-empty reason/i)).toBeInTheDocument();
   expect(resetIntegrationCircuitBreaker).not.toHaveBeenCalled();
@@ -331,12 +396,13 @@ test("super admin reset calls API and reloads status", async () => {
 
   render(<IntegrationStatusPanel {...styleProps} />);
 
-  await screen.findByText("slack");
+  await screen.findByText("Slack");
+  await userEvent.click(screen.getByText("Advanced"));
   await userEvent.type(
     screen.getByPlaceholderText(/describe why you are changing simulation breaker state/i),
     "post-incident review"
   );
-  await userEvent.click(screen.getByRole("button", { name: /reset to closed/i }));
+  await userEvent.click(screen.getByRole("button", { name: /restore healthy state/i }));
 
   await waitFor(() => {
     expect(resetIntegrationCircuitBreaker).toHaveBeenCalledWith("slack", "post-incident review");
@@ -352,7 +418,7 @@ test("does not crash when supported_actions is missing for an adapter", async ()
 
   render(<IntegrationStatusPanel {...styleProps} />);
 
-  expect(await screen.findByText("firewall")).toBeInTheDocument();
+  expect(await screen.findByText("Firewall")).toBeInTheDocument();
   expect(screen.getByText(/none listed/i)).toBeInTheDocument();
 });
 

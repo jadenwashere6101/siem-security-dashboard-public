@@ -10,7 +10,62 @@ import ExecutionSafetyModelPanel from "./ExecutionSafetyModelPanel";
 
 // spec: SPEC-UI-004 / SPEC-INTEG-005 - integration copy is adapter-specific and guard-controlled.
 const INTEGRATION_NOTICE =
-  "Integration execution is adapter-specific and guard-controlled. Simulation-safe execution is the default; Slack, Teams, email, and webhook can be real-capable only when their guards pass. Firewall remains dry-run only.";
+  "Operational view of integration readiness. Opening this page does not test, send, or execute integrations.";
+
+const ADAPTER_OPERATIONS = {
+  slack: {
+    label: "Slack",
+    description: "Sends SOAR playbook notifications to a Slack incoming webhook when real mode is enabled.",
+    usedBy: "14 core playbooks",
+    requiredEnv: ["INTEGRATION_MODE", "SOAR_ENV", "SOAR_REAL_SLACK_ENABLED", "SLACK_WEBHOOK_URL"],
+    credentialFlags: [{ key: "webhook_configured", env: "SLACK_WEBHOOK_URL" }],
+    enabledEnv: "SOAR_REAL_SLACK_ENABLED",
+  },
+  teams: {
+    label: "Teams",
+    description: "Sends SOAR playbook notifications to a Microsoft Teams webhook when configured.",
+    usedBy: "Not used by default",
+    requiredEnv: ["INTEGRATION_MODE", "SOAR_ENV", "SOAR_REAL_TEAMS_ENABLED", "TEAMS_WEBHOOK_URL"],
+    credentialFlags: [{ key: "webhook_configured", env: "TEAMS_WEBHOOK_URL" }],
+    enabledEnv: "SOAR_REAL_TEAMS_ENABLED",
+  },
+  email: {
+    label: "Email",
+    description: "Sends SOAR playbook notification emails through SMTP when real mode is enabled.",
+    usedBy: "1 core playbook",
+    requiredEnv: [
+      "INTEGRATION_MODE",
+      "SOAR_ENV",
+      "SOAR_REAL_EMAIL_ENABLED",
+      "SMTP_HOST",
+      "SMTP_USERNAME",
+      "SMTP_FROM_EMAIL",
+      "SMTP_TO_EMAIL",
+    ],
+    credentialFlags: [
+      { key: "smtp_host_configured", env: "SMTP_HOST" },
+      { key: "smtp_username_configured", env: "SMTP_USERNAME" },
+      { key: "smtp_from_configured", env: "SMTP_FROM_EMAIL" },
+      { key: "smtp_to_configured", env: "SMTP_TO_EMAIL" },
+    ],
+    enabledEnv: "SOAR_REAL_EMAIL_ENABLED",
+  },
+  firewall: {
+    label: "Firewall",
+    description: "Plans containment actions in simulation only; it does not change firewall rules.",
+    usedBy: "7 core playbooks",
+    requiredEnv: [],
+    dryRunOnly: true,
+  },
+  webhook: {
+    label: "Webhook",
+    description: "Posts sanitized SOAR events to a configured HTTPS webhook when real mode is enabled.",
+    usedBy: "Not used by default",
+    requiredEnv: ["INTEGRATION_MODE", "SOAR_ENV", "SOAR_REAL_WEBHOOK_ENABLED", "WEBHOOK_URL"],
+    credentialFlags: [{ key: "webhook_url_configured", env: "WEBHOOK_URL" }],
+    enabledEnv: "SOAR_REAL_WEBHOOK_ENABLED",
+  },
+};
 
 function normalizeAdapters(raw) {
   if (!Array.isArray(raw)) {
@@ -35,14 +90,114 @@ function formatCircuitScalar(value) {
   return String(value);
 }
 
-function adapterCapabilityLabel(adapter, name) {
-  if (adapter?.real_mode_ready || adapter?.real_enabled || adapter?.real_mode_enabled) {
-    return "Guarded Real-Capable";
+function formatOperationalState(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "closed") return "Healthy";
+  if (normalized === "open") return "Error";
+  if (normalized === "half_open") return "Recovering";
+  return formatCircuitScalar(value);
+}
+
+function adapterKey(adapter, index) {
+  return adapter && adapter.name != null && adapter.name !== ""
+    ? String(adapter.name).trim().toLowerCase()
+    : `adapter-${index}`;
+}
+
+function getOperationMeta(name) {
+  return ADAPTER_OPERATIONS[name] || {
+    label: name,
+    description: "Registered SOAR integration adapter.",
+    usedBy: "Not used by default",
+    requiredEnv: [],
+    credentialFlags: [],
+  };
+}
+
+function extractEnvNames(value) {
+  const text = String(value || "");
+  const matches = text.match(/\b[A-Z][A-Z0-9_]{2,}\b/g);
+  return Array.from(new Set(matches || []));
+}
+
+function missingConfigNames(adapter, name, status) {
+  const meta = getOperationMeta(name);
+  if (meta.dryRunOnly || adapter?.real_mode_ready === true) {
+    return [];
   }
-  if (String(name || "").toLowerCase() === "firewall") {
-    return "Dry-Run Only";
+
+  const names = new Set();
+  if (status?.configured_mode && status.configured_mode !== "real") {
+    names.add("INTEGRATION_MODE");
   }
-  return "Real Integration Disabled";
+
+  if (adapter?.real_mode_allowed === false) {
+    if (meta.enabledEnv) names.add(meta.enabledEnv);
+    names.add("SOAR_ENV");
+  }
+
+  for (const item of meta.credentialFlags || []) {
+    if (adapter?.[item.key] === false) {
+      names.add(item.env);
+    }
+  }
+
+  for (const envName of extractEnvNames(adapter?.real_mode_status)) {
+    names.add(envName);
+  }
+
+  return Array.from(names).filter((item) => meta.requiredEnv.includes(item));
+}
+
+function adapterMode(adapter, name) {
+  if (name === "firewall" || getOperationMeta(name).dryRunOnly) {
+    return "Simulation";
+  }
+  if (adapter?.real_mode_ready === true || adapter?.real_client === true || adapter?.mode === "real") {
+    return "Real";
+  }
+  if (adapter?.disabled === true || adapter?.enabled === false) {
+    return "Disabled";
+  }
+  return "Simulation";
+}
+
+function externalDeliveryLabel(adapter, name) {
+  if (name === "firewall" || getOperationMeta(name).dryRunOnly) {
+    return "Disabled";
+  }
+  return adapter?.real_mode_ready === true || adapter?.real_client === true ? "Enabled" : "Disabled";
+}
+
+function healthStatus(adapter, name, status) {
+  const circuitState = String(adapter?.circuit_breaker?.state || "").toLowerCase();
+  if (status?.error || circuitState === "open" || adapter?.status === "error") {
+    return "Error";
+  }
+  if (adapter?.real_mode_ready === false && missingConfigNames(adapter, name, status).length > 0) {
+    return "Warning";
+  }
+  return "Healthy";
+}
+
+function statusBadgeStyle(value) {
+  const normalized = String(value || "").toLowerCase();
+  if (normalized === "real" || normalized === "enabled" || normalized === "healthy" || normalized === "yes") {
+    return { ...badgeBaseStyle, ...badgeGoodStyle };
+  }
+  if (normalized === "error" || normalized === "disabled" || normalized === "no") {
+    return { ...badgeBaseStyle, ...badgeDangerStyle };
+  }
+  return { ...badgeBaseStyle, ...badgeWarnStyle };
+}
+
+function firstAvailable(...values) {
+  for (const value of values) {
+    if (value !== null && value !== undefined && value !== "") {
+      return String(value);
+    }
+  }
+  return "Not available";
 }
 
 function CircuitBreakerPanel({ circuit, adapterName, canManageCircuit = false, onCircuitUpdated }) {
@@ -63,7 +218,8 @@ function CircuitBreakerPanel({ circuit, adapterName, canManageCircuit = false, o
   }
 
   const rows = [
-    { label: "State", value: formatCircuitScalar(circuit.state) },
+    { label: "State", value: formatOperationalState(circuit.state) },
+    { label: "Raw state", value: formatCircuitScalar(circuit.state) },
     { label: "Consecutive failures", value: formatCircuitScalar(circuit.consecutive_failures) },
     { label: "Failure threshold", value: formatCircuitScalar(circuit.failure_threshold) },
     { label: "Cooldown (seconds)", value: formatCircuitScalar(circuit.cooldown_seconds) },
@@ -111,7 +267,7 @@ function CircuitBreakerPanel({ circuit, adapterName, canManageCircuit = false, o
   return (
     <div style={circuitBreakerBlockStyle}>
       <div style={circuitBreakerHeadingRowStyle}>
-        <span style={circuitBreakerTitleStyle}>Circuit breaker</span>
+        <span style={circuitBreakerTitleStyle}>Reliability internals</span>
         <span style={circuitSimulationBadgeStyle}>Simulation</span>
       </div>
       <p style={circuitBreakerDisclaimerStyle}>
@@ -129,9 +285,9 @@ function CircuitBreakerPanel({ circuit, adapterName, canManageCircuit = false, o
       {showControls ? (
         <div style={circuitControlsSectionStyle}>
           <p style={circuitControlsIntroStyle}>
-            <strong>Simulation circuit breaker controls (super admin).</strong> These requests only
+            <strong>Advanced simulation controls (super admin).</strong> These requests only
             update in-memory simulation state on the server. They do not run adapter code, open real
-            connections, or execute a half-open probe. &quot;Enable half-open probe&quot; only marks
+            connections, or execute a recovery probe. &quot;Simulate Recovery&quot; only marks
             that the next simulated adapter call may use one bounded probe when playbook execution
             reaches it.
           </p>
@@ -167,7 +323,7 @@ function CircuitBreakerPanel({ circuit, adapterName, canManageCircuit = false, o
               disabled={busyAction != null}
               onClick={() => runControl("reset", (r) => resetIntegrationCircuitBreaker(name, r))}
             >
-              {busyAction === "reset" ? "Working…" : "Reset to closed"}
+              {busyAction === "reset" ? "Working…" : "Restore Healthy State"}
             </button>
             <button
               type="button"
@@ -177,7 +333,7 @@ function CircuitBreakerPanel({ circuit, adapterName, canManageCircuit = false, o
                 runControl("force_open", (r) => forceOpenIntegrationCircuitBreaker(name, r))
               }
             >
-              {busyAction === "force_open" ? "Working…" : "Force open"}
+              {busyAction === "force_open" ? "Working…" : "Simulate Failure"}
             </button>
             <button
               type="button"
@@ -189,7 +345,7 @@ function CircuitBreakerPanel({ circuit, adapterName, canManageCircuit = false, o
                 )
               }
             >
-              {busyAction === "half_open" ? "Working…" : "Enable half-open probe"}
+              {busyAction === "half_open" ? "Working…" : "Simulate Recovery"}
             </button>
           </div>
         </div>
@@ -244,9 +400,9 @@ function IntegrationStatusPanel({
           <p style={sectionLabelStyle}>SOAR</p>
           <h2 style={cardTitleStyle}>Integration adapter status</h2>
           <p style={cardSubtitleStyle}>
-            View of registered adapters, guard readiness, and circuit safety from the backend registry.
+            Operational readiness for SOAR notification and response integrations.
             {isSuperAdmin
-              ? " Super admins can adjust simulation circuit breakers per adapter below."
+              ? " Super admins can adjust advanced simulation state inside each adapter."
               : " Analysts have read-only access to this panel."}
           </p>
         </div>
@@ -273,24 +429,26 @@ function IntegrationStatusPanel({
 
         {showModeSummary ? (
           <div style={modeSummaryStyle}>
-            <h3 style={subsectionTitleStyle}>Mode summary</h3>
+            <h3 style={subsectionTitleStyle}>Operational summary</h3>
             <div style={summaryGridStyle}>
               <div style={summaryFieldStyle}>
-                <span style={summaryLabelStyle}>Configured integration posture</span>
-                <span style={summaryValueStyle}>{String(status.mode ?? "—")}</span>
-              </div>
-              <div style={summaryFieldStyle}>
-                <span style={summaryLabelStyle}>Simulation-safe default</span>
-                <span style={summaryValueStyle}>{formatFlag(status.simulated)}</span>
-              </div>
-              <div style={summaryFieldStyle}>
-                <span style={summaryLabelStyle}>Guarded real integration</span>
+                <span style={summaryLabelStyle}>Overall mode</span>
                 <span style={summaryValueStyle}>
-                  {status.real_mode_enabled === true ? "Guarded Real-Capable" : "Real Integration Disabled"}
+                  {status.real_mode_enabled === true ? "Real" : "Simulation"}
                 </span>
               </div>
               <div style={summaryFieldStyle}>
-                <span style={summaryLabelStyle}>Guard status</span>
+                <span style={summaryLabelStyle}>Simulation safe</span>
+                <span style={summaryValueStyle}>{formatFlag(status.simulated)}</span>
+              </div>
+              <div style={summaryFieldStyle}>
+                <span style={summaryLabelStyle}>External delivery</span>
+                <span style={summaryValueStyle}>
+                  {status.real_mode_enabled === true ? "Enabled" : "Disabled"}
+                </span>
+              </div>
+              <div style={summaryFieldStyle}>
+                <span style={summaryLabelStyle}>Readiness</span>
                 <span style={{ ...summaryValueStyle, ...monoValueStyle }}>
                   {String(status.real_mode_status ?? "—")}
                 </span>
@@ -305,34 +463,78 @@ function IntegrationStatusPanel({
 
         {showAdapterRows ? (
           <div style={adapterListStyle}>
-            <h3 style={subsectionTitleStyle}>Adapters</h3>
+            <h3 style={subsectionTitleStyle}>Integrations</h3>
             <ul style={adapterUlStyle}>
               {adapters.map((adapter, index) => {
-                const key =
-                  adapter && adapter.name != null && adapter.name !== ""
-                    ? String(adapter.name)
-                    : `adapter-${index}`;
+                const key = adapterKey(adapter, index);
+                const meta = getOperationMeta(key);
                 const actions = Array.isArray(adapter?.supported_actions)
                   ? adapter.supported_actions
                   : [];
+                const mode = adapterMode(adapter, key);
+                const health = healthStatus(adapter, key, status);
+                const externalDelivery = externalDeliveryLabel(adapter, key);
+                const ready = adapter?.real_mode_ready === true;
+                const missing = missingConfigNames(adapter, key, status);
                 return (
                   <li key={key} style={adapterCardStyle}>
                     <div style={adapterHeaderRowStyle}>
-                      <span style={adapterNameStyle}>{key}</span>
-                      <span style={modeBadgeStyle}>
-                        {adapterCapabilityLabel(adapter, key)}
-                      </span>
+                      <div>
+                        <span style={adapterNameStyle}>{meta.label}</span>
+                        <p style={adapterDescriptionStyle}>{meta.description}</p>
+                      </div>
+                      <div style={badgeRowStyle}>
+                        <span style={statusBadgeStyle(mode)}>{mode}</span>
+                        <span style={statusBadgeStyle(health)}>{health}</span>
+                      </div>
                     </div>
-                    <div style={adapterMetaRowStyle}>
-                      <span style={metaMutedStyle}>Simulation-safe:</span>{" "}
-                      <span style={metaValueStyle}>{formatFlag(adapter?.simulated)}</span>
+
+                    <div style={operationalGridStyle}>
+                      <div style={operationalFieldStyle}>
+                        <span style={summaryLabelStyle}>Mode</span>
+                        <span style={metaValueStyle}>{mode}</span>
+                      </div>
+                      <div style={operationalFieldStyle}>
+                        <span style={summaryLabelStyle}>Health</span>
+                        <span style={metaValueStyle}>{health}</span>
+                      </div>
+                      <div style={operationalFieldStyle}>
+                        <span style={summaryLabelStyle}>Used by</span>
+                        <span style={metaValueStyle}>{meta.usedBy}</span>
+                      </div>
+                      <div style={operationalFieldStyle}>
+                        <span style={summaryLabelStyle}>External delivery</span>
+                        <span style={metaValueStyle}>{externalDelivery}</span>
+                      </div>
+                      <div style={operationalFieldStyle}>
+                        <span style={summaryLabelStyle}>Ready for real mode</span>
+                        <span style={metaValueStyle}>{ready ? "Yes" : "No"}</span>
+                      </div>
+                      <div style={operationalFieldStyle}>
+                        <span style={summaryLabelStyle}>Last delivery</span>
+                        <span style={metaValueStyle}>
+                          {firstAvailable(adapter?.last_successful_delivery, adapter?.last_delivery)}
+                        </span>
+                      </div>
+                      <div style={operationalFieldStyle}>
+                        <span style={summaryLabelStyle}>Last tested</span>
+                        <span style={metaValueStyle}>{firstAvailable(adapter?.last_tested)}</span>
+                      </div>
                     </div>
-                    <CircuitBreakerPanel
-                      circuit={adapter?.circuit_breaker}
-                      adapterName={key}
-                      canManageCircuit={isSuperAdmin}
-                      onCircuitUpdated={loadStatus}
-                    />
+
+                    {missing.length > 0 ? (
+                      <div style={missingConfigStyle}>
+                        <span style={actionsLabelStyle}>Missing config</span>
+                        <div style={actionTagsStyle}>
+                          {missing.map((envName) => (
+                            <span key={envName} style={missingTagStyle}>
+                              {envName}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
                     <div style={actionsBlockStyle}>
                       <span style={actionsLabelStyle}>Supported actions</span>
                       {actions.length === 0 ? (
@@ -347,6 +549,31 @@ function IntegrationStatusPanel({
                         </div>
                       )}
                     </div>
+                    <details style={advancedDetailsStyle}>
+                      <summary style={advancedSummaryStyle}>Advanced</summary>
+                      <div style={advancedContentStyle}>
+                        <div style={advancedMetaStyle}>
+                          <div style={operationalFieldStyle}>
+                            <span style={summaryLabelStyle}>Raw adapter mode</span>
+                            <span style={metaValueStyle}>{String(adapter?.mode ?? "—")}</span>
+                          </div>
+                          <div style={operationalFieldStyle}>
+                            <span style={summaryLabelStyle}>Simulation safe</span>
+                            <span style={metaValueStyle}>{formatFlag(adapter?.simulated)}</span>
+                          </div>
+                          <div style={operationalFieldStyle}>
+                            <span style={summaryLabelStyle}>Real client</span>
+                            <span style={metaValueStyle}>{formatFlag(adapter?.real_client)}</span>
+                          </div>
+                        </div>
+                        <CircuitBreakerPanel
+                          circuit={adapter?.circuit_breaker}
+                          adapterName={key}
+                          canManageCircuit={isSuperAdmin}
+                          onCircuitUpdated={loadStatus}
+                        />
+                      </div>
+                    </details>
                   </li>
                 );
               })}
@@ -461,6 +688,36 @@ const monoValueStyle = {
   fontWeight: "600",
 };
 
+const badgeBaseStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  minHeight: "24px",
+  padding: "4px 10px",
+  borderRadius: "999px",
+  fontSize: "11px",
+  fontWeight: "700",
+  letterSpacing: "0.04em",
+  textTransform: "uppercase",
+};
+
+const badgeGoodStyle = {
+  backgroundColor: "rgba(46, 160, 67, 0.14)",
+  border: "1px solid rgba(63, 185, 80, 0.34)",
+  color: "#8ddb8c",
+};
+
+const badgeWarnStyle = {
+  backgroundColor: "rgba(210, 153, 34, 0.12)",
+  border: "1px solid rgba(210, 153, 34, 0.35)",
+  color: "#e6c35c",
+};
+
+const badgeDangerStyle = {
+  backgroundColor: "rgba(239, 68, 68, 0.12)",
+  border: "1px solid rgba(239, 68, 68, 0.34)",
+  color: "#fca5a5",
+};
+
 const adapterListStyle = {
   marginTop: "8px",
 };
@@ -494,26 +751,22 @@ const adapterNameStyle = {
   fontSize: "16px",
   fontWeight: "700",
   color: "#e6edf3",
-  textTransform: "lowercase",
 };
 
-const modeBadgeStyle = {
-  display: "inline-flex",
-  alignItems: "center",
-  padding: "4px 10px",
-  borderRadius: "999px",
-  fontSize: "11px",
-  fontWeight: "700",
-  letterSpacing: "0.04em",
-  textTransform: "uppercase",
-  backgroundColor: "rgba(31, 111, 235, 0.14)",
-  border: "1px solid rgba(88, 166, 255, 0.35)",
-  color: "#93c5fd",
-};
-
-const adapterMetaRowStyle = {
+const adapterDescriptionStyle = {
+  margin: "6px 0 0 0",
+  color: "#8b949e",
   fontSize: "13px",
-  marginBottom: "10px",
+  lineHeight: 1.45,
+  maxWidth: "680px",
+};
+
+const badgeRowStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "flex-end",
+  gap: "8px",
+  flexWrap: "wrap",
 };
 
 const metaMutedStyle = {
@@ -523,6 +776,35 @@ const metaMutedStyle = {
 const metaValueStyle = {
   color: "#e6edf3",
   fontWeight: "600",
+};
+
+const operationalGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+  gap: "10px",
+  margin: "14px 0",
+};
+
+const operationalFieldStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "5px",
+  minHeight: "54px",
+  padding: "10px 11px",
+  borderRadius: "8px",
+  border: "1px solid rgba(48, 54, 61, 0.88)",
+  backgroundColor: "rgba(1, 4, 9, 0.38)",
+};
+
+const missingConfigStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "8px",
+  marginBottom: "14px",
+  padding: "10px 11px",
+  borderRadius: "8px",
+  border: "1px solid rgba(210, 153, 34, 0.32)",
+  backgroundColor: "rgba(210, 153, 34, 0.08)",
 };
 
 const actionsBlockStyle = {
@@ -554,6 +836,38 @@ const actionTagStyle = {
   backgroundColor: "#161b22",
   border: "1px solid #30363d",
   color: "#c9d1d9",
+};
+
+const missingTagStyle = {
+  ...actionTagStyle,
+  border: "1px solid rgba(210, 153, 34, 0.4)",
+  backgroundColor: "rgba(210, 153, 34, 0.10)",
+  color: "#e6c35c",
+  fontFamily: "'Courier New', monospace",
+};
+
+const advancedDetailsStyle = {
+  marginTop: "14px",
+  borderTop: "1px solid rgba(48, 54, 61, 0.75)",
+  paddingTop: "12px",
+};
+
+const advancedSummaryStyle = {
+  color: "#93c5fd",
+  fontSize: "13px",
+  fontWeight: "700",
+  cursor: "pointer",
+  userSelect: "none",
+};
+
+const advancedContentStyle = {
+  marginTop: "12px",
+};
+
+const advancedMetaStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+  gap: "10px",
 };
 
 const circuitBreakerBlockStyle = {
