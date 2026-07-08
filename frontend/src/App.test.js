@@ -1,8 +1,9 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from './App';
 import { loadCurrentSession } from './services/authService';
 import { loadAlerts } from './services/alertsService';
+import { UI_SETTINGS_STORAGE_KEY } from './utils/uiSettings';
 
 jest.mock('./services/authService', () => ({
   loadCurrentSession: jest.fn(),
@@ -56,6 +57,7 @@ jest.mock('./components/LiveLogsPanel', () => (props) => (
 
 beforeEach(() => {
   jest.clearAllMocks();
+  window.localStorage.clear();
   loadCurrentSession.mockResolvedValue({ authenticated: false });
   loadAlerts.mockResolvedValue([]);
 });
@@ -248,4 +250,103 @@ test('does not render Live Logs nav for viewer', async () => {
   expect(await screen.findByRole('button', { name: /^dashboard$/i })).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: /pfsense/i })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: /honeypot/i })).not.toBeInTheDocument();
+});
+
+test('renders Settings nav for viewer and opens foundation controls only', async () => {
+  loadCurrentSession.mockResolvedValue({
+    authenticated: true,
+    user: 'viewer1',
+    role: 'viewer',
+  });
+
+  render(<App />);
+
+  const settingsButton = await screen.findByRole('button', { name: /settings/i });
+  expect(settingsButton).toBeInTheDocument();
+
+  await userEvent.click(settingsButton);
+
+  expect(await screen.findByRole('heading', { name: /^settings$/i })).toBeInTheDocument();
+  expect(screen.getByLabelText(/default landing page/i)).toBeInTheDocument();
+  expect(screen.getByLabelText(/global auto-refresh interval/i)).toBeInTheDocument();
+  expect(screen.queryByText(/alert sound/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/browser notification/i)).not.toBeInTheDocument();
+});
+
+test('uses stored landing page when visible for the current role', async () => {
+  loadCurrentSession.mockResolvedValue({
+    authenticated: true,
+    user: 'analyst1',
+    role: 'analyst',
+  });
+  window.localStorage.setItem(
+    UI_SETTINGS_STORAGE_KEY,
+    JSON.stringify({
+      version: 1,
+      settings: {
+        defaultLandingPage: 'threat-hunt',
+        autoRefreshIntervalMs: 5000,
+      },
+    })
+  );
+
+  render(<App />);
+
+  const threatHuntButton = await screen.findByRole('button', { name: /threat hunt/i });
+  await waitFor(() => {
+    expect(threatHuntButton).toHaveAttribute('aria-current', 'page');
+  });
+});
+
+test('falls back to dashboard when stored landing page is hidden for role', async () => {
+  loadCurrentSession.mockResolvedValue({
+    authenticated: true,
+    user: 'viewer1',
+    role: 'viewer',
+  });
+  window.localStorage.setItem(
+    UI_SETTINGS_STORAGE_KEY,
+    JSON.stringify({
+      version: 1,
+      settings: {
+        defaultLandingPage: 'threat-hunt',
+        autoRefreshIntervalMs: 5000,
+      },
+    })
+  );
+
+  render(<App />);
+
+  expect(await screen.findByRole('button', { name: /^dashboard$/i })).toHaveAttribute(
+    'aria-current',
+    'page'
+  );
+});
+
+test('auto-refresh off disables interval polling while keeping initial load', async () => {
+  jest.useFakeTimers();
+  loadCurrentSession.mockResolvedValue({
+    authenticated: true,
+    user: 'analyst1',
+    role: 'analyst',
+  });
+  window.localStorage.setItem(
+    UI_SETTINGS_STORAGE_KEY,
+    JSON.stringify({
+      version: 1,
+      settings: {
+        defaultLandingPage: 'dashboard',
+        autoRefreshIntervalMs: 0,
+      },
+    })
+  );
+
+  render(<App />);
+  await screen.findByRole('button', { name: /^dashboard$/i });
+
+  const callsAfterInitialLoad = loadAlerts.mock.calls.length;
+  jest.advanceTimersByTime(30000);
+
+  expect(loadAlerts.mock.calls.length).toBe(callsAfterInitialLoad);
+  jest.useRealTimers();
 });

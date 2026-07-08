@@ -21,6 +21,7 @@ const EXPECTED_SECTION_IDS = [
   "soar-playbook-metrics",
   "soar-integrations",
   "soar-operations",
+  "settings",
 ];
 
 const roleFlagSets = {
@@ -167,11 +168,17 @@ const expectedVisibility = {
     viewer: false,
     unauthenticated: false,
   },
+  settings: {
+    super_admin: true,
+    analyst: true,
+    viewer: true,
+    unauthenticated: true,
+  },
 };
 
 describe("sectionsConfig", () => {
   test("contains exactly the expected section ids", () => {
-    expect(sectionsConfig).toHaveLength(20);
+    expect(sectionsConfig).toHaveLength(21);
     expect(sectionsConfig.map((section) => section.id)).toEqual(EXPECTED_SECTION_IDS);
   });
 

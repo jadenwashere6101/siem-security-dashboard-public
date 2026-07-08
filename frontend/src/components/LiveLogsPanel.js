@@ -11,7 +11,7 @@ export const LIVE_LOG_SOURCE_LABELS = {
   opentelemetry: "OTEL",
 };
 
-const POLL_INTERVAL_MS = 5000;
+const DEFAULT_POLL_INTERVAL_MS = 5000;
 const VIEW_MODES = {
   eventFeed: "event-feed",
   rawLog: "raw-log",
@@ -241,6 +241,7 @@ const formatRawLogLine = (event) => {
 function LiveLogsPanel({
   source,
   label,
+  pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
   cardStyle,
   cardHeaderStyle,
   cardTitleStyle,
@@ -306,9 +307,11 @@ function LiveLogsPanel({
         }
       }
 
-      intervalId = setInterval(() => {
-        pollForNewEvents();
-      }, POLL_INTERVAL_MS);
+      if (pollIntervalMs > 0) {
+        intervalId = setInterval(() => {
+          pollForNewEvents();
+        }, pollIntervalMs);
+      }
     };
 
     start();
@@ -319,11 +322,14 @@ function LiveLogsPanel({
         clearInterval(intervalId);
       }
     };
-  }, [source]);
+  }, [source, pollIntervalMs]);
 
   const subtitle = useMemo(
-    () => `Newest normalized events for source=${source}. Auto-refreshes every few seconds.`,
-    [source]
+    () =>
+      pollIntervalMs > 0
+        ? `Newest normalized events for source=${source}. Auto-refreshes every few seconds.`
+        : `Newest normalized events for source=${source}. Auto-refresh is currently disabled.`,
+    [source, pollIntervalMs]
   );
 
   return (

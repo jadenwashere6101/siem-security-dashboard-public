@@ -15,7 +15,9 @@ import SocCommandCenter from "./components/SocCommandCenter";
 import ThreatHuntPanel from "./components/ThreatHuntPanel";
 import BlocklistManagerPanel from "./components/BlocklistManagerPanel";
 import LiveLogsPanel from "./components/LiveLogsPanel";
+import SettingsPanel from "./components/SettingsPanel";
 import SidebarLayout from "./components/SidebarLayout";
+import { UiSettingsProvider, useUiSettings } from "./context/UiSettingsContext";
 import {
   readStoredSessionIdentity,
   writeStoredSessionIdentity,
@@ -37,7 +39,7 @@ import {
 import { isSectionVisible, sectionsConfig } from "./utils/sectionsConfig";
 import packageJson from "../package.json";
 
-function App() {
+function AppInner() {
   const [alerts, setAlerts] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [sourceFilter, setSourceFilter] = useState("all");
@@ -48,6 +50,7 @@ function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUsername, setCurrentUsername] = useState(null);
   const [userRole, setUserRole] = useState(null);
+  const { settings, updateSettings } = useUiSettings();
   const [activeSection, setActiveSection] = useState("dashboard");
   const [authLoading, setAuthLoading] = useState(true);
   const [loginUsername, setLoginUsername] = useState("");
@@ -60,6 +63,7 @@ function App() {
     role: null,
   });
   const hasCheckedAuthRef = useRef(false);
+  const hasAppliedLandingRef = useRef(false);
   const alertsTableRef = useRef(null);
   const pendingAlertsFocusRef = useRef(false);
 
@@ -165,12 +169,37 @@ function App() {
     if (!isAuthenticated) return;
 
     fetchAlerts();
+    if (settings.autoRefreshIntervalMs === 0) {
+      return undefined;
+    }
+
     const interval = setInterval(() => {
       fetchAlerts();
-    }, 5000);
+    }, settings.autoRefreshIntervalMs);
 
     return () => clearInterval(interval);
-  }, [isAuthenticated, fetchAlerts]);
+  }, [isAuthenticated, fetchAlerts, settings.autoRefreshIntervalMs]);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      hasAppliedLandingRef.current = false;
+      return;
+    }
+    if (hasAppliedLandingRef.current) {
+      return;
+    }
+
+    const visibilityFlags = {
+      isSuperAdmin: userRole === "super_admin",
+      isAnalyst: userRole === "analyst",
+      canTakeAlertActions: userRole === "super_admin" || userRole === "analyst",
+    };
+    const preferredSection = isSectionVisible(settings.defaultLandingPage, visibilityFlags)
+      ? settings.defaultLandingPage
+      : "dashboard";
+    setActiveSection(preferredSection);
+    hasAppliedLandingRef.current = true;
+  }, [isAuthenticated, settings.defaultLandingPage, userRole]);
 
   useEffect(() => {
     if (!sessionNotice) return;
@@ -224,6 +253,13 @@ function App() {
       : userRole || "unknown";
   const activeLiveLogsSection = sectionsConfig.find(
     (section) => section.id === activeSection && section.group === "live logs"
+  );
+  const landingPageOptions = useMemo(
+    () =>
+      sectionsConfig
+        .filter((section) => section.id !== "settings" && isSectionVisible(section.id, roleFlags))
+        .map((section) => ({ id: section.id, label: section.label })),
+    [roleFlags]
   );
 
   const handleUpdateStatus = async (id, status) => {
@@ -558,10 +594,30 @@ function App() {
           <LiveLogsPanel
             source={activeLiveLogsSection.source}
             label={activeLiveLogsSection.label}
+            pollIntervalMs={settings.autoRefreshIntervalMs}
             cardStyle={cardStyle}
             cardHeaderStyle={cardHeaderStyle}
             cardTitleStyle={cardTitleStyle}
             cardSubtitleStyle={cardSubtitleStyle}
+          />
+        )}
+
+        {activeSection === "settings" && isSectionVisible("settings", roleFlags) && (
+          <SettingsPanel
+            settings={settings}
+            landingPageOptions={landingPageOptions}
+            onDefaultLandingPageChange={(defaultLandingPage) =>
+              updateSettings((previous) => ({ ...previous, defaultLandingPage }))
+            }
+            onAutoRefreshIntervalChange={(autoRefreshIntervalMs) =>
+              updateSettings((previous) => ({ ...previous, autoRefreshIntervalMs }))
+            }
+            cardStyle={cardStyle}
+            cardHeaderStyle={cardHeaderStyle}
+            cardTitleStyle={cardTitleStyle}
+            cardSubtitleStyle={cardSubtitleStyle}
+            filterLabelStyle={filterLabelStyle}
+            selectStyle={selectStyle}
           />
         )}
 
@@ -947,5 +1003,13 @@ const tooltipItemStyle = {
   color: "#cbd5f5",
   fontWeight: "600",
 };
+
+function App() {
+  return (
+    <UiSettingsProvider>
+      <AppInner />
+    </UiSettingsProvider>
+  );
+}
 
 export default App;

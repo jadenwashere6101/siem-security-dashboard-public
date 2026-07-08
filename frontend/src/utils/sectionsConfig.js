@@ -125,6 +125,12 @@ export const sectionsConfig = [
     group: "soar",
     visibleWhen: ({ canTakeAlertActions }) => canTakeAlertActions,
   },
+  {
+    id: "settings",
+    label: "Settings",
+    group: "settings",
+    visibleWhen: () => true,
+  },
 ];
 
 export const isSectionVisible = (sectionId, roleFlags) => {
