@@ -183,3 +183,56 @@ test("clears polling interval on unmount", async () => {
 
   expect(clearSpy).toHaveBeenCalled();
 });
+
+test("Raw Stream prefers the original pfSense filterlog line over the parsed JSON payload", async () => {
+  loadLiveLogs.mockResolvedValue([
+    {
+      ...eventOne,
+      raw_payload: {
+        action: "block",
+        interface: "wan",
+        protocol: "tcp",
+        raw_log: "rule 100 wan block tcp 203.0.113.5:443 198.51.100.10:52344",
+        sanitized_summary: "rule 100 wan block tcp 203.0.113.5:443 198.51.100.1",
+      },
+    },
+  ]);
+
+  render(<LiveLogsPanel source="pfsense" {...styleProps} />);
+  await screen.findByText("first event");
+
+  await userEvent.click(screen.getByRole("button", { name: "Raw Stream" }));
+
+  const rawStream = screen.getByLabelText("pfSense raw stream");
+  expect(
+    within(rawStream).getByText(/rule 100 wan block tcp 203\.0\.113\.5:443 198\.51\.100\.10:52344/)
+  ).toBeInTheDocument();
+  expect(within(rawStream).queryByText(/"action": "block"/i)).not.toBeInTheDocument();
+});
+
+test("Raw Stream prefers the original NGINX access log line over the parsed JSON payload", async () => {
+  loadLiveLogs.mockResolvedValue([
+    {
+      ...eventOne,
+      source: "nginx",
+      raw_payload: {
+        line: '203.0.113.9 - - [07/Jul/2026:10:00:00 +0000] "GET /admin HTTP/1.1" 403 512',
+        log_format: "nginx_access",
+        method: "GET",
+        path: "/admin",
+        status: 403,
+      },
+    },
+  ]);
+
+  render(<LiveLogsPanel source="nginx" label="NGINX" {...styleProps} />);
+  await screen.findByText("first event");
+
+  await userEvent.click(screen.getByRole("button", { name: "Raw Stream" }));
+
+  const rawStream = screen.getByLabelText("NGINX raw stream");
+  expect(
+    within(rawStream).getByText(/GET \/admin HTTP\/1\.1.*403/)
+  ).toBeInTheDocument();
+  expect(within(rawStream).queryByText(/"log_format": "nginx_access"/i)).not.toBeInTheDocument();
+});

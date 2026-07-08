@@ -46,6 +46,24 @@ const buildNormalizedFallback = (event) => ({
   created_at: event.created_at,
 });
 
+// Some adapters (pfSense, NGINX) preserve the original pre-normalization log
+// line verbatim under one of these keys alongside their parsed fields. When
+// present, that literal text is a truer "raw log" than the surrounding JSON.
+const RAW_LOG_TEXT_KEYS = ["raw_log", "line"];
+
+const extractRawLogText = (rawPayload) => {
+  if (!rawPayload || typeof rawPayload !== "object") {
+    return null;
+  }
+  for (const key of RAW_LOG_TEXT_KEYS) {
+    const value = rawPayload[key];
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+  return null;
+};
+
 const formatRawStreamEntry = (event) => {
   const headerParts = [
     event.created_at || "unknown-time",
@@ -56,12 +74,12 @@ const formatRawStreamEntry = (event) => {
     event.source_ip ? `source_ip=${event.source_ip}` : null,
     event.app_name ? `app=${event.app_name}` : null,
   ].filter(Boolean);
-  const rawValue =
-    event.raw_payload && Object.keys(event.raw_payload || {}).length > 0
-      ? event.raw_payload
-      : buildNormalizedFallback(event);
 
-  return `${headerParts.join(" ")}\n${stringifyRawValue(rawValue)}`;
+  const hasRawPayload = event.raw_payload && Object.keys(event.raw_payload || {}).length > 0;
+  const rawLogText = hasRawPayload ? extractRawLogText(event.raw_payload) : null;
+  const body = rawLogText || stringifyRawValue(hasRawPayload ? event.raw_payload : buildNormalizedFallback(event));
+
+  return `${headerParts.join(" ")}\n${body}`;
 };
 
 function LiveLogsPanel({

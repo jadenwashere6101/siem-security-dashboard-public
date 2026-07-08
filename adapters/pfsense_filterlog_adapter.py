@@ -163,6 +163,10 @@ def normalize_pfsense_filterlog_event(
     if sender_ip:
         raw_payload["pfsense_sender_ip"] = sanitize_pfsense_text(sender_ip)
 
+    full_raw_log = sanitize_pfsense_text(sanitized_summary)
+    if full_raw_log:
+        raw_payload["raw_log"] = full_raw_log
+
     summary = _bounded_summary(sanitized_summary)
     if summary:
         raw_payload["sanitized_summary"] = summary

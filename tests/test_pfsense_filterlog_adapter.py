@@ -105,6 +105,28 @@ def test_control_characters_are_stripped_from_output():
     assert "\x1f" not in summary
 
 
+def test_raw_log_preserves_full_untruncated_filterlog_text_beyond_summary_bound():
+    long_suffix = "," + ("a" * 200)
+    long_line = TCP_BLOCK + long_suffix
+
+    result = parse_pfsense_filterlog_packet(long_line.encode("utf-8"))
+
+    assert result["ok"] is True
+    raw_payload = result["event"]["raw_payload"]
+    assert len(raw_payload["sanitized_summary"]) == 160
+    assert len(raw_payload["raw_log"]) > 160
+    assert raw_payload["raw_log"].startswith(raw_payload["sanitized_summary"])
+    assert raw_payload["raw_log"].endswith("a" * 200)
+
+
+def test_raw_log_matches_sanitized_summary_when_line_is_short():
+    result = parse_pfsense_filterlog_packet(UDP_PASS)
+
+    assert result["ok"] is True
+    raw_payload = result["event"]["raw_payload"]
+    assert raw_payload["raw_log"] == raw_payload["sanitized_summary"]
+
+
 def test_ipv6_or_unknown_variant_is_handled_safely():
     ipv6_line = (
         "<134>Jul  7 12:00:03 fw filterlog: "
