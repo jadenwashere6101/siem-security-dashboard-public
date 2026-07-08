@@ -12,6 +12,57 @@ export const LIVE_LOG_SOURCE_LABELS = {
 };
 
 const POLL_INTERVAL_MS = 5000;
+const VIEW_MODES = {
+  eventFeed: "event-feed",
+  rawStream: "raw-stream",
+};
+
+const stringifyRawValue = (value) => {
+  if (value === null || value === undefined || value === "") {
+    return "No raw_payload available; showing normalized event details.";
+  }
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch (_error) {
+    return "Unable to display raw payload.";
+  }
+};
+
+const buildNormalizedFallback = (event) => ({
+  id: event.id,
+  event_type: event.event_type,
+  severity: event.severity,
+  source: event.source,
+  source_type: event.source_type,
+  source_ip: event.source_ip,
+  app_name: event.app_name,
+  environment: event.environment,
+  message: event.message,
+  created_at: event.created_at,
+});
+
+const formatRawStreamEntry = (event) => {
+  const headerParts = [
+    event.created_at || "unknown-time",
+    `id=${event.id ?? "unknown"}`,
+    `source=${event.source || "unknown"}`,
+    `type=${event.event_type || "unknown"}`,
+    `severity=${event.severity || "unknown"}`,
+    event.source_ip ? `source_ip=${event.source_ip}` : null,
+    event.app_name ? `app=${event.app_name}` : null,
+  ].filter(Boolean);
+  const rawValue =
+    event.raw_payload && Object.keys(event.raw_payload || {}).length > 0
+      ? event.raw_payload
+      : buildNormalizedFallback(event);
+
+  return `${headerParts.join(" ")}\n${stringifyRawValue(rawValue)}`;
+};
 
 function LiveLogsPanel({
   source,
@@ -25,6 +76,7 @@ function LiveLogsPanel({
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [viewMode, setViewMode] = useState(VIEW_MODES.eventFeed);
   const maxSeenIdRef = useRef(null);
 
   const mergeEvents = (incoming) => {
@@ -112,12 +164,51 @@ function LiveLogsPanel({
       </div>
 
       <div style={panelContentStyle}>
+        <div style={viewToggleStyle} role="group" aria-label="Live log view mode">
+          <button
+            type="button"
+            onClick={() => setViewMode(VIEW_MODES.eventFeed)}
+            aria-pressed={viewMode === VIEW_MODES.eventFeed}
+            style={{
+              ...viewToggleButtonStyle,
+              ...(viewMode === VIEW_MODES.eventFeed ? activeViewToggleButtonStyle : {}),
+            }}
+          >
+            Event Feed
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode(VIEW_MODES.rawStream)}
+            aria-pressed={viewMode === VIEW_MODES.rawStream}
+            style={{
+              ...viewToggleButtonStyle,
+              ...(viewMode === VIEW_MODES.rawStream ? activeViewToggleButtonStyle : {}),
+            }}
+          >
+            Raw Stream
+          </button>
+        </div>
+
         {loading ? (
           <p style={emptyTextStyle}>Loading live logs...</p>
         ) : error ? (
           <div style={errorStateStyle}>{error}</div>
         ) : events.length === 0 ? (
           <p style={emptyTextStyle}>No live logs found for {displayLabel}.</p>
+        ) : viewMode === VIEW_MODES.rawStream ? (
+          <div style={rawStreamSectionStyle}>
+            <div style={tableMetaStyle}>
+              <span style={tableMetaLabelStyle}>Raw Stream</span>
+              <span style={tableMetaCountStyle}>{events.length}</span>
+            </div>
+            <div style={rawStreamStyle} aria-label={`${displayLabel} raw stream`}>
+              {events.map((event) => (
+                <pre key={event.id} style={rawEntryStyle}>
+                  {formatRawStreamEntry(event)}
+                </pre>
+              ))}
+            </div>
+          </div>
         ) : (
           <div style={tableSectionStyle}>
             <div style={tableMetaStyle}>
@@ -176,6 +267,34 @@ const sectionLabelStyle = {
   textTransform: "uppercase",
 };
 
+const viewToggleStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "4px",
+  marginBottom: "20px",
+  padding: "4px",
+  borderRadius: "8px",
+  border: "1px solid #30363d",
+  backgroundColor: "#0d1117",
+};
+
+const viewToggleButtonStyle = {
+  appearance: "none",
+  border: "0",
+  borderRadius: "6px",
+  backgroundColor: "transparent",
+  color: "#8b949e",
+  cursor: "pointer",
+  fontSize: "12px",
+  fontWeight: "700",
+  padding: "8px 12px",
+};
+
+const activeViewToggleButtonStyle = {
+  backgroundColor: "#1f6feb",
+  color: "#ffffff",
+};
+
 const sourceBadgeStyle = {
   display: "inline-flex",
   alignItems: "center",
@@ -220,6 +339,35 @@ const tableMetaCountStyle = {
 
 const tableWrapperStyle = {
   overflowX: "auto",
+};
+
+const rawStreamSectionStyle = {
+  marginTop: "4px",
+  borderTop: "1px solid #21262d",
+  paddingTop: "20px",
+};
+
+const rawStreamStyle = {
+  maxHeight: "620px",
+  overflow: "auto",
+  borderRadius: "8px",
+  border: "1px solid #30363d",
+  backgroundColor: "#010409",
+  padding: "14px",
+};
+
+const rawEntryStyle = {
+  margin: "0 0 14px 0",
+  padding: "12px",
+  borderRadius: "6px",
+  border: "1px solid #21262d",
+  backgroundColor: "#0d1117",
+  color: "#d1d5db",
+  fontFamily: "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace",
+  fontSize: "12px",
+  lineHeight: "1.55",
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
 };
 
 const tableStyle = {

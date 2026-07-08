@@ -1,5 +1,6 @@
 import React from "react";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 import LiveLogsPanel from "./LiveLogsPanel";
 import { loadLiveLogs } from "../services/liveLogsService";
@@ -23,6 +24,11 @@ const eventOne = {
   source_ip: "198.51.100.10",
   app_name: "pfsense_filterlog",
   message: "first event",
+  raw_payload: {
+    filter_action: "block",
+    interface: "wan",
+    protocol: "tcp",
+  },
   created_at: "2026-07-07T10:00:00Z",
 };
 
@@ -39,7 +45,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  jest.runOnlyPendingTimers();
+  jest.clearAllTimers();
   jest.useRealTimers();
 });
 
@@ -49,12 +55,76 @@ test("renders loading then populated newest-first rows", async () => {
   render(<LiveLogsPanel source="pfsense" {...styleProps} />);
 
   expect(screen.getByText(/loading live logs/i)).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "Event Feed" })).toHaveAttribute(
+    "aria-pressed",
+    "true"
+  );
+  expect(screen.getByRole("button", { name: "Raw Stream" })).toHaveAttribute(
+    "aria-pressed",
+    "false"
+  );
   expect(await screen.findByText("second event")).toBeInTheDocument();
   expect(screen.getByText("first event")).toBeInTheDocument();
 
   const messages = screen.getAllByText(/event$/i).map((node) => node.textContent);
   expect(messages).toEqual(["second event", "first event"]);
   expect(loadLiveLogs).toHaveBeenCalledWith({ source: "pfsense" });
+});
+
+test("switches to Raw Stream and renders raw payloads newest-first", async () => {
+  loadLiveLogs.mockResolvedValue([eventOne, eventTwo]);
+
+  render(<LiveLogsPanel source="pfsense" {...styleProps} />);
+
+  expect(await screen.findByText("second event")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "Raw Stream" }));
+
+  expect(screen.getByRole("button", { name: "Raw Stream" })).toHaveAttribute(
+    "aria-pressed",
+    "true"
+  );
+  expect(screen.getByLabelText("pfSense raw stream")).toBeInTheDocument();
+  expect(screen.getByText(/id=2 source=pfsense/i)).toBeInTheDocument();
+  expect(screen.getAllByText(/"filter_action": "block"/i)).toHaveLength(2);
+  expect(screen.getAllByText(/"interface": "wan"/i)).toHaveLength(2);
+});
+
+test("Raw Stream falls back to normalized event details when raw_payload is unavailable", async () => {
+  loadLiveLogs.mockResolvedValue([{ ...eventOne, raw_payload: {}, message: "normalized only" }]);
+
+  render(<LiveLogsPanel source="pfsense" {...styleProps} />);
+
+  expect(await screen.findByText("normalized only")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "Raw Stream" }));
+
+  expect(screen.getByText(/"message": "normalized only"/i)).toBeInTheDocument();
+  expect(screen.getByText(/"source": "pfsense"/i)).toBeInTheDocument();
+});
+
+test("Raw Stream uses the same source-filtered events request", async () => {
+  loadLiveLogs.mockResolvedValue([
+    {
+      ...eventOne,
+      id: 42,
+      source: "azure_insights",
+      source_type: "cloud",
+      raw_payload: { operationName: "SignInLogs", category: "AuditLogs" },
+    },
+  ]);
+  render(<LiveLogsPanel source="azure_insights" label="Azure" {...styleProps} />);
+
+  expect(await screen.findByText("first event")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "Raw Stream" }));
+
+  const rawStream = screen.getByLabelText("Azure raw stream");
+  expect(rawStream).toBeInTheDocument();
+  expect(within(rawStream).getByText(/source=azure_insights/i)).toBeInTheDocument();
+  expect(within(rawStream).getByText(/"operationName": "SignInLogs"/i)).toBeInTheDocument();
+  expect(loadLiveLogs).toHaveBeenCalledTimes(1);
+  expect(loadLiveLogs).toHaveBeenCalledWith({ source: "azure_insights" });
 });
 
 test("renders empty state", async () => {
