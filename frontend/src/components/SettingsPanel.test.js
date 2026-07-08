@@ -42,6 +42,37 @@ const renderPanel = (overrides = {}) =>
     />
   );
 
+function ControlledSettingsPanel({ initialSettings }) {
+  const [settings, setSettings] = React.useState({
+    ...DEFAULT_UI_SETTINGS,
+    ...initialSettings,
+    display: {
+      ...DEFAULT_UI_SETTINGS.display,
+      ...initialSettings?.display,
+    },
+    notifications: {
+      ...DEFAULT_UI_SETTINGS.notifications,
+      ...initialSettings?.notifications,
+    },
+  });
+
+  return (
+    <SettingsPanel
+      {...baseProps}
+      settings={settings}
+      onDisplaySettingsChange={(displayUpdate) =>
+        setSettings((previous) => ({
+          ...previous,
+          display: {
+            ...previous.display,
+            ...displayUpdate,
+          },
+        }))
+      }
+    />
+  );
+}
+
 const defineNotificationMock = ({ permission = "granted", requestPermission } = {}) => {
   const NotificationMock = jest.fn();
   NotificationMock.permission = permission;
@@ -141,6 +172,25 @@ test("Notification constructor errors are handled gracefully", async () => {
   });
 
   expect(await screen.findByText(/unable to show test browser notification/i)).toBeInTheDocument();
+});
+
+test("live log highlight rule value input keeps focus while typing", async () => {
+  render(
+    <ControlledSettingsPanel
+      initialSettings={{
+        display: {
+          liveLogHighlightRules: [{ target: "severity", value: "", treatment: "border" }],
+        },
+      }}
+    />
+  );
+
+  const valueInput = screen.getByDisplayValue("");
+  valueInput.focus();
+
+  await userEvent.type(valueInput, "scanner");
+
+  expect(screen.getByDisplayValue("scanner")).toHaveFocus();
 });
 
 test("alert sound test uses configured volume and reports success", async () => {

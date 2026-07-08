@@ -530,7 +530,7 @@ function HighlightRuleEditor({ settings, onDisplaySettingsChange }) {
   return (
     <div style={highlightContainerStyle}>
       {rules.map((rule, index) => (
-        <div key={`${rule.target}-${rule.value}-${index}`} style={highlightRuleStyle}>
+        <div key={index} style={highlightRuleStyle}>
           <select
             value={rule.target}
             onChange={(event) => upsertRule(index, { target: event.target.value })}
