@@ -66,17 +66,28 @@ Track the full SIEM Settings feature suite from audit through future child imple
 
 ## 6. Phase 3 - Validation Plan
 
-- [ ] 6.1 Validate settings storage defaults and malformed localStorage fallback.
-- [ ] 6.2 Validate Settings sidebar visibility and navigation behavior.
-- [ ] 6.3 Validate default landing page behavior for visible and hidden/role-gated sections.
-- [ ] 6.4 Validate auto-refresh intervals, including Off, across main alerts and Live Logs.
-- [ ] 6.5 Validate timestamp formatting for UTC/local and relative/absolute behavior.
-- [ ] 6.6 Validate Live Logs default view, font size, event limit, and highlighting behavior.
-- [ ] 6.7 Validate severity color presets after style centralization.
-- [ ] 6.8 Validate practical column visibility settings for selected tables.
-- [ ] 6.9 Validate mocked browser `Notification` permission states and audio playback behavior.
-- [ ] 6.10 Run child-specific frontend tests.
-- [ ] 6.11 Run backend tests only if a child spec adds backend APIs, schema, or query limits.
+- [x] 6.1 Validate settings storage defaults and malformed localStorage fallback.
+  - Validated by settings storage tests for defaults, malformed JSON, invalid values, partial merge, and notification preference fallback.
+- [x] 6.2 Validate Settings sidebar visibility and navigation behavior.
+  - Validated by Settings nav/App tests for viewer access and Settings panel rendering.
+- [x] 6.3 Validate default landing page behavior for visible and hidden/role-gated sections.
+  - Validated by App tests for visible stored landing pages and hidden-role fallback to Dashboard.
+- [x] 6.4 Validate auto-refresh intervals, including Off, across main alerts and Live Logs.
+  - Validated by frontend tests for Off behavior and settings-driven refresh behavior.
+- [x] 6.5 Validate timestamp formatting for UTC/local and relative/absolute behavior.
+  - Validated by display formatting tests from the display preferences implementation.
+- [x] 6.6 Validate Live Logs default view, font size, event limit, and highlighting behavior.
+  - Validated by Live Logs display preference tests from the display preferences implementation.
+- [x] 6.7 Validate severity color presets after style centralization.
+  - Validated by severity/display preference tests after centralizing severity styles.
+- [x] 6.8 Validate practical column visibility settings for selected tables.
+  - Validated by frontend table visibility tests for selected Settings-managed tables.
+- [x] 6.9 Validate mocked browser `Notification` permission states and audio playback behavior.
+  - Validated by SettingsPanel tests with mocked Notification granted, denied, default, unavailable/error states, and mocked audio playback.
+- [x] 6.10 Run child-specific frontend tests.
+  - Completed across foundation, display preferences, and alert notification preferences.
+- [x] 6.11 Run backend tests only if a child spec adds backend APIs, schema, or query limits.
+  - Not required for v1. Implemented settings specs were frontend/localStorage only and added no backend APIs, schema, or query limits.
 
 ## 7. Phase 4 - Deployment / Rebuild
 
