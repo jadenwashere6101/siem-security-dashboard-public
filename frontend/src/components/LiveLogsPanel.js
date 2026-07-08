@@ -14,7 +14,8 @@ export const LIVE_LOG_SOURCE_LABELS = {
 const POLL_INTERVAL_MS = 5000;
 const VIEW_MODES = {
   eventFeed: "event-feed",
-  rawStream: "raw-stream",
+  rawLog: "raw-log",
+  json: "json",
 };
 
 const stringifyRawValue = (value) => {
@@ -64,7 +65,7 @@ const extractRawLogText = (rawPayload) => {
   return null;
 };
 
-const formatRawStreamEntry = (event) => {
+const formatJsonEntry = (event) => {
   const headerParts = [
     event.created_at || "unknown-time",
     `id=${event.id ?? "unknown"}`,
@@ -80,6 +81,161 @@ const formatRawStreamEntry = (event) => {
   const body = rawLogText || stringifyRawValue(hasRawPayload ? event.raw_payload : buildNormalizedFallback(event));
 
   return `${headerParts.join(" ")}\n${body}`;
+};
+
+// --- Raw Log tab: one compact, source-specific text line per event -------
+// This is deliberately NOT a JSON renderer. Sources that preserve a literal
+// pre-normalization log line (pfSense, NGINX) show it verbatim; sources that
+// only ever had structured data (Honeypot, Azure, OTel, Bank App) get the
+// most realistic single-line log reconstructed from whatever fields their
+// raw_payload happens to contain, falling back to normalized event columns.
+
+const getRawPayloadObject = (event) =>
+  event.raw_payload && typeof event.raw_payload === "object" ? event.raw_payload : {};
+
+const firstNonEmptyString = (...values) => {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return String(value);
+    }
+  }
+  return null;
+};
+
+const formatGenericLogLine = (event) => {
+  const timestamp = event.created_at || "unknown-time";
+  const sourceIpSuffix = event.source_ip ? ` source_ip=${event.source_ip}` : "";
+  return `${timestamp} [${event.source || "unknown"}] ${event.message || "event"}${sourceIpSuffix}`;
+};
+
+const formatHoneypotLogLine = (event, rawPayload) => {
+  const timestamp = firstNonEmptyString(rawPayload.timestamp, event.created_at) || "unknown-time";
+  const sourceIp = firstNonEmptyString(rawPayload.source_ip, event.source_ip) || "unknown-ip";
+  const method = firstNonEmptyString(rawPayload.method);
+  const path = firstNonEmptyString(rawPayload.path);
+  const username = firstNonEmptyString(rawPayload.username);
+  const userAgent = firstNonEmptyString(rawPayload.user_agent, rawPayload.scanner_signature);
+
+  const segments = [timestamp, sourceIp];
+  if (method || path) {
+    segments.push(`${method || "-"} ${path || "-"}`);
+  }
+  if (username) {
+    segments.push(`username="${username}"`);
+  }
+  if (userAgent) {
+    segments.push(`User-Agent="${userAgent}"`);
+  }
+  if (segments.length === 2) {
+    segments.push(event.message || "honeypot event");
+  }
+  return segments.join(" ");
+};
+
+const formatAzureLogLine = (event, rawPayload) => {
+  const timestamp =
+    firstNonEmptyString(rawPayload.timestamp, rawPayload.time, event.created_at) || "unknown-time";
+  const baseData = rawPayload?.data?.baseData;
+  const operation =
+    firstNonEmptyString(baseData?.name, rawPayload.operationName, rawPayload.name, event.event_type) ||
+    "azure_event";
+  const resultCode = firstNonEmptyString(
+    baseData?.resultCode,
+    baseData?.responseCode,
+    rawPayload.resultCode,
+    rawPayload.responseCode,
+    rawPayload.statusCode
+  );
+  const username = firstNonEmptyString(rawPayload.userPrincipalName, rawPayload.username, rawPayload.upn);
+  const sourceIp = firstNonEmptyString(
+    rawPayload.source_ip,
+    rawPayload.sourceIp,
+    rawPayload.clientIp,
+    rawPayload.client_IP,
+    event.source_ip
+  );
+
+  const segments = [timestamp, `[${operation}]`];
+  if (resultCode) segments.push(`result=${resultCode}`);
+  if (username) segments.push(`user=${username}`);
+  if (sourceIp) segments.push(`source_ip=${sourceIp}`);
+  segments.push(event.message || "Azure telemetry event");
+  return segments.join(" ");
+};
+
+const extractOtelAttribute = (rawPayload, ...keys) => {
+  const attributes = rawPayload.attributes;
+  if (Array.isArray(attributes)) {
+    for (const item of attributes) {
+      if (item && keys.includes(item.key)) {
+        const value = firstNonEmptyString(item.value?.stringValue, item.value);
+        if (value) return value;
+      }
+    }
+  } else if (attributes && typeof attributes === "object") {
+    for (const key of keys) {
+      const value = firstNonEmptyString(attributes[key]);
+      if (value) return value;
+    }
+  }
+  return null;
+};
+
+const formatOtelLogLine = (event, rawPayload) => {
+  const timestamp =
+    firstNonEmptyString(rawPayload.timestamp, rawPayload.time, event.created_at) || "unknown-time";
+  const serviceName = extractOtelAttribute(rawPayload, "service.name") || event.app_name;
+  const operation =
+    firstNonEmptyString(rawPayload.name) ||
+    extractOtelAttribute(rawPayload, "http.target", "url.path", "http.route") ||
+    event.event_type ||
+    "otel_event";
+  const statusCode =
+    firstNonEmptyString(rawPayload.status_code, rawPayload.statusCode) ||
+    extractOtelAttribute(rawPayload, "http.status_code", "status_code", "statusCode");
+
+  const segments = [timestamp];
+  if (serviceName) segments.push(`[${serviceName}]`);
+  segments.push(operation);
+  if (statusCode) segments.push(`status=${statusCode}`);
+  segments.push(event.message || "OpenTelemetry event");
+  return segments.join(" ");
+};
+
+const formatBankAppLogLine = (event, rawPayload) => {
+  const timestamp = firstNonEmptyString(event.created_at) || "unknown-time";
+  const appName = firstNonEmptyString(rawPayload.app_name, event.app_name) || "bank_app";
+  const level = (firstNonEmptyString(rawPayload.severity, event.severity) || "info").toUpperCase();
+  const message = firstNonEmptyString(rawPayload.message, event.message) || "no message";
+  const sourceIp = firstNonEmptyString(rawPayload.source_ip, event.source_ip);
+
+  const segments = [timestamp, `[${appName}]`, `${level}:`, message];
+  if (sourceIp) segments.push(`source_ip=${sourceIp}`);
+  return segments.join(" ");
+};
+
+const formatRawLogLine = (event) => {
+  const rawPayload = getRawPayloadObject(event);
+
+  switch (event.source) {
+    case "honeypot":
+      return formatHoneypotLogLine(event, rawPayload);
+    case "nginx":
+      return firstNonEmptyString(rawPayload.line) || formatGenericLogLine(event);
+    case "pfsense":
+      return firstNonEmptyString(rawPayload.raw_log, rawPayload.sanitized_summary) || formatGenericLogLine(event);
+    case "azure_insights":
+      return formatAzureLogLine(event, rawPayload);
+    case "opentelemetry":
+      return formatOtelLogLine(event, rawPayload);
+    case "bank_app":
+      return formatBankAppLogLine(event, rawPayload);
+    default:
+      return formatGenericLogLine(event);
+  }
 };
 
 function LiveLogsPanel({
@@ -196,14 +352,25 @@ function LiveLogsPanel({
           </button>
           <button
             type="button"
-            onClick={() => setViewMode(VIEW_MODES.rawStream)}
-            aria-pressed={viewMode === VIEW_MODES.rawStream}
+            onClick={() => setViewMode(VIEW_MODES.rawLog)}
+            aria-pressed={viewMode === VIEW_MODES.rawLog}
             style={{
               ...viewToggleButtonStyle,
-              ...(viewMode === VIEW_MODES.rawStream ? activeViewToggleButtonStyle : {}),
+              ...(viewMode === VIEW_MODES.rawLog ? activeViewToggleButtonStyle : {}),
             }}
           >
-            Raw Stream
+            Raw Log
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode(VIEW_MODES.json)}
+            aria-pressed={viewMode === VIEW_MODES.json}
+            style={{
+              ...viewToggleButtonStyle,
+              ...(viewMode === VIEW_MODES.json ? activeViewToggleButtonStyle : {}),
+            }}
+          >
+            JSON
           </button>
         </div>
 
@@ -213,16 +380,30 @@ function LiveLogsPanel({
           <div style={errorStateStyle}>{error}</div>
         ) : events.length === 0 ? (
           <p style={emptyTextStyle}>No live logs found for {displayLabel}.</p>
-        ) : viewMode === VIEW_MODES.rawStream ? (
+        ) : viewMode === VIEW_MODES.rawLog ? (
           <div style={rawStreamSectionStyle}>
             <div style={tableMetaStyle}>
-              <span style={tableMetaLabelStyle}>Raw Stream</span>
+              <span style={tableMetaLabelStyle}>Raw Log</span>
               <span style={tableMetaCountStyle}>{events.length}</span>
             </div>
-            <div style={rawStreamStyle} aria-label={`${displayLabel} raw stream`}>
+            <div style={rawStreamStyle} aria-label={`${displayLabel} raw log`}>
+              {events.map((event) => (
+                <div key={event.id} style={rawLogLineStyle}>
+                  {formatRawLogLine(event)}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : viewMode === VIEW_MODES.json ? (
+          <div style={rawStreamSectionStyle}>
+            <div style={tableMetaStyle}>
+              <span style={tableMetaLabelStyle}>JSON</span>
+              <span style={tableMetaCountStyle}>{events.length}</span>
+            </div>
+            <div style={rawStreamStyle} aria-label={`${displayLabel} json view`}>
               {events.map((event) => (
                 <pre key={event.id} style={rawEntryStyle}>
-                  {formatRawStreamEntry(event)}
+                  {formatJsonEntry(event)}
                 </pre>
               ))}
             </div>
@@ -384,6 +565,17 @@ const rawEntryStyle = {
   fontFamily: "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace",
   fontSize: "12px",
   lineHeight: "1.55",
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
+};
+
+const rawLogLineStyle = {
+  padding: "5px 4px",
+  borderBottom: "1px solid #161b22",
+  color: "#d1d5db",
+  fontFamily: "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace",
+  fontSize: "12px",
+  lineHeight: "1.6",
   whiteSpace: "pre-wrap",
   wordBreak: "break-word",
 };
