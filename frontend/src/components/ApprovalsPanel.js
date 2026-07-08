@@ -6,7 +6,7 @@ import {
   submitApprovalDecision,
 } from "../services/approvalService";
 import { listApprovalNotificationDeliveries } from "../services/notificationDeliveryService";
-import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
+import { formatTimestamp } from "../utils/displayFormatting";
 import { ResponseOutcomeBadge, ResponseOutcomeSummary } from "./ResponseOutcome";
 
 const STATUS_FILTERS = ["all", "pending", "approved", "denied", "expired"];
@@ -38,6 +38,7 @@ function ApprovalsPanel({
   filterLabelStyle,
   selectStyle,
   userRole,
+  displaySettings,
 }) {
   const [approvals, setApprovals] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -364,10 +365,10 @@ function ApprovalsPanel({
                         {approval.queue_id ?? <span style={mutedTextStyle}>N/A</span>}
                       </td>
                       <td style={{ ...bodyCellStyle, ...timeCellStyle }}>
-                        {formatTimestamp(approval.created_at)}
+                        {formatTimestamp(approval.created_at, displaySettings, "N/A")}
                       </td>
                       <td style={{ ...bodyCellStyle, ...timeCellStyle }}>
-                        {formatTimestamp(approval.expires_at)}
+                        {formatTimestamp(approval.expires_at, displaySettings, "N/A")}
                       </td>
                     </tr>
                   ))}
@@ -401,9 +402,18 @@ function ApprovalsPanel({
                   <DetailField label="Risk" value={formatLabel(selectedApproval.risk_level)} />
                   <DetailField label="Incident ID" value={selectedApproval.incident_id ?? "N/A"} mono />
                   <DetailField label="Linked Queue Item" value={selectedApproval.queue_id ?? "N/A"} mono />
-                  <DetailField label="Created" value={formatTimestamp(selectedApproval.created_at)} />
-                  <DetailField label="Decided" value={formatTimestamp(selectedApproval.decided_at)} />
-                  <DetailField label="Expires" value={formatTimestamp(selectedApproval.expires_at)} />
+                  <DetailField
+                    label="Created"
+                    value={formatTimestamp(selectedApproval.created_at, displaySettings, "N/A")}
+                  />
+                  <DetailField
+                    label="Decided"
+                    value={formatTimestamp(selectedApproval.decided_at, displaySettings, "N/A")}
+                  />
+                  <DetailField
+                    label="Expires"
+                    value={formatTimestamp(selectedApproval.expires_at, displaySettings, "N/A")}
+                  />
                   <DetailField
                     label="Request Reason"
                     value={selectedApproval.request_reason || "N/A"}
@@ -454,7 +464,7 @@ function ApprovalsPanel({
                               <td style={bodyCellStyle}>{formatLabel(event.new_status)}</td>
                               <td style={bodyCellStyle}>{event.comment || "N/A"}</td>
                               <td style={{ ...bodyCellStyle, ...timeCellStyle }}>
-                                {formatTimestamp(event.created_at)}
+                                {formatTimestamp(event.created_at, displaySettings, "N/A")}
                               </td>
                             </tr>
                           ))}
@@ -500,6 +510,7 @@ function ApprovalsPanel({
                         <DeliveryAttempt
                           key={attempt.id || attempt.correlation_id}
                           attempt={attempt}
+                          displaySettings={displaySettings}
                         />
                       ))}
                     </div>
@@ -558,8 +569,6 @@ function ApprovalsPanel({
 
 const formatLabel = (value) =>
   String(value || "unknown").replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
-
-const formatTimestamp = (value) => formatAdminTimestamp(value, "N/A");
 
 const deliveryMetadataKeyIsSafe = (key) => {
   if (!key || typeof key !== "string") return false;
@@ -1067,7 +1076,7 @@ function DetailField({ label, value, mono = false }) {
   );
 }
 
-function DeliveryAttempt({ attempt }) {
+function DeliveryAttempt({ attempt, displaySettings }) {
   const metadataEntries = getSafeDeliveryMetadataEntries(attempt?.metadata);
   return (
     <div style={deliveryCardStyle}>
@@ -1094,10 +1103,22 @@ function DeliveryAttempt({ attempt }) {
           label="Timeout seconds"
           value={formatDeliveryValue(attempt?.timeout_seconds)}
         />
-        <DetailField label="Requested" value={formatTimestamp(attempt?.requested_at)} />
-        <DetailField label="Started" value={formatTimestamp(attempt?.started_at)} />
-        <DetailField label="Completed" value={formatTimestamp(attempt?.completed_at)} />
-        <DetailField label="Created" value={formatTimestamp(attempt?.created_at)} />
+        <DetailField
+          label="Requested"
+          value={formatTimestamp(attempt?.requested_at, displaySettings, "N/A")}
+        />
+        <DetailField
+          label="Started"
+          value={formatTimestamp(attempt?.started_at, displaySettings, "N/A")}
+        />
+        <DetailField
+          label="Completed"
+          value={formatTimestamp(attempt?.completed_at, displaySettings, "N/A")}
+        />
+        <DetailField
+          label="Created"
+          value={formatTimestamp(attempt?.created_at, displaySettings, "N/A")}
+        />
         {attempt?.failure_code ? (
           <DetailField label="Failure code" value={formatDeliveryValue(attempt.failure_code)} />
         ) : null}

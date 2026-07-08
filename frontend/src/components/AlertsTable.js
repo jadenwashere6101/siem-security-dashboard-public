@@ -31,6 +31,7 @@ import {
 import { loadAlertResponseLog } from "../services/alertResponseService";
 import { getApiErrorMessage, parseJsonResponse } from "../utils/apiResponse";
 import { buildSiemPath } from "../utils/siemPath";
+import { formatTimestamp } from "../utils/displayFormatting";
 
 // ============================================================================
 // Imports / Utilities
@@ -73,6 +74,7 @@ function AlertsTable({
   expandedContentStyle,
   expandedLabelStyle,
   expandedTextStyle,
+  displaySettings,
 }) {
   // ==========================================================================
   // Component State / Derived Values
@@ -186,23 +188,7 @@ function AlertsTable({
     }
   };
 
-  const formatNoteTimestamp = (value) => {
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) {
-      return value;
-    }
-
-    return new Intl.DateTimeFormat("en-US", {
-      month: "short",
-      day: "2-digit",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-      timeZone: "UTC",
-      timeZoneName: "short",
-    }).format(date);
-  };
+  const formatNoteTimestamp = (value) => formatTimestamp(value, displaySettings, "N/A");
 
   const addAlertNote = async (alertId) => {
     const noteText = (noteDrafts[alertId] || "").trim();
@@ -345,6 +331,20 @@ function AlertsTable({
 
   // Filtered/resolved alert collections used by the table and summary UI.
   const filteredAlerts = alerts;
+  const rowsPerPage = displaySettings?.rowsPerPage ?? "all";
+  const limitedAlerts =
+    rowsPerPage === "all" ? filteredAlerts : filteredAlerts.slice(0, Number(rowsPerPage));
+  const visibleColumns = displaySettings?.columnVisibility?.alertsTable || {
+    id: true,
+    type: true,
+    source: true,
+    sourceIp: true,
+    behavior: true,
+    severity: true,
+    message: true,
+    createdAt: true,
+    action: true,
+  };
 
   const resolvedAlerts = alerts.filter(
     (alert) => alert.status === "resolved"
@@ -447,7 +447,7 @@ function AlertsTable({
   const groupedFilteredAlertsMap = new Map();
 
   // Grouping happens after upstream filtering/sorting so table behavior stays intact.
-  filteredAlerts.forEach((alert) => {
+  limitedAlerts.forEach((alert) => {
     const groupKey = alert.source_ip || "Unknown IP";
     const existingGroup = groupedFilteredAlertsMap.get(groupKey);
 
@@ -559,7 +559,7 @@ function AlertsTable({
               }}
             >
             <table style={tableStyle}>
-              <AlertsTableHeader headerCellStyle={headerCellStyle} />
+              <AlertsTableHeader headerCellStyle={headerCellStyle} visibleColumns={visibleColumns} />
 
             <tbody>
               {groupedFilteredAlerts.map((group) => (
@@ -606,6 +606,8 @@ function AlertsTable({
                           canTakeAlertActions={canTakeAlertActions}
                           getActionButtonStyle={getActionButtonStyle}
                           getSeverityBadgeStyle={getSeverityBadgeStyle}
+                          formatTimestamp={(value) => formatTimestamp(value, displaySettings, "N/A")}
+                          visibleColumns={visibleColumns}
                           tableRowStyle={tableRowStyle}
                           bodyCellStyle={bodyCellStyle}
                           monoCellStyle={monoCellStyle}

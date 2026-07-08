@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import { loadLiveLogs } from "../services/liveLogsService";
+import { formatTimestamp } from "../utils/displayFormatting";
+import { getSeverityBadgeStyle } from "../utils/severityDisplay";
 
 export const LIVE_LOG_SOURCE_LABELS = {
   honeypot: "Honeypot",
@@ -242,6 +244,7 @@ function LiveLogsPanel({
   source,
   label,
   pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
+  displaySettings,
   cardStyle,
   cardHeaderStyle,
   cardTitleStyle,
@@ -251,8 +254,19 @@ function LiveLogsPanel({
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [viewMode, setViewMode] = useState(VIEW_MODES.eventFeed);
+  const [viewMode, setViewMode] = useState(
+    displaySettings?.defaultLiveLogsTab || VIEW_MODES.eventFeed
+  );
   const maxSeenIdRef = useRef(null);
+  const defaultViewModeRef = useRef(displaySettings?.defaultLiveLogsTab || VIEW_MODES.eventFeed);
+
+  useEffect(() => {
+    const nextDefault = displaySettings?.defaultLiveLogsTab || VIEW_MODES.eventFeed;
+    if (defaultViewModeRef.current !== nextDefault) {
+      defaultViewModeRef.current = nextDefault;
+      setViewMode(nextDefault);
+    }
+  }, [displaySettings?.defaultLiveLogsTab]);
 
   const mergeEvents = (incoming) => {
     const rows = Array.isArray(incoming) ? incoming : [];
@@ -332,6 +346,50 @@ function LiveLogsPanel({
     [source, pollIntervalMs]
   );
 
+  const limitedEvents = useMemo(() => {
+    const rowsPerPage = displaySettings?.rowsPerPage ?? "all";
+    return rowsPerPage === "all" ? events : events.slice(0, Number(rowsPerPage));
+  }, [events, displaySettings?.rowsPerPage]);
+
+  const fontSizeScale = useMemo(() => {
+    const size = displaySettings?.liveLogsFontSize || "medium";
+    if (size === "small") return { table: "12px", raw: "11px", json: "11px" };
+    if (size === "large") return { table: "15px", raw: "13px", json: "13px" };
+    return { table: "13px", raw: "12px", json: "12px" };
+  }, [displaySettings?.liveLogsFontSize]);
+
+  const visibleColumns = displaySettings?.columnVisibility?.liveLogsTable || {
+    id: true,
+    type: true,
+    severity: true,
+    sourceIp: true,
+    app: true,
+    message: true,
+    created: true,
+  };
+
+  const getHighlightStyle = (event) => {
+    const rules = displaySettings?.liveLogHighlightRules || [];
+    const severity = String(event.severity || "").toLowerCase();
+    const type = String(event.event_type || "").toLowerCase();
+    for (const rule of rules) {
+      const targetValue = rule.target === "severity" ? severity : type;
+      if (targetValue !== String(rule.value || "").toLowerCase()) {
+        continue;
+      }
+      if (rule.treatment === "border") {
+        return { boxShadow: "inset 3px 0 0 #58a6ff" };
+      }
+      if (rule.treatment === "background") {
+        return { backgroundColor: "rgba(31, 111, 235, 0.14)" };
+      }
+      if (rule.treatment === "glow") {
+        return { boxShadow: "0 0 0 1px rgba(88, 166, 255, 0.45)" };
+      }
+    }
+    return null;
+  };
+
   return (
     <section style={cardStyle}>
       <div style={cardHeaderStyle}>
@@ -384,17 +442,17 @@ function LiveLogsPanel({
           <p style={emptyTextStyle}>Loading live logs...</p>
         ) : error ? (
           <div style={errorStateStyle}>{error}</div>
-        ) : events.length === 0 ? (
+        ) : limitedEvents.length === 0 ? (
           <p style={emptyTextStyle}>No live logs found for {displayLabel}.</p>
         ) : viewMode === VIEW_MODES.rawLog ? (
           <div style={rawStreamSectionStyle}>
             <div style={tableMetaStyle}>
               <span style={tableMetaLabelStyle}>Raw Log</span>
-              <span style={tableMetaCountStyle}>{events.length}</span>
+              <span style={tableMetaCountStyle}>{limitedEvents.length}</span>
             </div>
             <div style={rawStreamStyle} aria-label={`${displayLabel} raw log`}>
-              {events.map((event) => (
-                <div key={event.id} style={rawLogLineStyle}>
+              {limitedEvents.map((event) => (
+                <div key={event.id} style={{ ...rawLogLineStyle, fontSize: fontSizeScale.raw }}>
                   {formatRawLogLine(event)}
                 </div>
               ))}
@@ -404,11 +462,11 @@ function LiveLogsPanel({
           <div style={rawStreamSectionStyle}>
             <div style={tableMetaStyle}>
               <span style={tableMetaLabelStyle}>JSON</span>
-              <span style={tableMetaCountStyle}>{events.length}</span>
+              <span style={tableMetaCountStyle}>{limitedEvents.length}</span>
             </div>
             <div style={rawStreamStyle} aria-label={`${displayLabel} json view`}>
-              {events.map((event) => (
-                <pre key={event.id} style={rawEntryStyle}>
+              {limitedEvents.map((event) => (
+                <pre key={event.id} style={{ ...rawEntryStyle, fontSize: fontSizeScale.json }}>
                   {formatJsonEntry(event)}
                 </pre>
               ))}
@@ -418,35 +476,73 @@ function LiveLogsPanel({
           <div style={tableSectionStyle}>
             <div style={tableMetaStyle}>
               <span style={tableMetaLabelStyle}>Recent Events</span>
-              <span style={tableMetaCountStyle}>{events.length}</span>
+              <span style={tableMetaCountStyle}>{limitedEvents.length}</span>
             </div>
             <div style={tableWrapperStyle}>
               <table style={tableStyle}>
                 <thead>
                   <tr>
                     <th style={{ ...headerCellStyle, width: "8%" }}>ID</th>
-                    <th style={{ ...headerCellStyle, width: "14%" }}>Type</th>
-                    <th style={{ ...headerCellStyle, width: "10%" }}>Severity</th>
-                    <th style={{ ...headerCellStyle, width: "13%" }}>Source IP</th>
-                    <th style={{ ...headerCellStyle, width: "13%" }}>App</th>
-                    <th style={{ ...headerCellStyle, width: "24%" }}>Message</th>
-                    <th style={{ ...headerCellStyle, width: "18%" }}>Created</th>
+                    {visibleColumns.type && <th style={{ ...headerCellStyle, width: "14%" }}>Type</th>}
+                    {visibleColumns.severity && (
+                      <th style={{ ...headerCellStyle, width: "10%" }}>Severity</th>
+                    )}
+                    {visibleColumns.sourceIp && (
+                      <th style={{ ...headerCellStyle, width: "13%" }}>Source IP</th>
+                    )}
+                    {visibleColumns.app && <th style={{ ...headerCellStyle, width: "13%" }}>App</th>}
+                    {visibleColumns.message && (
+                      <th style={{ ...headerCellStyle, width: "24%" }}>Message</th>
+                    )}
+                    {visibleColumns.created && <th style={{ ...headerCellStyle, width: "18%" }}>Created</th>}
                   </tr>
                 </thead>
                 <tbody>
-                  {events.map((event) => (
-                    <tr key={event.id} style={rowStyle}>
-                      <td style={{ ...bodyCellStyle, ...monoCellStyle }}>{event.id}</td>
-                      <td style={bodyCellStyle}>
-                        <span style={eventTypeBadgeStyle}>{event.event_type || "unknown"}</span>
+                  {limitedEvents.map((event) => (
+                    <tr key={event.id} style={{ ...rowStyle, ...getHighlightStyle(event) }}>
+                      <td style={{ ...bodyCellStyle, ...monoCellStyle, fontSize: fontSizeScale.table }}>
+                        {event.id}
                       </td>
-                      <td style={bodyCellStyle}>{event.severity || "unknown"}</td>
-                      <td style={{ ...bodyCellStyle, ...monoCellStyle }}>{event.source_ip || "N/A"}</td>
-                      <td style={bodyCellStyle}>{event.app_name || "N/A"}</td>
-                      <td style={bodyCellStyle}>{event.message || "N/A"}</td>
-                      <td style={{ ...bodyCellStyle, ...createdCellStyle }} title={event.created_at || ""}>
-                        {event.created_at || "N/A"}
-                      </td>
+                      {visibleColumns.type && (
+                        <td style={{ ...bodyCellStyle, fontSize: fontSizeScale.table }}>
+                          <span style={eventTypeBadgeStyle}>{event.event_type || "unknown"}</span>
+                        </td>
+                      )}
+                      {visibleColumns.severity && (
+                        <td style={{ ...bodyCellStyle, fontSize: fontSizeScale.table }}>
+                          <span
+                            style={{
+                              ...eventTypeBadgeStyle,
+                              ...getSeverityBadgeStyle(
+                                event.severity,
+                                displaySettings?.severityColorPreset
+                              ),
+                            }}
+                          >
+                            {event.severity || "unknown"}
+                          </span>
+                        </td>
+                      )}
+                      {visibleColumns.sourceIp && (
+                        <td style={{ ...bodyCellStyle, ...monoCellStyle, fontSize: fontSizeScale.table }}>
+                          {event.source_ip || "N/A"}
+                        </td>
+                      )}
+                      {visibleColumns.app && (
+                        <td style={{ ...bodyCellStyle, fontSize: fontSizeScale.table }}>
+                          {event.app_name || "N/A"}
+                        </td>
+                      )}
+                      {visibleColumns.message && (
+                        <td style={{ ...bodyCellStyle, fontSize: fontSizeScale.table }}>
+                          {event.message || "N/A"}
+                        </td>
+                      )}
+                      {visibleColumns.created && (
+                        <td style={{ ...bodyCellStyle, ...createdCellStyle }} title={event.created_at || ""}>
+                          {formatTimestamp(event.created_at, displaySettings, "N/A")}
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>

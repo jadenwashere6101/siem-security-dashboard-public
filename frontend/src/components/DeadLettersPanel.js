@@ -7,7 +7,7 @@ import {
   getDeadLetters,
   requestDeadLetterRetry,
 } from "../services/deadLetterService";
-import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
+import { formatTimestamp } from "../utils/displayFormatting";
 
 const DEAD_LETTER_STATUSES = ["open", "retrying", "retried", "dismissed"];
 const STATUS_FILTERS = ["all", ...DEAD_LETTER_STATUSES];
@@ -32,10 +32,6 @@ function formatLabel(value) {
   return String(value || "unknown")
     .replaceAll("_", " ")
     .replace(/\b\w/g, (char) => char.toUpperCase());
-}
-
-function formatTimestamp(value) {
-  return formatAdminTimestamp(value, "—");
 }
 
 function formatDisplayValue(value, emptyValue = "—") {
@@ -149,6 +145,7 @@ function DeadLettersPanel({
   filterLabelStyle,
   selectStyle,
   userRole,
+  displaySettings,
 }) {
   const [metrics, setMetrics] = useState(null);
   const [items, setItems] = useState([]);
@@ -417,6 +414,7 @@ function DeadLettersPanel({
         onRetryLoad={() => loadPanel()}
         onSelectRow={handleSelectRow}
         onCloseDetail={handleCloseDetail}
+        displaySettings={displaySettings}
       />
     </section>
   );
@@ -549,6 +547,7 @@ function PanelBody({
   onRetryLoad,
   onSelectRow,
   onCloseDetail,
+  displaySettings,
 }) {
   return (
     <div style={panelContentStyle}>
@@ -562,7 +561,7 @@ function PanelBody({
 
       {metrics?.oldest_active_at ? (
         <p style={oldestActiveStyle}>
-          Oldest active dead letter: {formatTimestamp(metrics.oldest_active_at)}
+          Oldest active dead letter: {formatTimestamp(metrics.oldest_active_at, displaySettings, "—")}
         </p>
       ) : null}
 
@@ -576,7 +575,12 @@ function PanelBody({
             <p style={emptyTextStyle}>No dead letters found ({filterSummary}).</p>
           ) : (
             <div style={tableSectionStyle}>
-              <DeadLetterTable items={items} selectedId={selectedId} onSelectRow={onSelectRow} />
+            <DeadLetterTable
+              items={items}
+              selectedId={selectedId}
+              onSelectRow={onSelectRow}
+              displaySettings={displaySettings}
+            />
             </div>
           )}
 
@@ -615,6 +619,7 @@ function PanelBody({
                 onRetryExecute={onRetryExecute}
                 onRetryExecuteConfirmedChange={onRetryExecuteConfirmedChange}
                 onRetryExecutePhraseChange={onRetryExecutePhraseChange}
+                displaySettings={displaySettings}
               />
             ) : (
               <p style={emptyTextStyle}>No detail available for this dead letter.</p>
@@ -665,7 +670,7 @@ function MetricCard({ label, value, badgeStyle }) {
   );
 }
 
-function DeadLetterTable({ items, selectedId, onSelectRow }) {
+function DeadLetterTable({ items, selectedId, onSelectRow, displaySettings }) {
   return (
     <div style={tableWrapperStyle}>
       <table style={tableStyle}>
@@ -703,7 +708,7 @@ function DeadLetterTable({ items, selectedId, onSelectRow }) {
               </td>
               <td style={{ ...bodyCellStyle, ...monoCellStyle }}>{item.retry_count ?? 0}</td>
               <td style={{ ...bodyCellStyle, ...timeCellStyle }} title={item.created_at || ""}>
-                {formatTimestamp(item.created_at)}
+                {formatTimestamp(item.created_at, displaySettings, "—")}
               </td>
               <td style={bodyCellStyle}>
                 <button
@@ -745,13 +750,14 @@ function DeadLetterDetail({
   onRetryExecute,
   onRetryExecuteConfirmedChange,
   onRetryExecutePhraseChange,
+  displaySettings,
 }) {
   const payloadEntries = getPayloadEntries(item.payload_json);
 
   return (
     <>
       <p style={detailHeadingStyle}>Dead Letter #{item.id}</p>
-      <DetailSummaryGrid item={item} />
+      <DetailSummaryGrid item={item} displaySettings={displaySettings} />
       <div style={detailSectionStyle}>
         <div style={detailSectionTitleStyle}>Error Message</div>
         <p style={detailParagraphStyle}>{item.error_message || "—"}</p>
@@ -762,10 +768,12 @@ function DeadLetterDetail({
       {hasLinkedContext(item) ? <LinkedContextSection item={item} /> : null}
       {item.dismiss_reason || item.dismissed_at ? (
         <div style={detailSectionStyle}>
-          <DismissalSection item={item} />
+          <DismissalSection item={item} displaySettings={displaySettings} />
         </div>
       ) : null}
-      {item.retry_requested_at ? <RetryRequestSection item={item} /> : null}
+      {item.retry_requested_at ? (
+        <RetryRequestSection item={item} displaySettings={displaySettings} />
+      ) : null}
       <DeadLetterActions
         item={item}
         canMutateDeadLetters={canMutateDeadLetters}
@@ -945,7 +953,7 @@ function DeadLetterActions({
   );
 }
 
-function DetailSummaryGrid({ item }) {
+function DetailSummaryGrid({ item, displaySettings }) {
   return (
     <div style={detailGridStyle}>
       <DetailField label="Status" value={formatLabel(item.status)} />
@@ -954,9 +962,15 @@ function DetailSummaryGrid({ item }) {
       <DetailField label="Failure Class" value={item.failure_class || "—"} />
       <DetailField label="Retry Count" value={item.retry_count ?? 0} mono />
       <DetailField label="Retryable" value={item.retryable} />
-      <DetailField label="Created" value={formatTimestamp(item.created_at)} />
-      <DetailField label="First Failed" value={formatTimestamp(item.first_failed_at)} />
-      <DetailField label="Last Failed" value={formatTimestamp(item.last_failed_at)} />
+      <DetailField label="Created" value={formatTimestamp(item.created_at, displaySettings, "—")} />
+      <DetailField
+        label="First Failed"
+        value={formatTimestamp(item.first_failed_at, displaySettings, "—")}
+      />
+      <DetailField
+        label="Last Failed"
+        value={formatTimestamp(item.last_failed_at, displaySettings, "—")}
+      />
     </div>
   );
 }
@@ -1030,23 +1044,29 @@ function LinkedContextSection({ item }) {
   );
 }
 
-function DismissalSection({ item }) {
+function DismissalSection({ item, displaySettings }) {
   return (
     <>
       <div style={detailSectionTitleStyle}>Dismissal</div>
       <div style={detailGridStyle}>
         <DetailField label="Dismiss Reason" value={item.dismiss_reason || "—"} wrap />
-        <DetailField label="Dismissed At" value={formatTimestamp(item.dismissed_at)} />
+        <DetailField
+          label="Dismissed At"
+          value={formatTimestamp(item.dismissed_at, displaySettings, "—")}
+        />
       </div>
     </>
   );
 }
 
-function RetryRequestSection({ item }) {
+function RetryRequestSection({ item, displaySettings }) {
   return (
     <div style={detailSectionStyle}>
       <div style={detailSectionTitleStyle}>Retry Request</div>
-      <DetailField label="Retry Requested At" value={formatTimestamp(item.retry_requested_at)} />
+      <DetailField
+        label="Retry Requested At"
+        value={formatTimestamp(item.retry_requested_at, displaySettings, "—")}
+      />
     </div>
   );
 }

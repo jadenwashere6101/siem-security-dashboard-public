@@ -23,6 +23,18 @@ function AlertTableRow({
   canTakeAlertActions,
   getActionButtonStyle,
   getSeverityBadgeStyle,
+  formatTimestamp = (value) => value,
+  visibleColumns = {
+    id: true,
+    type: true,
+    source: true,
+    sourceIp: true,
+    behavior: true,
+    severity: true,
+    message: true,
+    createdAt: true,
+    action: true,
+  },
   tableRowStyle,
   bodyCellStyle,
   monoCellStyle,
@@ -58,6 +70,7 @@ function AlertTableRow({
     >
       <td style={bodyCellStyle}>{alert.id}</td>
 
+      {visibleColumns.type && (
       <td style={{ ...bodyCellStyle, ...monoCellStyle }}>
         <div style={sourceBadgeStackStyle}>
           <span>{alert.alert_type}</span>
@@ -68,7 +81,9 @@ function AlertTableRow({
           )}
         </div>
       </td>
+      )}
 
+      {visibleColumns.source && (
       <td style={bodyCellStyle}>
         <div style={sourceBadgeStackStyle}>
           <span style={{ ...sourceBadgeStyle, ...sourceBadge.style }} title={`Source: ${sourceBadge.label}`}>
@@ -77,7 +92,9 @@ function AlertTableRow({
           <span style={sourceTypeTextStyle}>{sourceBadge.subLabel}</span>
         </div>
       </td>
+      )}
 
+      {visibleColumns.sourceIp && (
       <td style={{ ...bodyCellStyle, ...monoCellStyle }}>
         <div>{alert.source_ip}</div>
         <div style={{ fontSize: "12px", color: "#666", marginTop: "4px" }}>
@@ -86,7 +103,9 @@ function AlertTableRow({
             : "Location unavailable"}
         </div>
       </td>
+      )}
 
+      {visibleColumns.behavior && (
       <td style={bodyCellStyle}>
         <div style={sourceBadgeStackStyle}>
           <span
@@ -107,7 +126,9 @@ function AlertTableRow({
           <span style={sourceTypeTextStyle}>Score {behavioralReputation.score}</span>
         </div>
       </td>
+      )}
 
+      {visibleColumns.severity && (
       <td style={bodyCellStyle}>
         <div>
           <span style={getSeverityBadgeStyle(alert.severity)}>
@@ -115,13 +136,17 @@ function AlertTableRow({
           </span>
         </div>
       </td>
+      )}
 
-      <td style={bodyCellStyle}>{alert.message}</td>
+      {visibleColumns.message && <td style={bodyCellStyle}>{alert.message}</td>}
 
+      {visibleColumns.createdAt && (
       <td style={{ ...bodyCellStyle, ...monoCellStyle }}>
-        {alert.created_at}
+        {formatTimestamp(alert.created_at)}
       </td>
+      )}
 
+      {visibleColumns.action && (
       <td style={bodyCellStyle}>
         <div
           style={{
@@ -155,6 +180,7 @@ function AlertTableRow({
           )}
         </div>
       </td>
+      )}
     </tr>
   );
 }

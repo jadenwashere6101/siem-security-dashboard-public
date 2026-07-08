@@ -37,6 +37,7 @@ import {
   logoutFromDashboard,
 } from "./services/authService";
 import { isSectionVisible, sectionsConfig } from "./utils/sectionsConfig";
+import { getSeverityBadgeStyle } from "./utils/severityDisplay";
 import packageJson from "../package.json";
 
 function AppInner() {
@@ -303,42 +304,6 @@ function AppInner() {
     return buildAlertTimelineData(filteredAlerts);
   }, [filteredAlerts]);
 
-  const getSeverityBadgeStyle = (severity) => {
-    if (severity === "high") {
-      return {
-        ...severityBadgeBase,
-        color: "#f85149",
-        border: "1px solid rgba(248, 81, 73, 0.35)",
-        backgroundColor: "rgba(248, 81, 73, 0.10)",
-      };
-    }
-
-    if (severity === "medium") {
-      return {
-        ...severityBadgeBase,
-        color: "#d18616",
-        border: "1px solid rgba(209, 134, 22, 0.35)",
-        backgroundColor: "rgba(209, 134, 22, 0.10)",
-      };
-    }
-
-    if (severity === "low") {
-      return {
-        ...severityBadgeBase,
-        color: "#3fb950",
-        border: "1px solid rgba(63, 185, 80, 0.35)",
-        backgroundColor: "rgba(63, 185, 80, 0.10)",
-      };
-    }
-
-    return {
-      ...severityBadgeBase,
-      color: "#8b949e",
-      border: "1px solid #30363d",
-      backgroundColor: "#161b22",
-    };
-  };
-
   if (authLoading) {
     return (
       <div
@@ -524,7 +489,10 @@ function AppInner() {
             setSourceFilter={setSourceFilter}
             selectedAlertId={selectedAlertId}
             setSelectedAlertId={setSelectedAlertId}
-            getSeverityBadgeStyle={getSeverityBadgeStyle}
+            getSeverityBadgeStyle={(severity) => ({
+              ...severityBadgeBase,
+              ...getSeverityBadgeStyle(severity, settings.display?.severityColorPreset),
+            })}
             onUpdateStatus={handleUpdateStatus}
             statusFilter={statusFilter}
             setStatusFilter={setStatusFilter}
@@ -555,11 +523,13 @@ function AppInner() {
             expandedContentStyle={expandedContentStyle}
             expandedLabelStyle={expandedLabelStyle}
             expandedTextStyle={expandedTextStyle}
+            displaySettings={settings.display}
           />
         )}
 
         {activeSection === "threat-hunt" && isSectionVisible("threat-hunt", roleFlags) && (
           <ThreatHuntPanel
+            displaySettings={settings.display}
             cardStyle={cardStyle}
             cardHeaderStyle={cardHeaderStyle}
             cardTitleStyle={cardTitleStyle}
@@ -595,6 +565,7 @@ function AppInner() {
             source={activeLiveLogsSection.source}
             label={activeLiveLogsSection.label}
             pollIntervalMs={settings.autoRefreshIntervalMs}
+            displaySettings={settings.display}
             cardStyle={cardStyle}
             cardHeaderStyle={cardHeaderStyle}
             cardTitleStyle={cardTitleStyle}
@@ -612,12 +583,23 @@ function AppInner() {
             onAutoRefreshIntervalChange={(autoRefreshIntervalMs) =>
               updateSettings((previous) => ({ ...previous, autoRefreshIntervalMs }))
             }
+            onDisplaySettingsChange={(displayUpdate) =>
+              updateSettings((previous) => ({
+                ...previous,
+                display: {
+                  ...previous.display,
+                  ...displayUpdate,
+                },
+              }))
+            }
             cardStyle={cardStyle}
             cardHeaderStyle={cardHeaderStyle}
             cardTitleStyle={cardTitleStyle}
             cardSubtitleStyle={cardSubtitleStyle}
             filterLabelStyle={filterLabelStyle}
             selectStyle={selectStyle}
+            sections={sectionsConfig}
+            roleFlags={roleFlags}
           />
         )}
 
@@ -663,6 +645,7 @@ function AppInner() {
 
         {activeSection === "soar-incidents" && isSectionVisible("soar-incidents", roleFlags) && (
           <IncidentsPanel
+            displaySettings={settings.display}
             cardStyle={cardStyle}
             cardHeaderStyle={cardHeaderStyle}
             cardTitleStyle={cardTitleStyle}
@@ -675,6 +658,7 @@ function AppInner() {
 
         {activeSection === "soar-approvals" && isSectionVisible("soar-approvals", roleFlags) && (
           <ApprovalsPanel
+            displaySettings={settings.display}
             cardStyle={cardStyle}
             cardHeaderStyle={cardHeaderStyle}
             cardTitleStyle={cardTitleStyle}
@@ -719,6 +703,7 @@ function AppInner() {
 
         {activeSection === "soar-operations" && isSectionVisible("soar-operations", roleFlags) && (
           <DeadLettersPanel
+            displaySettings={settings.display}
             cardStyle={cardStyle}
             cardHeaderStyle={cardHeaderStyle}
             cardTitleStyle={cardTitleStyle}

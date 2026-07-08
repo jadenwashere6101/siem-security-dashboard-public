@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from "react";
 import ThreatHuntEventDetails from "./ThreatHuntEventDetails";
 import { searchThreatHuntEvents } from "../services/threatHuntService";
+import { formatTimestamp } from "../utils/displayFormatting";
+import { getSeverityBadgeStyle } from "../utils/severityDisplay";
 import {
-  formatCreatedAt,
   formatRawPayload,
   getEventTypeBadgeStyle,
   getReputationBadgeStyle,
-  getSeverityBadgeStyle,
   getSourceBadgeMeta,
   groupEventsByDate,
 } from "../utils/threatHuntDisplay";
@@ -19,6 +19,7 @@ function ThreatHuntPanel({
   filterLabelStyle,
   selectStyle,
   onViewRelatedAlerts,
+  displaySettings,
 }) {
   const [sourceIp, setSourceIp] = useState("");
   const [source, setSource] = useState("");
@@ -284,14 +285,24 @@ function ThreatHuntPanel({
                                 )
                               }
                             >
-                              <td style={bodyCellStyle}>{formatCreatedAt(event.created_at)}</td>
+                              <td style={bodyCellStyle}>
+                                {formatTimestamp(event.created_at, displaySettings, "N/A")}
+                              </td>
                               <td style={bodyCellStyle}>
                                 <span style={{ ...eventTypeBadgeStyle, ...getEventTypeBadgeStyle(event.event_type) }}>
                                   {event.event_type}
                                 </span>
                               </td>
                               <td style={bodyCellStyle}>
-                                <span style={{ ...severityBadgeStyle, ...getSeverityBadgeStyle(event.severity) }}>
+                                <span
+                                  style={{
+                                    ...severityBadgeStyle,
+                                    ...getSeverityBadgeStyle(
+                                      event.severity,
+                                      displaySettings?.severityColorPreset
+                                    ),
+                                  }}
+                                >
                                   {event.severity}
                                 </span>
                               </td>

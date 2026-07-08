@@ -6,7 +6,8 @@ import {
   updateIncidentStatus,
 } from "../services/incidentService";
 import { listIncidentNotificationDeliveries } from "../services/notificationDeliveryService";
-import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
+import { formatTimestamp } from "../utils/displayFormatting";
+import { getSeverityBadgeStyle } from "../utils/severityDisplay";
 
 const INCIDENT_STATUS_FILTERS = ["all", "open", "investigating", "resolved", "closed"];
 const INCIDENT_SEVERITY_FILTERS = ["all", "LOW", "MEDIUM", "HIGH", "CRITICAL"];
@@ -55,6 +56,7 @@ function IncidentsPanel({
   filterLabelStyle,
   selectStyle,
   canTakeAlertActions,
+  displaySettings,
 }) {
   const [incidents, setIncidents] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -208,6 +210,19 @@ function IncidentsPanel({
     }
   }, [loadDetail, loadNotificationDeliveries, loadTimeline, selectedIncidentId]);
 
+  const rowsPerPage = displaySettings?.rowsPerPage ?? "all";
+  const limitedIncidents =
+    rowsPerPage === "all" ? incidents : incidents.slice(0, Number(rowsPerPage));
+  const visibleColumns = displaySettings?.columnVisibility?.incidentsTable || {
+    id: true,
+    title: true,
+    severity: true,
+    priority: true,
+    status: true,
+    sourceIp: true,
+    created: true,
+  };
+
   return (
     <section style={cardStyle}>
       <div style={cardHeaderStyle}>
@@ -284,23 +299,33 @@ function IncidentsPanel({
           <div style={tableSectionStyle}>
             <div style={tableMetaStyle}>
               <span style={tableMetaLabelStyle}>Incidents</span>
-              <span style={tableMetaCountStyle}>{incidents.length}</span>
+              <span style={tableMetaCountStyle}>{limitedIncidents.length}</span>
             </div>
             <div style={tableWrapperStyle}>
               <table style={tableStyle}>
                 <thead>
                   <tr>
                     <th style={{ ...headerCellStyle, width: "8%" }}>ID</th>
-                    <th style={{ ...headerCellStyle, width: "28%" }}>Title</th>
-                    <th style={{ ...headerCellStyle, width: "12%" }}>Severity</th>
-                    <th style={{ ...headerCellStyle, width: "10%" }}>Priority</th>
-                    <th style={{ ...headerCellStyle, width: "14%" }}>Status</th>
-                    <th style={{ ...headerCellStyle, width: "14%" }}>Source IP</th>
-                    <th style={{ ...headerCellStyle, width: "14%" }}>Created</th>
+                    {visibleColumns.title && <th style={{ ...headerCellStyle, width: "28%" }}>Title</th>}
+                    {visibleColumns.severity && (
+                      <th style={{ ...headerCellStyle, width: "12%" }}>Severity</th>
+                    )}
+                    {visibleColumns.priority && (
+                      <th style={{ ...headerCellStyle, width: "10%" }}>Priority</th>
+                    )}
+                    {visibleColumns.status && (
+                      <th style={{ ...headerCellStyle, width: "14%" }}>Status</th>
+                    )}
+                    {visibleColumns.sourceIp && (
+                      <th style={{ ...headerCellStyle, width: "14%" }}>Source IP</th>
+                    )}
+                    {visibleColumns.created && (
+                      <th style={{ ...headerCellStyle, width: "14%" }}>Created</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
-                  {incidents.map((incident) => (
+                  {limitedIncidents.map((incident) => (
                     <tr
                       key={incident.id}
                       onClick={() => setSelectedIncidentId(incident.id)}
@@ -310,26 +335,34 @@ function IncidentsPanel({
                       }}
                     >
                       <td style={{ ...bodyCellStyle, ...monoCellStyle }}>{incident.id}</td>
-                      <td style={bodyCellStyle} title={incident.title || ""}>
+                      {visibleColumns.title && <td style={bodyCellStyle} title={incident.title || ""}>
                         {truncateText(incident.title || "Untitled incident", 44)}
-                      </td>
-                      <td style={bodyCellStyle}>
-                        <span style={{ ...badgeStyle, ...getSeverityBadgeStyle(incident.severity) }}>
+                      </td>}
+                      {visibleColumns.severity && <td style={bodyCellStyle}>
+                        <span
+                          style={{
+                            ...badgeStyle,
+                            ...getSeverityBadgeStyle(
+                              incident.severity,
+                              displaySettings?.severityColorPreset
+                            ),
+                          }}
+                        >
                           {formatSeverity(incident.severity)}
                         </span>
-                      </td>
-                      <td style={bodyCellStyle}>{incident.priority || "N/A"}</td>
-                      <td style={bodyCellStyle}>
+                      </td>}
+                      {visibleColumns.priority && <td style={bodyCellStyle}>{incident.priority || "N/A"}</td>}
+                      {visibleColumns.status && <td style={bodyCellStyle}>
                         <span style={{ ...badgeStyle, ...getStatusBadgeStyle(incident.status) }}>
                           {formatLabel(incident.status)}
                         </span>
-                      </td>
-                      <td style={{ ...bodyCellStyle, ...monoCellStyle }}>
+                      </td>}
+                      {visibleColumns.sourceIp && <td style={{ ...bodyCellStyle, ...monoCellStyle }}>
                         {incident.source_ip || <span style={mutedTextStyle}>N/A</span>}
-                      </td>
-                      <td style={{ ...bodyCellStyle, ...timeCellStyle }} title={incident.created_at || ""}>
-                        {formatTimestamp(incident.created_at)}
-                      </td>
+                      </td>}
+                      {visibleColumns.created && <td style={{ ...bodyCellStyle, ...timeCellStyle }} title={incident.created_at || ""}>
+                        {formatTimestamp(incident.created_at, displaySettings, "N/A")}
+                      </td>}
                     </tr>
                   ))}
                 </tbody>
@@ -362,10 +395,17 @@ function IncidentsPanel({
                   <DetailField label="Priority" value={selectedIncident.priority || "N/A"} />
                   <DetailField label="Status" value={formatLabel(selectedIncident.status)} />
                   <DetailField label="Source IP" value={selectedIncident.source_ip || "N/A"} mono />
-                  <DetailField label="Created" value={formatTimestamp(selectedIncident.created_at)} />
+                  <DetailField
+                    label="Created"
+                    value={formatTimestamp(selectedIncident.created_at, displaySettings, "N/A")}
+                  />
                   <DetailField
                     label="Resolved"
-                    value={selectedIncident.resolved_at ? formatTimestamp(selectedIncident.resolved_at) : "—"}
+                    value={
+                      selectedIncident.resolved_at
+                        ? formatTimestamp(selectedIncident.resolved_at, displaySettings, "N/A")
+                        : "—"
+                    }
                   />
                 </div>
 
@@ -396,7 +436,7 @@ function IncidentsPanel({
                               <td style={bodyCellStyle}>{formatSeverity(alert.severity)}</td>
                               <td style={bodyCellStyle}>{formatLabel(alert.status)}</td>
                               <td style={{ ...bodyCellStyle, ...timeCellStyle }}>
-                                {formatTimestamp(alert.linked_at)}
+                                {formatTimestamp(alert.linked_at, displaySettings, "N/A")}
                               </td>
                             </tr>
                           ))}
@@ -438,6 +478,7 @@ function IncidentsPanel({
                         <TimelineEvent
                           key={getTimelineEventKey(event, index)}
                           event={event}
+                          displaySettings={displaySettings}
                         />
                       ))}
                     </ol>
@@ -468,7 +509,11 @@ function IncidentsPanel({
                   ) : (
                     <div style={deliveryListStyle} aria-label="Notification delivery history">
                       {deliveryAttempts.map((attempt) => (
-                        <DeliveryAttempt key={attempt.id || attempt.correlation_id} attempt={attempt} />
+                        <DeliveryAttempt
+                          key={attempt.id || attempt.correlation_id}
+                          attempt={attempt}
+                          displaySettings={displaySettings}
+                        />
                       ))}
                     </div>
                   )}
@@ -524,8 +569,6 @@ const formatLabel = (value) =>
   String(value || "unknown").replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
 
 const formatSeverity = (value) => String(value || "N/A").toUpperCase();
-
-const formatTimestamp = (value) => formatAdminTimestamp(value, "N/A");
 
 const formatEventType = (value) => {
   const labels = {
@@ -600,15 +643,6 @@ const truncateText = (value, maxLength) => {
   const text = String(value || "");
   if (text.length <= maxLength) return text;
   return `${text.slice(0, maxLength)}...`;
-};
-
-const getSeverityBadgeStyle = (severity) => {
-  const normalized = String(severity || "").toUpperCase();
-  if (normalized === "CRITICAL") return criticalBadgeStyle;
-  if (normalized === "HIGH") return highBadgeStyle;
-  if (normalized === "MEDIUM") return mediumBadgeStyle;
-  if (normalized === "LOW") return lowBadgeStyle;
-  return neutralBadgeStyle;
 };
 
 const getStatusBadgeStyle = (status) => {
@@ -1115,14 +1149,14 @@ function DetailField({ label, value, mono = false }) {
   );
 }
 
-function TimelineEvent({ event }) {
+function TimelineEvent({ event, displaySettings }) {
   const metadataEntries = getSafeMetadataEntries(event?.metadata);
   return (
     <li style={timelineItemStyle}>
       <div style={timelineItemHeaderStyle}>
         <span style={timelineEventTypeStyle}>{formatEventType(event?.event_type)}</span>
         <time style={timelineTimestampStyle} dateTime={event?.timestamp || undefined}>
-          {formatTimestamp(event?.timestamp)}
+          {formatTimestamp(event?.timestamp, displaySettings, "N/A")}
         </time>
       </div>
       <p style={timelineSourceStyle}>{formatLabel(event?.source || "timeline")}</p>
@@ -1142,7 +1176,7 @@ function TimelineEvent({ event }) {
   );
 }
 
-function DeliveryAttempt({ attempt }) {
+function DeliveryAttempt({ attempt, displaySettings }) {
   const metadataEntries = getSafeDeliveryMetadataEntries(attempt?.metadata);
   return (
     <div style={deliveryCardStyle}>
@@ -1169,10 +1203,22 @@ function DeliveryAttempt({ attempt }) {
           label="Timeout seconds"
           value={formatDeliveryValue(attempt?.timeout_seconds)}
         />
-        <DetailField label="Requested" value={formatTimestamp(attempt?.requested_at)} />
-        <DetailField label="Started" value={formatTimestamp(attempt?.started_at)} />
-        <DetailField label="Completed" value={formatTimestamp(attempt?.completed_at)} />
-        <DetailField label="Created" value={formatTimestamp(attempt?.created_at)} />
+        <DetailField
+          label="Requested"
+          value={formatTimestamp(attempt?.requested_at, displaySettings, "N/A")}
+        />
+        <DetailField
+          label="Started"
+          value={formatTimestamp(attempt?.started_at, displaySettings, "N/A")}
+        />
+        <DetailField
+          label="Completed"
+          value={formatTimestamp(attempt?.completed_at, displaySettings, "N/A")}
+        />
+        <DetailField
+          label="Created"
+          value={formatTimestamp(attempt?.created_at, displaySettings, "N/A")}
+        />
         {attempt?.failure_code ? (
           <DetailField label="Failure code" value={formatDeliveryValue(attempt.failure_code)} />
         ) : null}

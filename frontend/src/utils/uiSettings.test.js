@@ -50,9 +50,52 @@ describe("uiSettings", () => {
     );
 
     expect(readUiSettings()).toEqual({
+      ...DEFAULT_UI_SETTINGS,
       defaultLandingPage: "threat-hunt",
       autoRefreshIntervalMs: DEFAULT_UI_SETTINGS.autoRefreshIntervalMs,
     });
+  });
+
+  test("recovers malformed display settings key-by-key", () => {
+    window.localStorage.setItem(
+      UI_SETTINGS_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        settings: {
+          defaultLandingPage: "dashboard",
+          autoRefreshIntervalMs: 5000,
+          display: {
+            timezoneMode: "utc",
+            timestampFormat: "bad",
+            rowsPerPage: 25,
+            defaultLiveLogsTab: "json",
+            severityColorPreset: "highContrast",
+            columnVisibility: {
+              alertsTable: {
+                id: false,
+                message: false,
+              },
+            },
+            liveLogHighlightRules: [
+              { target: "severity", value: "high", treatment: "border" },
+              { target: "bad", value: "x", treatment: "border" },
+            ],
+          },
+        },
+      })
+    );
+
+    const parsed = readUiSettings();
+    expect(parsed.display.timezoneMode).toBe("utc");
+    expect(parsed.display.timestampFormat).toBe(DEFAULT_UI_SETTINGS.display.timestampFormat);
+    expect(parsed.display.rowsPerPage).toBe(25);
+    expect(parsed.display.defaultLiveLogsTab).toBe("json");
+    expect(parsed.display.severityColorPreset).toBe("highContrast");
+    expect(parsed.display.columnVisibility.alertsTable.id).toBe(true);
+    expect(parsed.display.columnVisibility.alertsTable.message).toBe(false);
+    expect(parsed.display.liveLogHighlightRules).toEqual([
+      { target: "severity", value: "high", treatment: "border" },
+    ]);
   });
 
   test("handles localStorage read/write exceptions safely", () => {

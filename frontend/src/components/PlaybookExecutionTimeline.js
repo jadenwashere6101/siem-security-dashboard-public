@@ -1,6 +1,7 @@
 import React, { useMemo } from "react";
 import ExecutionSafetyModelPanel from "./ExecutionSafetyModelPanel";
 import { buildCanonicalStepOutcomeLabels } from "../utils/responseOutcomeDisplay";
+import { formatTimestamp as sharedFormatTimestamp } from "../utils/displayFormatting";
 
 // spec: SPEC-UI-004 - timeline labels clarify simulation-safe execution without downplaying real workflows.
 const STATUS_TONES = {
@@ -43,10 +44,8 @@ function parseDate(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-function formatTimestamp(value) {
-  const parsed = parseDate(value);
-  if (!parsed) return "Unavailable";
-  return parsed.toLocaleString();
+function formatTimestamp(value, displaySettings) {
+  return sharedFormatTimestamp(value, displaySettings, "Unavailable");
 }
 
 function formatDuration(startedAt, completedAt, explicitDuration) {
@@ -351,7 +350,7 @@ function Metric({ label, value }) {
   );
 }
 
-function PlaybookExecutionTimeline({ execution, compact = false }) {
+function PlaybookExecutionTimeline({ execution, compact = false, displaySettings }) {
   const timeline = useMemo(() => normalizeExecutionTimeline(execution || {}), [execution]);
   const { steps, summary } = timeline;
 
@@ -472,8 +471,8 @@ function PlaybookExecutionTimeline({ execution, compact = false }) {
                   </div>
 
                   <div style={metaGridStyle}>
-                    <Field label="Started" value={formatTimestamp(step.startedAt)} />
-                    <Field label="Completed" value={formatTimestamp(step.completedAt)} />
+                    <Field label="Started" value={formatTimestamp(step.startedAt, displaySettings)} />
+                    <Field label="Completed" value={formatTimestamp(step.completedAt, displaySettings)} />
                     <Field label="Duration" value={step.duration} />
                     {step.retryCount > 0 ? <Field label="Retry count" value={step.retryCount} /> : null}
                     {step.approvalRequestId ? (

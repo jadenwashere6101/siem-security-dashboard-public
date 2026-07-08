@@ -52,6 +52,7 @@ function DashboardSection({
   expandedContentStyle,
   expandedLabelStyle,
   expandedTextStyle,
+  displaySettings,
 }) {
   return (
     <>
@@ -112,6 +113,7 @@ function DashboardSection({
           expandedContentStyle={expandedContentStyle}
           expandedLabelStyle={expandedLabelStyle}
           expandedTextStyle={expandedTextStyle}
+          displaySettings={displaySettings}
           onUpdateStatus={onUpdateStatus}
           statusFilter={statusFilter}
           setStatusFilter={setStatusFilter}
