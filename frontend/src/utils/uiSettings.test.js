@@ -98,6 +98,47 @@ describe("uiSettings", () => {
     ]);
   });
 
+  test("recovers notification settings key-by-key", () => {
+    window.localStorage.setItem(
+      UI_SETTINGS_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        settings: {
+          notifications: {
+            alertSoundsEnabled: true,
+            alertSoundVolume: 0.8,
+            browserNotificationsEnabled: "yes",
+          },
+        },
+      })
+    );
+
+    const parsed = readUiSettings();
+    expect(parsed.notifications).toEqual({
+      ...DEFAULT_UI_SETTINGS.notifications,
+      alertSoundsEnabled: true,
+      alertSoundVolume: 0.8,
+    });
+  });
+
+  test("falls back to notification defaults when notification values are invalid", () => {
+    window.localStorage.setItem(
+      UI_SETTINGS_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        settings: {
+          notifications: {
+            alertSoundsEnabled: "true",
+            alertSoundVolume: 2,
+            browserNotificationsEnabled: null,
+          },
+        },
+      })
+    );
+
+    expect(readUiSettings().notifications).toEqual(DEFAULT_UI_SETTINGS.notifications);
+  });
+
   test("handles localStorage read/write exceptions safely", () => {
     const getItemSpy = jest.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
       throw new Error("read failed");

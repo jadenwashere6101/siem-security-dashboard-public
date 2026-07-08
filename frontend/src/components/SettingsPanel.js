@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useMemo, useState } from "react";
 
 import {
   ALLOWED_AUTO_REFRESH_INTERVALS,
@@ -42,6 +42,16 @@ const SEVERITY_PRESET_LABELS = {
   highContrast: "High Contrast",
 };
 
+const NOTIFICATION_PERMISSION_LABELS = {
+  granted: "Browser permission granted",
+  denied: "Browser permission blocked",
+  default: "Browser permission not requested",
+  unsupported: "Browser notifications unavailable",
+};
+
+const TEST_SOUND_SRC =
+  "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=";
+
 const HIGHLIGHT_TREATMENT_OPTIONS = [
   { id: "border", label: "Border" },
   { id: "background", label: "Background" },
@@ -54,6 +64,7 @@ function SettingsPanel({
   onDefaultLandingPageChange,
   onAutoRefreshIntervalChange,
   onDisplaySettingsChange,
+  onNotificationSettingsChange,
   sections,
   roleFlags,
   cardStyle,
@@ -63,6 +74,111 @@ function SettingsPanel({
   filterLabelStyle,
   selectStyle,
 }) {
+  const [notificationStatus, setNotificationStatus] = useState("");
+  const [notificationError, setNotificationError] = useState("");
+  const [soundStatus, setSoundStatus] = useState("");
+  const [soundError, setSoundError] = useState("");
+
+  const notificationPermission = useMemo(() => getNotificationPermission(), []);
+
+  const [currentNotificationPermission, setCurrentNotificationPermission] =
+    useState(notificationPermission);
+
+  const notifications = settings.notifications || {};
+  const notificationApiAvailable = currentNotificationPermission !== "unsupported";
+  const notificationPermissionDenied = currentNotificationPermission === "denied";
+
+  const requestNotificationPermission = async () => {
+    if (!("Notification" in window) || !window.Notification) {
+      setCurrentNotificationPermission("unsupported");
+      setNotificationError("Browser notifications are not available in this browser.");
+      return "unsupported";
+    }
+
+    const permission = window.Notification.permission || "default";
+    if (permission !== "default") {
+      setCurrentNotificationPermission(permission);
+      return permission;
+    }
+
+    try {
+      const requestedPermission = await window.Notification.requestPermission();
+      const nextPermission = requestedPermission || window.Notification.permission || "default";
+      setCurrentNotificationPermission(nextPermission);
+      return nextPermission;
+    } catch (_error) {
+      setNotificationError("Unable to request browser notification permission.");
+      return "default";
+    }
+  };
+
+  const handleBrowserNotificationsEnabledChange = async (enabled) => {
+    setNotificationStatus("");
+    setNotificationError("");
+
+    if (!enabled) {
+      onNotificationSettingsChange({ browserNotificationsEnabled: false });
+      return;
+    }
+
+    const permission = await requestNotificationPermission();
+    if (permission === "granted") {
+      onNotificationSettingsChange({ browserNotificationsEnabled: true });
+      setNotificationStatus("Browser notifications are enabled for test notifications.");
+      return;
+    }
+
+    onNotificationSettingsChange({ browserNotificationsEnabled: false });
+    if (permission === "denied") {
+      setNotificationError("Browser notifications are blocked by the browser.");
+    } else if (permission === "unsupported") {
+      setNotificationError("Browser notifications are not available in this browser.");
+    } else {
+      setNotificationError("Browser notification permission was not granted.");
+    }
+  };
+
+  const handleTestBrowserNotification = async () => {
+    setNotificationStatus("");
+    setNotificationError("");
+
+    const permission = await requestNotificationPermission();
+    if (permission !== "granted") {
+      if (permission === "denied") {
+        setNotificationError("Browser notifications are blocked by the browser.");
+      } else if (permission === "unsupported") {
+        setNotificationError("Browser notifications are not available in this browser.");
+      } else {
+        setNotificationError("Browser notification permission was not granted.");
+      }
+      return;
+    }
+
+    try {
+      new window.Notification("Test SIEM alert notification", {
+        body: "Synthetic notification from Settings. No real alert was created.",
+      });
+      setCurrentNotificationPermission("granted");
+      setNotificationStatus("Test browser notification sent.");
+    } catch (_error) {
+      setNotificationError("Unable to show test browser notification.");
+    }
+  };
+
+  const handleTestAlertSound = async () => {
+    setSoundStatus("");
+    setSoundError("");
+
+    try {
+      const audio = new window.Audio(TEST_SOUND_SRC);
+      audio.volume = notifications.alertSoundVolume ?? 0.5;
+      await audio.play();
+      setSoundStatus("Test alert sound played.");
+    } catch (_error) {
+      setSoundError("Unable to play the test alert sound.");
+    }
+  };
+
   return (
     <section style={cardStyle}>
       <div style={cardHeaderStyle}>
@@ -233,8 +349,97 @@ function SettingsPanel({
         <p style={sectionHeadingStyle}>Live Log Highlighting Rules</p>
         <HighlightRuleEditor settings={settings} onDisplaySettingsChange={onDisplaySettingsChange} />
       </div>
+
+      <div style={settingsSectionStyle}>
+        <p style={sectionHeadingStyle}>Alert Notification Preferences</p>
+        <div style={notificationGridStyle}>
+          <div style={notificationCardStyle}>
+            <label style={checkboxLabelStyle}>
+              <input
+                type="checkbox"
+                checked={!!notifications.alertSoundsEnabled}
+                onChange={(event) =>
+                  onNotificationSettingsChange({ alertSoundsEnabled: event.target.checked })
+                }
+              />
+              <span>Alert sound</span>
+            </label>
+
+            {notifications.alertSoundsEnabled && (
+              <>
+                <label htmlFor="alert-sound-volume" style={filterLabelStyle}>
+                  Alert sound volume
+                </label>
+                <input
+                  id="alert-sound-volume"
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={notifications.alertSoundVolume ?? 0.5}
+                  onChange={(event) =>
+                    onNotificationSettingsChange({
+                      alertSoundVolume: Number(event.target.value),
+                    })
+                  }
+                  style={rangeStyle}
+                />
+                <button type="button" style={addButtonStyle} onClick={handleTestAlertSound}>
+                  Test alert sound
+                </button>
+                {soundStatus && <p style={successTextStyle}>{soundStatus}</p>}
+                {soundError && <p style={errorTextStyle}>{soundError}</p>}
+              </>
+            )}
+          </div>
+
+          <div style={notificationCardStyle}>
+            <label style={checkboxLabelStyle}>
+              <input
+                type="checkbox"
+                checked={!!notifications.browserNotificationsEnabled}
+                disabled={!notificationApiAvailable || notificationPermissionDenied}
+                onChange={(event) =>
+                  handleBrowserNotificationsEnabledChange(event.target.checked)
+                }
+              />
+              <span>Browser notifications</span>
+            </label>
+            <p style={helperTextStyle}>
+              {NOTIFICATION_PERMISSION_LABELS[currentNotificationPermission] ||
+                NOTIFICATION_PERMISSION_LABELS.default}
+            </p>
+            <button
+              type="button"
+              style={{
+                ...addButtonStyle,
+                ...(!notificationApiAvailable || notificationPermissionDenied
+                  ? disabledButtonStyle
+                  : {}),
+              }}
+              disabled={!notificationApiAvailable || notificationPermissionDenied}
+              onClick={handleTestBrowserNotification}
+            >
+              Test browser notification
+            </button>
+            {notificationStatus && <p style={successTextStyle}>{notificationStatus}</p>}
+            {notificationError && <p style={errorTextStyle}>{notificationError}</p>}
+            <p style={helperTextStyle}>
+              Test notifications are synthetic and do not create or modify SIEM alerts.
+            </p>
+          </div>
+        </div>
+      </div>
     </section>
   );
+}
+
+function getNotificationPermission() {
+  if (typeof window === "undefined" || !("Notification" in window) || !window.Notification) {
+    return "unsupported";
+  }
+
+  return window.Notification.permission || "default";
 }
 
 function ColumnVisibilityEditor({ settings, onDisplaySettingsChange, sections, roleFlags }) {
@@ -379,6 +584,22 @@ const settingsSectionStyle = {
   padding: "0 20px 20px 20px",
 };
 
+const notificationGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+  gap: "14px",
+};
+
+const notificationCardStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "10px",
+  border: "1px solid #30363d",
+  borderRadius: "10px",
+  padding: "12px",
+  backgroundColor: "#0d1117",
+};
+
 const sectionHeadingStyle = {
   margin: "0 0 12px 0",
   color: "#8b949e",
@@ -449,6 +670,32 @@ const inputStyle = {
   fontSize: "13px",
 };
 
+const rangeStyle = {
+  width: "100%",
+  accentColor: "#1f6feb",
+};
+
+const helperTextStyle = {
+  margin: 0,
+  color: "#8b949e",
+  fontSize: "12px",
+  lineHeight: "1.5",
+};
+
+const successTextStyle = {
+  margin: 0,
+  color: "#3fb950",
+  fontSize: "12px",
+  fontWeight: "700",
+};
+
+const errorTextStyle = {
+  margin: 0,
+  color: "#fca5a5",
+  fontSize: "12px",
+  fontWeight: "700",
+};
+
 const removeButtonStyle = {
   padding: "8px 10px",
   borderRadius: "8px",
@@ -470,6 +717,11 @@ const addButtonStyle = {
   fontSize: "12px",
   fontWeight: "700",
   cursor: "pointer",
+};
+
+const disabledButtonStyle = {
+  opacity: 0.55,
+  cursor: "not-allowed",
 };
 
 export default SettingsPanel;

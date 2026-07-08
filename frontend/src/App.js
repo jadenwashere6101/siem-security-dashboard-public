@@ -592,6 +592,15 @@ function AppInner() {
                 },
               }))
             }
+            onNotificationSettingsChange={(notificationUpdate) =>
+              updateSettings((previous) => ({
+                ...previous,
+                notifications: {
+                  ...previous.notifications,
+                  ...notificationUpdate,
+                },
+              }))
+            }
             cardStyle={cardStyle}
             cardHeaderStyle={cardHeaderStyle}
             cardTitleStyle={cardTitleStyle}

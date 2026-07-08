@@ -252,7 +252,7 @@ test('does not render Live Logs nav for viewer', async () => {
   expect(screen.queryByRole('button', { name: /honeypot/i })).not.toBeInTheDocument();
 });
 
-test('renders Settings nav for viewer and opens foundation controls only', async () => {
+test('renders Settings nav for viewer and opens preference controls', async () => {
   loadCurrentSession.mockResolvedValue({
     authenticated: true,
     user: 'viewer1',
@@ -269,8 +269,8 @@ test('renders Settings nav for viewer and opens foundation controls only', async
   expect(await screen.findByRole('heading', { name: /^settings$/i })).toBeInTheDocument();
   expect(screen.getByLabelText(/default landing page/i)).toBeInTheDocument();
   expect(screen.getByLabelText(/global auto-refresh interval/i)).toBeInTheDocument();
-  expect(screen.queryByText(/alert sound/i)).not.toBeInTheDocument();
-  expect(screen.queryByText(/browser notification/i)).not.toBeInTheDocument();
+  expect(screen.getByText(/^alert sound$/i)).toBeInTheDocument();
+  expect(screen.getByText(/^browser notifications$/i)).toBeInTheDocument();
 });
 
 test('uses stored landing page when visible for the current role', async () => {

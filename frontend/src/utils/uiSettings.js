@@ -44,6 +44,11 @@ export const DEFAULT_UI_SETTINGS = {
     },
     liveLogHighlightRules: [],
   },
+  notifications: {
+    alertSoundsEnabled: false,
+    alertSoundVolume: 0.5,
+    browserNotificationsEnabled: false,
+  },
 };
 
 export const ALLOWED_AUTO_REFRESH_INTERVALS = [0, 5000, 10000, 30000, 60000];
@@ -55,6 +60,8 @@ export const ALLOWED_LIVE_LOGS_TABS = ["eventFeed", "rawLog", "json"];
 export const ALLOWED_SEVERITY_COLOR_PRESETS = ["default", "colorblindSafe", "highContrast"];
 export const ALLOWED_HIGHLIGHT_TARGETS = ["severity", "type"];
 export const ALLOWED_HIGHLIGHT_TREATMENTS = ["border", "background", "glow"];
+export const MIN_ALERT_SOUND_VOLUME = 0;
+export const MAX_ALERT_SOUND_VOLUME = 1;
 
 const LANDING_PAGE_ID_PATTERN = /^[a-z0-9-]+$/;
 
@@ -68,6 +75,12 @@ const isStringEnum = (value, allowed) => typeof value === "string" && allowed.in
 
 const isValidRowsPerPage = (value) =>
   value === "all" || (Number.isInteger(value) && ALLOWED_ROWS_PER_PAGE_VALUES.includes(value));
+
+const isValidAlertSoundVolume = (value) =>
+  typeof value === "number" &&
+  Number.isFinite(value) &&
+  value >= MIN_ALERT_SOUND_VOLUME &&
+  value <= MAX_ALERT_SOUND_VOLUME;
 
 const sanitizeColumnVisibilityMap = (candidateMap, fallbackMap, idKey) => {
   const next = { ...fallbackMap };
@@ -83,6 +96,27 @@ const sanitizeColumnVisibilityMap = (candidateMap, fallbackMap, idKey) => {
   });
 
   next[idKey] = true;
+  return next;
+};
+
+const sanitizeNotificationSettings = (candidateNotifications) => {
+  const fallback = DEFAULT_UI_SETTINGS.notifications;
+  const next = { ...fallback };
+
+  if (!candidateNotifications || typeof candidateNotifications !== "object") {
+    return next;
+  }
+
+  if (typeof candidateNotifications.alertSoundsEnabled === "boolean") {
+    next.alertSoundsEnabled = candidateNotifications.alertSoundsEnabled;
+  }
+  if (isValidAlertSoundVolume(candidateNotifications.alertSoundVolume)) {
+    next.alertSoundVolume = candidateNotifications.alertSoundVolume;
+  }
+  if (typeof candidateNotifications.browserNotificationsEnabled === "boolean") {
+    next.browserNotificationsEnabled = candidateNotifications.browserNotificationsEnabled;
+  }
+
   return next;
 };
 
@@ -180,6 +214,7 @@ const sanitizeSettings = (candidate) => {
       next.autoRefreshIntervalMs = candidate.autoRefreshIntervalMs;
     }
     next.display = sanitizeDisplaySettings(candidate.display);
+    next.notifications = sanitizeNotificationSettings(candidate.notifications);
   }
 
   return next;
