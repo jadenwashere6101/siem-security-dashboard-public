@@ -21,6 +21,7 @@ from integrations.base_integration import (
     CIRCUIT_STATE_CLOSED,
     CIRCUIT_STATE_HALF_OPEN,
     CIRCUIT_STATE_OPEN,
+    FAILURE_CLASSIFICATION_GUARD_FAILED,
     FAILURE_CLASSIFICATION_PROVIDER_RATE_LIMITED,
     FAILURE_CLASSIFICATION_TIMEOUT,
     FAILURE_CLASSIFICATION_TRANSIENT,
@@ -1689,9 +1690,60 @@ def test_real_success_notification_with_strong_evidence_marks_external_executed(
         result = playbook_step_executor.process_playbook_execution(conn, eid)
 
     assert result["outcome"] == "success"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    entry = row["steps_log"][0]
+    assert entry["mode"] == "real"
+    assert entry["simulated"] is False
+    assert entry["executed"] is True
+    assert entry["message"] == "Delivered to Slack."
+    assert entry["output"]["notification_delivery"]["mode"] == "real"
+    assert entry["output"]["notification_delivery"]["status"] == "success"
     [outcome] = _fetch_notification_outcomes(cur, eid)
     assert outcome[1:7] == ("real", "succeeded", "adapter", True, False, None)
     assert outcome[12]["real_evidence"] is True
+
+
+def test_real_guard_blocked_notification_is_not_reported_as_provider_failure(
+    postgres_db,
+):
+    conn, cur = postgres_db
+    eid, _decision = _create_linked_execution(
+        conn,
+        cur,
+        "pb_slack_guard_blocked",
+        steps=[{"action": "notify_slack", "params": {"message": "real alert"}}],
+    )
+    blocked_result = {
+        "adapter": "slack",
+        "action": "send_message",
+        "mode": "real",
+        "simulated": True,
+        "executed": False,
+        "success": False,
+        "message": "blocked: slack real mode requires guard(s): SLACK_WEBHOOK_URL",
+        "params": {},
+        "context": {},
+        "metadata": {"failure_classification": FAILURE_CLASSIFICATION_GUARD_FAILED},
+    }
+
+    with patch(
+        "engines.playbook_step_executor.execute_playbook_simulated_adapter",
+        return_value=blocked_result,
+    ):
+        result = playbook_step_executor.process_playbook_execution(conn, eid)
+
+    assert result["outcome"] == "failed"
+    row = playbook_store.get_playbook_execution(conn, eid)
+    entry = row["steps_log"][0]
+    assert entry["mode"] == "real"
+    assert entry["simulated"] is True
+    assert entry["executed"] is False
+    assert entry["output"]["notification_delivery"]["status"] == "blocked"
+    assert entry["output"]["notification_delivery"]["mode"] == "real"
+    rows = _fetch_deliveries(cur, eid)
+    assert rows[0][2] == "blocked"
+    [outcome] = _fetch_notification_outcomes(cur, eid)
+    assert outcome[1:7] == ("real", "blocked", "adapter", False, False, "policy_blocked")
 
 
 def test_real_success_missing_simulated_false_does_not_mark_external_executed(

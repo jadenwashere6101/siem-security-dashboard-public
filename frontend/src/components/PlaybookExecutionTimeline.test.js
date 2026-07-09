@@ -237,6 +237,86 @@ test("renders real-mode labels", () => {
   expect(screen.getByText("Real")).toBeInTheDocument();
 });
 
+test("prefers notification adapter delivery result over stale wrapper simulation mode", () => {
+  const timeline = normalizeExecutionTimeline({
+    ...baseExecution,
+    steps_log: [
+      {
+        step_index: 0,
+        action: "notify_slack",
+        status: "success",
+        mode: "simulation",
+        output: {
+          adapter_result: {
+            adapter: "slack",
+            action: "send_message",
+            mode: "real",
+            simulated: false,
+            executed: true,
+            success: true,
+            message: "Delivered to Slack.",
+          },
+          notification_delivery: {
+            provider: "slack",
+            mode: "real",
+            status: "success",
+          },
+        },
+      },
+    ],
+  });
+
+  expect(timeline.steps[0].mode).toBe("real");
+  expect(timeline.steps[0].eventLabel).toBe("Real delivered");
+  expect(timeline.steps[0].adapterExecuted).toBe(true);
+  expect(timeline.steps[0].deliveryStatus).toBe("success");
+});
+
+test("renders guard-blocked notification delivery reason", () => {
+  render(
+    <PlaybookExecutionTimeline
+      execution={{
+        ...baseExecution,
+        status: "failed",
+        steps_log: [
+          {
+            step_index: 0,
+            action: "notify_slack",
+            status: "failed",
+            mode: "real",
+            output: {
+              adapter_result: {
+                adapter: "slack",
+                action: "send_message",
+                mode: "real",
+                simulated: true,
+                executed: false,
+                success: false,
+                message: "blocked: slack real mode requires guard(s): SLACK_WEBHOOK_URL",
+              },
+              notification_delivery: {
+                provider: "slack",
+                mode: "real",
+                status: "blocked",
+                failure_message:
+                  "blocked: slack real mode requires guard(s): SLACK_WEBHOOK_URL",
+              },
+            },
+          },
+        ],
+      }}
+    />
+  );
+
+  expect(screen.getAllByText("Guard blocked").length).toBeGreaterThan(0);
+  expect(screen.getByText(/^delivery status$/i)).toBeInTheDocument();
+  expect(screen.getByText("Blocked")).toBeInTheDocument();
+  expect(screen.getByText(/^delivery detail$/i)).toBeInTheDocument();
+  expect(
+    screen.getAllByText("blocked: slack real mode requires guard(s): SLACK_WEBHOOK_URL").length
+  ).toBeGreaterThan(0);
+});
+
 test("compact mode omits detailed timeline list but keeps flow", () => {
   render(
     <PlaybookExecutionTimeline

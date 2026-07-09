@@ -20,6 +20,12 @@ const STATUS_TONES = {
 
 const TERMINAL_STATUSES = new Set(["success", "failed", "skipped", "abandoned", "aborted"]);
 const ACTIVE_STATUSES = new Set(["running", "awaiting_approval", "pending"]);
+const NOTIFICATION_ACTIONS = new Set([
+  "notify_slack",
+  "notify_teams",
+  "notify_email",
+  "notify_webhook",
+]);
 const SECRET_KEY_PATTERN =
   /(token|secret|password|authorization|auth_header|cookie|bearer|api[_-]?key|webhook|payload|raw_response|raw_payload|smtp)/i;
 const URL_PATTERN = /https?:\/\/[^\s"'<>]+/gi;
@@ -150,6 +156,30 @@ function getEventLabel(step, status) {
   }
 }
 
+function normalizeMode(value) {
+  const mode = String(value || "").trim().toLowerCase();
+  return mode === "real" || mode === "simulation" ? mode : "";
+}
+
+function getNotificationEventLabel(action, step, delivery, adapterResult) {
+  if (!NOTIFICATION_ACTIONS.has(action)) return "";
+  if (step?.skipped === true || step?.output?.skipped === true) {
+    return "Skipped by policy";
+  }
+  const deliveryStatus = String(delivery?.status || "").trim().toLowerCase();
+  const mode = normalizeMode(adapterResult?.mode) || normalizeMode(delivery?.mode);
+  const adapterExecuted = adapterResult?.executed === true;
+  if (deliveryStatus === "success" || adapterResult?.success === true) {
+    if (mode === "real" && adapterExecuted) return "Real delivered";
+    if (mode === "real") return "Real delivery unconfirmed";
+    return "Simulated";
+  }
+  if (deliveryStatus === "blocked") return "Guard blocked";
+  if (deliveryStatus === "timeout") return "Timed out";
+  if (deliveryStatus === "failed" || adapterResult?.success === false) return "Delivery failed";
+  return "";
+}
+
 function getStepIndex(step, fallbackIndex) {
   const raw = step?.step_index ?? step?.index ?? step?.order ?? fallbackIndex;
   const numeric = Number(raw);
@@ -251,15 +281,22 @@ export function normalizeExecutionTimeline(execution = {}) {
       const stepIndex = getStepIndex(step, index);
       const retryCount = getRetryCount(step);
       const action = getStepAction(step);
-      const mode =
-        step.mode ||
-        step.execution_mode ||
-        step.output?.adapter_result?.mode ||
-        execution.mode ||
-        execution.execution_mode ||
-        "simulation";
       const adapterResult =
         step.output && typeof step.output === "object" ? step.output.adapter_result : null;
+      const delivery =
+        step.output && typeof step.output === "object" ? step.output.notification_delivery : null;
+      const notificationLabel = getNotificationEventLabel(action, step, delivery, adapterResult);
+      const adapterMode = normalizeMode(adapterResult?.mode);
+      const deliveryMode = normalizeMode(delivery?.mode);
+      const stepMode = normalizeMode(step.mode || step.execution_mode);
+      const executionMode = normalizeMode(execution.mode || execution.execution_mode);
+      const mode =
+        (NOTIFICATION_ACTIONS.has(action) && (adapterMode || deliveryMode)) ||
+        stepMode ||
+        adapterMode ||
+        deliveryMode ||
+        executionMode ||
+        "simulation";
       const startedAt = step.started_at || step.start_time || step.timestamp || step.created_at;
       const completedAt = step.completed_at || step.end_time || step.finished_at;
       const canonicalOutcomeLabel = canonicalStepLabels[stepIndex];
@@ -269,7 +306,7 @@ export function normalizeExecutionTimeline(execution = {}) {
         label: step.label || step.step_name || `Step ${stepIndex + 1}`,
         action,
         status,
-        eventLabel: canonicalOutcomeLabel || getEventLabel(step, status),
+        eventLabel: canonicalOutcomeLabel || notificationLabel || getEventLabel(step, status),
         tone: STATUS_TONES[status] || "muted",
         mode,
         startedAt,
@@ -289,6 +326,18 @@ export function normalizeExecutionTimeline(execution = {}) {
           adapterResult && typeof adapterResult === "object"
             ? adapterResult.success
             : undefined,
+        adapterExecuted:
+          adapterResult && typeof adapterResult === "object"
+            ? adapterResult.executed
+            : undefined,
+        deliveryStatus:
+          delivery && typeof delivery === "object" ? sanitizeTimelineText(delivery.status) : "",
+        deliveryMode:
+          delivery && typeof delivery === "object" ? sanitizeTimelineText(delivery.mode) : "",
+        deliveryFailure:
+          delivery && typeof delivery === "object"
+            ? sanitizeTimelineText(delivery.failure_message || delivery.failure_code)
+            : "",
         retryCount,
         approvalRequestId: getNested(step, "approval_request_id"),
         approvalStatus: getNested(step, "approval_status"),
@@ -486,6 +535,14 @@ function PlaybookExecutionTimeline({ execution, compact = false, displaySettings
                     {step.adapterSuccess !== undefined ? (
                       <Field label="Adapter success" value={step.adapterSuccess ? "Yes" : "No"} />
                     ) : null}
+                    {step.adapterExecuted !== undefined ? (
+                      <Field label="Adapter executed" value={step.adapterExecuted ? "Yes" : "No"} />
+                    ) : null}
+                    {step.deliveryStatus ? (
+                      <Field label="Delivery status" value={titleCase(step.deliveryStatus)} />
+                    ) : null}
+                    {step.deliveryMode ? <Field label="Delivery mode" value={titleCase(step.deliveryMode)} /> : null}
+                    {step.deliveryFailure ? <Field label="Delivery detail" value={step.deliveryFailure} /> : null}
                     {step.skipReason ? <Field label="Skip reason" value={step.skipReason} /> : null}
                   </div>
 

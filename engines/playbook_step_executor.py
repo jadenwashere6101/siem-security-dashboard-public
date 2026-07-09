@@ -34,6 +34,8 @@ from engines.soar_playbook_orchestrator import create_and_link_playbook_executio
 from integrations.base_integration import (
     FAILURE_CLASSIFICATION_CIRCUIT_OPEN,
     FAILURE_CLASSIFICATION_CIRCUIT_STATE_INVALID,
+    FAILURE_CLASSIFICATION_CREDENTIAL_MISSING,
+    FAILURE_CLASSIFICATION_GUARD_FAILED,
     FAILURE_CLASSIFICATION_PROVIDER_RATE_LIMITED,
     FAILURE_CLASSIFICATION_TIMEOUT,
     get_simulated_circuit_breaker_dict,
@@ -71,6 +73,14 @@ def _delivery_status_from_adapter_result(adapter_result: dict[str, Any]) -> str:
         FAILURE_CLASSIFICATION_CIRCUIT_OPEN,
         FAILURE_CLASSIFICATION_CIRCUIT_STATE_INVALID,
         FAILURE_CLASSIFICATION_PROVIDER_RATE_LIMITED,
+        FAILURE_CLASSIFICATION_GUARD_FAILED,
+        FAILURE_CLASSIFICATION_CREDENTIAL_MISSING,
+    ):
+        return "blocked"
+    if (
+        str(adapter_result.get("mode") or "").strip().lower() == "real"
+        and adapter_result.get("simulated") is True
+        and adapter_result.get("executed") is False
     ):
         return "blocked"
     return "failed"
@@ -107,16 +117,16 @@ def _record_notification_delivery_attempt(
     step_index: int,
     entry: dict[str, Any],
     now: datetime,
-) -> None:
+) -> dict[str, Any] | None:
     """
-    Append an immutable delivery record for a Slack/Teams notification step.
+    Append an immutable delivery record for a notification step.
     Failures here are logged but never propagate to the step outcome.
     """
     try:
         action = step.get("action")
         provider = _PROVIDER_FOR_ACTION.get(action)
         if provider is None:
-            return
+            return None
 
         adapter_name, adapter_action = ADAPTER_ACTIONS[action]
         adapter_result: dict[str, Any] = (entry.get("output") or {}).get("adapter_result") or {}
@@ -187,6 +197,18 @@ def _record_notification_delivery_attempt(
             circuit_breaker_state=circuit_state,
         )
         _append_notification_delivery_outcome_event(conn, execution, delivery_attempt)
+        return {
+            "id": delivery_attempt.get("id"),
+            "provider": delivery_attempt.get("provider"),
+            "mode": delivery_attempt.get("mode"),
+            "status": delivery_attempt.get("status"),
+            "adapter_name": delivery_attempt.get("adapter_name"),
+            "action": delivery_attempt.get("action"),
+            "playbook_step_index": delivery_attempt.get("playbook_step_index"),
+            "failure_code": delivery_attempt.get("failure_code"),
+            "failure_message": delivery_attempt.get("failure_message"),
+            "circuit_breaker_state": delivery_attempt.get("circuit_breaker_state"),
+        }
     except Exception:
         logger.warning(
             "[PLAYBOOK SIMULATION] delivery tracking failed safely "
@@ -195,6 +217,7 @@ def _record_notification_delivery_attempt(
             step_index,
             exc_info=True,
         )
+        return None
 
 
 def process_next_pending_playbook_execution(
@@ -1024,7 +1047,13 @@ def _process_steps(
             and step.get("action") in _NOTIFICATION_ACTIONS
             and entry.get("skipped") is not True
         ):
-            _record_notification_delivery_attempt(conn, execution, step, index, entry, timestamp)
+            delivery_attempt = _record_notification_delivery_attempt(
+                conn, execution, step, index, entry, timestamp
+            )
+            if delivery_attempt is not None:
+                output = entry.setdefault("output", {})
+                if isinstance(output, dict):
+                    output["notification_delivery"] = delivery_attempt
 
         if entry["status"] == "success":
             last_completed_step = index
@@ -1282,10 +1311,24 @@ def _simulate_adapter_step(
         )
 
     status = "success" if adapter_result.get("success") is True else "failed"
+    result_mode = str(adapter_result.get("mode") or "simulation").strip().lower()
+    if result_mode not in ("simulation", "real"):
+        result_mode = "simulation"
+    adapter_simulated = (
+        adapter_result.get("simulated")
+        if isinstance(adapter_result.get("simulated"), bool)
+        else result_mode != "real"
+    )
+    adapter_executed = adapter_result.get("executed") is True
     message = (
-        "Simulated adapter action completed."
+        adapter_result.get("message")
+        or (
+            "Real adapter action completed."
+            if result_mode == "real" and adapter_executed
+            else "Simulated adapter action completed."
+        )
         if status == "success"
-        else adapter_result.get("message") or "Simulated adapter action failed."
+        else adapter_result.get("message") or "Adapter action failed safely."
     )
     circuit_snapshot = get_simulated_circuit_breaker_dict(adapter_name, now=now)
     err_meta = adapter_result.get("metadata")
@@ -1300,15 +1343,16 @@ def _simulate_adapter_step(
         "step_index": step_index,
         "action": action,
         "status": status,
-        "mode": "simulation",
-        "simulated": True,
-        "executed": False,
+        "mode": result_mode,
+        "simulated": adapter_simulated,
+        "executed": adapter_executed,
         "started_at": _iso(now),
         "completed_at": _iso(now),
         "message": message,
         "output": {
-            "simulated": True,
-            "executed": False,
+            "simulated": adapter_simulated,
+            "executed": adapter_executed,
+            "adapter_mode": result_mode,
             "resolved_params": params,
             "adapter_result": adapter_result,
             "circuit_breaker": circuit_snapshot,
