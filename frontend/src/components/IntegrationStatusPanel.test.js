@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import IntegrationStatusPanel from "./IntegrationStatusPanel";
@@ -160,6 +160,10 @@ beforeEach(() => {
   });
 });
 
+afterEach(() => {
+  jest.useRealTimers();
+});
+
 test("shows loading state while request is in flight", async () => {
   getIntegrationStatus.mockImplementation(
     () =>
@@ -308,6 +312,39 @@ test("notification test sends and refreshes after confirmation", async () => {
   await waitFor(() => expect(sendNotificationTest).toHaveBeenCalledWith("slack"));
   expect(await screen.findByText("Slack real-mode notification sent.")).toBeInTheDocument();
   expect(getNotificationReadiness).toHaveBeenCalledTimes(2);
+});
+
+test("notification test message disappears after five seconds", async () => {
+  jest.useFakeTimers();
+  getIntegrationStatus.mockResolvedValue(sampleStatus);
+  getNotificationReadiness.mockResolvedValue(sampleReadiness);
+  readStoredSessionIdentity.mockReturnValue({
+    authenticated: true,
+    role: "super_admin",
+    username: "admin",
+  });
+  jest.spyOn(window, "confirm").mockReturnValueOnce(true);
+
+  render(<IntegrationStatusPanel {...styleProps} />);
+
+  expect(await screen.findByText("Notification readiness")).toBeInTheDocument();
+  await userEvent.click(screen.getAllByRole("button", { name: "Test" })[0]);
+
+  expect(await screen.findByText("Slack real-mode notification sent.")).toBeInTheDocument();
+
+  act(() => {
+    jest.advanceTimersByTime(4999);
+  });
+  expect(screen.getByText("Slack real-mode notification sent.")).toBeInTheDocument();
+
+  act(() => {
+    jest.advanceTimersByTime(1);
+  });
+  await waitFor(() => {
+    expect(screen.queryByText("Slack real-mode notification sent.")).not.toBeInTheDocument();
+  });
+
+  jest.useRealTimers();
 });
 
 test("each integration card shows operational fields, description, and supported actions", async () => {

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   enableHalfOpenIntegrationCircuitBreaker,
   forceOpenIntegrationCircuitBreaker,
@@ -13,6 +13,7 @@ import ExecutionSafetyModelPanel from "./ExecutionSafetyModelPanel";
 // spec: SPEC-UI-004 / SPEC-INTEG-005 - integration copy is adapter-specific and guard-controlled.
 const INTEGRATION_NOTICE =
   "Operational view of integration readiness. Opening this page does not test, send, or execute integrations.";
+const READINESS_TEST_MESSAGE_TIMEOUT_MS = 5000;
 
 const ADAPTER_OPERATIONS = {
   slack: {
@@ -238,6 +239,30 @@ function NotificationReadinessPanel({ readiness, loading, error, canTest, onRefr
   const [busyProvider, setBusyProvider] = useState(null);
   const [testError, setTestError] = useState("");
   const [testMessage, setTestMessage] = useState("");
+  const messageTimerRef = useRef(null);
+
+  useEffect(() => {
+    if (messageTimerRef.current) {
+      window.clearTimeout(messageTimerRef.current);
+      messageTimerRef.current = null;
+    }
+    if (!testError && !testMessage) {
+      return undefined;
+    }
+
+    messageTimerRef.current = window.setTimeout(() => {
+      setTestError("");
+      setTestMessage("");
+      messageTimerRef.current = null;
+    }, READINESS_TEST_MESSAGE_TIMEOUT_MS);
+
+    return () => {
+      if (messageTimerRef.current) {
+        window.clearTimeout(messageTimerRef.current);
+        messageTimerRef.current = null;
+      }
+    };
+  }, [testError, testMessage]);
 
   const runTest = async (provider) => {
     const key = String(provider?.provider || "").trim().toLowerCase();
@@ -1101,6 +1126,10 @@ const metaMutedStyle = {
 const metaValueStyle = {
   color: "#e6edf3",
   fontWeight: "600",
+  lineHeight: 1.25,
+  minWidth: 0,
+  overflowWrap: "anywhere",
+  wordBreak: "break-word",
 };
 
 const operationalGridStyle = {
@@ -1114,6 +1143,7 @@ const operationalFieldStyle = {
   display: "flex",
   flexDirection: "column",
   gap: "5px",
+  minWidth: 0,
   minHeight: "54px",
   padding: "10px 11px",
   borderRadius: "8px",
