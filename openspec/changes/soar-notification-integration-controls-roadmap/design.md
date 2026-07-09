@@ -26,6 +26,20 @@ A provider can be Configured without being Tested, and Tested without being Acti
 
 All four notification adapters share one canonical fail-closed guard function, `_validate_real_mode_guards()` in `integrations/base_integration.py`: real mode requires `INTEGRATION_MODE=real` **and** `SOAR_ENV` in an explicit allowlist (`staging` by default) **and** a per-adapter `SOAR_REAL_<PROVIDER>_ENABLED` flag **and** all required credential env vars present. Missing any guard fails closed with a safe, secret-free `real_mode_status` string. All four also share per-adapter rate limiting (`check_adapter_rate_limit`), timeout handling, HTTP/URL error classification (transient vs non-transient), and audit logging of every real-mode attempt via `core.integration_audit.log_integration_execution_attempt`. This confirms the user's framing precisely: the code for all four is structurally identical and equally guarded, but only Slack has actual human-confirmed delivery evidence.
 
+## Live Runtime Readiness Evidence
+
+After implementing `soar-notification-readiness-test-buttons`, live runtime validation produced the following production-readiness evidence:
+
+| Provider | Live readiness evidence | Current readiness |
+| --- | --- | --- |
+| Slack | Successfully configured, real-mode enabled, manual readiness test succeeded, and a real Slack notification was received. | `Configured=true`, `Tested=Passed`, `Ready=true` |
+| Email | Successfully configured using Gmail SMTP with an App Password; manual readiness test succeeded and SMTP authentication succeeded. | `Configured=true`, `Tested=Passed`, `Ready=true` |
+| Webhook | Successfully configured; manual readiness test succeeded and a real outbound POST completed successfully. | `Configured=true`, `Tested=Passed`, `Ready=true` |
+| Teams | Not yet configured; no real readiness test has been performed. Current blocker is the absence of a Microsoft Teams Workflows webhook. Deferred intentionally until a personal Teams environment or supported Workflows webhook is available. | Not ready; intentionally deferred |
+| Firewall | Remains simulation-only by design; no real execution attempted. | N/A |
+
+This evidence proves three notification providers in a live runtime: Slack, Email, and Webhook. It does **not** mean every integration is complete; Teams remains intentionally deferred, and Firewall remains permanently excluded from real execution by this roadmap.
+
 ## Current Playbook Notification Actions
 
 `engines/playbook_step_executor.py` already defines four notification step types — `notify_slack`, `notify_teams`, `notify_email`, `notify_webhook` — mapped via `_PROVIDER_FOR_ACTION` to the corresponding adapter. The executor already has an `_existing_active_delivery()` idempotency check that prevents duplicate delivery attempts for the same playbook execution/step, and already maps adapter results to a delivery status (`success`/`timeout`/`blocked`/etc.) for storage. **No provider active/inactive gate exists anywhere in the executor today** — a playbook step will attempt delivery through whatever mode/guards are currently configured, with no durable, human-controlled "this provider is allowed in production" switch. This is exactly the gap `soar-playbook-notification-enforcement` (child spec 3) must fill.
@@ -64,6 +78,8 @@ Owns proving what actually works:
 - Show last test result per provider (new).
 - Re-prove Slack. Prove or clearly fail Teams, Email, and Webhook.
 - Do not wire Active/Inactive enforcement yet — this spec only proves Tested state.
+
+Implementation status: completed. Live runtime validation proved Slack, Email, and Webhook. Teams remains intentionally deferred because no Microsoft Teams Workflows webhook is available yet.
 
 ### 2. `soar-notification-provider-active-controls`
 

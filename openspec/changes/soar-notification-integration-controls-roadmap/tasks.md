@@ -40,7 +40,7 @@ Track a professional Integration Delivery Controls system for SOAR notification 
 
 ## 4. Phase 1 - Child Spec Creation
 
-- [ ] 4.1 Create `soar-notification-readiness-test-buttons`.
+- [x] 4.1 Create `soar-notification-readiness-test-buttons`.
   - Scope: detailed adapter audit, safe manual test-send buttons/endpoints, missing-config display, last-test-result display, re-proving Slack, proving/failing Teams/Email/Webhook clearly. No Active/Inactive enforcement yet.
 - [ ] 4.2 Create `soar-notification-provider-active-controls`.
   - Scope: durable backend provider status (DB, not localStorage), UI Active/Inactive toggles for Slack/Teams/Email/Webhook, Firewall excluded from real enablement, activation gated or warned by Configured/Tested state.
@@ -53,7 +53,7 @@ Track a professional Integration Delivery Controls system for SOAR notification 
 
 ## 5. Phase 2 - Implementation Sequencing
 
-- [ ] 5.1 Implement `soar-notification-readiness-test-buttons` first.
+- [x] 5.1 Implement `soar-notification-readiness-test-buttons` first.
   - Reason: nothing should be treated as trustworthy before it can be manually proven or disproven.
 - [ ] 5.2 Implement `soar-notification-provider-active-controls` second.
   - Reason: production authorization should be informed by real Tested evidence, not introduced blind.
@@ -66,7 +66,7 @@ Track a professional Integration Delivery Controls system for SOAR notification 
 ## 6. Phase 3 - Validation Plan
 
 - [ ] 6.1 Validate guard enforcement (four-guard fail-closed model) remains intact for all four notification adapters.
-- [ ] 6.2 Validate manual test-send behavior and result display, fully mocked in tests (no real external calls in any test suite).
+- [x] 6.2 Validate manual test-send behavior and result display, fully mocked in tests (no real external calls in any test suite).
 - [ ] 6.3 Validate durable provider Active/Inactive persistence and its independence from the in-memory/simulated circuit breaker.
 - [ ] 6.4 Validate playbook executor skip-by-policy behavior for inactive providers, including the exact recorded message format.
 - [ ] 6.5 Validate no fake-success and no endless-retry behavior for both skipped and failed notification steps.

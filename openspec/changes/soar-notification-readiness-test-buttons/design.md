@@ -115,6 +115,20 @@ No Firewall card and no Firewall test button appear anywhere in this UI. This su
 
 None expected. The existing `notification_delivery_attempts` table (`migrations/0008_soar_notification_delivery.sql`) already has every column this spec needs: `provider`, `mode`, `status` (including the `blocked` value already needed for the guard-blocked case), `adapter_name`, `action` (to carry the new `test_notification` marker), `failure_code`/`failure_message` (already redacted at write time), and `created_at`/`requested_at`/`completed_at` (source of "Last Test"). `playbook_execution_id`, `incident_id`, `approval_request_id`, and `alert_id` are already nullable and are simply left `NULL` for a manual test row.
 
+## Completed Live Runtime Validation Evidence
+
+After implementation, the readiness system was used in a live runtime to validate notification delivery. The verified evidence is:
+
+| Provider | Verified evidence | Readiness result |
+| --- | --- | --- |
+| Slack | Successfully configured; real-mode enabled; manual readiness test succeeded; real Slack notification received. | `Configured=true`, `Tested=Passed`, `Ready=true` |
+| Email | Successfully configured using Gmail SMTP with an App Password; manual readiness test succeeded; SMTP authentication succeeded. | `Configured=true`, `Tested=Passed`, `Ready=true` |
+| Webhook | Successfully configured; manual readiness test succeeded; real outbound POST completed successfully. | `Configured=true`, `Tested=Passed`, `Ready=true` |
+| Teams | Not yet configured; no real readiness test performed. Current blocker is the absence of a Microsoft Teams Workflows webhook. Deferred intentionally until a personal Teams environment or supported Workflows webhook is available. | Not ready; intentionally deferred |
+| Firewall | Simulation-only by design; no real execution attempted. | N/A |
+
+This completes the immediate proof step for three notification providers: Slack, Email, and Webhook. It does not claim every integration is complete, because Teams remains intentionally deferred and Firewall remains out of scope for real execution.
+
 ## Explicitly Out Of Scope For This Spec
 
 - Active/Inactive provider toggles or any durable "allowed in production" state (`soar-notification-provider-active-controls`).
