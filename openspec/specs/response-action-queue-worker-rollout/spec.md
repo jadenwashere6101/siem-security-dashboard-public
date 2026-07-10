@@ -18,23 +18,23 @@ path from playbook execution processing.
   `engines.soar_action_worker.process_batch`
 
 ### Requirement: Simulation-Safe Backlog Drain
-The system SHALL provide a controlled one-time backlog drain workflow that uses
-the existing response-action runner in simulation mode.
+The system SHALL provide a controlled backlog drain workflow that uses the existing response-action runner in simulation mode and terminally accounts for every reviewed eligible row.
 
 #### Scenario: Preflight counts are recorded
 - **WHEN** an operator prepares to drain backlog
-- **THEN** the system SHALL provide queue counts by status and action before any
-  mutation occurs
+- **THEN** the system SHALL provide queue counts by status and action plus record-level evidence for anomalously old pending work before any mutation occurs
 
 #### Scenario: Bounded simulation batch runs
-- **WHEN** the one-time drain is invoked
-- **THEN** it SHALL use `SOAR_EXECUTION_MODE=simulation` and a bounded batch size
+- **WHEN** the drain is invoked
+- **THEN** it SHALL use `SOAR_EXECUTION_MODE=simulation`, a bounded batch size, and idempotency checks
 
 #### Scenario: Backlog transitions are verified
 - **WHEN** a drain batch completes
-- **THEN** the operator SHALL be able to compare before/after counts and inspect
-  transitions for success, awaiting approval, skipped, failed, and remaining
-  pending states
+- **THEN** the operator SHALL compare before/after counts and inspect transitions for success, awaiting approval, skipped, failed, and remaining pending states
+
+#### Scenario: Poison or obsolete work is encountered
+- **WHEN** an eligible row cannot be safely processed or is no longer relevant
+- **THEN** it SHALL receive an explicit safe terminal disposition or documented escalation and SHALL NOT be deleted or falsely recorded as successful
 
 ### Requirement: Approval Gate Preservation
 The response-action worker SHALL preserve high-risk action approval behavior.

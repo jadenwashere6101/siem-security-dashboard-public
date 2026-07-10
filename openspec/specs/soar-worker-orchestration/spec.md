@@ -1,3 +1,6 @@
+## Purpose
+Define daemonized SOAR worker execution, lease ownership, recovery, operational visibility, and deployment safety for continuous playbook processing.
+
 ## Requirements
 
 ### Requirement: Daemon worker process
@@ -78,15 +81,19 @@ The system SHALL expose read-only operational visibility for worker health, queu
 - **THEN** the system SHALL surface that state as unknown or unhealthy without crashing dashboard views.
 
 ### Requirement: Deployment safety
-The system SHALL define deployment practices for daemonized execution that preserve current runtime safety constraints.
+The system SHALL define deployment practices for daemonized execution that preserve current runtime safety constraints and expose deterministic environment precedence.
 
 #### Scenario: systemd deployment is prepared
-- **WHEN** deployment artifacts are introduced in a later implementation slice
-- **THEN** they SHALL include environment requirements, logging expectations, restart policy, and graceful shutdown semantics.
+- **WHEN** deployment artifacts are installed
+- **THEN** they SHALL include environment requirements, precedence rules, logging expectations, restart policy, graceful shutdown semantics, and descriptions that match effective behavior
 
-#### Scenario: Real integrations remain disabled
-- **WHEN** the daemonized worker is deployed
-- **THEN** it SHALL NOT enable autonomous real firewall actions or real Slack/Teams notifications by default.
+#### Scenario: Real-delivery kill-switch is invoked
+- **WHEN** an operator activates the documented kill-switch
+- **THEN** the effective worker process environment SHALL disable every real notification adapter and verification SHALL fail closed if that state cannot be proven
+
+#### Scenario: Simulation-only integrations remain disabled
+- **WHEN** the daemonized worker is deployed or restarted
+- **THEN** it SHALL NOT enable autonomous real firewall actions, real Teams notifications, or real execution for monitor or flag_high_priority
 
 ### Requirement: Concurrency and load validation
 The system SHALL include verification coverage for concurrent workers, queue pressure, stale recovery, and failure injection before production-style rollout.
