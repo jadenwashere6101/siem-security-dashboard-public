@@ -6,6 +6,8 @@ from core.approval_store import (
     expire_pending_requests,
     get_latest_approval_for_queue_action,
 )
+from core.response_command_contracts import ORIGIN_RESPONSE_QUEUE, ResponseCommandRequest
+from core.response_command_service import execute_response_command
 from core.soar_protected_targets import (
     ProtectedTargetConfigError,
     require_unprotected_target,
@@ -32,8 +34,11 @@ logger = logging.getLogger(__name__)
 # compatibility. `soar-automation-path-consolidation-decision` designates the
 # playbook engine as authoritative for new SOAR automation; queue retirement or
 # removal is a separately approved future stage, not part of ongoing worker changes.
+# Phase 1 routes block_ip/monitor/flag_high_priority through the shared response
+# command service for durable tracking while preserving approval gates.
 
 APPROVAL_REQUIRED_ACTIONS = frozenset({"block_ip"})
+CANONICAL_QUEUE_ACTIONS = frozenset({"block_ip", "monitor", "flag_high_priority"})
 
 
 def process_next_action(conn, now=None, executor=None):
@@ -90,6 +95,55 @@ def process_next_action(conn, now=None, executor=None):
         return approval_result
 
     try:
+        if row.get("action") in CANONICAL_QUEUE_ACTIONS:
+            command_result = execute_response_command(
+                conn,
+                ResponseCommandRequest(
+                    action=row["action"],
+                    indicator_value=str(row["source_ip"]) if row.get("source_ip") else None,
+                    alert_id=row.get("alert_id"),
+                    reason=f"Queue worker {row['action']}",
+                    origin_surface=ORIGIN_RESPONSE_QUEUE,
+                    queue_id=row.get("id"),
+                    approval_request_id=row.get("approval_request_id"),
+                    idempotency_key=f"queue-{row['id']}-{row['action']}",
+                ),
+            )
+            if not command_result.success:
+                raise SkippedAction(
+                    command_result.error or command_result.message,
+                    code=command_result.error_code or "response_command_failed",
+                )
+            execution_result = {
+                "code": command_result.outcome_label,
+                "message": command_result.message,
+            }
+            updated = mark_action_success(conn, row["id"], now=now)
+            response_action_log_id = command_result.response_action_log_id
+            reason_code = (
+                "tracking_only"
+                if row.get("action") == "block_ip"
+                else None
+            )
+            _append_worker_outcome_event(
+                conn,
+                updated,
+                execution_state="succeeded",
+                reason_code=reason_code or "simulation_mode",
+                summary=execution_result["message"],
+                event_type="succeeded",
+                response_action_log_id=response_action_log_id,
+            )
+            conn.commit()
+            return _worker_result(
+                row,
+                updated,
+                outcome="success",
+                retryable=False,
+                code=execution_result["code"],
+                message=execution_result["message"],
+            )
+
         execution_result = executor(row)
         _validate_executor_result(execution_result)
         updated = mark_action_success(conn, row["id"], now=now)

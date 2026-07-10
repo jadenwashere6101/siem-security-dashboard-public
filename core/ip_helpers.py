@@ -463,6 +463,9 @@ def enqueue_response_action(cur, alert_id, source_ip, action, *, max_retries=3):
     # Must be called after the ingest transaction commits — this helper must not
     # rely on uncommitted ingest state and must be safe to call on a separate
     # DB connection or committed session.
+    from core.canonical_action_vocabulary import validate_action_for_response_queue
+
+    action = validate_action_for_response_queue(action)
     idempotency_key = _compute_idempotency_key(alert_id, source_ip, action)
     cur.execute(
         """

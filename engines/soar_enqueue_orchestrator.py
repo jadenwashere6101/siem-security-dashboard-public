@@ -2,6 +2,10 @@ import logging
 
 from core import soar_response_outcomes as outcomes
 from core.ip_helpers import enqueue_response_action
+from core.canonical_action_vocabulary import (
+    CanonicalActionValidationError,
+    validate_action_for_response_queue,
+)
 from core.response_action_queue_store import set_queue_linkage
 
 
@@ -88,6 +92,31 @@ def enqueue_committed_alerts(alerts_created, conn, *, exclude_alert_ids=None):
             continue
 
         source_ip_text = str(source_ip)
+        try:
+            action = validate_action_for_response_queue(action)
+        except CanonicalActionValidationError as error:
+            logger.warning(
+                "[SOAR ENQUEUE REJECTED] alert_id=%s action=%s code=%s error=%s",
+                alert_id,
+                action,
+                error.code,
+                error,
+            )
+            results.append(
+                {
+                    "alert_id": alert_id,
+                    "source_ip": source_ip_text,
+                    "action": action,
+                    "queue_id": None,
+                    "skipped": True,
+                    "status": "rejected",
+                    "skip_reason": error.code,
+                    "error": str(error),
+                    "index": index,
+                }
+            )
+            continue
+
         try:
             queue_id = enqueue_response_action(cur, alert_id, source_ip_text, action)
         except Exception as error:

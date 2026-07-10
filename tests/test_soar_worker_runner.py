@@ -323,7 +323,16 @@ def test_runner_db_backed_simulation_partial_skip(postgres_db):
     bad = _insert_alert(cur, "10.0.0.1")
     enqueue_response_action(cur, ok1, "8.8.8.8", "monitor")
     enqueue_response_action(cur, ok2, "1.1.1.1", "monitor")
-    enqueue_response_action(cur, bad, "10.0.0.1", "unknown_action")
+    # Historical/unsupported rows may already exist in the queue even though new
+    # producers can no longer enqueue unknown actions.
+    cur.execute(
+        """
+        INSERT INTO response_actions_queue
+            (alert_id, source_ip, action, status, idempotency_key, max_retries)
+        VALUES (%s, %s, 'unknown_action', 'pending', %s, 3)
+        """,
+        (bad, "10.0.0.1", f"legacy-unknown-{bad}"),
+    )
     conn.commit()
 
     results = soar_worker_run.process_batch(conn, limit=10, executor=soar_worker_run.SimulationExecutor())

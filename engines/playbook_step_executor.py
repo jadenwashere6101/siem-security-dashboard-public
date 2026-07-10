@@ -1,8 +1,11 @@
 """
-Simulation-safe SOAR playbook step executor.
+SOAR playbook step executor.
 
-Consumes pending playbook_executions and records simulated step outcomes. It does not
-enqueue SOAR actions, create approvals, or mutate firewalls/blocklists.
+Consumes pending playbook_executions and records step outcomes. Notification and
+firewall adapter steps remain simulation/real-guarded via adapters. Canonical
+`block_ip` / `monitor` / `flag_high_priority` steps also record durable tracking
+through the shared response command service (Blocklist tracking only; no host
+firewall enforcement).
 """
 
 from __future__ import annotations
@@ -19,6 +22,8 @@ from core import dead_letter_store
 from core import notification_delivery_store
 from core import playbook_store
 from core.playbook_worker_identity import generate_playbook_worker_id
+from core.response_command_contracts import ORIGIN_PLAYBOOK, ResponseCommandRequest
+from core.response_command_service import execute_response_command
 from core.soar_protected_targets import require_unprotected_target
 from core.soar_response_outcomes import append_outcome_event
 from engines.soar_errors import SkippedAction
@@ -1184,6 +1189,11 @@ def _simulate_step(
             now=now,
         )
 
+    if action in {"monitor", "flag_high_priority"}:
+        return _execute_canonical_response_step(
+            conn, step, step_index, now, execution, action=action
+        )
+
     messages = {
         "monitor": "[SIMULATED PLAYBOOK STEP] monitor",
         "flag_high_priority": "[SIMULATED PLAYBOOK STEP] flag_high_priority",
@@ -1196,10 +1206,81 @@ def _simulate_step(
         "mode": "simulation",
         "started_at": _iso(now),
         "completed_at": _iso(now),
-        "message": messages[action],
+        "message": messages.get(action, f"[PLAYBOOK STEP] {action}"),
         "output": {
             "simulated": True,
             "executed": False,
+        },
+        "error": None,
+    }
+    if isinstance(step.get("label"), str) and step.get("label"):
+        entry["label"] = step["label"]
+    return entry
+
+
+def _execute_canonical_response_step(
+    conn,
+    step: dict[str, Any],
+    step_index: int,
+    now: datetime,
+    execution: dict[str, Any],
+    *,
+    action: str,
+) -> dict[str, Any]:
+    raw_params = step.get("params") if isinstance(step.get("params"), dict) else {}
+    try:
+        params = resolve_step_params(conn, raw_params, execution=execution)
+    except PlaybookParamBindingError as error:
+        return _failure_entry(
+            step_index=step_index,
+            action=action,
+            message=error.message,
+            code=error.code,
+            now=now,
+        )
+
+    source_ip = params.get("source_ip") or execution.get("source_ip")
+    result = execute_response_command(
+        conn,
+        ResponseCommandRequest(
+            action=action,
+            indicator_value=str(source_ip) if source_ip else None,
+            alert_id=execution.get("alert_id"),
+            incident_id=execution.get("incident_id"),
+            reason=params.get("reason") or f"Playbook step {action}",
+            origin_surface=ORIGIN_PLAYBOOK,
+            playbook_execution_id=execution.get("id"),
+            playbook_step_index=step_index,
+            idempotency_key=f"playbook-{execution.get('id')}-{step_index}-{action}",
+            safe_metadata={"playbook_id": execution.get("playbook_id")},
+        ),
+    )
+    if not result.success:
+        return _failure_entry(
+            step_index=step_index,
+            action=action,
+            message=result.error or result.message,
+            code=result.error_code or "response_command_failed",
+            now=now,
+        )
+    entry = {
+        "step_index": step_index,
+        "action": action,
+        "status": "success",
+        "mode": "simulation",
+        "started_at": _iso(now),
+        "completed_at": _iso(now),
+        "message": result.message,
+        "output": {
+            "simulated": False,
+            "executed": True,
+            "enforcement": result.enforcement,
+            "registry_record_id": result.registry_record_id,
+            "registry_event_id": result.registry_event_id,
+            "blocked_ip_id": result.blocked_ip_id,
+            "incident_id": result.incident_id,
+            "disposition": result.disposition,
+            "canonical_response": True,
         },
         "error": None,
     }
@@ -1366,7 +1447,81 @@ def _simulate_adapter_step(
     }
     if isinstance(step.get("label"), str) and step.get("label"):
         entry["label"] = step["label"]
+
+    if status == "success" and action == "block_ip":
+        tracking = _record_playbook_block_tracking(
+            conn, step=step, step_index=step_index, execution=execution, params=params
+        )
+        if tracking is not None:
+            entry["output"]["blocklist_tracking"] = tracking
+            # Ineligible/private documentation IPs keep adapter success; tracking is skipped.
+            if tracking.get("success") is False and tracking.get("error_code") not in {
+                "invalid_indicator",
+                "protected_target",
+                "protected_target_config_invalid",
+                "validation_no_target",
+            }:
+                entry["status"] = "failed"
+                entry["error"] = {
+                    "code": tracking.get("error_code") or "blocklist_tracking_failed",
+                    "message": tracking.get("message") or "Blocklist tracking failed",
+                }
+                entry["message"] = tracking.get("message") or entry["message"]
+
     return entry
+
+
+def _record_playbook_block_tracking(
+    conn,
+    *,
+    step: dict[str, Any],
+    step_index: int,
+    execution: dict[str, Any],
+    params: dict[str, Any],
+) -> dict[str, Any] | None:
+    source_ip = params.get("source_ip")
+    if not source_ip:
+        return {
+            "success": False,
+            "skipped": True,
+            "error_code": "validation_no_target",
+            "message": "No source_ip for blocklist tracking",
+        }
+    try:
+        from core.db import validate_blocked_ip
+
+        validate_blocked_ip(str(source_ip))
+    except ValueError as error:
+        return {
+            "success": False,
+            "skipped": True,
+            "error_code": "invalid_indicator",
+            "message": str(error),
+        }
+    result = execute_response_command(
+        conn,
+        ResponseCommandRequest(
+            action="block_ip",
+            indicator_value=str(source_ip),
+            alert_id=execution.get("alert_id"),
+            incident_id=execution.get("incident_id"),
+            reason=params.get("reason") or "Playbook block_ip tracking",
+            origin_surface=ORIGIN_PLAYBOOK,
+            playbook_execution_id=execution.get("id"),
+            playbook_step_index=step_index,
+            idempotency_key=f"playbook-block-{execution.get('id')}-{step_index}",
+            safe_metadata={"playbook_id": execution.get("playbook_id")},
+        ),
+    )
+    return {
+        "success": result.success,
+        "message": result.message,
+        "error_code": result.error_code,
+        "registry_record_id": result.registry_record_id,
+        "blocked_ip_id": result.blocked_ip_id,
+        "idempotent": result.idempotent,
+        "enforcement": result.enforcement,
+    }
 
 
 def _failure_entry(

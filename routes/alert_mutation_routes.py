@@ -5,12 +5,12 @@ from core.audit_helpers import log_audit_event
 from core.auth import analyst_or_super_admin_required
 from core.db import get_db_connection
 from core.extensions import limiter
-from core.ip_helpers import execute_response_action
-from core.soar_response_outcomes import (
-    append_outcome_event,
-    create_response_decision,
-    resolve_response_log_outcome,
+from core.response_command_contracts import (
+    ORIGIN_MANUAL_ALERT,
+    ResponseCommandRequest,
 )
+from core.response_command_service import execute_response_command
+from core.soar_response_outcomes import resolve_response_log_outcome
 
 
 alert_mutation_bp = Blueprint("alert_mutation", __name__)
@@ -209,48 +209,25 @@ def manual_execute_alert(alert_id):
             return jsonify({"error": "Alert not found"}), 404
 
         source_ip = row[0]
-
-        decision = _create_manual_response_decision(
+        result = execute_response_command(
             conn,
-            alert_id=alert_id,
-            source_ip=str(source_ip),
-            action=action,
-            actor_user_id=current_user.id,
+            ResponseCommandRequest(
+                action=action,
+                indicator_value=str(source_ip) if source_ip is not None else None,
+                alert_id=alert_id,
+                reason=(
+                    f"Manual block recorded from alert {alert_id}"
+                    if action == "block_ip"
+                    else data.get("reason")
+                ),
+                actor_user_id=_numeric_user_id_or_none(current_user.id),
+                origin_surface=ORIGIN_MANUAL_ALERT,
+                idempotency_key=f"manual-alert-{alert_id}-{action}",
+            ),
         )
-        block_reason = f"Manual block recorded from alert {alert_id}" if action == "block_ip" else None
-        execution_result = execute_response_action(
-            cur,
-            alert_id,
-            str(source_ip),
-            action,
-            create_blocklist_record=action == "block_ip",
-            created_by=current_user.id,
-            reason=block_reason,
-            source_alert_id=alert_id if action == "block_ip" else None,
-            decision_id=decision["id"],
-            soar_correlation_id=decision["soar_correlation_id"],
-            return_log_id=True,
-        )
-        execution_status = execution_result["status"]
-
-        _append_manual_response_outcome(
-            conn,
-            decision=decision,
-            alert_id=alert_id,
-            source_ip=str(source_ip),
-            action=action,
-            response_action_log_id=execution_result["response_action_log_id"],
-        )
-
-        cur.execute(
-            """
-            UPDATE alerts
-            SET response_action = %s,
-                response_status = %s
-            WHERE id = %s
-            """,
-            (action, execution_status, alert_id)
-        )
+        if not result.success:
+            conn.rollback()
+            return jsonify({"error": result.error or result.message}), 400
 
         conn.commit()
 
@@ -262,15 +239,23 @@ def manual_execute_alert(alert_id):
             http_method=request.method,
             request_path=request.path,
             source_ip=request.remote_addr,
-            details={"action": action, "status": execution_status},
+            details={
+                "action": action,
+                "status": result.compatible_fields.get("response_status", "executed"),
+                "registry_record_id": result.registry_record_id,
+                "blocked_ip_id": result.blocked_ip_id,
+                "incident_id": result.incident_id,
+            },
         )
 
-        return jsonify({
+        payload = {
             "message": "Action executed successfully",
             "alert_id": alert_id,
             "action": action,
-            "response_status": execution_status
-        }), 200
+            "response_status": result.compatible_fields.get("response_status", "executed"),
+            **result.to_api_dict(),
+        }
+        return jsonify(payload), 200
 
     except ValueError as e:
         if conn:
@@ -289,94 +274,11 @@ def manual_execute_alert(alert_id):
             conn.close()
 
 
-def _create_manual_response_decision(
-    conn,
-    *,
-    alert_id,
-    source_ip,
-    action,
-    actor_user_id,
-):
-    if action == "block_ip":
-        reason_code = "tracking_only"
-        summary = (
-            "Manual block_ip selected; SIEM blocklist tracking will be recorded "
-            "without firewall enforcement."
-        )
-    else:
-        reason_code = "simulation_mode"
-        summary = f"Manual {action} response selected for simulation."
-
-    return create_response_decision(
-        conn,
-        alert_id=alert_id,
-        source_ip=source_ip,
-        selected_action=action,
-        decision_source="manual",
-        reason_code=reason_code,
-        outcome_summary=summary,
-        created_by=_numeric_user_id_or_none(actor_user_id),
-        safe_metadata={
-            "route": "/alerts/<id>/execute",
-            "manual_action": action,
-        },
-    )
-
-
 def _numeric_user_id_or_none(user_id):
     try:
         return int(user_id)
     except (TypeError, ValueError):
         return None
-
-
-def _append_manual_response_outcome(
-    conn,
-    *,
-    decision,
-    alert_id,
-    source_ip,
-    action,
-    response_action_log_id,
-):
-    if action == "block_ip":
-        execution_mode = "tracking_only"
-        simulated = False
-        tracking_recorded = True
-        reason_code = "tracking_only"
-        summary = (
-            "SIEM blocklist tracking was recorded for this IP; no firewall, "
-            "provider, external, or local enforcement occurred."
-        )
-    else:
-        execution_mode = "simulation"
-        simulated = True
-        tracking_recorded = False
-        reason_code = "simulation_mode"
-        summary = f"Manual {action} response completed in simulation mode."
-
-    return append_outcome_event(
-        conn,
-        decision_id=decision["id"],
-        soar_correlation_id=decision["soar_correlation_id"],
-        event_type="succeeded",
-        execution_mode=execution_mode,
-        execution_state="succeeded",
-        external_executed=False,
-        tracking_recorded=tracking_recorded,
-        simulated=simulated,
-        execution_actor="manual",
-        reason_code=reason_code,
-        outcome_summary=summary,
-        alert_id=alert_id,
-        source_ip=source_ip,
-        response_action_log_id=response_action_log_id,
-        idempotency_key=f"manual-{action}-{alert_id}-{decision['id']}",
-        metadata={
-            "manual_action": action,
-            "response_action_log_id": response_action_log_id,
-        },
-    )
 
 
 @alert_mutation_bp.route("/alerts/<int:alert_id>/status", methods=["POST"])

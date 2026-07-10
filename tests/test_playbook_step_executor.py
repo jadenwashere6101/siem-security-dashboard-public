@@ -366,7 +366,9 @@ def test_pending_monitor_step_becomes_success(postgres_db):
     assert entry["action"] == "monitor"
     assert entry["status"] == "success"
     assert entry["mode"] == "simulation"
-    assert entry["output"] == {"simulated": True, "executed": False}
+    assert entry["output"]["executed"] is True
+    assert entry["output"]["canonical_response"] is True
+    assert entry["output"]["registry_record_id"] is not None
     assert _count(cur, "soar_dead_letters") == 0
 
 
@@ -714,9 +716,12 @@ def test_multiple_supported_steps_are_simulated_successfully(postgres_db):
         "block_ip",
     ]
     for entry in row["steps_log"]:
-        assert entry["output"]["simulated"] is True
-        assert entry["output"]["executed"] is False
         assert entry["error"] is None
+        if entry["action"] in {"monitor", "flag_high_priority"}:
+            assert entry["output"]["executed"] is True
+            assert entry["output"].get("canonical_response") is True
+        else:
+            assert entry["output"]["simulated"] is True
 
 
 def test_adapter_backed_steps_are_simulated_through_registry(postgres_db, no_network):
@@ -1235,11 +1240,9 @@ def test_require_approval_pauses_execution_and_creates_linked_request(postgres_d
     assert approval[6] == "Approve simulated block before continuing"
 
     assert _count(cur, "response_actions_queue") == 0
-    assert _count(cur, "response_actions_log") == 0
     assert _count(cur, "soar_dead_letters") == 0
-
-
-def test_require_approval_pending_rerun_does_not_duplicate_request_or_steps(postgres_db):
+    # Canonical monitor step records a response_actions_log row via the shared command service.
+    assert _count(cur, "response_actions_log") >= 1
     conn, cur = postgres_db
     eid = _create_execution(
         conn,
@@ -1312,7 +1315,8 @@ def test_approved_approval_resumes_from_next_step(postgres_db):
     assert row["steps_log"][-1]["output"]["executed"] is False
     assert row["steps_log"][-1]["output"]["adapter_result"]["adapter"] == "firewall"
     assert _count(cur, "response_actions_queue") == 0
-    assert _count(cur, "response_actions_log") == 0
+    # Monitor step records through the canonical response command service.
+    assert _count(cur, "response_actions_log") >= 1
 
     rerun = playbook_step_executor.process_playbook_execution(conn, eid)
     assert rerun["outcome"] == "skipped"

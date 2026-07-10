@@ -1,11 +1,10 @@
-"""
-Playbook step action registry (scaffold).
-
-Handler wiring and step execution are Phase 2D — this module only validates
-that step definitions reference known action names before definitions are persisted.
-"""
-
 from __future__ import annotations
+
+from core.canonical_action_vocabulary import (
+    CanonicalActionValidationError,
+    PLAYBOOK_ACTIONS,
+    resolve_action_for_playbook,
+)
 
 CORE_ACTIONS: frozenset[str] = frozenset(
     {
@@ -27,9 +26,7 @@ ADAPTER_ACTIONS = {
     "notify_webhook": ("webhook", "post_event"),
 }
 
-KNOWN_PLAYBOOK_ACTIONS: frozenset[str] = frozenset(
-    {*CORE_ACTIONS, *ADAPTER_ACTIONS.keys()}
-)
+KNOWN_PLAYBOOK_ACTIONS: frozenset[str] = frozenset(PLAYBOOK_ACTIONS)
 SUPPORTED_ACTIONS = KNOWN_PLAYBOOK_ACTIONS
 
 APPROVAL_RISK_LEVELS: frozenset[str] = frozenset({"medium", "high", "critical"})
@@ -75,6 +72,11 @@ def validate_playbook_steps(steps: list[dict], *, playbook_id: str | None = None
         action = step["action"]
         if not isinstance(action, str):
             errors.append(f"{prefix}: 'action' must be a string")
+            continue
+        try:
+            action = resolve_action_for_playbook(action)
+        except CanonicalActionValidationError as error:
+            errors.append(f"{prefix}: {error}")
             continue
         if action not in KNOWN_PLAYBOOK_ACTIONS:
             errors.append(f"{prefix}: unsupported action {action!r}")

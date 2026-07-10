@@ -1,31 +1,31 @@
 ## 1. Mac AI — Phase 1 Contract Baseline
 
-- [ ] 1.1 Inventory every producer, route, queue, playbook step, executor, and UI control for `block_ip`, `monitor`, `flag_high_priority`/escalation, `notify`, and `enrich_context`
-- [ ] 1.2 Define the canonical action vocabulary, owning executor, supported modes, aliases, deprecations, and validation errors in one source-controlled registry
-- [ ] 1.3 Add failing contract tests proving bare ambiguous `notify` is rejected before enqueue and `enrich_context` cannot enter the legacy response-action queue
-- [ ] 1.4 Decide and document the minimum durable escalation policy and default monitoring expiry/renewal policy
-- [ ] 1.5 Define API schemas for canonical commands, outcomes, affected-resource invalidation keys, registry records, events, list filters, and detail responses
+- [x] 1.1 Inventory every producer, route, queue, playbook step, executor, and UI control for `block_ip`, `monitor`, `flag_high_priority`/escalation, `notify`, and `enrich_context`
+- [x] 1.2 Define the canonical action vocabulary, owning executor, supported modes, aliases, deprecations, and validation errors in one source-controlled registry
+- [x] 1.3 Add failing contract tests proving bare ambiguous `notify` is rejected before enqueue and `enrich_context` cannot enter the legacy response-action queue
+- [x] 1.4 Decide and document the minimum durable escalation policy and default monitoring expiry/renewal policy
+- [x] 1.5 Define API schemas for canonical commands, outcomes, affected-resource invalidation keys, registry records, events, list filters, and detail responses
 
 ## 2. Mac AI — Phase 1 Registry Data Foundation
 
-- [ ] 2.1 Add versioned migrations for normalized indicator registry identities, append-only response events, provenance relationships, and required uniqueness/foreign-key/index constraints
-- [ ] 2.2 Add migration rollback behavior that preserves pre-existing Blocklist, response outcome, alert, incident, queue, approval, and playbook data
-- [ ] 2.3 Implement registry persistence APIs for identity upsert, transactional event append, current-disposition derivation, expiry, pagination, filters, and history
-- [ ] 2.4 Implement evidence-safe backfill tooling that imports only provable historical relationships and labels inferred/unknown provenance
-- [ ] 2.5 Add database tests for concurrency, duplicate IP normalization, idempotent events, foreign-key integrity, pagination, expiry, and rollback
+- [x] 2.1 Add versioned migrations for normalized indicator registry identities, append-only response events, provenance relationships, and required uniqueness/foreign-key/index constraints
+- [x] 2.2 Add migration rollback behavior that preserves pre-existing Blocklist, response outcome, alert, incident, queue, approval, and playbook data
+- [x] 2.3 Implement registry persistence APIs for identity upsert, transactional event append, current-disposition derivation, expiry, pagination, filters, and history
+- [x] 2.4 Implement evidence-safe backfill tooling that imports only provable historical relationships and labels inferred/unknown provenance
+- [x] 2.5 Add database tests for concurrency, duplicate IP normalization, idempotent events, foreign-key integrity, pagination, expiry, and rollback
 
 ## 3. Mac AI — Phase 1 Canonical Response Commands
 
-- [ ] 3.1 Implement a shared response command service enforcing RBAC, protected-target checks, validation, idempotency, atomic source mutation, canonical outcome, registry event, and audit logging
-- [ ] 3.2 Implement idempotent tracking-only `block_ip` that creates or reuses one active Blocklist record and returns registry/outcome/Blocklist identifiers
-- [ ] 3.3 Implement durable monitor/watch dispositions with reason, origin, ownership, start, expiry, renewal, removal, and history
-- [ ] 3.4 Implement durable internal escalation according to the approved incident/priority/assignment policy and prevent log-only success
-- [ ] 3.5 Adapt manual alert and direct Blocklist routes to the shared service while preserving compatible response fields
-- [ ] 3.6 Adapt playbook `block_ip` and approved queue/approval paths to the shared service without enabling firewall enforcement
-- [ ] 3.7 Route `enrich_context` exclusively through the playbook read-only executor and remove or guard every legacy producer path
-- [ ] 3.8 Replace or reject bare `notify` producers and add actionable validation that identifies required provider-specific actions
-- [ ] 3.9 Return canonical outcome, registry record/event IDs, specialized resource IDs, idempotency result, and affected-resource keys from every mutation endpoint
-- [ ] 3.10 Add backend unit, integration, security, concurrency, and end-to-end tests for all command origins and failure states
+- [x] 3.1 Implement a shared response command service enforcing RBAC, protected-target checks, validation, idempotency, atomic source mutation, canonical outcome, registry event, and audit logging
+- [x] 3.2 Implement idempotent tracking-only `block_ip` that creates or reuses one active Blocklist record and returns registry/outcome/Blocklist identifiers
+- [x] 3.3 Implement durable monitor/watch dispositions with reason, origin, ownership, start, expiry, renewal, and history
+- [x] 3.4 Implement durable internal escalation according to the approved incident/priority/assignment policy and prevent log-only success
+- [x] 3.5 Adapt manual alert and direct Blocklist routes to the shared service while preserving compatible response fields
+- [x] 3.6 Adapt playbook `block_ip` and approved queue/approval paths to the shared service without enabling firewall enforcement
+- [x] 3.7 Route `enrich_context` exclusively through the playbook read-only executor and remove or guard every legacy producer path
+- [x] 3.8 Replace or reject bare `notify` producers and add actionable validation that identifies required provider-specific actions
+- [x] 3.9 Return canonical outcome, registry record/event IDs, specialized resource IDs, idempotency result, and affected-resource keys from every mutation endpoint
+- [x] 3.10 Add backend unit, integration, security, concurrency, and end-to-end tests for all command origins and failure states
 
 ## 4. Mac AI — Phase 2 Response Registry Workspace
 
