@@ -19,6 +19,7 @@ function ThreatHuntPanel({
   filterLabelStyle,
   selectStyle,
   onViewRelatedAlerts,
+  onOpenResponseRegistry,
   displaySettings,
 }) {
   const [sourceIp, setSourceIp] = useState("");
@@ -343,6 +344,18 @@ function ThreatHuntPanel({
                                         }}
                                       >
                                         View Related Alerts
+                                      </button>
+                                      <button
+                                        type="button"
+                                        style={copyActionButtonStyle}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          onOpenResponseRegistry?.({
+                                            sourceIp: event.source_ip || "",
+                                          });
+                                        }}
+                                      >
+                                        Open in Response Registry
                                       </button>
                                       <button
                                         type="button"

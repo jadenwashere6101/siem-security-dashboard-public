@@ -7,6 +7,7 @@ import {
   loadRegistryRecords,
 } from "../services/responseRegistryService";
 import { formatTimestamp } from "../utils/displayFormatting";
+import { keysOverlap, useResponseSync } from "../context/ResponseSyncContext";
 
 const PAGE_SIZE = 50;
 
@@ -70,7 +71,9 @@ function ResponseRegistryPanel({
   selectStyle,
   canTakeAlertActions = false,
   initialView = "all",
+  navigationRequest = null,
 }) {
+  const { publishMutation, subscribe } = useResponseSync();
   const [view, setView] = useState(initialView || "all");
   const [records, setRecords] = useState([]);
   const [total, setTotal] = useState(0);
@@ -78,6 +81,8 @@ function ResponseRegistryPanel({
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const [relatedAlertId, setRelatedAlertId] = useState(null);
+  const [relatedIncidentId, setRelatedIncidentId] = useState(null);
   const [feedback, setFeedback] = useState({ type: "", message: "" });
 
   const [search, setSearch] = useState("");
@@ -104,6 +109,22 @@ function ResponseRegistryPanel({
     setView(initialView || "all");
   }, [initialView]);
 
+  useEffect(() => {
+    if (!navigationRequest || !navigationRequest.nonce) return;
+    if (navigationRequest.view) {
+      setView(navigationRequest.view);
+    }
+    if (navigationRequest.q != null) {
+      const nextQ = String(navigationRequest.q || "").trim();
+      setSearch(nextQ);
+      setSearchInput(nextQ);
+    }
+    setRelatedAlertId(navigationRequest.relatedAlertId || null);
+    setRelatedIncidentId(navigationRequest.relatedIncidentId || null);
+    setSelectedId(null);
+    setDetail(null);
+  }, [navigationRequest]);
+
   const loadList = useCallback(
     async ({ quiet = false, nextOffset = offset } = {}) => {
       try {
@@ -120,6 +141,8 @@ function ResponseRegistryPanel({
           origin: originFilter || undefined,
           outcome: outcomeFilter || undefined,
           enforcement: enforcementFilter || undefined,
+          relatedAlertId: relatedAlertId || undefined,
+          relatedIncidentId: relatedIncidentId || undefined,
           sort,
           limit: PAGE_SIZE,
           offset: nextOffset,
@@ -145,6 +168,8 @@ function ResponseRegistryPanel({
       originFilter,
       outcomeFilter,
       enforcementFilter,
+      relatedAlertId,
+      relatedIncidentId,
       sort,
       offset,
     ]
@@ -168,7 +193,35 @@ function ResponseRegistryPanel({
   useEffect(() => {
     loadList({ nextOffset: 0 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, search, dispositionFilter, originFilter, outcomeFilter, enforcementFilter, sort]);
+  }, [
+    view,
+    search,
+    dispositionFilter,
+    originFilter,
+    outcomeFilter,
+    enforcementFilter,
+    relatedAlertId,
+    relatedIncidentId,
+    sort,
+  ]);
+
+  useEffect(() => {
+    return subscribe((keys) => {
+      if (
+        keysOverlap(keys, [
+          "response_registry",
+          "blocklist",
+          relatedAlertId ? `alert:${relatedAlertId}` : null,
+          relatedIncidentId ? `incident:${relatedIncidentId}` : null,
+        ].filter(Boolean))
+      ) {
+        loadList({ quiet: true, nextOffset: offset });
+        if (selectedId) {
+          loadDetail(selectedId);
+        }
+      }
+    });
+  }, [subscribe, loadList, loadDetail, offset, selectedId, relatedAlertId, relatedIncidentId]);
 
   useEffect(() => {
     if (selectedId) {
@@ -215,6 +268,7 @@ function ResponseRegistryPanel({
       setTrackReason("");
       setEscalateReason("");
       setMonitorExpiry("");
+      publishMutation(result.affected_resource_keys || [], { action, result });
       await loadDetail(record.id);
       await loadList({ quiet: true, nextOffset: offset });
     } catch (err) {

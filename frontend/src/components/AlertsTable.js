@@ -13,6 +13,8 @@ import AlertsToolbar from "./AlertsToolbar";
 import AlertsToast from "./AlertsToast";
 import ResolvedAlertsTable from "./ResolvedAlertsTable";
 import { outcomeLabel } from "./ResponseOutcome";
+import ResponseStateSummary from "./ResponseStateSummary";
+import LifecycleIndependenceNotice from "./LifecycleIndependenceNotice";
 import {
   correlationBadgeStyle,
   correlationListStyle,
@@ -32,6 +34,9 @@ import { loadAlertResponseLog } from "../services/alertResponseService";
 import { getApiErrorMessage, parseJsonResponse } from "../utils/apiResponse";
 import { buildSiemPath } from "../utils/siemPath";
 import { formatTimestamp } from "../utils/displayFormatting";
+import { formatCanonicalActionSuccess } from "../utils/responseStateLabels";
+import { registryNavFromAlert } from "../utils/responseNavigation";
+import { useResponseSync } from "../context/ResponseSyncContext";
 
 // ============================================================================
 // Imports / Utilities
@@ -75,6 +80,8 @@ function AlertsTable({
   expandedLabelStyle,
   expandedTextStyle,
   displaySettings,
+  onOpenResponseRegistry = null,
+  onReviewIncident = null,
 }) {
   // ==========================================================================
   // Component State / Derived Values
@@ -86,6 +93,7 @@ function AlertsTable({
   const [loadingNotesForAlertId, setLoadingNotesForAlertId] = useState(null);
   const [addingNoteForAlertId, setAddingNoteForAlertId] = useState(null);
   const [executingActionId, setExecutingActionId] = useState(null);
+  const { publishMutation } = useResponseSync();
   const [toastMessage, setToastMessage] = useState("");
   const [toastType, setToastType] = useState("info");
   const [selectedAlert, setSelectedAlert] = useState(null);
@@ -264,6 +272,10 @@ function AlertsTable({
   };
 
   const executeAction = async (alertId, action) => {
+    if (!canTakeAlertActions) {
+      showToast("Requires analyst or super-admin privileges", "error");
+      return;
+    }
     try {
       setExecutingActionId(alertId);
 
@@ -304,13 +316,27 @@ function AlertsTable({
 
       setAlerts(data);
 
+      publishMutation(executeData?.affected_resource_keys || [], {
+        action,
+        alertId,
+        result: executeData,
+      });
+
       const responseOutcome = executeData?.response_outcome || null;
       if (action === "block_ip" && responseOutcome?.execution_mode === "tracking_only") {
         showToast(
-          `${outcomeLabel(responseOutcome)}: SIEM blocklist entry recorded. No firewall, provider, external, or local enforcement occurred.`
+          formatCanonicalActionSuccess(
+            {
+              ...executeData,
+              message:
+                `${outcomeLabel(responseOutcome)}: SIEM blocklist entry recorded. ` +
+                "No firewall, provider, external, or local enforcement occurred.",
+            },
+            action
+          )
         );
       } else {
-        showToast(`Action "${action}" completed successfully`);
+        showToast(formatCanonicalActionSuccess(executeData, action));
       }
     } catch (err) {
       console.error("Error executing action:", err);
@@ -632,6 +658,8 @@ function AlertsTable({
                             executingActionId={executingActionId}
                             getActionButtonStyle={getActionButtonStyle}
                             getReputationBadgeStyle={getReputationBadgeStyle}
+                            onOpenResponseRegistry={onOpenResponseRegistry}
+                            onReviewIncident={onReviewIncident}
                           />
                         )}
                       </React.Fragment>
@@ -681,14 +709,26 @@ function AlertsTable({
               correlationListStyle={correlationListStyle}
               signalRowStyle={signalRowStyle}
               sourceTypeTextStyle={sourceTypeTextStyle}
+              onOpenResponseRegistry={onOpenResponseRegistry}
             />
             <p><strong>Response Action:</strong> {latestSelectedAlert.response_action || "N/A"}</p>
             <p><strong>Response Status:</strong> {latestSelectedAlert.response_status || "N/A"}</p>
+
+            <ResponseStateSummary
+              alert={latestSelectedAlert}
+              onOpenRegistry={
+                typeof onOpenResponseRegistry === "function"
+                  ? () => onOpenResponseRegistry(registryNavFromAlert(latestSelectedAlert))
+                  : null
+              }
+            />
+            <LifecycleIndependenceNotice onReviewIncident={onReviewIncident} />
 
             <AlertResponseLog logs={responseLogs[latestSelectedAlert.id]} variant="panel" />
 
             <AlertManualActions
               alertId={latestSelectedAlert.id}
+              sourceIp={latestSelectedAlert.source_ip}
               executeAction={executeAction}
               executingActionId={null}
               canTakeAlertActions={canTakeAlertActions}

@@ -18,6 +18,11 @@ import LiveLogsPanel from "./components/LiveLogsPanel";
 import SettingsPanel from "./components/SettingsPanel";
 import SidebarLayout from "./components/SidebarLayout";
 import { UiSettingsProvider, useUiSettings } from "./context/UiSettingsContext";
+import { ResponseSyncProvider } from "./context/ResponseSyncContext";
+import {
+  attentionNavTarget,
+  buildRegistryNavigation,
+} from "./utils/responseNavigation";
 import {
   readStoredSessionIdentity,
   writeStoredSessionIdentity,
@@ -54,6 +59,8 @@ function AppInner() {
   const { settings, updateSettings } = useUiSettings();
   const [activeSection, setActiveSection] = useState("dashboard");
   const [registryInitialView, setRegistryInitialView] = useState("all");
+  const [registryNavigationRequest, setRegistryNavigationRequest] = useState(null);
+  const [approvalsInitialStatus, setApprovalsInitialStatus] = useState("all");
   const [authLoading, setAuthLoading] = useState(true);
   const [loginUsername, setLoginUsername] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
@@ -266,6 +273,35 @@ function AppInner() {
     setActiveSection(sectionId);
   }, []);
 
+  const handleOpenResponseRegistry = useCallback((nav = {}) => {
+    const target = buildRegistryNavigation(nav);
+    setRegistryInitialView(target.view || "all");
+    setRegistryNavigationRequest({
+      ...target,
+      nonce: Date.now(),
+    });
+    setActiveSection("response-registry");
+  }, []);
+
+  const handleOpenAttentionTarget = useCallback((label) => {
+    const target = attentionNavTarget(label);
+    if (target.statusFilter) {
+      setApprovalsInitialStatus(target.statusFilter);
+    }
+    handleNavigate(target.sectionId);
+  }, [handleNavigate]);
+
+  const handleViewRelatedAlerts = (sourceIp) => {
+    pendingAlertsFocusRef.current = true;
+    setSearchTerm(sourceIp || "");
+    setActiveSection("dashboard");
+    setSelectedAlertId(null);
+  };
+
+  const handleOpenIncidentWorkspace = useCallback(() => {
+    handleNavigate("soar-incidents");
+  }, [handleNavigate]);
+
   const displayRoleLabel =
     userRole === "super_admin"
       ? "Super Admin"
@@ -304,14 +340,6 @@ function AppInner() {
       };
     }
   };
-
-  const handleViewRelatedAlerts = (sourceIp) => {
-    pendingAlertsFocusRef.current = true;
-    setSearchTerm(sourceIp || "");
-    setActiveSection("dashboard");
-    setSelectedAlertId(null);
-  };
-
 
   const metrics = useMemo(() => {
     return buildAlertMetrics(filteredAlerts);
@@ -546,6 +574,8 @@ function AppInner() {
             expandedLabelStyle={expandedLabelStyle}
             expandedTextStyle={expandedTextStyle}
             displaySettings={settings.display}
+            onOpenResponseRegistry={handleOpenResponseRegistry}
+            onReviewIncident={handleOpenIncidentWorkspace}
           />
         )}
 
@@ -559,6 +589,7 @@ function AppInner() {
             filterLabelStyle={filterLabelStyle}
             selectStyle={selectStyle}
             onViewRelatedAlerts={handleViewRelatedAlerts}
+            onOpenResponseRegistry={handleOpenResponseRegistry}
           />
         )}
 
@@ -568,6 +599,8 @@ function AppInner() {
             userRole={userRole}
             currentUsername={currentUsername}
             onNavigate={handleNavigate}
+            onOpenAttentionItem={handleOpenAttentionTarget}
+            onOpenResponseRegistry={handleOpenResponseRegistry}
           />
         )}
 
@@ -585,6 +618,7 @@ function AppInner() {
             initialView={
               activeSection === "blocklist" ? "blocklist_tracking" : registryInitialView
             }
+            navigationRequest={registryNavigationRequest}
           />
         )}
 
@@ -677,6 +711,7 @@ function AppInner() {
             cardSubtitleStyle={cardSubtitleStyle}
             filterLabelStyle={filterLabelStyle}
             selectStyle={selectStyle}
+            onOpenResponseRegistry={handleOpenResponseRegistry}
           />
         )}
 
@@ -690,6 +725,8 @@ function AppInner() {
             filterLabelStyle={filterLabelStyle}
             selectStyle={selectStyle}
             canTakeAlertActions={canTakeAlertActions}
+            onOpenResponseRegistry={handleOpenResponseRegistry}
+            onViewRelatedAlerts={handleViewRelatedAlerts}
           />
         )}
 
@@ -703,6 +740,8 @@ function AppInner() {
             filterLabelStyle={filterLabelStyle}
             selectStyle={selectStyle}
             userRole={userRole}
+            initialStatusFilter={approvalsInitialStatus}
+            onOpenResponseRegistry={handleOpenResponseRegistry}
           />
         )}
 
@@ -716,6 +755,7 @@ function AppInner() {
             filterLabelStyle={filterLabelStyle}
             selectStyle={selectStyle}
             userRole={userRole}
+            onOpenResponseRegistry={handleOpenResponseRegistry}
           />
         )}
 
@@ -1029,7 +1069,9 @@ const tooltipItemStyle = {
 function App() {
   return (
     <UiSettingsProvider>
-      <AppInner />
+      <ResponseSyncProvider>
+        <AppInner />
+      </ResponseSyncProvider>
     </UiSettingsProvider>
   );
 }

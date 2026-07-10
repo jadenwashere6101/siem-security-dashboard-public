@@ -6,7 +6,10 @@ import AlertReputationDetails from "./AlertReputationDetails";
 import AlertResponseLog from "./AlertResponseLog";
 import AlertSourceDetails from "./AlertSourceDetails";
 import { ResponseOutcomeBadge } from "./ResponseOutcome";
+import ResponseStateSummary from "./ResponseStateSummary";
+import LifecycleIndependenceNotice from "./LifecycleIndependenceNotice";
 import TargetedAlertPanel from "./TargetedAlertPanel";
+import { registryNavFromAlert } from "../utils/responseNavigation";
 import {
   correlationListStyle,
   correlationPanelStyle,
@@ -47,6 +50,8 @@ function AlertExpandedRow({
   executingActionId,
   getActionButtonStyle,
   getReputationBadgeStyle,
+  onOpenResponseRegistry = null,
+  onReviewIncident = null,
 }) {
   return (
     <tr onClick={(e) => e.stopPropagation()}>
@@ -139,6 +144,16 @@ function AlertExpandedRow({
             <ResponseOutcomeBadge outcome={alert.response_outcome || null} />
           </p>
 
+          <ResponseStateSummary
+            alert={alert}
+            onOpenRegistry={
+              typeof onOpenResponseRegistry === "function"
+                ? () => onOpenResponseRegistry(registryNavFromAlert(alert))
+                : null
+            }
+          />
+          <LifecycleIndependenceNotice onReviewIncident={onReviewIncident} />
+
           <AlertExportLinks
             alert={alert}
             exportRowStyle={exportRowStyle}
@@ -152,6 +167,7 @@ function AlertExpandedRow({
 
           <AlertManualActions
             alertId={alert.id}
+            sourceIp={alert.source_ip}
             executeAction={executeAction}
             executingActionId={executingActionId}
             canTakeAlertActions={canTakeAlertActions}

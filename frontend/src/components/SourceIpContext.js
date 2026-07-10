@@ -2,9 +2,11 @@ import React, { useEffect, useMemo, useState } from "react";
 
 import { loadSourceIpContext } from "../services/sourceIpContextService";
 import { CanonicalOutcomeBreakdown, ResponseOutcomeBadge, ResponseOutcomeSummary } from "./ResponseOutcome";
+import ResponseStateSummary from "./ResponseStateSummary";
 import { outcomeLabel } from "../utils/responseOutcomeDisplay";
+import { registryNavFromSourceIp } from "../utils/responseNavigation";
 
-function SourceIpContext({ sourceIp, compact = false }) {
+function SourceIpContext({ sourceIp, compact = false, onOpenResponseRegistry = null }) {
   const [context, setContext] = useState(null);
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState(null);
@@ -105,6 +107,18 @@ function SourceIpContext({ sourceIp, compact = false }) {
   return (
     <section style={panelStyle} data-testid="source-ip-context">
       <PanelHeader sourceIp={context.source_ip || sourceIp} compact={compact} />
+      <ResponseStateSummary
+        lastAction={latestOutcome ? outcomeLabel(latestOutcome) : null}
+        compact={compact}
+        onOpenRegistry={
+          typeof onOpenResponseRegistry === "function"
+            ? () =>
+                onOpenResponseRegistry(
+                  registryNavFromSourceIp(context.source_ip || sourceIp)
+                )
+            : null
+        }
+      />
       {!hasAnyContext ? (
         <p style={mutedTextStyle}>No source-IP context found.</p>
       ) : (

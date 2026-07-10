@@ -1,13 +1,25 @@
 function AlertManualActions({
   alertId,
+  sourceIp = "",
   executeAction,
   executingActionId,
   canTakeAlertActions,
   getActionButtonStyle,
   variant = "row",
+  lockReason = "Requires analyst or super-admin privileges",
 }) {
   const panelVariant = variant === "panel";
   const isExecuting = executingActionId === alertId;
+  const missingTarget = !String(sourceIp || "").trim() && !alertId;
+  const isLocked = !canTakeAlertActions || missingTarget || isExecuting;
+  const effectiveLockReason = !canTakeAlertActions
+    ? lockReason
+    : missingTarget
+      ? "Missing indicator context (source IP / alert)"
+      : isExecuting
+        ? "Action already in progress"
+        : "";
+
   const manualActionNoticeStyle = panelVariant
     ? { marginTop: "6px", fontSize: "12px", color: "#94a3b8" }
     : { fontSize: "12px", color: "#8b949e", marginTop: "4px" };
@@ -19,7 +31,7 @@ function AlertManualActions({
     {
       id: "block_ip",
       label: "Block IP",
-      lockedLabel: "🔒 Block IP",
+      lockedLabel: "Block IP (locked)",
       backgroundColor: "#ff4d4f",
       color: "white",
       accent: "#ff4d4f",
@@ -27,7 +39,7 @@ function AlertManualActions({
     {
       id: "flag_high_priority",
       label: "Escalate",
-      lockedLabel: "🔒 Escalate",
+      lockedLabel: "Escalate (locked)",
       backgroundColor: "#faad14",
       color: "black",
       accent: "#f59e0b",
@@ -35,7 +47,7 @@ function AlertManualActions({
     {
       id: "monitor",
       label: "Monitor",
-      lockedLabel: "🔒 Monitor",
+      lockedLabel: "Monitor (locked)",
       backgroundColor: "#52c41a",
       color: "white",
       accent: "#22c55e",
@@ -43,61 +55,53 @@ function AlertManualActions({
   ];
 
   return (
-    <div style={{ marginTop: panelVariant ? "20px" : "10px" }}>
+    <div style={{ marginTop: panelVariant ? "20px" : "10px" }} data-testid="alert-manual-actions">
       <strong>Manual Actions:</strong>
-      {!canTakeAlertActions && (
-        <div style={manualActionNoticeStyle}>
-          Requires elevated privileges
+      {isLocked && (
+        <div style={manualActionNoticeStyle} title={effectiveLockReason}>
+          {effectiveLockReason || "Actions locked"}
         </div>
       )}
 
       <div style={buttonRowStyle}>
         {actions.map((action) => {
-          const buttonProps = panelVariant
-            ? {}
-            : {
-                onMouseOver: (e) => e.target.style.opacity = "0.85",
-                onMouseOut: (e) => e.target.style.opacity = "1",
-                disabled: isExecuting,
-              };
-          const baseStyle = panelVariant
+          const baseStyle = {
+            backgroundColor: action.backgroundColor,
+            color: action.color,
+            border: "none",
+            padding: "6px 10px",
+            borderRadius: "6px",
+            cursor: isLocked ? "not-allowed" : "pointer",
+            fontWeight: "bold",
+            opacity: isLocked ? 0.55 : 1,
+            transition: "opacity 120ms ease, border-color 120ms ease, background-color 120ms ease",
+          };
+          const style = getActionButtonStyle
             ? {
-                backgroundColor: action.backgroundColor,
-                color: action.color,
-                border: "none",
-                padding: "6px 10px",
-                borderRadius: "6px",
-                cursor: "pointer",
-                fontWeight: "bold",
-                transition: "opacity 120ms ease, border-color 120ms ease, background-color 120ms ease",
-              }
-            : {
-                backgroundColor: action.backgroundColor,
-                color: action.color,
-                border: "none",
-                padding: "6px 10px",
-                borderRadius: "6px",
-                cursor: isExecuting ? "not-allowed" : "pointer",
-                fontWeight: "bold",
-                opacity: isExecuting ? 0.6 : 1,
-                transition: "opacity 120ms ease, border-color 120ms ease, background-color 120ms ease",
-              };
-          const style = panelVariant
-            ? getActionButtonStyle(baseStyle, action.accent)
-            : {
                 ...getActionButtonStyle(baseStyle, action.accent),
-                opacity: isExecuting ? 0.6 : 1,
-              };
+                opacity: isLocked ? 0.55 : canTakeAlertActions ? 1 : 0.55,
+                cursor: isLocked ? "not-allowed" : "pointer",
+              }
+            : baseStyle;
 
           return (
             <button
               key={action.id}
-              onClick={() => executeAction(alertId, action.id)}
-              title={canTakeAlertActions ? action.label : "Requires elevated privileges"}
+              type="button"
+              disabled={isLocked}
+              aria-disabled={isLocked}
+              title={isLocked ? effectiveLockReason : action.label}
+              onClick={() => {
+                if (isLocked) return;
+                executeAction(alertId, action.id);
+              }}
               style={style}
-              {...buttonProps}
             >
-              {isExecuting ? "Executing..." : canTakeAlertActions ? action.label : action.lockedLabel}
+              {isExecuting
+                ? "Executing..."
+                : canTakeAlertActions
+                  ? action.label
+                  : action.lockedLabel}
             </button>
           );
         })}

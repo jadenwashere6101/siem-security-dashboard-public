@@ -17,6 +17,7 @@ function DashboardVisuals({
   cardHeaderStyle,
   cardTitleStyle,
   cardSubtitleStyle,
+  onOpenResponseRegistry = null,
 }) {
   return (
     <>
@@ -59,7 +60,7 @@ function DashboardVisuals({
           </p>
         </div>
         <div style={{ padding: "20px" }}>
-          <MapView alerts={sortedAlerts} />
+          <MapView alerts={sortedAlerts} onOpenResponseRegistry={onOpenResponseRegistry} />
         </div>
       </div>
     </>

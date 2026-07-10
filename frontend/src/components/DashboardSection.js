@@ -11,6 +11,8 @@ function DashboardSection({
   alertsTableRef,
   canTakeAlertActions,
   setAlerts,
+  onOpenResponseRegistry,
+  onReviewIncident,
   searchTerm,
   setSearchTerm,
   sortOption,
@@ -77,6 +79,7 @@ function DashboardSection({
         cardHeaderStyle={cardHeaderStyle}
         cardTitleStyle={cardTitleStyle}
         cardSubtitleStyle={cardSubtitleStyle}
+        onOpenResponseRegistry={onOpenResponseRegistry}
       />
       <div ref={alertsTableRef}>
         <AlertsTable
@@ -117,6 +120,8 @@ function DashboardSection({
           onUpdateStatus={onUpdateStatus}
           statusFilter={statusFilter}
           setStatusFilter={setStatusFilter}
+          onOpenResponseRegistry={onOpenResponseRegistry}
+          onReviewIncident={onReviewIncident}
         />
       </div>
     </>

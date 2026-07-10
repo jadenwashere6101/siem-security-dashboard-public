@@ -57,6 +57,8 @@ function IncidentsPanel({
   selectStyle,
   canTakeAlertActions,
   displaySettings,
+  onOpenResponseRegistry = null,
+  onViewRelatedAlerts = null,
 }) {
   const [incidents, setIncidents] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -395,6 +397,48 @@ function IncidentsPanel({
                   <DetailField label="Priority" value={selectedIncident.priority || "N/A"} />
                   <DetailField label="Status" value={formatLabel(selectedIncident.status)} />
                   <DetailField label="Source IP" value={selectedIncident.source_ip || "N/A"} mono />
+                  {typeof onOpenResponseRegistry === "function" && selectedIncident.source_ip ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onOpenResponseRegistry({
+                          sourceIp: selectedIncident.source_ip,
+                          relatedIncidentId: selectedIncident.id,
+                        })
+                      }
+                      style={{
+                        marginTop: "8px",
+                        background: "transparent",
+                        border: "1px solid #388bfd",
+                        color: "#58a6ff",
+                        borderRadius: "6px",
+                        padding: "4px 8px",
+                        cursor: "pointer",
+                        fontSize: "12px",
+                      }}
+                    >
+                      Open in Response Registry
+                    </button>
+                  ) : null}
+                  {typeof onViewRelatedAlerts === "function" && selectedIncident.source_ip ? (
+                    <button
+                      type="button"
+                      onClick={() => onViewRelatedAlerts(selectedIncident.source_ip)}
+                      style={{
+                        marginTop: "8px",
+                        marginLeft: "8px",
+                        background: "transparent",
+                        border: "1px solid #30363d",
+                        color: "#c9d1d9",
+                        borderRadius: "6px",
+                        padding: "4px 8px",
+                        cursor: "pointer",
+                        fontSize: "12px",
+                      }}
+                    >
+                      View related alerts
+                    </button>
+                  ) : null}
                   <DetailField
                     label="Created"
                     value={formatTimestamp(selectedIncident.created_at, displaySettings, "N/A")}

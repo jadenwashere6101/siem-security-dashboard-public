@@ -19,6 +19,7 @@ function AlertDetailsPanel({
   correlationListStyle,
   signalRowStyle,
   sourceTypeTextStyle,
+  onOpenResponseRegistry = null,
 }) {
   const externalReputation = getExternalReputation(selectedAlert);
   const behavioralReputation = getBehavioralReputation(selectedAlert);
@@ -118,7 +119,10 @@ function AlertDetailsPanel({
         selectedAlertTimeline={selectedAlertTimeline}
         getSourceBadgeMeta={getSourceBadgeMeta}
       />
-      <SourceIpContext sourceIp={selectedAlert.source_ip} />
+      <SourceIpContext
+        sourceIp={selectedAlert.source_ip}
+        onOpenResponseRegistry={onOpenResponseRegistry}
+      />
     </div>
   );
 }

@@ -3,6 +3,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import ResponseRegistryPanel from "./ResponseRegistryPanel";
+import { ResponseSyncProvider } from "../context/ResponseSyncContext";
 import {
   executeRegistryCommand,
   loadRegistryDetail,
@@ -30,6 +31,10 @@ const styleProps = {
   filterLabelStyle: {},
   selectStyle: {},
 };
+
+function renderRegistry(ui) {
+  return render(<ResponseSyncProvider>{ui}</ResponseSyncProvider>);
+}
 
 async function openFirstRow() {
   const row = await screen.findByRole("row", {
@@ -95,7 +100,7 @@ beforeEach(() => {
 });
 
 test("shows loading then registry rows", async () => {
-  render(<ResponseRegistryPanel {...styleProps} canTakeAlertActions />);
+  renderRegistry(<ResponseRegistryPanel {...styleProps} canTakeAlertActions />);
 
   expect(screen.getByText(/Loading response registry/i)).toBeInTheDocument();
   expect(
@@ -106,7 +111,7 @@ test("shows loading then registry rows", async () => {
 
 test("shows empty state when no records", async () => {
   loadRegistryRecords.mockResolvedValue({ items: [], total: 0 });
-  render(<ResponseRegistryPanel {...styleProps} canTakeAlertActions />);
+  renderRegistry(<ResponseRegistryPanel {...styleProps} canTakeAlertActions />);
 
   expect(
     await screen.findByText(/No registry records match the current filters/i)
@@ -115,14 +120,14 @@ test("shows empty state when no records", async () => {
 
 test("shows error state with retry", async () => {
   loadRegistryRecords.mockRejectedValueOnce(new Error("boom"));
-  render(<ResponseRegistryPanel {...styleProps} canTakeAlertActions />);
+  renderRegistry(<ResponseRegistryPanel {...styleProps} canTakeAlertActions />);
 
   expect(await screen.findByRole("alert")).toHaveTextContent("boom");
   expect(screen.getByRole("button", { name: /Retry/i })).toBeInTheDocument();
 });
 
 test("opens detail and shows history and related alerts", async () => {
-  render(<ResponseRegistryPanel {...styleProps} canTakeAlertActions />);
+  renderRegistry(<ResponseRegistryPanel {...styleProps} canTakeAlertActions />);
   const detail = await openFirstRow();
 
   expect(within(detail).getByText("Indicator detail")).toBeInTheDocument();
@@ -134,7 +139,7 @@ test("opens detail and shows history and related alerts", async () => {
 });
 
 test("viewer cannot mutate and sees locked explanation", async () => {
-  render(<ResponseRegistryPanel {...styleProps} canTakeAlertActions={false} />);
+  renderRegistry(<ResponseRegistryPanel {...styleProps} canTakeAlertActions={false} />);
   const detail = await openFirstRow();
 
   expect(
@@ -151,7 +156,7 @@ test("analyst can run monitor command and shows canonical outcome message", asyn
     message: "Monitoring disposition recorded.",
     idempotent: false,
   });
-  render(<ResponseRegistryPanel {...styleProps} canTakeAlertActions />);
+  renderRegistry(<ResponseRegistryPanel {...styleProps} canTakeAlertActions />);
   const detail = await openFirstRow();
 
   await userEvent.click(within(detail).getByRole("button", { name: "Monitor" }));
@@ -188,7 +193,7 @@ test("blocklist tracking view embeds blocklist manager", async () => {
 });
 
 test("truthful tracking-only copy is present in workspace subtitle", async () => {
-  render(<ResponseRegistryPanel {...styleProps} canTakeAlertActions />);
+  renderRegistry(<ResponseRegistryPanel {...styleProps} canTakeAlertActions />);
   expect(
     await screen.findByText(/no firewall enforcement is implied/i)
   ).toBeInTheDocument();

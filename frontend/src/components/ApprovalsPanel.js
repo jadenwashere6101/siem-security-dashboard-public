@@ -39,12 +39,14 @@ function ApprovalsPanel({
   selectStyle,
   userRole,
   displaySettings,
+  initialStatusFilter = "all",
+  onOpenResponseRegistry = null,
 }) {
   const [approvals, setApprovals] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState(initialStatusFilter || "all");
   const [riskFilter, setRiskFilter] = useState("all");
   const [selectedApprovalId, setSelectedApprovalId] = useState(null);
   const [selectedApproval, setSelectedApproval] = useState(null);
@@ -59,6 +61,12 @@ function ApprovalsPanel({
   const [deliveryAttempts, setDeliveryAttempts] = useState([]);
   const [deliveryLoading, setDeliveryLoading] = useState(false);
   const [deliveryError, setDeliveryError] = useState("");
+
+  useEffect(() => {
+    if (initialStatusFilter) {
+      setStatusFilter(initialStatusFilter);
+    }
+  }, [initialStatusFilter]);
 
   const isSuperAdmin = userRole === "super_admin";
 
@@ -402,6 +410,30 @@ function ApprovalsPanel({
                   <DetailField label="Risk" value={formatLabel(selectedApproval.risk_level)} />
                   <DetailField label="Incident ID" value={selectedApproval.incident_id ?? "N/A"} mono />
                   <DetailField label="Linked Queue Item" value={selectedApproval.queue_id ?? "N/A"} mono />
+                  {typeof onOpenResponseRegistry === "function" ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onOpenResponseRegistry({
+                          relatedAlertId: selectedApproval.alert_id,
+                          relatedIncidentId: selectedApproval.incident_id,
+                          sourceIp: selectedApproval.source_ip,
+                        })
+                      }
+                      style={{
+                        marginTop: "8px",
+                        background: "transparent",
+                        border: "1px solid #388bfd",
+                        color: "#58a6ff",
+                        borderRadius: "6px",
+                        padding: "4px 8px",
+                        cursor: "pointer",
+                        fontSize: "12px",
+                      }}
+                    >
+                      Open in Response Registry
+                    </button>
+                  ) : null}
                   <DetailField
                     label="Created"
                     value={formatTimestamp(selectedApproval.created_at, displaySettings, "N/A")}

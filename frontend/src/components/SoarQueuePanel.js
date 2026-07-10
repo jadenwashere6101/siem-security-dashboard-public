@@ -23,6 +23,7 @@ function SoarQueuePanel({
   cardSubtitleStyle,
   filterLabelStyle,
   selectStyle,
+  onOpenResponseRegistry = null,
 }) {
   const [statusSummary, setStatusSummary] = useState(null);
   const [queueItems, setQueueItems] = useState([]);
@@ -387,6 +388,29 @@ function SoarQueuePanel({
                   <DetailField label="Action" value={formatQueueLabel(selectedQueueItem.action)} />
                   <DetailField label="Status" value={formatQueueLabel(selectedQueueItem.status)} />
                   <DetailField label="Source IP" value={selectedQueueItem.source_ip || "N/A"} mono />
+                  {typeof onOpenResponseRegistry === "function" && selectedQueueItem.source_ip ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onOpenResponseRegistry({
+                          sourceIp: selectedQueueItem.source_ip,
+                          relatedAlertId: selectedQueueItem.alert_id,
+                        })
+                      }
+                      style={{
+                        marginTop: "8px",
+                        background: "transparent",
+                        border: "1px solid #388bfd",
+                        color: "#58a6ff",
+                        borderRadius: "6px",
+                        padding: "4px 8px",
+                        cursor: "pointer",
+                        fontSize: "12px",
+                      }}
+                    >
+                      Open in Response Registry
+                    </button>
+                  ) : null}
                   <DetailField
                     label="Retries"
                     value={`${selectedQueueItem.retry_count ?? 0} / ${selectedQueueItem.max_retries ?? 0}`}

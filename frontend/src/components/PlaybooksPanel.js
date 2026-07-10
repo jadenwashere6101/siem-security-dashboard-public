@@ -198,6 +198,7 @@ function PlaybooksPanel({
   filterLabelStyle,
   selectStyle,
   userRole,
+  onOpenResponseRegistry = null,
 }) {
   const isSuperAdmin = userRole === "super_admin";
   const canLaunchPlaybooks = userRole === "analyst" || userRole === "super_admin";
@@ -1090,6 +1091,30 @@ function PlaybooksPanel({
                       <span style={detailLabelStyle}>Incident ID</span>
                       <span style={detailValueStyle}>{formatDetailValue(detailRecord.incident_id)}</span>
                     </div>
+                    {typeof onOpenResponseRegistry === "function" ? (
+                      <div style={detailFieldStyle}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onOpenResponseRegistry({
+                              relatedAlertId: detailRecord.alert_id,
+                              relatedIncidentId: detailRecord.incident_id,
+                            })
+                          }
+                          style={{
+                            background: "transparent",
+                            border: "1px solid #388bfd",
+                            color: "#58a6ff",
+                            borderRadius: "6px",
+                            padding: "4px 8px",
+                            cursor: "pointer",
+                            fontSize: "12px",
+                          }}
+                        >
+                          Open in Response Registry
+                        </button>
+                      </div>
+                    ) : null}
                     <div style={detailFieldStyle}>
                       <span style={detailLabelStyle}>Last Completed Step</span>
                       <span style={detailValueStyle}>

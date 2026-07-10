@@ -17,7 +17,7 @@ import { outcomeLabel } from "../utils/responseOutcomeDisplay";
 
 const geoUrl = "https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json";
 
-function MapView({ alerts }) {
+function MapView({ alerts, onOpenResponseRegistry = null }) {
   const [selectedAlert, setSelectedAlert] = useState(null);
   const [isInteractive, setIsInteractive] = useState(false);
   const mapContainerRef = useRef(null);
@@ -329,7 +329,11 @@ function MapView({ alerts }) {
             <strong>Legacy Response Status:</strong>{" "}
             {selectedAlert.response_status || "Not set"}
           </p>
-          <SourceIpContext sourceIp={selectedAlert.source_ip} compact />
+          <SourceIpContext
+            sourceIp={selectedAlert.source_ip}
+            compact
+            onOpenResponseRegistry={onOpenResponseRegistry}
+          />
         </div>
       )}
     </div>

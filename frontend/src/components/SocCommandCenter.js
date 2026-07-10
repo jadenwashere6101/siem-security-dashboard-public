@@ -341,42 +341,49 @@ export function deriveAttentionItems(data) {
       value: staleExecutions,
       status: staleExecutions > 0 ? "Needs review" : "Clear",
       severity: staleExecutions > 0 ? "danger" : "success",
+      navLabel: "Stale running executions",
     },
     {
       label: "Pending approvals",
       value: pendingApprovals,
       status: pendingApprovals > 0 ? "Actionable" : "Clear",
       severity: pendingApprovals > 0 ? "warning" : "success",
+      navLabel: "Pending approvals",
     },
     {
       label: "Open or retrying dead letters",
       value: activeDeadLetters,
       status: activeDeadLetters > 0 ? "Review retryability" : "Clear",
       severity: activeDeadLetters > 0 ? "danger" : "success",
+      navLabel: "Open or retrying dead letters",
     },
     {
       label: "Failed playbooks",
       value: failedPlaybooks,
       status: failedPlaybooks > 0 ? "Investigate" : "Clear",
       severity: failedPlaybooks > 0 ? "danger" : "success",
+      navLabel: "Failed playbooks",
     },
     {
       label: "Notification failures",
       value: notificationFailures,
       status: notificationFailures > 0 ? "Delivery degraded" : "Clear",
       severity: notificationFailures > 0 ? "danger" : "success",
+      navLabel: "Notification failures",
     },
     {
       label: "Queue pressure",
       value: queuePressure,
       status: queuePressure > 0 ? "Active work" : "Clear",
       severity: queuePressure > 10 ? "warning" : "info",
+      navLabel: "Queue pressure",
     },
     {
       label: "Degraded integrations",
       value: integrationSummary.blockedCount,
       status: integrationSummary.blockedCount > 0 ? "Safety gate active" : "Clear",
       severity: integrationSummary.blockedCount > 0 ? "warning" : "success",
+      navLabel: "Degraded integrations",
     },
   ];
 
@@ -529,6 +536,8 @@ function SocCommandCenter({
   userRole,
   currentUsername,
   onNavigate,
+  onOpenAttentionItem = null,
+  onOpenResponseRegistry = null,
 }) {
   const canOperate = ACTION_ROLES.has(userRole);
   const [data, setData] = useState(emptyCommandData);
@@ -769,6 +778,15 @@ function SocCommandCenter({
                   <div>
                     <p style={attentionLabelStyle}>{item.label}</p>
                     <p style={attentionStatusStyle}>{item.status}</p>
+                    {typeof onOpenAttentionItem === "function" ? (
+                      <button
+                        type="button"
+                        style={linkButtonStyle}
+                        onClick={() => onOpenAttentionItem(item.navLabel || item.label)}
+                      >
+                        Open workspace
+                      </button>
+                    ) : null}
                   </div>
                   <div style={attentionValueWrapStyle}>
                     <strong style={attentionValueStyle}>{item.value}</strong>

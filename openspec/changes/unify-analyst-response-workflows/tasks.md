@@ -40,23 +40,23 @@
 
 ## 5. Mac AI — Phase 3 Cross-Workspace Correlation
 
-- [ ] 5.1 Replace every duplicated alert-action rendering with one permission-correct shared component and disable locked controls before requests are sent
-- [ ] 5.2 Connect Dashboard, alert detail/expanded row, Threat Hunt, Attack Map, incidents, Source-IP Context, SOC Command Center, playbooks, queue, and approvals to canonical commands or contextual handoffs
-- [ ] 5.3 Implement targeted mutation invalidation for alerts, response logs, registry/blocklist, IP context, incidents, playbooks, queue, approvals, metrics, and command-center summaries
-- [ ] 5.4 Make SOC attention items navigate to filtered authoritative views for approvals, dead letters, executions, notifications, queue pressure, and integrations
-- [ ] 5.5 Make incident alert IDs, registry relationships, queue/approval/playbook identifiers, and source-IP summaries deep-linkable with selection/filter/back-navigation context
-- [ ] 5.6 Replace generic action success and vague legacy response status presentation with actual canonical outcomes and created/reused resource identifiers
-- [ ] 5.7 Add independent alert/incident lifecycle warnings and review handoffs without automatically coupling status mutations
-- [ ] 5.8 Add browser-level workflow tests proving equivalent actions from every supported surface converge on the same registry/Blocklist state and synchronized UI
+- [x] 5.1 Replace every duplicated alert-action rendering with one permission-correct shared component and disable locked controls before requests are sent
+- [x] 5.2 Connect Dashboard, alert detail/expanded row, Threat Hunt, Attack Map, incidents, Source-IP Context, SOC Command Center, playbooks, queue, and approvals to canonical commands or contextual handoffs
+- [x] 5.3 Implement targeted mutation invalidation for alerts, response logs, registry/blocklist, IP context, incidents, playbooks, queue, approvals, metrics, and command-center summaries
+- [x] 5.4 Make SOC attention items navigate to filtered authoritative views for approvals, dead letters, executions, notifications, queue pressure, and integrations
+- [x] 5.5 Make incident alert IDs, registry relationships, queue/approval/playbook identifiers, and source-IP summaries deep-linkable with selection/filter/back-navigation context
+- [x] 5.6 Replace generic action success and vague legacy response status presentation with actual canonical outcomes and created/reused resource identifiers
+- [x] 5.7 Add independent alert/incident lifecycle warnings and review handoffs without automatically coupling status mutations
+- [x] 5.8 Add browser-level workflow tests proving equivalent actions from every supported surface converge on the same registry/Blocklist state and synchronized UI
 
 ## 6. Mac AI — Migration and VM Handoff
 
-- [ ] 6.1 Run migration dry-run/upgrade/rollback tests plus focused and full backend/frontend test suites
-- [ ] 6.2 Verify no test path performs firewall or host enforcement and Teams remains disabled unless separately configured
-- [ ] 6.3 Produce a historical `unsupported_action` classifier/report for `notify` and `enrich_context` with safe retry, dismiss, and escalation criteria
-- [ ] 6.4 Document VM deployment order: clean-tree check, fetch/merge after authorization, migration dry-run/apply, backend/worker restart, health checks, frontend build deployment, and rollback
-- [ ] 6.5 Document production smoke tests for each action origin, idempotent Blocklist convergence, watch/escalation state, deep links, synchronized views, and absence of new unsupported-action cohorts
-- [ ] 6.6 Hand deployment and dead-letter remediation to `vm-soar-runtime-recovery-parent`; do not edit VM source, commit, push, or deploy without separate authorization
+- [x] 6.1 Run migration dry-run/upgrade/rollback tests plus focused and full backend/frontend test suites
+- [x] 6.2 Verify no test path performs firewall or host enforcement and Teams remains disabled unless separately configured
+- [x] 6.3 Produce a historical `unsupported_action` classifier/report for `notify` and `enrich_context` with safe retry, dismiss, and escalation criteria
+- [x] 6.4 Document VM deployment order: clean-tree check, fetch/merge after authorization, migration dry-run/apply, backend/worker restart, health checks, frontend build deployment, and rollback
+- [x] 6.5 Document production smoke tests for each action origin, idempotent Blocklist convergence, watch/escalation state, deep links, synchronized views, and absence of new unsupported-action cohorts
+- [x] 6.6 Hand deployment and dead-letter remediation to `vm-soar-runtime-recovery-parent`; do not edit VM source, commit, push, or deploy without separate authorization
 
 ## 7. VM AI — Existing Runtime Parent Follow-Through
 
