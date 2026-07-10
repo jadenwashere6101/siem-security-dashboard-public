@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# VM backend deploy: schema migrations (scripts/migrate.py) then siem-backend.service restart.
+# VM backend deploy: migrations, source-controlled worker unit installation, daemon reload,
+# backend/worker restarts, and effective unit verification.
 # See docs/schema_migration_workflow.md and openspec/changes/harden-migration-deployment-workflow/
 # Frontend deploy remains deploy.sh (artifact helper only).
 
@@ -29,7 +30,8 @@ usage() {
 Usage: scripts/deploy_backend_vm.sh [OPTIONS]
 
 Run from the repository root on the VM after syncing code.
-Applies pending schema migrations, then restarts the backend service.
+Applies pending schema migrations, installs current worker units, reloads systemd,
+restarts backend and workers, and verifies their effective configuration.
 
 Options:
   --dry-run-migrations   Run migration dry-run only; do not apply, restart, or health-check.
@@ -38,6 +40,8 @@ Options:
   -h, --help             Show this help.
 
 This script does not build the frontend, run playbooks, or send notifications.
+Provider kill switches are environment guards: INTEGRATION_MODE=simulation plus false
+SOAR_REAL_*_ENABLED values disables real notification delivery. This script never changes .env.
 EOF
 }
 
@@ -219,6 +223,12 @@ restart_backend_service() {
   sudo systemctl restart "$SERVICE_NAME"
 }
 
+install_and_restart_worker_units() {
+  log "Installing repository worker units, reloading systemd, and restarting workers..."
+  scripts/install_soar_playbook_worker_service.sh --enable --start
+  scripts/install_response_action_worker_service.sh --enable --start
+}
+
 check_backend_service_status() {
   log "Checking ${SERVICE_NAME} status..."
   sudo systemctl status "$SERVICE_NAME" --no-pager || die "${SERVICE_NAME} is not healthy after restart."
@@ -276,6 +286,7 @@ main() {
 
   restart_backend_service
   check_backend_service_status
+  install_and_restart_worker_units
 
   if [[ "$SKIP_HEALTH_CHECK" -eq 1 ]]; then
     log "Skipping health check (--skip-health-check)."

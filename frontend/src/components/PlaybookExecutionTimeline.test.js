@@ -160,6 +160,34 @@ test("renders awaiting approval and approval pause marker", () => {
   expect(screen.getByText(/^risk level$/i)).toBeInTheDocument();
 });
 
+test.each([
+  ["real", "Real execution resumed"],
+  ["simulation", "Simulation resumed"],
+  ["read_only", "Read-only execution resumed"],
+  [undefined, "Execution resumed"],
+])("renders approval resume wording for %s mode", (mode, expected) => {
+  const timeline = normalizeExecutionTimeline({
+    ...baseExecution,
+    mode,
+    steps_log: [{ step_index: 0, action: "require_approval", event: "approval_resumed" }],
+  });
+  expect(timeline.steps[0].eventLabel).toBe(expected);
+});
+
+test("renders historical enrichment metadata as read-only without external action claims", () => {
+  const timeline = normalizeExecutionTimeline({
+    steps_log: [{
+      step_index: 0,
+      action: "enrich_context",
+      status: "success",
+      mode: "simulation",
+      output: { simulated: true, executed: false, read_only: true },
+    }],
+  });
+  expect(timeline.steps[0].action).toBe("enrich_context");
+  expect(timeline.steps[0].mode).toBe("simulation");
+});
+
 test("handles malformed and empty steps_log safely", () => {
   const { rerender } = render(
     <PlaybookExecutionTimeline

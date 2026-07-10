@@ -26,7 +26,7 @@ const ADAPTER_OPERATIONS = {
   },
   teams: {
     label: "Teams",
-    description: "Sends SOAR playbook notifications to a Microsoft Teams webhook when configured.",
+    description: "Sends SOAR playbook notifications to a Microsoft Teams webhook when real mode is enabled.",
     usedBy: "Not used by default",
     requiredEnv: ["INTEGRATION_MODE", "SOAR_ENV", "SOAR_REAL_TEAMS_ENABLED", "TEAMS_WEBHOOK_URL"],
     credentialFlags: [{ key: "webhook_configured", env: "TEAMS_WEBHOOK_URL" }],

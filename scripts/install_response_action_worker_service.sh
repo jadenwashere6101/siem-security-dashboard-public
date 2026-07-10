@@ -33,8 +33,8 @@ Usage: scripts/install_response_action_worker_service.sh [OPTIONS]
 Install, update, or roll back the SOAR response-action queue worker service/timer.
 Run from the repository root as the jaden user on the VM. Privileged steps use sudo.
 
-By default, install copies the service and timer and runs systemctl daemon-reload.
-The timer is not enabled or started unless you pass explicit flags.
+Install copies both units and reloads systemd. --start enables and restarts the timer,
+then verifies the effective service and timer configuration.
 
 Options:
   --dry-run       Print commands without executing them.
@@ -49,8 +49,8 @@ Examples:
   scripts/install_response_action_worker_service.sh --enable --start
   scripts/install_response_action_worker_service.sh --rollback --dry-run
 
-The timer runs bounded simulation-safe batches. It does not enable real firewall
-enforcement and does not process playbook_executions.
+Execution mode and notification kill-switch guards come from the service EnvironmentFile.
+The timer does not enable real firewall enforcement and does not process playbook_executions.
 EOF
 }
 
@@ -86,8 +86,9 @@ enable_timer() {
 }
 
 start_timer() {
-  run_sudo systemctl start "$TIMER_NAME"
-  run_sudo systemctl status "$TIMER_NAME" --no-pager || true
+  run_sudo systemctl restart "$TIMER_NAME"
+  run_sudo systemctl status "$TIMER_NAME" --no-pager
+  run_sudo systemctl cat "$SERVICE_NAME" "$TIMER_NAME" --no-pager
 }
 
 rollback_units() {

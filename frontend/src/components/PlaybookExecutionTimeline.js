@@ -2,6 +2,7 @@ import React, { useMemo } from "react";
 import ExecutionSafetyModelPanel from "./ExecutionSafetyModelPanel";
 import { buildCanonicalStepOutcomeLabels } from "../utils/responseOutcomeDisplay";
 import { formatTimestamp as sharedFormatTimestamp } from "../utils/displayFormatting";
+import { executionModeLabel, executionModeNoun, normalizeExecutionMode } from "../utils/executionModeDisplay";
 
 // spec: SPEC-UI-004 - timeline labels clarify simulation-safe execution without downplaying real workflows.
 const STATUS_TONES = {
@@ -137,14 +138,14 @@ function getStepStatus(step) {
   return "unknown";
 }
 
-function getEventLabel(step, status) {
+function getEventLabel(step, status, mode) {
   switch (step?.event) {
     case "approval_requested":
       return "Approval requested";
     case "approval_approved":
       return "Approval approved";
     case "approval_resumed":
-      return "Simulation resumed";
+      return `${executionModeNoun(mode)[0].toUpperCase()}${executionModeNoun(mode).slice(1)} resumed`;
     case "approval_denied":
       return "Approval denied";
     case "approval_expired":
@@ -156,18 +157,13 @@ function getEventLabel(step, status) {
   }
 }
 
-function normalizeMode(value) {
-  const mode = String(value || "").trim().toLowerCase();
-  return mode === "real" || mode === "simulation" ? mode : "";
-}
-
 function getNotificationEventLabel(action, step, delivery, adapterResult) {
   if (!NOTIFICATION_ACTIONS.has(action)) return "";
   if (step?.skipped === true || step?.output?.skipped === true) {
     return "Skipped by policy";
   }
   const deliveryStatus = String(delivery?.status || "").trim().toLowerCase();
-  const mode = normalizeMode(adapterResult?.mode) || normalizeMode(delivery?.mode);
+  const mode = normalizeExecutionMode(adapterResult?.mode, delivery?.mode);
   const adapterExecuted = adapterResult?.executed === true;
   if (deliveryStatus === "success" || adapterResult?.success === true) {
     if (mode === "real" && adapterExecuted) return "Real delivered";
@@ -286,17 +282,16 @@ export function normalizeExecutionTimeline(execution = {}) {
       const delivery =
         step.output && typeof step.output === "object" ? step.output.notification_delivery : null;
       const notificationLabel = getNotificationEventLabel(action, step, delivery, adapterResult);
-      const adapterMode = normalizeMode(adapterResult?.mode);
-      const deliveryMode = normalizeMode(delivery?.mode);
-      const stepMode = normalizeMode(step.mode || step.execution_mode);
-      const executionMode = normalizeMode(execution.mode || execution.execution_mode);
+      const adapterMode = normalizeExecutionMode(adapterResult?.mode);
+      const deliveryMode = normalizeExecutionMode(delivery?.mode);
+      const stepMode = normalizeExecutionMode(step.mode, step.execution_mode);
+      const executionMode = normalizeExecutionMode(execution.mode, execution.execution_mode);
       const mode =
-        (NOTIFICATION_ACTIONS.has(action) && (adapterMode || deliveryMode)) ||
-        stepMode ||
-        adapterMode ||
-        deliveryMode ||
-        executionMode ||
-        "simulation";
+        (NOTIFICATION_ACTIONS.has(action) && adapterMode !== "unknown" && adapterMode) ||
+        (NOTIFICATION_ACTIONS.has(action) && deliveryMode !== "unknown" && deliveryMode) ||
+        (stepMode !== "unknown" && stepMode) ||
+        (adapterMode !== "unknown" && adapterMode) ||
+        (deliveryMode !== "unknown" && deliveryMode) || executionMode;
       const startedAt = step.started_at || step.start_time || step.timestamp || step.created_at;
       const completedAt = step.completed_at || step.end_time || step.finished_at;
       const canonicalOutcomeLabel = canonicalStepLabels[stepIndex];
@@ -306,7 +301,7 @@ export function normalizeExecutionTimeline(execution = {}) {
         label: step.label || step.step_name || `Step ${stepIndex + 1}`,
         action,
         status,
-        eventLabel: canonicalOutcomeLabel || notificationLabel || getEventLabel(step, status),
+        eventLabel: canonicalOutcomeLabel || notificationLabel || getEventLabel(step, status, mode),
         tone: STATUS_TONES[status] || "muted",
         mode,
         startedAt,
@@ -382,7 +377,7 @@ export function normalizeExecutionTimeline(execution = {}) {
     activeStepIndex,
     terminalStepIndex: terminalActualIndex,
     hasLease: hasLeaseMarker(execution),
-    executionMode: execution.mode || execution.execution_mode || "simulation",
+    executionMode: normalizeExecutionMode(execution.mode, execution.execution_mode),
   };
 }
 
@@ -513,8 +508,8 @@ function PlaybookExecutionTimeline({ execution, compact = false, displaySettings
                     </div>
                     <div style={badgeRowStyle}>
                       <Badge tone={step.tone}>{step.eventLabel}</Badge>
-                      <Badge tone={String(step.mode).toLowerCase() === "real" ? "warning" : "info"}>
-                        {String(step.mode).toLowerCase() === "real" ? "Real" : "Simulation"}
+                      <Badge tone={step.mode === "real" ? "warning" : "info"}>
+                        {executionModeLabel(step.mode)}
                       </Badge>
                     </div>
                   </div>

@@ -271,8 +271,13 @@ def test_enrich_context_step_outputs_alert_context_without_external_lookup(postg
     entry = row["steps_log"][0]
     assert entry["action"] == "enrich_context"
     assert entry["status"] == "success"
+    assert entry["mode"] == "read_only"
     output = entry["output"]
     assert output["read_only"] is True
+    assert output["executed"] is True
+    assert output["simulated"] is False
+    assert output["external_side_effect"] is False
+    assert "no external action" in entry["message"].lower()
     context = output["context"]
     assert context["target"] == {
         "target_type": "alert",

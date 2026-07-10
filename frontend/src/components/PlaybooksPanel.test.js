@@ -69,6 +69,7 @@ const execRow = {
   alert_id: null,
   incident_id: null,
   status: "pending",
+  mode: "simulation",
   started_at: null,
   completed_at: null,
   last_completed_step: null,
@@ -1045,7 +1046,7 @@ test("shows visibility-only notice", async () => {
   render(<PlaybooksPanel {...styleProps} userRole="analyst" />);
 
   expect(
-    await screen.findByText(/simulation-only playbook controls/i)
+    await screen.findByText(/playbook execution controls/i)
   ).toBeInTheDocument();
   expect(screen.getByText(/analyst users have read-only access/i)).toBeInTheDocument();
 });

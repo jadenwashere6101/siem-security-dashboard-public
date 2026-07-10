@@ -1,15 +1,8 @@
 #!/usr/bin/env bash
-# Run one bounded response-action queue worker batch using VM .env settings.
-# This wrapper constructs DATABASE_URL without printing it.
+# Run one bounded response-action queue worker batch using the environment loaded by systemd.
+# EnvironmentFile values are data; this wrapper must never source or evaluate .env as shell code.
 
 set -euo pipefail
-
-if [[ -f .env ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  . ./.env
-  set +a
-fi
 
 pick() {
   local primary="$1"

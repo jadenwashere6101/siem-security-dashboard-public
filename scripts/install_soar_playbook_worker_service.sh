@@ -32,8 +32,8 @@ Usage: scripts/install_soar_playbook_worker_service.sh [OPTIONS]
 Install, update, or roll back soar-playbook-worker.service on the VM.
 Run from the repository root as the jaden user. Privileged steps use sudo.
 
-By default, install copies the unit and runs systemctl daemon-reload only.
-The service is not enabled or started unless you pass explicit flags.
+Install copies the unit and reloads systemd. --start enables and restarts the worker,
+then verifies the effective unit contains the repository ExecStart configuration.
 
 Options:
   --dry-run       Print commands without executing them.
@@ -90,8 +90,9 @@ enable_service() {
 }
 
 start_service() {
-  run_sudo systemctl start "$SERVICE_NAME"
-  run_sudo systemctl status "$SERVICE_NAME" --no-pager || true
+  run_sudo systemctl restart "$SERVICE_NAME"
+  run_sudo systemctl status "$SERVICE_NAME" --no-pager
+  run_sudo systemctl cat "$SERVICE_NAME" --no-pager
 }
 
 rollback_service() {

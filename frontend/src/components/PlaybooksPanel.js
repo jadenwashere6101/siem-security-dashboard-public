@@ -15,13 +15,12 @@ import {
 import { listDeadLetters } from "../services/deadLetterService";
 import { listNotificationDeliveries } from "../services/notificationDeliveryService";
 import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
+import { executionModeNoun, normalizeExecutionMode } from "../utils/executionModeDisplay";
 import PlaybookExecutionTimeline from "./PlaybookExecutionTimeline";
 import { ResponseOutcomeBadge, ResponseOutcomeSummary } from "./ResponseOutcome";
 
 const PAGE_LIMIT = 50;
 const EXEC_STATUSES = ["pending", "running", "awaiting_approval", "success", "failed", "abandoned"];
-const APPROVAL_PAUSED_MESSAGE =
-  "Approval-gated simulation paused; no later steps will run until approval.";
 const ENABLED_OPTIONS = [
   { value: "all", label: "All definitions" },
   { value: "enabled", label: "Enabled only" },
@@ -72,23 +71,29 @@ function normalizeStepsLog(stepsLog) {
   return [];
 }
 
-function getExecutionStatusSummary(status) {
+function getExecutionStatusSummary(status, execution) {
+  const subject = executionModeNoun(normalizeExecutionMode(execution?.mode, execution?.execution_mode));
   switch (status) {
     case "pending":
-      return "Pending simulation; no steps have been consumed yet.";
+      return `Pending ${subject}; no steps have been consumed yet.`;
     case "running":
-      return "Simulation is marked running and may have partial step output.";
+      return `${subject[0].toUpperCase()}${subject.slice(1)} is marked running and may have partial step output.`;
     case "awaiting_approval":
-      return "Simulation is paused at an approval gate.";
+      return `${subject[0].toUpperCase()}${subject.slice(1)} is paused at an approval gate.`;
     case "success":
-      return "Simulation completed successfully.";
+      return `${subject[0].toUpperCase()}${subject.slice(1)} completed successfully.`;
     case "failed":
-      return "Simulation failed before completing all steps.";
+      return `${subject[0].toUpperCase()}${subject.slice(1)} failed before completing all steps.`;
     case "abandoned":
       return "Execution was abandoned and will not continue in this view.";
     default:
       return "Execution status is unknown.";
   }
+}
+
+function getApprovalPausedMessage(execution) {
+  const subject = executionModeNoun(normalizeExecutionMode(execution?.mode, execution?.execution_mode));
+  return `Approval-gated ${subject} paused; no later steps will run until approval.`;
 }
 
 function isAwaitingApproval(detailRecord) {
@@ -665,7 +670,7 @@ function PlaybooksPanel({
           <p style={sectionLabelStyle}>SOAR</p>
           <h2 style={cardTitleStyle}>Playbooks</h2>
           <p style={cardSubtitleStyle}>
-            Simulation-only playbook controls. Retry, abandon, and resume actions are available
+            Playbook execution controls. Retry, abandon, and resume actions are available
             to super_admin users. Analyst users have read-only access.
           </p>
         </div>
@@ -972,7 +977,7 @@ function PlaybooksPanel({
                                       opacity: actionBusy ? 0.65 : 1,
                                     }}
                                   >
-                                    Retry simulation
+                                    Retry {executionModeNoun(normalizeExecutionMode(row.mode, row.execution_mode))}
                                   </button>
                                 ) : null}
                                 {controls.canAbandon ? (
@@ -998,7 +1003,7 @@ function PlaybooksPanel({
                                       opacity: actionBusy ? 0.65 : 1,
                                     }}
                                   >
-                                    Resume simulation
+                                    Resume {executionModeNoun(normalizeExecutionMode(row.mode, row.execution_mode))}
                                   </button>
                                 ) : null}
                               </div>
@@ -1111,10 +1116,10 @@ function PlaybooksPanel({
                     </div>
                   </div>
                   <div style={statusSummaryStyle}>
-                    {getExecutionStatusSummary(detailRecord.status)}
+                    {getExecutionStatusSummary(detailRecord.status, detailRecord)}
                   </div>
                   {isAwaitingApproval(detailRecord) ? (
-                    <div style={approvalNoticeStyle}>{APPROVAL_PAUSED_MESSAGE}</div>
+                    <div style={approvalNoticeStyle}>{getApprovalPausedMessage(detailRecord)}</div>
                   ) : null}
                   <div style={outcomeSectionStyle}>
                     <p style={detailLabelStyle}>Canonical response outcome</p>
