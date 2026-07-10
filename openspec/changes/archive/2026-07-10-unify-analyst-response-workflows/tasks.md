@@ -1,3 +1,5 @@
+Status: Complete. Mac implementation phases, legacy backfill durability, validation, and the VM-parent handoff are complete.
+
 ## 1. Mac AI — Phase 1 Contract Baseline
 
 - [x] 1.1 Inventory every producer, route, queue, playbook step, executor, and UI control for `block_ip`, `monitor`, `flag_high_priority`/escalation, `notify`, and `enrich_context`
@@ -60,8 +62,10 @@
 
 ## 7. VM AI — Existing Runtime Parent Follow-Through
 
-- [ ] 7.1 Execute only through `vm-soar-runtime-recovery-parent` after the approved Mac implementation is committed, pushed, and ready; do not create a competing VM feature spec
-- [ ] 7.2 Confirm the VM worktree is clean, deploy through the documented source-of-truth workflow, run migrations, restart affected services, deploy the frontend build, and capture sanitized smoke evidence
-- [ ] 7.3 Recount and classify the audited 82-open `unsupported_action` records for `notify`/`enrich_context` and the one retrying record using current live values rather than assuming counts are unchanged
-- [ ] 7.4 Canary-retry only relevant idempotent records corrected by the deployed routing change; dismiss or escalate obsolete, ambiguous, unsafe, and duplicate-prone records with reasons and preserved history
-- [ ] 7.5 Observe production for new `unsupported_action` creation, verify the cohort no longer grows, and return any continuing producer evidence to the Mac AI
+- [x] 7.1 Execute only through `vm-soar-runtime-recovery-parent` after the approved Mac implementation is committed, pushed, and ready; do not create a competing VM feature spec — completed through the existing runtime parent, now archived
+- [x] 7.2 Confirm the VM worktree is clean, deploy through the documented source-of-truth workflow, run migrations, restart affected services, deploy the frontend build, and capture sanitized smoke evidence — runtime parent preflight/postflight and health evidence complete
+- [x] 7.3 Recount and classify the audited 82-open `unsupported_action` records for `notify`/`enrich_context` and the one retrying record using current live values rather than assuming counts are unchanged — live cohorts classified and retained as historical evidence
+- [x] 7.4 Canary-retry only relevant idempotent records corrected by the deployed routing change; dismiss or escalate obsolete, ambiguous, unsafe, and duplicate-prone records with reasons and preserved history — no safe canary cohort existed; permanent/obsolete records were retained/escalated without rewriting history
+- [x] 7.5 Observe production for new `unsupported_action` creation, verify the cohort no longer grows, and return any continuing producer evidence to the Mac AI — observation completed with no new producer path requiring VM mutation
+
+Completion evidence: canonical response foundation, Response Registry workspace, cross-workspace correlation/VM handoff, and the legacy backfill durability fix are implemented. Required backend/frontend, migration, backfill idempotency, actor/timestamp, and OpenSpec validation coverage completed.
