@@ -85,7 +85,8 @@ def test_migration_0012_is_pending_when_db_at_0011(capsys):
     assert "Would apply migration 0012 0012_soar_response_outcomes" in output
     assert "Would apply migration 0013 0013_playbook_chaining" in output
     assert "Would apply migration 0014 0014_events_source_index" in output
-    assert "Dry run complete. 3 pending migration(s)." in output
+    assert "Would apply migration 0015 0015_indicator_response_registry" in output
+    assert "Dry run complete. 4 pending migration(s)." in output
 
 
 def test_migration_0013_is_pending_when_db_at_0012(capsys):
@@ -100,19 +101,20 @@ def test_migration_0013_is_pending_when_db_at_0012(capsys):
     output = capsys.readouterr().out
     assert "Would apply migration 0013 0013_playbook_chaining" in output
     assert "Would apply migration 0014 0014_events_source_index" in output
-    assert "Dry run complete. 2 pending migration(s)." in output
+    assert "Would apply migration 0015 0015_indicator_response_registry" in output
+    assert "Dry run complete. 3 pending migration(s)." in output
 
 
-def test_migration_0013_is_noop_when_already_applied(capsys):
+def test_migration_0015_is_noop_when_already_applied(capsys):
     conn = MagicMock()
     cur = MagicMock()
     conn.cursor.return_value.__enter__.return_value = cur
-    cur.fetchall.return_value = [(version,) for version in range(1, 15)]
+    cur.fetchall.return_value = [(version,) for version in range(1, 16)]
 
     code = migrate.run(conn, migrations_dir=REPO_ROOT / "migrations", dry_run=True)
 
     assert code == 0
-    assert "Nothing to apply. DB at version 0014." in capsys.readouterr().out
+    assert "Nothing to apply. DB at version 0015." in capsys.readouterr().out
 
 
 def test_migration_0014_is_pending_when_db_at_0013(capsys):
@@ -126,4 +128,19 @@ def test_migration_0014_is_pending_when_db_at_0013(capsys):
     assert code == 0
     output = capsys.readouterr().out
     assert "Would apply migration 0014 0014_events_source_index" in output
+    assert "Would apply migration 0015 0015_indicator_response_registry" in output
+    assert "Dry run complete. 2 pending migration(s)." in output
+
+
+def test_migration_0015_is_pending_when_db_at_0014(capsys):
+    conn = MagicMock()
+    cur = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cur
+    cur.fetchall.return_value = [(version,) for version in range(1, 15)]
+
+    code = migrate.run(conn, migrations_dir=REPO_ROOT / "migrations", dry_run=True)
+
+    assert code == 0
+    output = capsys.readouterr().out
+    assert "Would apply migration 0015 0015_indicator_response_registry" in output
     assert "Dry run complete. 1 pending migration(s)." in output
