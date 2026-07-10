@@ -97,7 +97,7 @@ function AlertTableRow({
       {visibleColumns.sourceIp && (
       <td style={{ ...bodyCellStyle, ...monoCellStyle }}>
         <div>{alert.source_ip}</div>
-        <div style={{ fontSize: "12px", color: "#666", marginTop: "4px" }}>
+        <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "4px" }}>
           {alert.city && alert.country
             ? `${alert.city}, ${alert.country}`
             : "Location unavailable"}

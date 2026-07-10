@@ -290,7 +290,10 @@ function ResponseRegistryPanel({
   };
 
   return (
-    <section style={cardStyle} data-testid="response-registry-panel">
+    <section
+      style={{ ...cardStyle, color: "#e6edf3" }}
+      data-testid="response-registry-panel"
+    >
       <div style={cardHeaderStyle}>
         <div>
           <h2 style={cardTitleStyle}>Response Registry</h2>
@@ -310,11 +313,17 @@ function ResponseRegistryPanel({
         </button>
       </div>
 
+      <div style={{ padding: "20px" }}>
       <div
         role="tablist"
         aria-label="Registry views"
         data-testid={`registry-view-${view}`}
-        style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "16px" }}
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+          gap: "10px",
+          marginBottom: "20px",
+        }}
       >
         {REGISTRY_VIEWS.map((entry) => {
           const active = view === entry.id;
@@ -334,6 +343,8 @@ function ResponseRegistryPanel({
                 background: active ? "#1f6feb" : "#21262d",
                 color: active ? "#ffffff" : "#c9d1d9",
                 borderColor: active ? "#1f6feb" : "#30363d",
+                minHeight: "38px",
+                width: "100%",
               }}
             >
               {entry.label}
@@ -837,6 +848,7 @@ function ResponseRegistryPanel({
             )}
           </aside>
         )}
+      </div>
       </div>
     </section>
   );

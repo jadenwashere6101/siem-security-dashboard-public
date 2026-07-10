@@ -40,8 +40,8 @@ function AlertManualActions({
       id: "flag_high_priority",
       label: "Escalate",
       lockedLabel: "Escalate (locked)",
-      backgroundColor: "#faad14",
-      color: "black",
+      backgroundColor: "#b45309",
+      color: "#ffffff",
       accent: "#f59e0b",
     },
     {

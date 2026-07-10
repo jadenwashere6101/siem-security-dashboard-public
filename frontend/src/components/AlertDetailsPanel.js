@@ -26,7 +26,7 @@ function AlertDetailsPanel({
   const contributingSignals = behavioralReputation.contributing_signals;
 
   return (
-    <div style={{ fontSize: "14px", lineHeight: "1.7" }}>
+    <div style={{ fontSize: "14px", lineHeight: "1.7", color: "#e6edf3" }}>
       {getTargetedAlertMeta(selectedAlert.alert_type) && (
         <div
           style={
