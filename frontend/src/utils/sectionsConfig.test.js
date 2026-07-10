@@ -3,6 +3,7 @@ import { isSectionVisible, sectionsConfig } from "./sectionsConfig";
 const EXPECTED_SECTION_IDS = [
   "dashboard",
   "soc-command-center",
+  "response-registry",
   "blocklist",
   "threat-hunt",
   "live-logs-honeypot",
@@ -55,6 +56,12 @@ const expectedVisibility = {
     unauthenticated: true,
   },
   "soc-command-center": {
+    super_admin: true,
+    analyst: true,
+    viewer: false,
+    unauthenticated: false,
+  },
+  "response-registry": {
     super_admin: true,
     analyst: true,
     viewer: false,
@@ -178,7 +185,7 @@ const expectedVisibility = {
 
 describe("sectionsConfig", () => {
   test("contains exactly the expected section ids", () => {
-    expect(sectionsConfig).toHaveLength(21);
+    expect(sectionsConfig).toHaveLength(22);
     expect(sectionsConfig.map((section) => section.id)).toEqual(EXPECTED_SECTION_IDS);
   });
 

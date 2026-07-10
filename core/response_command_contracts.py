@@ -13,6 +13,7 @@ ORIGIN_RESPONSE_QUEUE = "response_queue"
 ORIGIN_APPROVAL = "approval"
 ORIGIN_SYSTEM = "system"
 ORIGIN_BACKFILL = "backfill"
+ORIGIN_RESPONSE_REGISTRY = "response_registry"
 
 DISPOSITION_OBSERVED = "observed"
 DISPOSITION_MONITORED = "monitored"

@@ -68,6 +68,28 @@ _CANONICAL_SPECS: tuple[CanonicalActionSpec, ...] = (
         validation_hint="Provide alert_id (preferred) or source_ip for escalation context.",
     ),
     CanonicalActionSpec(
+        name="stop_monitor",
+        owning_executor=OWNER_RESPONSE_COMMAND,
+        supported_modes=frozenset({MODE_INTERNAL}),
+        description="Stop an active monitor/watch disposition without firewall changes.",
+        validation_hint="Provide source_ip for the monitored indicator.",
+    ),
+    CanonicalActionSpec(
+        name="remove_tracking",
+        owning_executor=OWNER_RESPONSE_COMMAND,
+        supported_modes=frozenset({MODE_TRACKING_ONLY}),
+        aliases=frozenset({"unblock"}),
+        description="Remove active Blocklist tracking; no firewall change.",
+        validation_hint="Provide source_ip or an active blocked_ip context.",
+    ),
+    CanonicalActionSpec(
+        name="add_note",
+        owning_executor=OWNER_RESPONSE_COMMAND,
+        supported_modes=frozenset({MODE_INTERNAL}),
+        description="Append an analyst note to registry history without changing disposition.",
+        validation_hint="Provide source_ip and a non-empty reason/note.",
+    ),
+    CanonicalActionSpec(
         name="enrich_context",
         owning_executor=OWNER_PLAYBOOK_READ_ONLY,
         supported_modes=frozenset({MODE_READ_ONLY}),
@@ -147,7 +169,14 @@ RESPONSE_QUEUE_ACTIONS: frozenset[str] = frozenset(
 
 # Analyst response commands (shared command service).
 RESPONSE_COMMAND_ACTIONS: frozenset[str] = frozenset(
-    {"block_ip", "monitor", "flag_high_priority"}
+    {
+        "block_ip",
+        "monitor",
+        "flag_high_priority",
+        "stop_monitor",
+        "remove_tracking",
+        "add_note",
+    }
 )
 
 # block_ip is both a response command and a playbook adapter action.
@@ -236,11 +265,12 @@ def validate_action_for_response_queue(action: str | None) -> str:
 
 def validate_response_command_action(action: str | None) -> str:
     spec = get_action_spec(action)
-    # Accept escalate alias via normalize
+    # Accept escalate/unblock aliases via normalize
     if spec.name not in RESPONSE_COMMAND_ACTIONS:
         raise CanonicalActionValidationError(
             f"Action {spec.name!r} is not a canonical response command "
-            f"(block_ip, monitor, flag_high_priority).",
+            f"(block_ip, monitor, flag_high_priority, stop_monitor, "
+            f"remove_tracking, add_note).",
             code="unsupported_action",
         )
     return spec.name

@@ -15,6 +15,8 @@ function BlocklistManagerPanel({
   cardSubtitleStyle,
   filterLabelStyle,
   selectStyle,
+  canTakeAlertActions = true,
+  onMutationComplete,
 }) {
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -62,6 +64,9 @@ function BlocklistManagerPanel({
         message: data.message || "Blocked IP added successfully",
       });
       await loadEntries();
+      if (typeof onMutationComplete === "function") {
+        onMutationComplete(data);
+      }
     } catch (err) {
       setFeedback({
         type: "error",
@@ -84,6 +89,9 @@ function BlocklistManagerPanel({
         message: data.message || "Blocked IP removed successfully",
       });
       await loadEntries();
+      if (typeof onMutationComplete === "function") {
+        onMutationComplete(data);
+      }
     } catch (err) {
       setFeedback({
         type: "error",
@@ -113,6 +121,7 @@ function BlocklistManagerPanel({
           </div>
         ) : null}
 
+        {canTakeAlertActions ? (
         <form onSubmit={handleAddBlockedIp} style={formStyle}>
           <div style={formGridStyle}>
             <div style={fieldStyle}>
@@ -164,6 +173,11 @@ function BlocklistManagerPanel({
             {submitting ? "Adding..." : "Add Blocked IP"}
           </button>
         </form>
+        ) : (
+          <p style={emptyTextStyle} title="Viewers cannot mutate Blocklist tracking.">
+            Blocklist mutations are locked for this role. Tracking history remains visible below.
+          </p>
+        )}
 
         {loading ? (
           <p style={emptyTextStyle}>Loading blocked IPs...</p>
@@ -210,7 +224,7 @@ function BlocklistManagerPanel({
                     <td style={bodyCellStyle}>{formatAdminTimestamp(entry.created_at, "None")}</td>
                     <td style={bodyCellStyle}>{formatAdminTimestamp(entry.expires_at, "None")}</td>
                     <td style={bodyCellStyle}>
-                      {entry.status === "active" ? (
+                      {entry.status === "active" && canTakeAlertActions ? (
                         <button
                           type="button"
                           onClick={() => handleUnblock(entry.id)}
@@ -219,6 +233,13 @@ function BlocklistManagerPanel({
                         >
                           {unblockingId === String(entry.id) ? "Unblocking..." : "Unblock"}
                         </button>
+                      ) : entry.status === "active" ? (
+                        <span
+                          style={inactiveTextStyle}
+                          title="Viewers cannot remove Blocklist tracking."
+                        >
+                          Locked
+                        </span>
                       ) : (
                         <span style={inactiveTextStyle}>Inactive</span>
                       )}

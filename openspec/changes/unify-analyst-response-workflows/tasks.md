@@ -29,14 +29,14 @@
 
 ## 4. Mac AI — Phase 2 Response Registry Workspace
 
-- [ ] 4.1 Add Response Registry to sidebar configuration and role/visibility tests
-- [ ] 4.2 Build registry service clients and workspace shell with All, Monitoring, Blocklist Tracking, Escalated, Pending, Failed/Rejected, and History views
-- [ ] 4.3 Implement paginated search/filter/sort for indicator, disposition, requested action, outcome, enforcement, risk, origin, actor, related resource, and time range
-- [ ] 4.4 Implement registry detail with current state, explicit enforcement statement, complete history, provenance, related counts, and deep links
-- [ ] 4.5 Integrate existing Blocklist add/list/expiry/unblock behavior into Blocklist Tracking with canonical outcomes and history
-- [ ] 4.6 Add guarded Monitor, Stop Monitoring, Track in Blocklist, Remove Tracking, Escalate, note, and expiry controls using shared command contracts
-- [ ] 4.7 Redirect the legacy Blocklist sidebar/deep link to the Registry Blocklist Tracking view after compatibility tests pass
-- [ ] 4.8 Add responsive, accessibility, viewer/analyst/super-admin, empty/error/loading, and truthful-copy frontend tests
+- [x] 4.1 Add Response Registry to sidebar configuration and role/visibility tests
+- [x] 4.2 Build registry service clients and workspace shell with All, Monitoring, Blocklist Tracking, Escalated, Pending, Failed/Rejected, and History views
+- [x] 4.3 Implement paginated search/filter/sort for indicator, disposition, requested action, outcome, enforcement, risk, origin, actor, related resource, and time range
+- [x] 4.4 Implement registry detail with current state, explicit enforcement statement, complete history, provenance, related counts, and deep links
+- [x] 4.5 Integrate existing Blocklist add/list/expiry/unblock behavior into Blocklist Tracking with canonical outcomes and history
+- [x] 4.6 Add guarded Monitor, Stop Monitoring, Track in Blocklist, Remove Tracking, Escalate, note, and expiry controls using shared command contracts
+- [x] 4.7 Redirect the legacy Blocklist sidebar/deep link to the Registry Blocklist Tracking view after compatibility tests pass
+- [x] 4.8 Add responsive, accessibility, viewer/analyst/super-admin, empty/error/loading, and truthful-copy frontend tests
 
 ## 5. Mac AI — Phase 3 Cross-Workspace Correlation
 

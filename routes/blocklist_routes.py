@@ -191,17 +191,30 @@ def unblock_blocked_ip(block_id):
         if row[3] != "active":
             return jsonify({"error": "Blocked IP entry is not active"}), 400
 
-        cur.execute(
-            """
-            UPDATE blocked_ips
-            SET status = 'inactive'
-            WHERE id = %s
-            """,
-            (block_id,),
+        ip_address = str(row[0]) if row[0] is not None else None
+        try:
+            actor_user_id = int(current_user.id)
+        except (TypeError, ValueError):
+            actor_user_id = None
+
+        result = execute_response_command(
+            conn,
+            ResponseCommandRequest(
+                action="remove_tracking",
+                indicator_value=ip_address,
+                alert_id=row[2],
+                reason=row[1] or "Blocklist tracking removed",
+                actor_user_id=actor_user_id,
+                origin_surface=ORIGIN_BLOCKLIST_FORM,
+                idempotency_key=f"blocklist-unblock-{block_id}",
+            ),
         )
+        if not result.success:
+            conn.rollback()
+            return jsonify({"error": result.error or result.message}), 400
+
         conn.commit()
 
-        ip_address = str(row[0]) if row[0] is not None else None
         log_audit_event(
             "block_ip_removed",
             actor_username=current_user.id,
@@ -215,10 +228,17 @@ def unblock_blocked_ip(block_id):
                 "actor": current_user.id,
                 "source_alert_id": row[2],
                 "block_id": block_id,
+                "registry_record_id": result.registry_record_id,
+                "registry_event_id": result.registry_event_id,
             },
         )
 
-        return jsonify({"message": "Blocked IP removed successfully"}), 200
+        return jsonify({
+            "message": result.compatible_fields.get(
+                "message", "Blocked IP removed successfully"
+            ),
+            **result.to_api_dict(),
+        }), 200
     except Exception as error:
         if conn:
             conn.rollback()

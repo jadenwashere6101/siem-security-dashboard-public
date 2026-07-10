@@ -12,6 +12,12 @@ export const sectionsConfig = [
     visibleWhen: ({ canTakeAlertActions }) => canTakeAlertActions,
   },
   {
+    id: "response-registry",
+    label: "Response Registry",
+    group: "soc",
+    visibleWhen: ({ canTakeAlertActions }) => canTakeAlertActions,
+  },
+  {
     id: "blocklist",
     label: "Blocklist",
     group: "soc",

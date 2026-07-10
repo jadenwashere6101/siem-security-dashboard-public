@@ -13,6 +13,7 @@ from core.canonical_action_vocabulary import (
 from core.db import create_blocked_ip_record, validate_blocked_ip
 from core.indicator_response_registry import (
     append_registry_event,
+    get_indicator_by_value,
     upsert_indicator_identity,
 )
 from core.response_command_contracts import (
@@ -21,6 +22,7 @@ from core.response_command_contracts import (
     DISPOSITION_ESCALATED,
     DISPOSITION_MONITORED,
     DISPOSITION_REJECTED,
+    DISPOSITION_REMOVED,
     ESCALATION_DEFAULT_PRIORITY,
     ESCALATION_DEFAULT_SEVERITY,
     INDICATOR_TYPE_IP,
@@ -267,7 +269,7 @@ def execute_response_command(conn, request: ResponseCommandRequest) -> ResponseC
             error_code="invalid_indicator",
         )
 
-    if action in {"block_ip", "monitor"} and not source_ip:
+    if action in {"block_ip", "monitor", "stop_monitor", "remove_tracking", "add_note"} and not source_ip:
         return ResponseCommandResult(
             success=False,
             action=action,
@@ -287,6 +289,16 @@ def execute_response_command(conn, request: ResponseCommandRequest) -> ResponseC
             error_code="validation_no_target",
         )
 
+    if action == "add_note" and not (request.reason or "").strip():
+        return ResponseCommandResult(
+            success=False,
+            action=action,
+            outcome_label="rejected",
+            message="reason is required for add_note",
+            error="reason is required for add_note",
+            error_code="validation_missing_reason",
+        )
+
     idem_key = _default_idempotency_key(
         ResponseCommandRequest(
             **{
@@ -301,6 +313,12 @@ def execute_response_command(conn, request: ResponseCommandRequest) -> ResponseC
         return _execute_block_ip(conn, request, action, source_ip, idem_key)
     if action == "monitor":
         return _execute_monitor(conn, request, action, source_ip, idem_key)
+    if action == "stop_monitor":
+        return _execute_stop_monitor(conn, request, action, source_ip, idem_key)
+    if action == "remove_tracking":
+        return _execute_remove_tracking(conn, request, action, source_ip, idem_key)
+    if action == "add_note":
+        return _execute_add_note(conn, request, action, source_ip, idem_key)
     return _execute_escalate(conn, request, action, source_ip, idem_key)
 
 
@@ -731,6 +749,224 @@ def _execute_escalate(
             "action": action,
             "incident_id": incident_id,
         },
+    )
+
+
+def _execute_stop_monitor(
+    conn,
+    request: ResponseCommandRequest,
+    action: str,
+    source_ip: str,
+    idem_key: str,
+) -> ResponseCommandResult:
+    registry = get_indicator_by_value(
+        conn, indicator_type=INDICATOR_TYPE_IP, indicator_value=source_ip
+    )
+    if registry is None:
+        registry = upsert_indicator_identity(
+            conn, indicator_type=INDICATOR_TYPE_IP, indicator_value=source_ip
+        )
+    if registry.get("current_disposition") != DISPOSITION_MONITORED:
+        # Idempotent: already not monitored
+        if registry.get("current_disposition") == DISPOSITION_REMOVED:
+            return ResponseCommandResult(
+                success=True,
+                action=action,
+                outcome_label="removed",
+                idempotent=True,
+                enforcement="none",
+                registry_record_id=registry["id"],
+                disposition=DISPOSITION_REMOVED,
+                message="Monitoring is already stopped for this indicator.",
+                affected_resource_keys=build_affected_resource_keys(
+                    source_ip=source_ip,
+                    registry_record_id=registry["id"],
+                    alert_id=request.alert_id,
+                ),
+            )
+
+    event = append_registry_event(
+        conn,
+        registry_id=registry["id"],
+        event_type="monitor_stopped",
+        requested_action=action,
+        outcome="removed",
+        disposition_after=DISPOSITION_REMOVED,
+        enforcement="none",
+        origin_surface=request.origin_surface or ORIGIN_SYSTEM,
+        actor_user_id=request.actor_user_id,
+        reason=request.reason or "Monitoring stopped",
+        alert_id=request.alert_id,
+        incident_id=request.incident_id,
+        idempotency_key=idem_key,
+    )
+    cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE indicator_registry
+        SET monitor_expires_at = NULL,
+            updated_at = NOW()
+        WHERE id = %s
+        """,
+        (registry["id"],),
+    )
+    return ResponseCommandResult(
+        success=True,
+        action=action,
+        outcome_label="removed",
+        enforcement="none",
+        registry_record_id=registry["id"],
+        registry_event_id=event["id"],
+        disposition=DISPOSITION_REMOVED,
+        message="Monitoring stopped. No firewall or host enforcement changed.",
+        affected_resource_keys=build_affected_resource_keys(
+            source_ip=source_ip,
+            registry_record_id=registry["id"],
+            alert_id=request.alert_id,
+        ),
+    )
+
+
+def _execute_remove_tracking(
+    conn,
+    request: ResponseCommandRequest,
+    action: str,
+    source_ip: str,
+    idem_key: str,
+) -> ResponseCommandResult:
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, status
+        FROM blocked_ips
+        WHERE ip_address = %s::inet AND status = 'active'
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (source_ip,),
+    )
+    row = cur.fetchone()
+    registry = upsert_indicator_identity(
+        conn, indicator_type=INDICATOR_TYPE_IP, indicator_value=source_ip
+    )
+    if row is None:
+        return ResponseCommandResult(
+            success=True,
+            action=action,
+            outcome_label="removed",
+            idempotent=True,
+            enforcement="none",
+            registry_record_id=registry["id"],
+            disposition=registry.get("current_disposition"),
+            message="No active Blocklist tracking exists for this IP.",
+            affected_resource_keys=build_affected_resource_keys(
+                source_ip=source_ip,
+                registry_record_id=registry["id"],
+            ),
+        )
+
+    block_id = row[0]
+    cur.execute(
+        """
+        UPDATE blocked_ips
+        SET status = 'inactive'
+        WHERE id = %s AND status = 'active'
+        """,
+        (block_id,),
+    )
+    event = append_registry_event(
+        conn,
+        registry_id=registry["id"],
+        event_type="tracking_removed",
+        requested_action=action,
+        outcome="removed",
+        disposition_after=DISPOSITION_REMOVED,
+        enforcement="none",
+        origin_surface=request.origin_surface or ORIGIN_SYSTEM,
+        actor_user_id=request.actor_user_id,
+        reason=request.reason or "Blocklist tracking removed",
+        alert_id=request.alert_id,
+        blocked_ip_id=block_id,
+        idempotency_key=idem_key,
+    )
+    cur.execute(
+        """
+        UPDATE indicator_registry
+        SET active_blocked_ip_id = NULL,
+            updated_at = NOW()
+        WHERE id = %s
+        """,
+        (registry["id"],),
+    )
+    return ResponseCommandResult(
+        success=True,
+        action=action,
+        outcome_label="removed",
+        enforcement="none",
+        registry_record_id=registry["id"],
+        registry_event_id=event["id"],
+        blocked_ip_id=block_id,
+        disposition=DISPOSITION_REMOVED,
+        message=(
+            "Blocklist tracking removed. Tracking only; no firewall or host "
+            "enforcement changed."
+        ),
+        affected_resource_keys=build_affected_resource_keys(
+            source_ip=source_ip,
+            blocked_ip_id=block_id,
+            registry_record_id=registry["id"],
+            alert_id=request.alert_id,
+        ),
+        compatible_fields={"message": "Blocked IP removed successfully", "id": block_id},
+    )
+
+
+def _execute_add_note(
+    conn,
+    request: ResponseCommandRequest,
+    action: str,
+    source_ip: str,
+    idem_key: str,
+) -> ResponseCommandResult:
+    registry = upsert_indicator_identity(
+        conn, indicator_type=INDICATOR_TYPE_IP, indicator_value=source_ip
+    )
+    note = (request.reason or "").strip()
+    event = append_registry_event(
+        conn,
+        registry_id=registry["id"],
+        event_type="note",
+        requested_action=action,
+        outcome="recorded",
+        disposition_after=registry.get("current_disposition") or "observed",
+        enforcement="none",
+        origin_surface=request.origin_surface or ORIGIN_SYSTEM,
+        actor_user_id=request.actor_user_id,
+        reason=note,
+        alert_id=request.alert_id,
+        incident_id=request.incident_id,
+        idempotency_key=idem_key,
+        update_registry=False,
+    )
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE indicator_registry SET updated_at = NOW() WHERE id = %s",
+        (registry["id"],),
+    )
+    return ResponseCommandResult(
+        success=True,
+        action=action,
+        outcome_label="recorded",
+        enforcement="none",
+        registry_record_id=registry["id"],
+        registry_event_id=event["id"],
+        disposition=registry.get("current_disposition"),
+        message="Note recorded in response history.",
+        affected_resource_keys=build_affected_resource_keys(
+            source_ip=source_ip,
+            registry_record_id=registry["id"],
+            alert_id=request.alert_id,
+        ),
     )
 
 

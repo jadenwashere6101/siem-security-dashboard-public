@@ -326,8 +326,19 @@ def list_registry_records(
     conn,
     *,
     disposition: str | None = None,
+    dispositions: list[str] | None = None,
     indicator_type: str | None = None,
     q: str | None = None,
+    origin_surface: str | None = None,
+    actor_user_id: int | None = None,
+    outcome: str | None = None,
+    enforcement: str | None = None,
+    requested_action: str | None = None,
+    related_alert_id: int | None = None,
+    related_incident_id: int | None = None,
+    updated_after: datetime | None = None,
+    updated_before: datetime | None = None,
+    sort: str = "updated_at_desc",
     limit: int = 50,
     offset: int = 0,
 ) -> dict[str, Any]:
@@ -335,34 +346,248 @@ def list_registry_records(
     offset = max(0, int(offset))
     clauses = ["TRUE"]
     params: list[Any] = []
-    if disposition:
-        clauses.append("current_disposition = %s")
-        params.append(disposition)
+
+    disposition_values: list[str] = []
+    if dispositions:
+        disposition_values.extend(
+            [d for d in dispositions if d and d in VALID_DISPOSITIONS]
+        )
+    if disposition and disposition in VALID_DISPOSITIONS:
+        disposition_values.append(disposition)
+    disposition_values = list(dict.fromkeys(disposition_values))
+    if disposition_values:
+        clauses.append("r.current_disposition = ANY(%s)")
+        params.append(disposition_values)
+
     if indicator_type:
-        clauses.append("indicator_type = %s")
+        clauses.append("r.indicator_type = %s")
         params.append(indicator_type)
     if q:
-        clauses.append("indicator_value ILIKE %s")
+        clauses.append("r.indicator_value ILIKE %s")
         params.append(f"%{q.strip()}%")
+    if updated_after is not None:
+        clauses.append("r.updated_at >= %s")
+        params.append(updated_after)
+    if updated_before is not None:
+        clauses.append("r.updated_at <= %s")
+        params.append(updated_before)
+    if origin_surface:
+        clauses.append("e.origin_surface = %s")
+        params.append(origin_surface)
+    if actor_user_id is not None:
+        clauses.append("e.actor_user_id = %s")
+        params.append(actor_user_id)
+    if outcome:
+        clauses.append("e.outcome = %s")
+        params.append(outcome)
+    if enforcement:
+        clauses.append("e.enforcement = %s")
+        params.append(enforcement)
+    if requested_action:
+        clauses.append("e.requested_action = %s")
+        params.append(requested_action)
+    if related_alert_id is not None:
+        clauses.append(
+            """
+            EXISTS (
+                SELECT 1 FROM indicator_response_events ev
+                WHERE ev.registry_id = r.id AND ev.alert_id = %s
+            )
+            """
+        )
+        params.append(related_alert_id)
+    if related_incident_id is not None:
+        clauses.append(
+            """
+            EXISTS (
+                SELECT 1 FROM indicator_response_events ev
+                WHERE ev.registry_id = r.id AND ev.incident_id = %s
+            )
+            """
+        )
+        params.append(related_incident_id)
+
     where = " AND ".join(clauses)
+    order_by = {
+        "updated_at_asc": "r.updated_at ASC, r.id ASC",
+        "created_at_desc": "r.created_at DESC, r.id DESC",
+        "created_at_asc": "r.created_at ASC, r.id ASC",
+        "indicator_value_asc": "r.indicator_value ASC, r.id ASC",
+        "indicator_value_desc": "r.indicator_value DESC, r.id DESC",
+    }.get(sort or "updated_at_desc", "r.updated_at DESC, r.id DESC")
+
+    from_sql = f"""
+        FROM indicator_registry r
+        LEFT JOIN LATERAL (
+            SELECT
+                requested_action,
+                outcome,
+                enforcement,
+                origin_surface,
+                actor_user_id,
+                reason,
+                alert_id,
+                incident_id
+            FROM indicator_response_events
+            WHERE registry_id = r.id
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+        ) e ON TRUE
+        WHERE {where}
+    """
+
     cur = conn.cursor()
-    cur.execute(
-        f"SELECT COUNT(*) FROM indicator_registry WHERE {where}",
-        params,
-    )
+    cur.execute(f"SELECT COUNT(*) {from_sql}", params)
     total = cur.fetchone()[0]
     cur.execute(
         f"""
-        SELECT {_REGISTRY_COLUMNS}
-        FROM indicator_registry
-        WHERE {where}
-        ORDER BY updated_at DESC, id DESC
+        SELECT
+            r.id,
+            r.indicator_type,
+            r.indicator_value,
+            r.current_disposition,
+            r.active_blocked_ip_id,
+            r.active_incident_id,
+            r.monitor_expires_at,
+            r.created_at,
+            r.updated_at,
+            e.requested_action,
+            e.outcome,
+            e.enforcement,
+            e.origin_surface,
+            e.actor_user_id,
+            e.reason,
+            e.alert_id,
+            e.incident_id
+        {from_sql}
+        ORDER BY {order_by}
         LIMIT %s OFFSET %s
         """,
         [*params, limit, offset],
     )
-    rows = [_registry_row_to_dict(row) for row in cur.fetchall()]
+    rows = []
+    for row in cur.fetchall():
+        item = _registry_row_to_dict(row[:9])
+        item.update(
+            {
+                "latest_requested_action": row[9],
+                "latest_outcome": row[10],
+                "enforcement": row[11] or "none",
+                "latest_origin_surface": row[12],
+                "latest_actor_user_id": row[13],
+                "latest_reason": row[14],
+                "latest_alert_id": row[15],
+                "latest_incident_id": row[16],
+                "related_alert_id": row[15],
+                "related_incident_id": row[16] or item.get("active_incident_id"),
+                "enforcement_statement": (
+                    "Tracking only; no firewall or host enforcement."
+                    if item.get("current_disposition") == DISPOSITION_BLOCKLIST_TRACKED
+                    or row[11] in {None, "none", "tracking_only"}
+                    else f"Enforcement mode: {row[11]}"
+                ),
+            }
+        )
+        rows.append(item)
     return {"total": total, "limit": limit, "offset": offset, "items": rows}
+
+
+def get_registry_detail(conn, registry_id: int) -> dict[str, Any] | None:
+    record = get_indicator_by_id(conn, registry_id)
+    if record is None:
+        return None
+
+    events = list_registry_events(conn, registry_id, limit=200, offset=0)
+    cur = conn.cursor()
+
+    blocklist_entry = None
+    if record.get("active_blocked_ip_id"):
+        cur.execute(
+            """
+            SELECT
+                id,
+                host(ip_address),
+                reason,
+                CASE
+                    WHEN status = 'active'
+                     AND expires_at IS NOT NULL
+                     AND expires_at <= NOW()
+                    THEN 'expired'
+                    ELSE status
+                END AS effective_status,
+                created_by,
+                created_at,
+                expires_at,
+                source_alert_id
+            FROM blocked_ips
+            WHERE id = %s
+            """,
+            (record["active_blocked_ip_id"],),
+        )
+        brow = cur.fetchone()
+        if brow:
+            blocklist_entry = {
+                "id": brow[0],
+                "ip_address": brow[1],
+                "reason": brow[2],
+                "status": brow[3],
+                "created_by": brow[4],
+                "created_at": _iso(brow[5]),
+                "expires_at": _iso(brow[6]),
+                "source_alert_id": brow[7],
+            }
+
+    cur.execute(
+        """
+        SELECT DISTINCT alert_id
+        FROM indicator_response_events
+        WHERE registry_id = %s AND alert_id IS NOT NULL
+        ORDER BY alert_id
+        """,
+        (registry_id,),
+    )
+    related_alert_ids = [row[0] for row in cur.fetchall()]
+
+    cur.execute(
+        """
+        SELECT DISTINCT incident_id
+        FROM indicator_response_events
+        WHERE registry_id = %s AND incident_id IS NOT NULL
+        ORDER BY incident_id
+        """,
+        (registry_id,),
+    )
+    related_incident_ids = [row[0] for row in cur.fetchall()]
+    if record.get("active_incident_id") and record["active_incident_id"] not in related_incident_ids:
+        related_incident_ids.append(record["active_incident_id"])
+
+    latest = events[0] if events else None
+    disposition = record.get("current_disposition")
+    enforcement = (latest or {}).get("enforcement") or "none"
+    if disposition == DISPOSITION_BLOCKLIST_TRACKED or blocklist_entry:
+        enforcement_statement = (
+            "Tracking only; no firewall or host enforcement is implied."
+        )
+    elif enforcement in {None, "none"}:
+        enforcement_statement = "No firewall or host enforcement."
+    else:
+        enforcement_statement = f"Enforcement mode: {enforcement}"
+
+    return {
+        "record": record,
+        "events": events,
+        "blocklist_entry": blocklist_entry,
+        "related_alert_ids": related_alert_ids,
+        "related_incident_ids": related_incident_ids,
+        "related_alert_count": len(related_alert_ids),
+        "related_incident_count": len(related_incident_ids),
+        "enforcement": enforcement,
+        "enforcement_statement": enforcement_statement,
+        "first_seen": record.get("created_at"),
+        "last_updated": record.get("updated_at"),
+        "response_source": (latest or {}).get("origin_surface"),
+        "latest_event": latest,
+    }
 
 
 def list_registry_events(

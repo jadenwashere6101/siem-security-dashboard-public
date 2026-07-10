@@ -23,6 +23,7 @@ from core.extensions import limiter
 from routes.ingest_routes import ingest_bp
 from routes.reporting_routes import reporting_bp
 from routes.source_ip_context_routes import source_ip_context_bp
+from routes.response_registry_routes import response_registry_bp
 
 
 # ============================================================================
@@ -126,6 +127,7 @@ def create_app():
     app.register_blueprint(notification_delivery_bp)
     app.register_blueprint(dead_letter_bp)
     app.register_blueprint(source_ip_context_bp)
+    app.register_blueprint(response_registry_bp)
 
     return app
 

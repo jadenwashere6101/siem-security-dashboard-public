@@ -13,7 +13,7 @@ import SoarMetricsDashboard from "./components/SoarMetricsDashboard";
 import DeadLettersPanel from "./components/DeadLettersPanel";
 import SocCommandCenter from "./components/SocCommandCenter";
 import ThreatHuntPanel from "./components/ThreatHuntPanel";
-import BlocklistManagerPanel from "./components/BlocklistManagerPanel";
+import ResponseRegistryPanel from "./components/ResponseRegistryPanel";
 import LiveLogsPanel from "./components/LiveLogsPanel";
 import SettingsPanel from "./components/SettingsPanel";
 import SidebarLayout from "./components/SidebarLayout";
@@ -53,6 +53,7 @@ function AppInner() {
   const [userRole, setUserRole] = useState(null);
   const { settings, updateSettings } = useUiSettings();
   const [activeSection, setActiveSection] = useState("dashboard");
+  const [registryInitialView, setRegistryInitialView] = useState("all");
   const [authLoading, setAuthLoading] = useState(true);
   const [loginUsername, setLoginUsername] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
@@ -198,7 +199,15 @@ function AppInner() {
     const preferredSection = isSectionVisible(settings.defaultLandingPage, visibilityFlags)
       ? settings.defaultLandingPage
       : "dashboard";
-    setActiveSection(preferredSection);
+    if (preferredSection === "blocklist") {
+      setRegistryInitialView("blocklist_tracking");
+      setActiveSection("blocklist");
+    } else {
+      if (preferredSection === "response-registry") {
+        setRegistryInitialView("all");
+      }
+      setActiveSection(preferredSection);
+    }
     hasAppliedLandingRef.current = true;
   }, [isAuthenticated, settings.defaultLandingPage, userRole]);
 
@@ -244,6 +253,19 @@ function AppInner() {
     () => ({ isSuperAdmin, isAnalyst, canTakeAlertActions }),
     [isSuperAdmin, isAnalyst, canTakeAlertActions]
   );
+
+  const handleNavigate = useCallback((sectionId) => {
+    if (sectionId === "blocklist") {
+      setRegistryInitialView("blocklist_tracking");
+      setActiveSection("blocklist");
+      return;
+    }
+    if (sectionId === "response-registry") {
+      setRegistryInitialView("all");
+    }
+    setActiveSection(sectionId);
+  }, []);
+
   const displayRoleLabel =
     userRole === "super_admin"
       ? "Super Admin"
@@ -440,7 +462,7 @@ function AppInner() {
       sections={sectionsConfig}
       roleFlags={roleFlags}
       activeSectionId={activeSection}
-      onNavigate={setActiveSection}
+      onNavigate={handleNavigate}
       title="SIEM Dashboard"
       eyebrow="SIEM"
       statusLabel="Operational"
@@ -545,18 +567,24 @@ function AppInner() {
             alerts={alerts}
             userRole={userRole}
             currentUsername={currentUsername}
-            onNavigate={setActiveSection}
+            onNavigate={handleNavigate}
           />
         )}
 
-        {activeSection === "blocklist" && isSectionVisible("blocklist", roleFlags) && (
-          <BlocklistManagerPanel
+        {(activeSection === "response-registry" || activeSection === "blocklist") &&
+          (isSectionVisible("response-registry", roleFlags) ||
+            isSectionVisible("blocklist", roleFlags)) && (
+          <ResponseRegistryPanel
             cardStyle={cardStyle}
             cardHeaderStyle={cardHeaderStyle}
             cardTitleStyle={cardTitleStyle}
             cardSubtitleStyle={cardSubtitleStyle}
             filterLabelStyle={filterLabelStyle}
             selectStyle={selectStyle}
+            canTakeAlertActions={canTakeAlertActions}
+            initialView={
+              activeSection === "blocklist" ? "blocklist_tracking" : registryInitialView
+            }
           />
         )}
 
