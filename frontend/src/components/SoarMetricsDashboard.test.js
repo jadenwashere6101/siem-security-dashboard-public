@@ -393,9 +393,14 @@ describe("SoarMetricsDashboard", () => {
 
     const dlSection = screen.getByRole("region", { name: "Dead Letter Metrics" });
     expect(within(dlSection).getByRole("alert")).toBeInTheDocument();
+    expect(within(dlSection).getByRole("alert")).toHaveTextContent(/not zero/i);
 
     const incidentSection = screen.getByRole("region", { name: "Incident Metrics" });
     expect(within(incidentSection).getByRole("alert")).toBeInTheDocument();
+    expect(within(incidentSection).getByRole("alert")).toHaveAttribute(
+      "data-metrics-state",
+      "error"
+    );
   });
 
   // --- Role gating for queue ---

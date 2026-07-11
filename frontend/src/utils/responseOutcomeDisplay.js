@@ -79,10 +79,17 @@ export function outcomeLabel(outcome) {
     return "Observed only";
   }
 
+  if (outcomeEvidenceQuality(outcome) === "contradiction") {
+    return "Unknown";
+  }
+
   const state = outcome.execution_state;
   const mode = outcome.execution_mode;
 
   if (STATE_LABELS[state]) {
+    if (state === "blocked" && outcome.reason_code === "approval_denied") {
+      return "Rejected";
+    }
     return STATE_LABELS[state];
   }
   if (state === "observed") {
@@ -98,13 +105,14 @@ export function outcomeLabel(outcome) {
     return "Real executed";
   }
   if (mode === "real") {
-    return "Failed";
+    // Real mode without confirmed external effect is not promoted to success.
+    return outcome.execution_state === "succeeded" ? "Unknown" : "Failed";
   }
   if (mode === "observed") {
     return "Observed only";
   }
 
-  return "Observed only";
+  return "Unknown";
 }
 
 export function outcomeColor(outcome) {
@@ -113,7 +121,14 @@ export function outcomeColor(outcome) {
   if (label === "Real executed") return "success";
   if (label === "Simulated" || label === "Running" || label === "Queued") return "info";
   if (label === "Tracking only" || label === "Awaiting approval") return "warning";
-  if (label === "Blocked by approval" || label === "Failed") return "danger";
+  if (
+    label === "Blocked by approval" ||
+    label === "Rejected" ||
+    label === "Failed" ||
+    label === "Unknown"
+  ) {
+    return "danger";
+  }
   return "neutral";
 }
 
@@ -124,6 +139,10 @@ export function outcomeToneStyle(outcome) {
 export function formatOutcomeStatus(outcome) {
   if (!outcome) {
     return "Observed only";
+  }
+
+  if (outcomeEvidenceQuality(outcome) === "contradiction") {
+    return "Unknown";
   }
 
   const state = outcome.execution_state;
@@ -138,6 +157,9 @@ export function formatOutcomeStatus(outcome) {
     }
     if (mode === "real" && outcome.external_executed === true) {
       return "Real executed";
+    }
+    if (mode === "real") {
+      return "Unknown";
     }
   }
 
@@ -175,17 +197,84 @@ export function relatedOutcomeIds(outcome) {
   if (!outcome) return [];
 
   return [
-    ["Alert id", outcome.alert_id ?? outcome.related?.alert_id],
-    ["Queue id", outcome.queue_id ?? outcome.related?.queue_id],
-    ["Playbook execution id", outcome.playbook_execution_id ?? outcome.related?.playbook_execution_id],
-    ["Approval request id", outcome.approval_request_id ?? outcome.related?.approval_request_id],
+    ["Alert id", outcome.alert_id ?? outcome.related?.alert_id, "alert"],
+    ["Incident id", outcome.incident_id ?? outcome.related?.incident_id, "incident"],
+    ["Queue id", outcome.queue_id ?? outcome.related?.queue_id, "queue"],
+    [
+      "Playbook execution id",
+      outcome.playbook_execution_id ?? outcome.related?.playbook_execution_id,
+      "playbook_execution",
+    ],
+    [
+      "Approval request id",
+      outcome.approval_request_id ?? outcome.related?.approval_request_id,
+      "approval",
+    ],
     [
       "Notification delivery id",
       outcome.notification_delivery_id ||
         outcome.notification_delivery_attempt_id ||
         outcome.related?.notification_delivery_attempt_id,
+      "notification_delivery",
     ],
   ];
+}
+
+/**
+ * Classify evidence quality without inferring real execution.
+ * @returns {"ok"|"missing"|"contradiction"}
+ */
+export function outcomeEvidenceQuality(outcome) {
+  if (!outcome || !outcome.execution_mode) {
+    return "missing";
+  }
+  const simulated = outcome.simulated === true;
+  const external = outcome.external_executed === true;
+  const tracking = outcome.tracking_recorded === true;
+  const mode = outcome.execution_mode;
+
+  if (simulated && external) return "contradiction";
+  if (mode === "simulation" && external) return "contradiction";
+  if (mode === "tracking_only" && external) return "contradiction";
+  if (mode === "real" && external && simulated) return "contradiction";
+  if (mode === "observed" && external) return "contradiction";
+  if (tracking && external) return "contradiction";
+  return "ok";
+}
+
+export function outcomeEvidenceQualityMessage(outcome) {
+  const quality = outcomeEvidenceQuality(outcome);
+  if (quality === "missing") {
+    return "Not recorded — insufficient canonical evidence; not inferred as real execution.";
+  }
+  if (quality === "contradiction") {
+    return "Data-quality warning — canonical fields conflict; shown as Unknown and not claimed as real execution.";
+  }
+  return "";
+}
+
+export function buildOutcomeEvidenceLines(outcome) {
+  if (!outcome) {
+    return ["Not recorded"];
+  }
+  const lines = [
+    `Mode: ${formatOutcomeValue(outcome.execution_mode, "Unknown")}`,
+    `State: ${formatOutcomeValue(outcome.execution_state, "Unknown")}`,
+    ...formatExecutionClauses(outcome),
+  ];
+  if (outcome.reason_code) {
+    lines.push(
+      `Reason: ${reasonCodeExplanation(outcome.reason_code) || formatOutcomeValue(outcome.reason_code)}`
+    );
+  }
+  if (outcome.outcome_summary) {
+    lines.push(`Summary: ${outcome.outcome_summary}`);
+  }
+  const qualityMessage = outcomeEvidenceQualityMessage(outcome);
+  if (qualityMessage) {
+    lines.unshift(qualityMessage);
+  }
+  return lines;
 }
 
 const OUTCOME_COUNT_GROUP_ORDER = [

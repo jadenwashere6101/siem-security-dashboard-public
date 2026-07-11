@@ -185,8 +185,9 @@ function SectionLoading({ label }) {
 
 function SectionError({ message, onRetry }) {
   return (
-    <div role="alert">
+    <div role="alert" data-metrics-state="error">
       <span>{message || "Failed to load"}</span>
+      <span> — values unavailable (unknown), not zero.</span>
       <button onClick={onRetry} style={{ marginLeft: 8 }}>
         Retry
       </button>
@@ -496,7 +497,7 @@ export default function SoarMetricsDashboard({
       <div style={panelContentStyle}>
 
         {/* ── Section 1: Playbook Metrics ── */}
-        <section aria-label="Playbook Metrics" style={sectionWrapStyle}>
+        <section aria-label="Playbook Metrics" style={sectionWrapStyle} data-metrics-source="playbook_executions">
           <h3 style={sectionHeadingStyle}>Playbook Metrics</h3>
           {playbook.loading && <SectionLoading label="Playbook Metrics" />}
           {!playbook.loading && playbook.error && (
@@ -558,7 +559,7 @@ export default function SoarMetricsDashboard({
         </section>
 
         {/* ── Section 2: Dead Letter Metrics ── */}
-        <section aria-label="Dead Letter Metrics" style={sectionWrapStyle}>
+        <section aria-label="Dead Letter Metrics" style={sectionWrapStyle} data-metrics-source="soar_dead_letters">
           <h3 style={sectionHeadingStyle}>Dead Letter Metrics</h3>
           {deadLetter.loading && <SectionLoading label="Dead Letter Metrics" />}
           {!deadLetter.loading && deadLetter.error && (
@@ -621,7 +622,7 @@ export default function SoarMetricsDashboard({
         </section>
 
         {/* ── Section 3: Notification Delivery Metrics ── */}
-        <section aria-label="Notification Delivery Metrics" style={sectionWrapStyle}>
+        <section aria-label="Notification Delivery Metrics" style={sectionWrapStyle} data-metrics-source="notification_delivery_attempts">
           <h3 style={sectionHeadingStyle}>Notification Delivery Metrics</h3>
           {notification.loading && (
             <SectionLoading label="Notification Delivery Metrics" />
@@ -691,7 +692,7 @@ export default function SoarMetricsDashboard({
         </section>
 
         {/* ── Section 4: Incident Metrics ── */}
-        <section aria-label="Incident Metrics" style={sectionWrapStyle}>
+        <section aria-label="Incident Metrics" style={sectionWrapStyle} data-metrics-source="soar_incidents">
           <h3 style={sectionHeadingStyle}>Incident Metrics</h3>
           {incident.loading && <SectionLoading label="Incident Metrics" />}
           {!incident.loading && incident.error && (
@@ -750,7 +751,7 @@ export default function SoarMetricsDashboard({
         </section>
 
         {/* ── Section 5: Approval Metrics ── */}
-        <section aria-label="Approval Metrics" style={sectionWrapStyle}>
+        <section aria-label="Approval Metrics" style={sectionWrapStyle} data-metrics-source="soar_approvals">
           <h3 style={sectionHeadingStyle}>Approval Metrics</h3>
           {approval.loading && <SectionLoading label="Approval Metrics" />}
           {!approval.loading && approval.error && (
@@ -802,7 +803,7 @@ export default function SoarMetricsDashboard({
 
         {/* ── Section 6: Worker Operations ── */}
         {canViewWorkerOperations && (
-          <section aria-label="Worker Operations" style={sectionWrapStyle}>
+          <section aria-label="Worker Operations" style={sectionWrapStyle} data-metrics-source="playbook_worker_runtime">
             <h3 style={sectionHeadingStyle}>Worker Operations</h3>
             {worker.loading && <SectionLoading label="Worker Operations" />}
             {!worker.loading && worker.error && (
@@ -892,7 +893,7 @@ export default function SoarMetricsDashboard({
 
         {/* ── Section 7: SOAR Queue Health (super_admin only) ── */}
         {isSuperAdmin && (
-          <section aria-label="SOAR Queue Health" style={sectionWrapStyle}>
+          <section aria-label="SOAR Queue Health" style={sectionWrapStyle} data-metrics-source="response_action_queue">
             <h3 style={sectionHeadingStyle}>SOAR Queue Health</h3>
             {queue.loading && <SectionLoading label="SOAR Queue Health" />}
             {!queue.loading && queue.error && (

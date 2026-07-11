@@ -76,6 +76,19 @@ function AlertDetailsPanel({
           <ResponseOutcomeSummary
             outcome={selectedAlert.response_outcome || null}
             showRelated
+            onOpenRelated={
+              typeof onOpenResponseRegistry === "function"
+                ? ({ kind, id, outcome }) => {
+                    if (kind === "alert" || kind === "incident") {
+                      onOpenResponseRegistry({
+                        relatedAlertId: kind === "alert" ? id : selectedAlert.id,
+                        relatedIncidentId: kind === "incident" ? id : undefined,
+                        sourceIp: outcome?.source_ip || selectedAlert.source_ip || undefined,
+                      });
+                    }
+                  }
+                : null
+            }
           />
         </div>
       </div>

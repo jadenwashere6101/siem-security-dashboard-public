@@ -1193,6 +1193,19 @@ function PlaybooksPanel({
                     <ResponseOutcomeSummary
                       outcome={detailRecord.response_outcome || null}
                       showRelated
+                      onOpenRelated={
+                        typeof onOpenResponseRegistry === "function"
+                          ? ({ kind, id, outcome }) => {
+                              if (kind === "alert" || kind === "incident") {
+                                onOpenResponseRegistry({
+                                  relatedAlertId: kind === "alert" ? id : undefined,
+                                  relatedIncidentId: kind === "incident" ? id : undefined,
+                                  sourceIp: outcome?.source_ip || detailRecord?.source_ip || undefined,
+                                });
+                              }
+                            }
+                          : null
+                      }
                     />
                   </div>
                   <PlaybookExecutionTimeline execution={detailRecord} />

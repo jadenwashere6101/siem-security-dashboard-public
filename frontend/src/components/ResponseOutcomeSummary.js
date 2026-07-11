@@ -5,32 +5,61 @@ import {
   formatExecutionClauses,
   formatOutcomeStatus,
   formatOutcomeValue,
+  outcomeEvidenceQuality,
+  outcomeEvidenceQualityMessage,
   reasonCodeExplanation,
   relatedOutcomeIds,
 } from "../utils/responseOutcomeDisplay";
 
-function ResponseOutcomeSummary({ outcome, showRelated = false }) {
+function ResponseOutcomeSummary({
+  outcome,
+  showRelated = false,
+  onOpenRelated = null,
+}) {
   // Compatibility inference belongs in backend resolve_*_outcome helpers and API
   // response_outcome payloads; this component renders null as canonical no-history.
   if (!outcome) {
     return (
       <section aria-label="Response outcome summary" style={summaryStyle}>
         <p style={emptyTextStyle}>No response outcome recorded.</p>
+        <p style={qualityTextStyle}>
+          Not recorded — insufficient canonical evidence; not inferred as real execution.
+        </p>
       </section>
     );
   }
 
   const reasonExplanation = reasonCodeExplanation(outcome.reason_code);
   const relatedIds = relatedOutcomeIds(outcome);
+  const quality = outcomeEvidenceQuality(outcome);
+  const qualityMessage = outcomeEvidenceQualityMessage(outcome);
 
   return (
     <section aria-label="Response outcome summary" style={summaryStyle}>
       <div style={summaryHeaderStyle}>
-        <ResponseOutcomeBadge outcome={outcome} />
+        <ResponseOutcomeBadge outcome={outcome} expandable={false} />
         <span style={summaryStatusStyle}>{formatOutcomeStatus(outcome)}</span>
       </div>
 
+      {qualityMessage ? (
+        <p
+          role={quality === "contradiction" ? "status" : undefined}
+          data-outcome-quality={quality}
+          style={qualityTextStyle}
+        >
+          {qualityMessage}
+        </p>
+      ) : null}
+
       <dl style={definitionListStyle}>
+        <div style={definitionRowStyle}>
+          <dt style={termStyle}>Execution mode</dt>
+          <dd style={descriptionStyle}>{formatOutcomeValue(outcome.execution_mode, "Unknown")}</dd>
+        </div>
+        <div style={definitionRowStyle}>
+          <dt style={termStyle}>Execution state</dt>
+          <dd style={descriptionStyle}>{formatOutcomeValue(outcome.execution_state, "Unknown")}</dd>
+        </div>
         <div style={definitionRowStyle}>
           <dt style={termStyle}>Selected action</dt>
           <dd style={descriptionStyle}>{formatOutcomeValue(outcome.selected_action, "None selected")}</dd>
@@ -67,10 +96,25 @@ function ResponseOutcomeSummary({ outcome, showRelated = false }) {
 
       {showRelated ? (
         <dl aria-label="Related response outcome identifiers" style={relatedListStyle}>
-          {relatedIds.map(([label, value]) => (
+          {relatedIds.map(([label, value, kind]) => (
             <div key={label} style={definitionRowStyle}>
               <dt style={termStyle}>{label}</dt>
-              <dd style={descriptionStyle}>{value === undefined || value === null || value === "" ? "Unavailable" : value}</dd>
+              <dd style={descriptionStyle}>
+                {value === undefined || value === null || value === "" ? (
+                  "Unavailable"
+                ) : typeof onOpenRelated === "function" ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenRelated({ kind, id: value, outcome })}
+                    style={relatedLinkStyle}
+                    title={`Open linked ${kind} record ${value}`}
+                  >
+                    {value}
+                  </button>
+                ) : (
+                  value
+                )}
+              </dd>
             </div>
           ))}
         </dl>
@@ -101,6 +145,14 @@ const summaryStatusStyle = {
 const emptyTextStyle = {
   margin: 0,
   color: "#9ca3af",
+};
+
+const qualityTextStyle = {
+  margin: "0 0 10px",
+  color: "#fcd34d",
+  fontSize: "12px",
+  fontWeight: "600",
+  lineHeight: 1.4,
 };
 
 const definitionListStyle = {
@@ -142,6 +194,16 @@ const evidenceListStyle = {
   margin: "0",
   paddingLeft: "18px",
   color: "#cbd5e1",
+};
+
+const relatedLinkStyle = {
+  padding: 0,
+  border: "none",
+  background: "transparent",
+  color: "#58a6ff",
+  cursor: "pointer",
+  font: "inherit",
+  textDecoration: "underline",
 };
 
 export default ResponseOutcomeSummary;

@@ -6,6 +6,7 @@ export {
   EXECUTION_STATES,
   REASON_CODES,
   buildCanonicalStepOutcomeLabels,
+  buildOutcomeEvidenceLines,
   canonicalOutcomeCountSections,
   formatExecutionClauses,
   formatOutcomeStatus,
@@ -14,7 +15,10 @@ export {
   mergeCanonicalOutcomeCounts,
   outcomeColor,
   outcomeCountEntryLabel,
+  outcomeEvidenceQuality,
+  outcomeEvidenceQualityMessage,
   outcomeLabel,
   outcomeToneStyle,
   reasonCodeExplanation,
+  relatedOutcomeIds,
 } from "../utils/responseOutcomeDisplay";

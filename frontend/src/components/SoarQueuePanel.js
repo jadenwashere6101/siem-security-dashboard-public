@@ -134,7 +134,8 @@ function SoarQueuePanel({
           <p style={sectionLabelStyle}>SOAR</p>
           <h2 style={cardTitleStyle}>Queue Visibility</h2>
           <p style={cardSubtitleStyle}>
-            Read-only status for queued automated response actions.
+            Read-only status for queued automated response actions. Manual simulation
+            batches process pending rows with SimulationExecutor only.
           </p>
         </div>
         <div style={controlsStyle}>
@@ -167,6 +168,12 @@ function SoarQueuePanel({
             </select>
           </label>
           <div style={batchControlWrapperStyle}>
+            <p style={simulationHelpStyle}>
+              Run simulation batch claims up to the selected pending queue rows (max 25),
+              evaluates them with SimulationExecutor, and may update internal queue/outcome
+              lifecycle records. It cannot send notifications, call providers, change
+              firewalls/hosts, or perform any other real external effect.
+            </p>
             <label style={filterWrapperStyle}>
               <span style={filterLabelStyle}>Batch Size</span>
               <input
@@ -183,7 +190,7 @@ function SoarQueuePanel({
               type="button"
               onClick={handleRunBatch}
               disabled={loading || isRunningBatch}
-              title="Run one manual simulation batch. This processes pending queue items in simulation mode only."
+              title="Processes pending queue items with SimulationExecutor only. Internal lifecycle records may change; no notification, provider, firewall, host, or other external effect occurs."
               style={{
                 ...runBatchButtonStyle,
                 opacity: loading || isRunningBatch ? 0.65 : 1,
@@ -216,16 +223,21 @@ function SoarQueuePanel({
             <div style={resultHeaderStyle}>
               <p style={resultLabelStyle}>Last manual simulation batch</p>
               <span style={resultMetaStyle}>
-                {lastRunResult.summary.processed || 0} actions simulated · Batch size used: {lastRunResult.batch_size ?? "N/A"}
+                {lastRunResult.summary.processed || 0} queue actions simulated internally ·
+                Batch size used: {lastRunResult.batch_size ?? "N/A"}
               </span>
             </div>
+            <p style={simulationResultNoticeStyle}>
+              Counts below are simulated/failed/skipped/requeued internal queue outcomes only.
+              No notification, provider, firewall, host, or other external execution occurred.
+            </p>
             <div style={resultGridStyle}>
               <div style={resultItemStyle}>
                 <span style={resultCountLabelStyle}>Processed</span>
                 <strong style={resultCountValueStyle}>{lastRunResult.summary.processed || 0}</strong>
               </div>
               <div style={resultItemStyle}>
-                <span style={resultCountLabelStyle}>Success</span>
+                <span style={resultCountLabelStyle}>Simulated success</span>
                 <strong style={{ ...resultCountValueStyle, color: "#7ee787" }}>
                   {lastRunResult.summary.success || 0}
                 </strong>
@@ -456,6 +468,19 @@ function SoarQueuePanel({
                   <ResponseOutcomeSummary
                     outcome={selectedQueueItem.response_outcome || null}
                     showRelated
+                    onOpenRelated={
+                      typeof onOpenResponseRegistry === "function"
+                        ? ({ kind, id, outcome }) => {
+                            if (kind === "alert" || kind === "incident") {
+                              onOpenResponseRegistry({
+                                relatedAlertId: kind === "alert" ? id : undefined,
+                                relatedIncidentId: kind === "incident" ? id : undefined,
+                                sourceIp: outcome?.source_ip || undefined,
+                              });
+                            }
+                          }
+                        : null
+                    }
                   />
                 </div>
                 {selectedQueueItem.latest_approval ? (
@@ -664,6 +689,23 @@ const batchControlWrapperStyle = {
   alignItems: "flex-end",
   gap: "8px",
   flexWrap: "wrap",
+  maxWidth: "520px",
+};
+
+const simulationHelpStyle = {
+  margin: "0 0 4px",
+  flex: "1 0 100%",
+  color: "#8b949e",
+  fontSize: "12px",
+  lineHeight: 1.45,
+};
+
+const simulationResultNoticeStyle = {
+  margin: "0 0 10px",
+  color: "#f5d487",
+  fontSize: "12px",
+  fontWeight: "600",
+  lineHeight: 1.45,
 };
 
 const batchInputStyle = {

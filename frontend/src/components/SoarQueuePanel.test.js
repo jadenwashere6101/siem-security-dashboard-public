@@ -741,7 +741,11 @@ test("renders queue counts and recent queue rows", async () => {
     await userEvent.click(screen.getByRole("button", { name: "Run simulation batch" }));
 
     expect(await screen.findByText("Last manual simulation batch")).toBeInTheDocument();
-    expect(await screen.findByText(/2 actions simulated/i)).toBeInTheDocument();
+    expect(await screen.findByText(/2 queue actions simulated internally/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/No notification, provider, firewall, host, or other external execution occurred/i)
+    ).toBeInTheDocument();
+    expect(screen.getAllByText(/SimulationExecutor/i).length).toBeGreaterThan(0);
     expect(screen.queryByText(/actions executed/i)).not.toBeInTheDocument();
     expect(await screen.findByText("Processed")).toBeInTheDocument();
 

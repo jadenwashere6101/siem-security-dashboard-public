@@ -74,6 +74,17 @@ describe("response outcome display utilities", () => {
     ).toBe(expected);
   });
 
+  test("outcomeLabel returns Unknown for contradictory evidence", () => {
+    expect(
+      outcomeLabel({
+        ...baseOutcome,
+        execution_mode: "simulation",
+        simulated: true,
+        external_executed: true,
+      })
+    ).toBe("Unknown");
+  });
+
   test("outcomeLabel gives canonical boolean flags priority for mode labels", () => {
     expect(
       outcomeLabel({
@@ -100,6 +111,28 @@ describe("response outcome display utilities", () => {
         simulated: true,
       })
     ).toBe("Simulated");
+  });
+
+  test("outcomeLabel returns Rejected for denied approvals", () => {
+    expect(
+      outcomeLabel({
+        ...baseOutcome,
+        execution_state: "blocked",
+        reason_code: "approval_denied",
+      })
+    ).toBe("Rejected");
+  });
+
+  test("outcomeLabel does not promote real mode without external effect", () => {
+    expect(
+      outcomeLabel({
+        ...baseOutcome,
+        execution_mode: "real",
+        execution_state: "succeeded",
+        external_executed: false,
+        simulated: false,
+      })
+    ).toBe("Unknown");
   });
 
   test.each(REASON_CODES)("reason code %s has a display explanation", (reasonCode) => {
@@ -166,6 +199,18 @@ describe("ResponseOutcomeBadge", () => {
     const badge = screen.getByText("Simulated");
     expect(badge).toBeInTheDocument();
     expect(badge).toHaveAttribute("data-outcome-tone", "info");
+  });
+
+  test("exposes expandable canonical evidence without claiming real execution", async () => {
+    const userEvent = require("@testing-library/user-event").default;
+    render(<ResponseOutcomeBadge outcome={baseOutcome} />);
+    await userEvent.click(screen.getByLabelText(/Simulated outcome evidence/i));
+    expect(screen.getByLabelText("Canonical outcome evidence")).toHaveTextContent(
+      /No real execution confirmed/i
+    );
+    expect(screen.getByLabelText("Canonical outcome evidence")).toHaveTextContent(
+      /Mode: Simulation/i
+    );
   });
 
   test("renders an aria-label with mode and state for non-null outcomes", () => {
@@ -241,6 +286,32 @@ describe("ResponseOutcomeSummary", () => {
     expect(within(related).getByText("303")).toBeInTheDocument();
     expect(within(related).getByText("404")).toBeInTheDocument();
     expect(within(related).getByText("505")).toBeInTheDocument();
+  });
+
+  test("linked related ids invoke navigation callback", async () => {
+    const userEvent = require("@testing-library/user-event").default;
+    const onOpenRelated = jest.fn();
+    render(
+      <ResponseOutcomeSummary outcome={baseOutcome} showRelated onOpenRelated={onOpenRelated} />
+    );
+    await userEvent.click(screen.getByRole("button", { name: "101" }));
+    expect(onOpenRelated).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "alert", id: 101 })
+    );
+  });
+
+  test("shows data-quality warning for contradictory evidence", () => {
+    render(
+      <ResponseOutcomeSummary
+        outcome={{
+          ...baseOutcome,
+          simulated: true,
+          external_executed: true,
+        }}
+      />
+    );
+    expect(screen.getByText(/Data-quality warning/i)).toBeInTheDocument();
+    expect(screen.getAllByText("Unknown").length).toBeGreaterThan(0);
   });
 
   test("does not infer outcome from legacy fields when canonical outcome is null", () => {
