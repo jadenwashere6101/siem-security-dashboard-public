@@ -1,11 +1,11 @@
 ## 1. MAC AI — Navigation Contract Pass
 
-- [ ] 1.1 Audit every `setActiveSection`, `onNavigate`, sidebar action, SOC attention action, `Open in…`, related-alert, and Response Registry transition and record its intended destination.
-- [ ] 1.2 Add a structured navigation-request utility with `sectionId`, destination kind, optional target key/context, and nonce validation.
-- [ ] 1.3 Expose the actual `SidebarLayout` main scroll container and workspace-heading/deep-target refs without using `window.scrollTo`.
-- [ ] 1.4 Route ordinary sidebar and SOC Command Center navigation through top-scroll and heading-focus behavior.
-- [ ] 1.5 Route Recent Alerts, Response Registry, approval-filter, and other intentional deep links through element destinations while preserving existing state.
-- [ ] 1.6 Respect reduced motion and fall back to workspace top when a deep target is unavailable.
+- [x] 1.1 Audit every `setActiveSection`, `onNavigate`, sidebar action, SOC attention action, `Open in…`, related-alert, and Response Registry transition and record its intended destination.
+- [x] 1.2 Add a structured navigation-request utility with `sectionId`, destination kind, optional target key/context, and nonce validation.
+- [x] 1.3 Expose the actual `SidebarLayout` main scroll container and workspace-heading/deep-target refs without using `window.scrollTo`.
+- [x] 1.4 Route ordinary sidebar and SOC Command Center navigation through top-scroll and heading-focus behavior.
+- [x] 1.5 Route Recent Alerts, Response Registry, approval-filter, and other intentional deep links through element destinations while preserving existing state.
+- [x] 1.6 Respect reduced motion and fall back to workspace top when a deep target is unavailable.
 
 ## 2. MAC AI — Detail UX Pass
 

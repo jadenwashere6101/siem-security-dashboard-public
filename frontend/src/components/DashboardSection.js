@@ -82,7 +82,7 @@ function DashboardSection({
         displaySettings={displaySettings}
         onOpenResponseRegistry={onOpenResponseRegistry}
       />
-      <div ref={alertsTableRef}>
+      <div ref={alertsTableRef} data-navigation-target="recent-alerts" aria-label="Recent Alerts">
         <AlertsTable
           alerts={sortedAlerts}
           canTakeAlertActions={canTakeAlertActions}

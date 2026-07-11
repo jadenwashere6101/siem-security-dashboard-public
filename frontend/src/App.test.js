@@ -15,8 +15,17 @@ jest.mock('./services/alertsService', () => ({
   loadAlerts: jest.fn(),
 }));
 
-jest.mock('./components/DashboardSection', () => () => (
-  <div data-testid="dashboard-section">Dashboard Section Mock</div>
+jest.mock('./components/DashboardSection', () => (props) => (
+  <div data-testid="dashboard-section">
+    Dashboard Section Mock
+    <button type="button" onClick={() => props.onOpenResponseRegistry({ sourceIp: '8.8.8.8', relatedAlertId: 12 })}>
+      Dashboard open registry
+    </button>
+    <button type="button" onClick={() => props.onReviewIncident()}>
+      Dashboard open incidents
+    </button>
+    <div data-navigation-target="recent-alerts">Recent Alerts target</div>
+  </div>
 ));
 
 jest.mock('./components/DeadLettersPanel', () => (props) => (
@@ -34,7 +43,24 @@ jest.mock('./components/SoarMetricsDashboard', () => (props) => (
 jest.mock('./components/SocCommandCenter', () => (props) => (
   <div data-testid="soc-command-center">
     SOC Command Center Mock {props.userRole} {props.currentUsername}
+    <button type="button" onClick={() => props.onNavigate('soar-operations')}>SOC open operations</button>
+    <button type="button" onClick={() => props.onOpenAttentionItem('Pending approvals')}>SOC open approvals</button>
+    <button type="button" onClick={() => props.onOpenResponseRegistry({ sourceIp: '9.9.9.9', relatedIncidentId: 7 })}>SOC open registry</button>
   </div>
+));
+
+jest.mock('./components/ResponseRegistryPanel', () => (props) => (
+  <div data-testid="response-registry-panel">
+    Response Registry Mock {props.navigationRequest?.q} {props.navigationRequest?.relatedIncidentId}
+  </div>
+));
+
+jest.mock('./components/ApprovalsPanel', () => (props) => (
+  <div data-testid="approvals-panel">Approvals Mock {props.initialStatusFilter}</div>
+));
+
+jest.mock('./components/IncidentsPanel', () => () => (
+  <div data-testid="incidents-panel">Incidents Mock</div>
 ));
 
 jest.mock('./components/DetectionRulesPanel', () => () => (
@@ -114,6 +140,52 @@ test('renders SOC Command Center nav for analyst and loads command center when s
   await userEvent.click(screen.getByRole('button', { name: /soc command center/i }));
 
   expect(await screen.findByTestId('soc-command-center')).toHaveTextContent(/analyst analyst1/i);
+});
+
+test('ordinary sidebar and SOC navigation reset the shared main scroll container', async () => {
+  loadCurrentSession.mockResolvedValue({ authenticated: true, user: 'analyst1', role: 'analyst' });
+  render(<App />);
+  const operationsButton = await screen.findByRole('button', { name: /soar operations/i });
+  const main = screen.getByRole('main');
+  main.scrollTo = jest.fn();
+
+  await userEvent.click(operationsButton);
+  expect(main.scrollTo).toHaveBeenLastCalledWith({ top: 0, left: 0, behavior: 'smooth' });
+
+  await userEvent.click(screen.getByRole('button', { name: /soc command center/i }));
+  main.scrollTo.mockClear();
+  await userEvent.click(await screen.findByRole('button', { name: 'SOC open operations' }));
+  expect(main.scrollTo).toHaveBeenLastCalledWith({ top: 0, left: 0, behavior: 'smooth' });
+});
+
+test('SOC attention and Open in Response Registry preserve deep navigation context', async () => {
+  loadCurrentSession.mockResolvedValue({ authenticated: true, user: 'analyst1', role: 'analyst' });
+  render(<App />);
+  await userEvent.click(await screen.findByRole('button', { name: /soc command center/i }));
+  const main = screen.getByRole('main');
+  main.scrollTo = jest.fn();
+
+  await userEvent.click(screen.getByRole('button', { name: 'SOC open approvals' }));
+  expect(await screen.findByTestId('approvals-panel')).toHaveTextContent('pending');
+  expect(screen.getByLabelText('SOAR Approvals workspace')).toHaveFocus();
+
+  await userEvent.click(screen.getByRole('button', { name: /soc command center/i }));
+  await userEvent.click(await screen.findByRole('button', { name: 'SOC open registry' }));
+  expect(await screen.findByTestId('response-registry-panel')).toHaveTextContent('9.9.9.9 7');
+  expect(screen.getByLabelText('Response Registry workspace')).toHaveFocus();
+});
+
+test('dashboard deep links preserve registry and incident destinations', async () => {
+  loadCurrentSession.mockResolvedValue({ authenticated: true, user: 'analyst1', role: 'analyst' });
+  render(<App />);
+  await screen.findByTestId('dashboard-section');
+
+  await userEvent.click(screen.getByRole('button', { name: 'Dashboard open registry' }));
+  expect(await screen.findByTestId('response-registry-panel')).toHaveTextContent('8.8.8.8');
+
+  await userEvent.click(screen.getByRole('button', { name: /^dashboard$/i }));
+  await userEvent.click(await screen.findByRole('button', { name: 'Dashboard open incidents' }));
+  expect(await screen.findByRole('button', { name: /soar incidents/i })).toHaveAttribute('aria-current', 'page');
 });
 
 test('renders SOAR Metrics nav for analyst and loads dashboard when selected', async () => {

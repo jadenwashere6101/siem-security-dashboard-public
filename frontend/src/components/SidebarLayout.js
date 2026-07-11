@@ -1,8 +1,9 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import Sidebar from "./Sidebar";
 import TopBar from "./TopBar";
 import { readStoredSidebarCollapsed, writeStoredSidebarCollapsed } from "../utils/sidebarPreference";
+import { NAVIGATION_DESTINATIONS, getWorkspaceNavigationBehavior } from "../utils/workspaceNavigation";
 
 function SidebarLayout({
   sections,
@@ -14,9 +15,12 @@ function SidebarLayout({
   topBarActions,
   statusLabel,
   versionLabel,
+  navigationRequest = null,
   children,
 }) {
   const [isCollapsed, setIsCollapsed] = useState(() => readStoredSidebarCollapsed() ?? false);
+  const mainRef = useRef(null);
+  const handledNavigationNonceRef = useRef(null);
 
   const toggleCollapsed = useCallback(() => {
     setIsCollapsed((previous) => !previous);
@@ -25,6 +29,29 @@ function SidebarLayout({
   useEffect(() => {
     writeStoredSidebarCollapsed(isCollapsed);
   }, [isCollapsed]);
+
+  useEffect(() => {
+    const main = mainRef.current;
+    if (!main || !navigationRequest || navigationRequest.sectionId !== activeSectionId) return;
+    if (handledNavigationNonceRef.current === navigationRequest.nonce) return;
+    if (navigationRequest.destination === NAVIGATION_DESTINATIONS.preserve) return;
+
+    handledNavigationNonceRef.current = navigationRequest.nonce;
+    const requestedTarget = navigationRequest.destination === NAVIGATION_DESTINATIONS.element
+      ? main.querySelector(`[data-navigation-target="${navigationRequest.targetKey}"]`)
+      : null;
+    const primaryHeading = main.querySelector("[data-workspace-heading], h1, h2, [role='heading']");
+    const focusTarget = requestedTarget || primaryHeading || main;
+    const top = requestedTarget ? requestedTarget.offsetTop : 0;
+
+    if (typeof main.scrollTo === "function") {
+      main.scrollTo({ top, left: 0, behavior: getWorkspaceNavigationBehavior() });
+    } else {
+      main.scrollTop = top;
+    }
+    if (!focusTarget.hasAttribute("tabindex")) focusTarget.setAttribute("tabindex", "-1");
+    focusTarget.focus({ preventScroll: true });
+  }, [activeSectionId, navigationRequest]);
 
   return (
     <div style={shellStyle}>
@@ -49,6 +76,7 @@ function SidebarLayout({
         />
 
         <main
+          ref={mainRef}
           data-sidebar-state={isCollapsed ? "collapsed" : "expanded"}
           style={{ ...mainContentStyle, paddingLeft: "32px" }}
         >

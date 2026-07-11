@@ -44,6 +44,11 @@ import {
 } from "./services/authService";
 import { isSectionVisible, sectionsConfig } from "./utils/sectionsConfig";
 import { getSeverityBadgeStyle } from "./utils/severityDisplay";
+import {
+  NAVIGATION_DESTINATIONS,
+  WORKSPACE_TARGETS,
+  createWorkspaceNavigationRequest,
+} from "./utils/workspaceNavigation";
 import packageJson from "../package.json";
 
 function AppInner() {
@@ -59,6 +64,7 @@ function AppInner() {
   const [userRole, setUserRole] = useState(null);
   const { settings, updateSettings } = useUiSettings();
   const [activeSection, setActiveSection] = useState("dashboard");
+  const [workspaceNavigationRequest, setWorkspaceNavigationRequest] = useState(null);
   const [registryInitialView, setRegistryInitialView] = useState("all");
   const [registryNavigationRequest, setRegistryNavigationRequest] = useState(null);
   const [approvalsInitialStatus, setApprovalsInitialStatus] = useState("all");
@@ -75,7 +81,6 @@ function AppInner() {
   const hasCheckedAuthRef = useRef(false);
   const hasAppliedLandingRef = useRef(false);
   const alertsTableRef = useRef(null);
-  const pendingAlertsFocusRef = useRef(false);
 
   const checkAuth = async () => {
     try {
@@ -229,18 +234,6 @@ function AppInner() {
     return () => clearTimeout(timeout);
   }, [sessionNotice]);
 
-  useEffect(() => {
-    if (!pendingAlertsFocusRef.current || activeSection !== "dashboard") {
-      return;
-    }
-
-    alertsTableRef.current?.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-    });
-    pendingAlertsFocusRef.current = false;
-  }, [activeSection, searchTerm]);
-
   const filteredAlerts = useMemo(() => {
     return filterAlerts(alerts, {
       searchTerm,
@@ -262,17 +255,25 @@ function AppInner() {
     [isSuperAdmin, isAnalyst, canTakeAlertActions]
   );
 
+  const navigateWorkspace = useCallback((sectionId, options = {}) => {
+    setWorkspaceNavigationRequest(createWorkspaceNavigationRequest(sectionId, options));
+    setActiveSection(sectionId);
+  }, []);
+
   const handleNavigate = useCallback((sectionId) => {
     if (sectionId === "blocklist") {
       setRegistryInitialView("blocklist_tracking");
-      setActiveSection("blocklist");
+      navigateWorkspace("blocklist", {
+        destination: NAVIGATION_DESTINATIONS.element,
+        targetKey: WORKSPACE_TARGETS.responseRegistry,
+      });
       return;
     }
     if (sectionId === "response-registry") {
       setRegistryInitialView("all");
     }
-    setActiveSection(sectionId);
-  }, []);
+    navigateWorkspace(sectionId);
+  }, [navigateWorkspace]);
 
   const handleOpenResponseRegistry = useCallback((nav = {}) => {
     const target = buildRegistryNavigation(nav);
@@ -281,22 +282,33 @@ function AppInner() {
       ...target,
       nonce: Date.now(),
     });
-    setActiveSection("response-registry");
-  }, []);
+    navigateWorkspace("response-registry", {
+      destination: NAVIGATION_DESTINATIONS.element,
+      targetKey: WORKSPACE_TARGETS.responseRegistry,
+      context: target,
+    });
+  }, [navigateWorkspace]);
 
   const handleOpenAttentionTarget = useCallback((label) => {
     const target = attentionNavTarget(label);
     if (target.statusFilter) {
       setApprovalsInitialStatus(target.statusFilter);
     }
-    handleNavigate(target.sectionId);
-  }, [handleNavigate]);
+    navigateWorkspace(target.sectionId, target.statusFilter ? {
+      destination: NAVIGATION_DESTINATIONS.element,
+      targetKey: WORKSPACE_TARGETS.approvals,
+      context: target,
+    } : undefined);
+  }, [navigateWorkspace]);
 
   const handleViewRelatedAlerts = (sourceIp) => {
-    pendingAlertsFocusRef.current = true;
     setSearchTerm(sourceIp || "");
-    setActiveSection("dashboard");
     setSelectedAlertId(null);
+    navigateWorkspace("dashboard", {
+      destination: NAVIGATION_DESTINATIONS.element,
+      targetKey: WORKSPACE_TARGETS.recentAlerts,
+      context: { sourceIp: sourceIp || "" },
+    });
   };
 
   const handleOpenIncidentWorkspace = useCallback(() => {
@@ -492,6 +504,7 @@ function AppInner() {
       roleFlags={roleFlags}
       activeSectionId={activeSection}
       onNavigate={handleNavigate}
+      navigationRequest={workspaceNavigationRequest}
       title="SIEM Dashboard"
       eyebrow="SIEM"
       statusLabel="Operational"
@@ -608,19 +621,24 @@ function AppInner() {
         {(activeSection === "response-registry" || activeSection === "blocklist") &&
           (isSectionVisible("response-registry", roleFlags) ||
             isSectionVisible("blocklist", roleFlags)) && (
-          <ResponseRegistryPanel
-            cardStyle={cardStyle}
-            cardHeaderStyle={cardHeaderStyle}
-            cardTitleStyle={cardTitleStyle}
-            cardSubtitleStyle={cardSubtitleStyle}
-            filterLabelStyle={filterLabelStyle}
-            selectStyle={selectStyle}
-            canTakeAlertActions={canTakeAlertActions}
-            initialView={
-              activeSection === "blocklist" ? "blocklist_tracking" : registryInitialView
-            }
-            navigationRequest={registryNavigationRequest}
-          />
+          <div
+            data-navigation-target={WORKSPACE_TARGETS.responseRegistry}
+            aria-label="Response Registry workspace"
+          >
+            <ResponseRegistryPanel
+              cardStyle={cardStyle}
+              cardHeaderStyle={cardHeaderStyle}
+              cardTitleStyle={cardTitleStyle}
+              cardSubtitleStyle={cardSubtitleStyle}
+              filterLabelStyle={filterLabelStyle}
+              selectStyle={selectStyle}
+              canTakeAlertActions={canTakeAlertActions}
+              initialView={
+                activeSection === "blocklist" ? "blocklist_tracking" : registryInitialView
+              }
+              navigationRequest={registryNavigationRequest}
+            />
+          </div>
         )}
 
         {activeLiveLogsSection && isSectionVisible(activeLiveLogsSection.id, roleFlags) && (
@@ -742,18 +760,23 @@ function AppInner() {
         )}
 
         {activeSection === "soar-approvals" && isSectionVisible("soar-approvals", roleFlags) && (
-          <ApprovalsPanel
-            displaySettings={settings.display}
-            cardStyle={cardStyle}
-            cardHeaderStyle={cardHeaderStyle}
-            cardTitleStyle={cardTitleStyle}
-            cardSubtitleStyle={cardSubtitleStyle}
-            filterLabelStyle={filterLabelStyle}
-            selectStyle={selectStyle}
-            userRole={userRole}
-            initialStatusFilter={approvalsInitialStatus}
-            onOpenResponseRegistry={handleOpenResponseRegistry}
-          />
+          <div
+            data-navigation-target={WORKSPACE_TARGETS.approvals}
+            aria-label="SOAR Approvals workspace"
+          >
+            <ApprovalsPanel
+              displaySettings={settings.display}
+              cardStyle={cardStyle}
+              cardHeaderStyle={cardHeaderStyle}
+              cardTitleStyle={cardTitleStyle}
+              cardSubtitleStyle={cardSubtitleStyle}
+              filterLabelStyle={filterLabelStyle}
+              selectStyle={selectStyle}
+              userRole={userRole}
+              initialStatusFilter={approvalsInitialStatus}
+              onOpenResponseRegistry={handleOpenResponseRegistry}
+            />
+          </div>
         )}
 
         {activeSection === "soar-playbooks" && isSectionVisible("soar-playbooks", roleFlags) && (

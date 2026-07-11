@@ -330,3 +330,128 @@ test("main content keeps its left padding when the sidebar is expanded", () => {
   expect(mainRegion).toHaveAttribute("data-sidebar-state", "expanded");
   expect(mainRegion).toHaveStyle({ paddingLeft: "32px", paddingRight: "32px" });
 });
+
+test("ordinary navigation resets the main container and focuses its primary heading", () => {
+  const { rerender } = render(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      title="SIEM Dashboard"
+    >
+      <h2>Alpha workspace</h2>
+    </SidebarLayout>
+  );
+  const main = screen.getByRole("main");
+  main.scrollTo = jest.fn();
+
+  rerender(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="gamma"
+      onNavigate={() => {}}
+      title="SIEM Dashboard"
+      navigationRequest={{ sectionId: "gamma", destination: "top", nonce: 1 }}
+    >
+      <h2>Gamma workspace</h2>
+    </SidebarLayout>
+  );
+
+  expect(main.scrollTo).toHaveBeenCalledWith({ top: 0, left: 0, behavior: "smooth" });
+  expect(screen.getByRole("heading", { name: "Gamma workspace" })).toHaveFocus();
+});
+
+test("element navigation preserves the deep destination and background rerenders do not steal focus", () => {
+  const request = {
+    sectionId: "alpha",
+    destination: "element",
+    targetKey: "recent-alerts",
+    nonce: 2,
+  };
+  const { rerender } = render(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      title="SIEM Dashboard"
+    >
+      <h2>Alpha workspace</h2>
+      <div data-navigation-target="recent-alerts">Recent Alerts target</div>
+    </SidebarLayout>
+  );
+  const main = screen.getByRole("main");
+  const target = screen.getByText("Recent Alerts target");
+  Object.defineProperty(target, "offsetTop", { configurable: true, value: 240 });
+  main.scrollTo = jest.fn();
+
+  rerender(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      title="SIEM Dashboard"
+      navigationRequest={request}
+    >
+      <h2>Alpha workspace</h2>
+      <div data-navigation-target="recent-alerts">Recent Alerts target</div>
+    </SidebarLayout>
+  );
+
+  expect(main.scrollTo).toHaveBeenCalledWith({ top: 240, left: 0, behavior: "smooth" });
+  expect(target).toHaveFocus();
+  main.scrollTo.mockClear();
+
+  rerender(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      title="SIEM Dashboard"
+      navigationRequest={request}
+    >
+      <h2>Alpha workspace refreshed</h2>
+      <div data-navigation-target="recent-alerts">Recent Alerts target</div>
+    </SidebarLayout>
+  );
+  expect(main.scrollTo).not.toHaveBeenCalled();
+});
+
+test("missing element target falls back to top and reduced motion disables animation", () => {
+  const originalMatchMedia = window.matchMedia;
+  window.matchMedia = jest.fn().mockReturnValue({ matches: true });
+  const { rerender } = render(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      title="SIEM Dashboard"
+    >
+      <h2>Fallback heading</h2>
+    </SidebarLayout>
+  );
+  const main = screen.getByRole("main");
+  main.scrollTo = jest.fn();
+
+  rerender(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      title="SIEM Dashboard"
+      navigationRequest={{ sectionId: "alpha", destination: "element", targetKey: "missing", nonce: 3 }}
+    >
+      <h2>Fallback heading</h2>
+    </SidebarLayout>
+  );
+
+  expect(main.scrollTo).toHaveBeenCalledWith({ top: 0, left: 0, behavior: "auto" });
+  expect(screen.getByRole("heading", { name: "Fallback heading" })).toHaveFocus();
+  window.matchMedia = originalMatchMedia;
+});
