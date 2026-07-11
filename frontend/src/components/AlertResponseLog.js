@@ -4,7 +4,12 @@ function AlertResponseLog({ logs, variant = "inline" }) {
   const panelVariant = variant === "panel";
 
   return (
-    <div style={{ marginTop: panelVariant ? "20px" : "10px" }}>
+    <div
+      style={{
+        marginTop: panelVariant ? "20px" : "10px",
+        color: panelVariant ? "#e5e7eb" : "inherit",
+      }}
+    >
       <strong>Response Log:</strong>
 
       {logs && logs.length > 0 ? (
@@ -26,6 +31,7 @@ function AlertResponseLog({ logs, variant = "inline" }) {
                 padding: "8px",
                 borderRadius: "8px",
                 backgroundColor: "#1e293b",
+                color: "#e5e7eb",
                 fontSize: "12px",
                 display: "flex",
                 justifyContent: "space-between"
@@ -45,14 +51,18 @@ function AlertResponseLog({ logs, variant = "inline" }) {
                 {" \u2192 "}
                 {statusLabel}
               </span>
-              <span style={{ opacity: 0.7 }}>
+              <span style={{ color: "#cbd5e1" }}>
                 {new Date(log.executed_at).toLocaleTimeString()}
               </span>
             </div>
           );
         })
       ) : (
-        <div style={panelVariant ? { marginTop: "8px", fontSize: "12px", opacity: 0.7 } : { fontSize: "12px", opacity: 0.6 }}>
+        <div
+          style={panelVariant
+            ? { marginTop: "8px", fontSize: "12px", color: "#cbd5e1" }
+            : { fontSize: "12px", color: "#8b949e" }}
+        >
           No response actions logged
         </div>
       )}

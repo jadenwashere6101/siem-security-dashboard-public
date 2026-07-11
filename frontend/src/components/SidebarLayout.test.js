@@ -289,7 +289,7 @@ test("main content region has minWidth 0 so wide content cannot squeeze the side
   expect(mainRegion).toHaveStyle({ minWidth: 0 });
 });
 
-test("main content has no left padding when the sidebar is collapsed, so content sits flush against the rail", () => {
+test("main content keeps balanced gutters when the sidebar is collapsed", () => {
   readStoredSidebarCollapsed.mockReturnValue(true);
 
   render(
@@ -306,7 +306,8 @@ test("main content has no left padding when the sidebar is collapsed, so content
 
   const pageContent = screen.getByText("Page Content");
   const mainRegion = pageContent.closest("main");
-  expect(mainRegion).toHaveStyle({ paddingLeft: 0 });
+  expect(mainRegion).toHaveAttribute("data-sidebar-state", "collapsed");
+  expect(mainRegion).toHaveStyle({ paddingLeft: "32px", paddingRight: "32px" });
 });
 
 test("main content keeps its left padding when the sidebar is expanded", () => {
@@ -326,5 +327,6 @@ test("main content keeps its left padding when the sidebar is expanded", () => {
 
   const pageContent = screen.getByText("Page Content");
   const mainRegion = pageContent.closest("main");
-  expect(mainRegion).toHaveStyle({ paddingLeft: "32px" });
+  expect(mainRegion).toHaveAttribute("data-sidebar-state", "expanded");
+  expect(mainRegion).toHaveStyle({ paddingLeft: "32px", paddingRight: "32px" });
 });

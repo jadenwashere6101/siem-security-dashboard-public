@@ -4,7 +4,7 @@ import {
   loadPfsenseIngestFilters,
   updatePfsenseIngestFilter,
 } from "../services/pfsenseIngestFilterService";
-import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
+import { formatTimestamp } from "../utils/displayFormatting";
 
 const CATEGORY_LABELS = {
   block_events: "Blocked traffic",
@@ -14,7 +14,13 @@ const CATEGORY_LABELS = {
   icmp_traffic: "Allowed IPv4 ICMP traffic",
 };
 
-function PfsenseIngestFiltersPanel({ cardStyle, cardHeaderStyle, cardTitleStyle, cardSubtitleStyle }) {
+function PfsenseIngestFiltersPanel({
+  cardStyle,
+  cardHeaderStyle,
+  cardTitleStyle,
+  cardSubtitleStyle,
+  displaySettings,
+}) {
   const [policy, setPolicy] = useState(null);
   const [metrics, setMetrics] = useState(null);
   const [ports, setPorts] = useState("");
@@ -118,7 +124,9 @@ function PfsenseIngestFiltersPanel({ cardStyle, cardHeaderStyle, cardTitleStyle,
                 <p style={metadataStyle}>
                   {config.override_status === "applied" ? "Database setting" : "Safe default"}
                   {config.updated_by ? ` · ${config.updated_by}` : ""}
-                  {config.updated_at ? ` · ${formatAdminTimestamp(config.updated_at)}` : ""}
+                  {config.updated_at
+                    ? ` · ${formatTimestamp(config.updated_at, displaySettings)}`
+                    : ""}
                 </p>
               </article>
             ))}
@@ -166,7 +174,7 @@ function PfsenseIngestFiltersPanel({ cardStyle, cardHeaderStyle, cardTitleStyle,
           <section style={metricsStyle} aria-labelledby="filter-metrics-title">
             <h3 id="filter-metrics-title" style={policyTitleStyle}>Backend decision counters</h3>
             <p style={descriptionStyle}>
-              Process-local aggregates since {formatAdminTimestamp(metrics?.started_at)}. Counters
+              Process-local aggregates since {formatTimestamp(metrics?.started_at, displaySettings)}. Counters
               reset when the backend restarts and never store filtered payloads. Listener transport
               outcomes ({(metrics?.listener_outcome_contract || []).join(", ") || "forwarded, filtered, ingested, rejected, backend_failed"})
               remain separate in listener operational statistics.

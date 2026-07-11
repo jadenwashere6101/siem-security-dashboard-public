@@ -79,6 +79,7 @@ function DashboardSection({
         cardHeaderStyle={cardHeaderStyle}
         cardTitleStyle={cardTitleStyle}
         cardSubtitleStyle={cardSubtitleStyle}
+        displaySettings={displaySettings}
         onOpenResponseRegistry={onOpenResponseRegistry}
       />
       <div ref={alertsTableRef}>

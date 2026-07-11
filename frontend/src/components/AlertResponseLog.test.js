@@ -44,3 +44,10 @@ test("AlertResponseLog preserves legacy status display without response_outcome"
   expect(screen.getByText("MONITOR")).toBeInTheDocument();
   expect(container).toHaveTextContent("MONITOR → success");
 });
+
+test("panel variant uses explicit readable dark-theme foregrounds", () => {
+  render(<AlertResponseLog logs={[]} variant="panel" />);
+
+  expect(screen.getByText("Response Log:").parentElement).toHaveStyle({ color: "#e5e7eb" });
+  expect(screen.getByText("No response actions logged")).toHaveStyle({ color: "#cbd5e1" });
+});

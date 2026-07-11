@@ -48,7 +48,10 @@ function SidebarLayout({
           versionLabel={versionLabel}
         />
 
-        <main style={{ ...mainContentStyle, paddingLeft: isCollapsed ? 0 : "32px" }}>
+        <main
+          data-sidebar-state={isCollapsed ? "collapsed" : "expanded"}
+          style={{ ...mainContentStyle, paddingLeft: "32px" }}
+        >
           {children}
         </main>
       </div>

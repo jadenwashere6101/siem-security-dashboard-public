@@ -17,6 +17,7 @@ function DashboardVisuals({
   cardHeaderStyle,
   cardTitleStyle,
   cardSubtitleStyle,
+  displaySettings,
   onOpenResponseRegistry = null,
 }) {
   return (
@@ -51,6 +52,7 @@ function DashboardVisuals({
         cardStyle={cardStyle}
         cardHeaderStyle={cardHeaderStyle}
         cardTitleStyle={cardTitleStyle}
+        displaySettings={displaySettings}
       />
       <div style={cardStyle}>
         <div style={cardHeaderStyle}>

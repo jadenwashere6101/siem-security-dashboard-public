@@ -24,9 +24,9 @@
 - [ ] 3.4 Update `components/AlertTableRow.js` to render `alert.created_at` through the shared helper instead of the raw string.
 - [ ] 3.5 Update `components/LiveLogsPanel.js`'s Event Feed table `created_at` cell to use the shared helper instead of the raw string; leave the Raw Log/JSON tabs' literal payload text unchanged, since those views intentionally show source-preserved raw text (per existing Live Logs behavior).
 - [ ] 3.6 Confirm no other timestamp-formatting call site was missed via a repo-wide search for `formatTimestamp`/`toLocaleString`/`toISOString`/raw `created_at` rendering.
-- [ ] 3.7 Refactor Alerts Over Time data to retain numeric bucket instants and format axis/tooltip labels through the shared helper using current display settings.
-- [ ] 3.8 Pass authoritative display settings into pfSense Ingest Filters and replace forced-UTC policy/metrics timestamp rendering with the shared helper.
-- [ ] 3.9 Test chart bucket/count preservation, local/UTC labels, 12/24-hour labels, tooltip output, pfSense timestamps, invalid values, and live preference changes.
+- [x] 3.7 Refactor Alerts Over Time data to retain numeric bucket instants and format axis/tooltip labels through the shared helper using current display settings.
+- [x] 3.8 Pass authoritative display settings into pfSense Ingest Filters and replace forced-UTC policy/metrics timestamp rendering with the shared helper.
+- [x] 3.9 Test chart bucket/count preservation, local/UTC labels, 12/24-hour labels, tooltip output, pfSense timestamps, invalid values, and live preference changes.
 
 ## 4. MAC AI — Rows Per Page / Event Limit
 
@@ -74,11 +74,11 @@
 
 ## 10. MAC AI — Shell Symmetry and Alert Contrast Pass
 
-- [ ] 10.1 Make collapsed `SidebarLayout` main-content gutters equal while preserving intentional expanded-sidebar separation.
-- [ ] 10.2 Audit effective colors in Alert Details, ResponseOutcome, response state/log, manual actions, lifecycle notice, and source-IP context; replace accidental inheritance with explicit dark-theme tokens.
-- [ ] 10.3 Measure normal text at 4.5:1 minimum and large text/focus/non-text UI at 3:1 minimum against effective backgrounds.
-- [ ] 10.4 Add component/layout tests for collapsed/expanded gutters and explicit readable alert-detail foregrounds.
-- [ ] 10.5 Verify desktop, 1280px, tablet, and narrow/mobile layouts, chart resizing, keyboard focus, and horizontal overflow with visual evidence when practical.
+- [x] 10.1 Make collapsed `SidebarLayout` main-content gutters equal while preserving intentional expanded-sidebar separation.
+- [x] 10.2 Audit effective colors in Alert Details, ResponseOutcome, response state/log, manual actions, lifecycle notice, and source-IP context; replace accidental inheritance with explicit dark-theme tokens.
+- [x] 10.3 Measure normal text at 4.5:1 minimum and large text/focus/non-text UI at 3:1 minimum against effective backgrounds.
+- [x] 10.4 Add component/layout tests for collapsed/expanded gutters and explicit readable alert-detail foregrounds.
+- [x] 10.5 Verify desktop, 1280px, tablet, and narrow/mobile layouts, chart resizing, keyboard focus, and horizontal overflow with visual evidence when practical.
 
 ## 11. MAC AI — Tests To Add During Implementation
 
@@ -94,12 +94,12 @@
 
 ## 12. MAC AI — Validation To Run During Implementation
 
-- [ ] 12.1 Run focused frontend tests for the shared timestamp helper and its consumers.
+- [x] 12.1 Run focused frontend tests for the shared timestamp helper and its consumers.
 - [ ] 12.2 Run focused frontend tests for the centralized severity color function and its consumers.
-- [ ] 12.3 Run focused frontend tests for rows-per-page, column visibility, Live Logs font size/default tab, highlighting, chart/pfSense timestamps, shell spacing, and Alert Details contrast.
-- [ ] 12.4 Run existing Alerts, Live Logs, Incidents, pfSense, SidebarLayout, and dashboard chart suites to confirm no regression.
-- [ ] 12.5 Run `npm test -- --watchAll=false` from `frontend/` if practical for the implementation change.
-- [ ] 12.6 Run `npm run build`, `openspec validate siem-display-preferences --strict`, and `git diff --check`.
+- [x] 12.3 Run focused frontend tests for rows-per-page, column visibility, Live Logs font size/default tab, highlighting, chart/pfSense timestamps, shell spacing, and Alert Details contrast.
+- [x] 12.4 Run existing Alerts, Live Logs, Incidents, pfSense, SidebarLayout, and dashboard chart suites to confirm no regression.
+- [x] 12.5 Run `npm test -- --watchAll=false` from `frontend/` if practical for the implementation change.
+- [x] 12.6 Run `npm run build`, `openspec validate siem-display-preferences --strict`, and `git diff --check`.
 
 ## 13. MAC AI — Out Of Scope and Stop Conditions
 

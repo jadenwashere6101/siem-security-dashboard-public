@@ -73,7 +73,6 @@ export const buildTopIPChartData = (filteredAlerts) => {
 
 export const buildAlertTimelineData = (filteredAlerts) => {
   const bucketCounts = new Map();
-  const dayKeys = new Set();
 
   filteredAlerts.forEach((alert) => {
     if (!alert?.created_at) return;
@@ -88,27 +87,10 @@ export const buildAlertTimelineData = (filteredAlerts) => {
       createdAt.getUTCHours()
     );
 
-    const dayKey = `${createdAt.getUTCFullYear()}-${createdAt.getUTCMonth()}-${createdAt.getUTCDate()}`;
-    dayKeys.add(dayKey);
     bucketCounts.set(bucketStart, (bucketCounts.get(bucketStart) || 0) + 1);
   });
 
-  const showDateInLabel = dayKeys.size > 1;
-
   return Array.from(bucketCounts.entries())
     .sort((a, b) => a[0] - b[0])
-    .map(([bucketStart, count]) => {
-      const bucketDate = new Date(bucketStart);
-      const month = String(bucketDate.getUTCMonth() + 1).padStart(2, "0");
-      const day = String(bucketDate.getUTCDate()).padStart(2, "0");
-      const hour = String(bucketDate.getUTCHours()).padStart(2, "0");
-
-      return {
-        time: showDateInLabel
-          ? `${month}/${day} ${hour}:00 UTC`
-          : `${hour}:00 UTC`,
-        count,
-        bucketStart,
-      };
-    });
+    .map(([bucketStart, count]) => ({ bucketStart, count }));
 };

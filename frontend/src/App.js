@@ -686,6 +686,7 @@ function AppInner() {
 
         {activeSection === "pfsense-ingest-filters" && isSectionVisible("pfsense-ingest-filters", roleFlags) && (
           <PfsenseIngestFiltersPanel
+            displaySettings={settings.display}
             cardStyle={cardStyle}
             cardHeaderStyle={cardHeaderStyle}
             cardTitleStyle={cardTitleStyle}

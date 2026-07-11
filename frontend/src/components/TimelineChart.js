@@ -8,6 +8,7 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
+import { formatTimestamp } from "../utils/displayFormatting";
 
 function TimelineChart({
   data,
@@ -17,8 +18,11 @@ function TimelineChart({
   cardStyle,
   cardHeaderStyle,
   cardTitleStyle,
+  displaySettings,
 }) {
   const hasEnoughTrendData = data.length >= 2;
+  const formatBucketTimestamp = (value) =>
+    formatTimestamp(value, displaySettings, "Unknown time");
 
   return (
     <section style={{ ...cardStyle, marginBottom: "24px" }}>
@@ -44,7 +48,11 @@ function TimelineChart({
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={data} style={{ backgroundColor: "transparent" }}>
               <CartesianGrid stroke="#30363d" strokeDasharray="3 3" />
-              <XAxis dataKey="time" stroke="#8b949e" />
+              <XAxis
+                dataKey="bucketStart"
+                stroke="#8b949e"
+                tickFormatter={formatBucketTimestamp}
+              />
               <YAxis stroke="#8b949e" allowDecimals={false} />
               <Tooltip
                 contentStyle={tooltipStyle}
@@ -52,6 +60,7 @@ function TimelineChart({
                 itemStyle={tooltipItemStyle}
                 cursor={{ stroke: "#334155", strokeWidth: 1 }}
                 wrapperStyle={{ outline: "none", backgroundColor: "transparent" }}
+                labelFormatter={formatBucketTimestamp}
               />
               <Line
                 type="monotone"

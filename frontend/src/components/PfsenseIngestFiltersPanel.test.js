@@ -6,7 +6,7 @@ import * as service from "../services/pfsenseIngestFilterService";
 jest.mock("../services/pfsenseIngestFilterService");
 
 const categories = {
-  block_events: { enabled: true, parameters: {}, description: "Retain blocks.", override_status: "applied" },
+  block_events: { enabled: true, parameters: {}, description: "Retain blocks.", override_status: "applied", updated_at: "2026-07-10T10:00:00Z" },
   inbound_sensitive_port_allows: { enabled: true, parameters: { sensitive_ports: [22, 443] }, description: "Retain sensitive allows.", override_status: "applied" },
   all_allow_events: { enabled: false, parameters: {}, description: "Retain all allows.", override_status: "applied" },
   dns_traffic: { enabled: false, parameters: {}, description: "Port 53 only.", override_status: "applied" },
@@ -53,4 +53,25 @@ test("backend failures are announced accessibly", async () => {
   service.loadPfsenseIngestFilters.mockRejectedValue(new Error("Forbidden"));
   render(<PfsenseIngestFiltersPanel {...props} />);
   expect(await screen.findByRole("alert")).toHaveTextContent("Forbidden");
+});
+
+test("formats policy and metrics timestamps with shared display preferences", async () => {
+  const { rerender } = render(
+    <PfsenseIngestFiltersPanel
+      {...props}
+      displaySettings={{ timezoneMode: "utc", timestampFormat: "12h" }}
+    />
+  );
+
+  expect(await screen.findAllByText(/Jul 10, 2026, 10:00 AM UTC/)).toHaveLength(2);
+
+  rerender(
+    <PfsenseIngestFiltersPanel
+      {...props}
+      displaySettings={{ timezoneMode: "utc", timestampFormat: "24h" }}
+    />
+  );
+
+  expect(screen.getAllByText(/Jul 10, 2026, 10:00 UTC/)).toHaveLength(2);
+  expect(screen.queryByText(/10:00 AM UTC/)).not.toBeInTheDocument();
 });
