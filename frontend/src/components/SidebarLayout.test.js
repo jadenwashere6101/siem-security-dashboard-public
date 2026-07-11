@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import SidebarLayout from "./SidebarLayout";
@@ -372,6 +372,27 @@ test("ordinary navigation resets the main container and focuses its primary head
   expect(screen.getByRole("heading", { name: "Gamma workspace" })).toHaveFocus();
 });
 
+test("constrains the shell flex hierarchy so main is the viewport scroll owner", () => {
+  render(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      title="SIEM Dashboard"
+    >
+      <h2>Alpha workspace</h2>
+    </SidebarLayout>
+  );
+
+  const main = screen.getByRole("main");
+  const body = main.parentElement;
+  const shell = body.parentElement;
+  expect(shell).toHaveStyle({ height: "100vh", maxHeight: "100dvh", minHeight: 0, overflow: "hidden" });
+  expect(body).toHaveStyle({ minHeight: 0, overflow: "hidden" });
+  expect(main).toHaveStyle({ minHeight: 0, overflow: "auto" });
+});
+
 test("element navigation preserves the deep destination and background rerenders do not steal focus", () => {
   const request = {
     sectionId: "alpha",
@@ -393,7 +414,9 @@ test("element navigation preserves the deep destination and background rerenders
   );
   const main = screen.getByRole("main");
   const target = screen.getByText("Recent Alerts target");
-  Object.defineProperty(target, "offsetTop", { configurable: true, value: 240 });
+  Object.defineProperty(main, "scrollTop", { configurable: true, writable: true, value: 125 });
+  main.getBoundingClientRect = jest.fn(() => ({ top: 80 }));
+  target.getBoundingClientRect = jest.fn(() => ({ top: 320 }));
   main.scrollTo = jest.fn();
 
   rerender(
@@ -410,7 +433,7 @@ test("element navigation preserves the deep destination and background rerenders
     </SidebarLayout>
   );
 
-  expect(main.scrollTo).toHaveBeenCalledWith({ top: 240, left: 0, behavior: "smooth" });
+  expect(main.scrollTo).toHaveBeenCalledWith({ top: 365, left: 0, behavior: "smooth" });
   expect(target).toHaveFocus();
   main.scrollTo.mockClear();
 
@@ -430,7 +453,59 @@ test("element navigation preserves the deep destination and background rerenders
   expect(main.scrollTo).not.toHaveBeenCalled();
 });
 
+test("waits for a conditionally mounted deep target before consuming the request", () => {
+  jest.useFakeTimers();
+  const request = {
+    sectionId: "alpha",
+    destination: "element",
+    targetKey: "soar-approvals",
+    nonce: 20,
+  };
+  const { rerender } = render(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      title="SIEM Dashboard"
+      navigationRequest={request}
+    >
+      <h2>Approvals workspace</h2>
+    </SidebarLayout>
+  );
+  const main = screen.getByRole("main");
+  main.scrollTo = undefined;
+  main.scrollTop = 600;
+
+  expect(main.scrollTop).toBe(600);
+  rerender(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      title="SIEM Dashboard"
+      navigationRequest={request}
+    >
+      <h2>Approvals workspace</h2>
+      <div data-navigation-target="soar-approvals">Approvals target</div>
+    </SidebarLayout>
+  );
+  const target = screen.getByText("Approvals target");
+  main.getBoundingClientRect = jest.fn(() => ({ top: 50 }));
+  target.getBoundingClientRect = jest.fn(() => ({ top: 250 }));
+
+  act(() => {
+    jest.runOnlyPendingTimers();
+  });
+
+  expect(main.scrollTop).toBe(800);
+  expect(target).toHaveFocus();
+  jest.useRealTimers();
+});
+
 test("missing element target falls back to top and reduced motion disables animation", () => {
+  jest.useFakeTimers();
   const originalMatchMedia = window.matchMedia;
   window.matchMedia = jest.fn().mockReturnValue({ matches: true });
   const { rerender } = render(
@@ -460,9 +535,14 @@ test("missing element target falls back to top and reduced motion disables anima
     </SidebarLayout>
   );
 
+  act(() => {
+    jest.advanceTimersByTime(1000);
+  });
+
   expect(main.scrollTo).toHaveBeenCalledWith({ top: 0, left: 0, behavior: "auto" });
   expect(screen.getByRole("heading", { name: "Fallback heading" })).toHaveFocus();
   window.matchMedia = originalMatchMedia;
+  jest.useRealTimers();
 });
 
 test("preserve destination and same-section state updates do not steal scroll or focus", () => {

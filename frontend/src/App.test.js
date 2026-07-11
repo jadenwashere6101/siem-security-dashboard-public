@@ -238,13 +238,12 @@ test('incident and playbook Open in Response Registry preserve correlation ident
 
 test('related-alert deep links preserve source-IP filter and Recent Alerts destination', async () => {
   loadCurrentSession.mockResolvedValue({ authenticated: true, user: 'analyst1', role: 'analyst' });
-  const offsetDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetTop');
-  Object.defineProperty(HTMLElement.prototype, 'offsetTop', {
-    configurable: true,
-    get() {
-      return this.getAttribute?.('data-navigation-target') === 'recent-alerts' ? 320 : 0;
-    },
-  });
+  const originalGetBoundingClientRect = HTMLElement.prototype.getBoundingClientRect;
+  HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
+    if (this.getAttribute?.('data-navigation-target') === 'recent-alerts') return { top: 390 };
+    if (this.tagName === 'MAIN') return { top: 70 };
+    return originalGetBoundingClientRect.call(this);
+  };
   render(<App />);
   await userEvent.click(await screen.findByRole('button', { name: /soar incidents/i }));
   const main = screen.getByRole('main');
@@ -255,11 +254,7 @@ test('related-alert deep links preserve source-IP filter and Recent Alerts desti
   expect(screen.getByText('Recent Alerts target')).toHaveFocus();
   expect(main.scrollTo).toHaveBeenCalledWith({ top: 320, left: 0, behavior: 'smooth' });
 
-  if (offsetDescriptor) {
-    Object.defineProperty(HTMLElement.prototype, 'offsetTop', offsetDescriptor);
-  } else {
-    delete HTMLElement.prototype.offsetTop;
-  }
+  HTMLElement.prototype.getBoundingClientRect = originalGetBoundingClientRect;
 });
 
 test('dashboard deep links preserve registry and incident destinations', async () => {

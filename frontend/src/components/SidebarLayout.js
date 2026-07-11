@@ -36,21 +36,60 @@ function SidebarLayout({
     if (handledNavigationNonceRef.current === navigationRequest.nonce) return;
     if (navigationRequest.destination === NAVIGATION_DESTINATIONS.preserve) return;
 
-    handledNavigationNonceRef.current = navigationRequest.nonce;
-    const requestedTarget = navigationRequest.destination === NAVIGATION_DESTINATIONS.element
-      ? main.querySelector(`[data-navigation-target="${navigationRequest.targetKey}"]`)
-      : null;
-    const primaryHeading = main.querySelector("[data-workspace-heading], h1, h2, [role='heading']");
-    const focusTarget = requestedTarget || primaryHeading || main;
-    const top = requestedTarget ? requestedTarget.offsetTop : 0;
+    let cancelled = false;
+    let frameId = null;
+    let fallbackTimer = null;
+    let observer = null;
 
-    if (typeof main.scrollTo === "function") {
-      main.scrollTo({ top, left: 0, behavior: getWorkspaceNavigationBehavior() });
-    } else {
-      main.scrollTop = top;
+    const completeNavigation = (allowTopFallback = false) => {
+      if (cancelled || handledNavigationNonceRef.current === navigationRequest.nonce) return true;
+
+      const requestedTarget = navigationRequest.destination === NAVIGATION_DESTINATIONS.element
+        ? main.querySelector(`[data-navigation-target="${navigationRequest.targetKey}"]`)
+        : null;
+      if (
+        navigationRequest.destination === NAVIGATION_DESTINATIONS.element &&
+        !requestedTarget &&
+        !allowTopFallback
+      ) {
+        return false;
+      }
+
+      const primaryHeading = main.querySelector("[data-workspace-heading], h1, h2, [role='heading']");
+      const focusTarget = requestedTarget || primaryHeading || main;
+      const mainRect = main.getBoundingClientRect();
+      const targetRect = requestedTarget?.getBoundingClientRect();
+      const top = targetRect
+        ? Math.max(0, main.scrollTop + targetRect.top - mainRect.top)
+        : 0;
+
+      if (typeof main.scrollTo === "function") {
+        main.scrollTo({ top, left: 0, behavior: getWorkspaceNavigationBehavior() });
+      } else {
+        main.scrollTop = top;
+      }
+      if (!focusTarget.hasAttribute("tabindex")) focusTarget.setAttribute("tabindex", "-1");
+      focusTarget.focus({ preventScroll: true });
+      handledNavigationNonceRef.current = navigationRequest.nonce;
+      observer?.disconnect();
+      if (fallbackTimer != null) window.clearTimeout(fallbackTimer);
+      return true;
+    };
+
+    if (!completeNavigation()) {
+      observer = new MutationObserver(() => {
+        frameId = window.requestAnimationFrame(() => completeNavigation());
+      });
+      observer.observe(main, { childList: true, subtree: true });
+      fallbackTimer = window.setTimeout(() => completeNavigation(true), 1000);
     }
-    if (!focusTarget.hasAttribute("tabindex")) focusTarget.setAttribute("tabindex", "-1");
-    focusTarget.focus({ preventScroll: true });
+
+    return () => {
+      cancelled = true;
+      if (frameId != null) window.cancelAnimationFrame(frameId);
+      if (fallbackTimer != null) window.clearTimeout(fallbackTimer);
+      observer?.disconnect();
+    };
   }, [activeSectionId, navigationRequest]);
 
   return (
@@ -90,7 +129,10 @@ function SidebarLayout({
 const shellStyle = {
   display: "flex",
   flexDirection: "column",
-  minHeight: "100vh",
+  height: "100vh",
+  maxHeight: "100dvh",
+  minHeight: 0,
+  overflow: "hidden",
   backgroundColor: "#0d1117",
 };
 
@@ -98,12 +140,14 @@ const bodyStyle = {
   display: "flex",
   flex: "1 1 auto",
   minHeight: 0,
+  overflow: "hidden",
   backgroundColor: "#0d1117",
 };
 
 const mainContentStyle = {
   flex: "1 1 auto",
   minWidth: 0,
+  minHeight: 0,
   overflow: "auto",
   paddingTop: "18px",
   paddingRight: "32px",
