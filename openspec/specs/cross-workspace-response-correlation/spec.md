@@ -50,3 +50,13 @@ The UI SHALL preserve independent alert and incident lifecycles while surfacing 
 - **WHEN** resolving an alert leaves its linked incident open with no other open linked alerts
 - **THEN** the UI SHALL explain that incident status is independent and offer a direct review action without silently resolving the incident
 
+### Requirement: Correlation-preserving presentation destination
+Cross-workspace response navigation SHALL carry both canonical correlation context and an explicit presentation destination without altering API request semantics.
+
+#### Scenario: Incident opens Response Registry
+- **WHEN** an analyst opens Response Registry from an incident
+- **THEN** the target SHALL retain related incident and source-IP context while scrolling/focusing the relevant registry region
+
+#### Scenario: Playbook opens Response Registry
+- **WHEN** an analyst opens Response Registry from a playbook execution
+- **THEN** the target SHALL retain all available alert, incident, and indicator identifiers while scrolling/focusing the relevant registry region

@@ -243,6 +243,7 @@ test("view definition calls getPlaybook and shows read-only JSON", async () => {
   });
 
   expect(screen.getByText(/definition detail/i)).toHaveFocus();
+  expect(screen.getByRole("complementary", { name: "Selected playbook detail" })).toBeVisible();
   await waitFor(() => {
     expect(screen.getByText(/alert_type/, { exact: false })).toBeInTheDocument();
   });

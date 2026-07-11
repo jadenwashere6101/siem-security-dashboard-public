@@ -201,10 +201,14 @@ test("selecting row shows detail", async () => {
 
   expect(await screen.findByText(/dead letter #7/i)).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Dead Letter Detail" })).toHaveFocus();
+  expect(screen.getByLabelText("Dead letter list and selected dead letter detail")).toHaveClass(
+    "master-detail-layout--open"
+  );
   expect(getDeadLetter).toHaveBeenCalledWith(7);
   expect(screen.getByText(/view in soar playbooks/i)).toBeInTheDocument();
   expect(screen.getByText(/view in soar incidents/i)).toBeInTheDocument();
   expect(screen.getByText(/index 1, action notify_slack/i)).toBeInTheDocument();
+  expect(screen.getByRole("complementary", { name: "Selected dead letter detail" })).toBeVisible();
 
   await userEvent.click(screen.getByRole("button", { name: "Close" }));
   expect(viewButton).toHaveFocus();

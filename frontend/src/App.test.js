@@ -17,19 +17,21 @@ jest.mock('./services/alertsService', () => ({
 
 jest.mock('./components/DashboardSection', () => (props) => (
   <div data-testid="dashboard-section">
-    Dashboard Section Mock
+    <h2>Dashboard workspace</h2>
+    Dashboard Section Mock search:{props.searchTerm || ''}
     <button type="button" onClick={() => props.onOpenResponseRegistry({ sourceIp: '8.8.8.8', relatedAlertId: 12 })}>
       Dashboard open registry
     </button>
     <button type="button" onClick={() => props.onReviewIncident()}>
       Dashboard open incidents
     </button>
-    <div data-navigation-target="recent-alerts">Recent Alerts target</div>
+    <div data-navigation-target="recent-alerts" tabIndex={-1}>Recent Alerts target</div>
   </div>
 ));
 
 jest.mock('./components/DeadLettersPanel', () => (props) => (
   <div data-testid="dead-letters-panel">
+    <h2>Dead Letter Queue</h2>
     Dead Letters Panel Mock {props.userRole}
   </div>
 ));
@@ -42,6 +44,7 @@ jest.mock('./components/SoarMetricsDashboard', () => (props) => (
 
 jest.mock('./components/SocCommandCenter', () => (props) => (
   <div data-testid="soc-command-center">
+    <h2>SOC Command Center</h2>
     SOC Command Center Mock {props.userRole} {props.currentUsername}
     <button type="button" onClick={() => props.onNavigate('soar-operations')}>SOC open operations</button>
     <button type="button" onClick={() => props.onOpenAttentionItem('Pending approvals')}>SOC open approvals</button>
@@ -51,7 +54,7 @@ jest.mock('./components/SocCommandCenter', () => (props) => (
 
 jest.mock('./components/ResponseRegistryPanel', () => (props) => (
   <div data-testid="response-registry-panel">
-    Response Registry Mock {props.navigationRequest?.q} {props.navigationRequest?.relatedIncidentId}
+    Response Registry Mock {props.navigationRequest?.q} {props.navigationRequest?.relatedIncidentId} {props.navigationRequest?.relatedAlertId}
   </div>
 ));
 
@@ -59,8 +62,47 @@ jest.mock('./components/ApprovalsPanel', () => (props) => (
   <div data-testid="approvals-panel">Approvals Mock {props.initialStatusFilter}</div>
 ));
 
-jest.mock('./components/IncidentsPanel', () => () => (
-  <div data-testid="incidents-panel">Incidents Mock</div>
+jest.mock('./components/IncidentsPanel', () => (props) => (
+  <div data-testid="incidents-panel">
+    <h2>Incident Visibility</h2>
+    Incidents Mock
+    <button
+      type="button"
+      onClick={() => props.onViewRelatedAlerts?.('203.0.113.10')}
+    >
+      Incident open related alerts
+    </button>
+    <button
+      type="button"
+      onClick={() =>
+        props.onOpenResponseRegistry?.({
+          sourceIp: '203.0.113.10',
+          relatedIncidentId: 42,
+        })
+      }
+    >
+      Incident open registry
+    </button>
+  </div>
+));
+
+jest.mock('./components/PlaybooksPanel', () => (props) => (
+  <div data-testid="playbooks-panel">
+    <h2>Playbooks</h2>
+    Playbooks Mock
+    <button
+      type="button"
+      onClick={() =>
+        props.onOpenResponseRegistry?.({
+          sourceIp: '198.51.100.20',
+          relatedAlertId: 55,
+          relatedIncidentId: 9,
+        })
+      }
+    >
+      Playbook open registry
+    </button>
+  </div>
 ));
 
 jest.mock('./components/DetectionRulesPanel', () => () => (
@@ -151,11 +193,14 @@ test('ordinary sidebar and SOC navigation reset the shared main scroll container
 
   await userEvent.click(operationsButton);
   expect(main.scrollTo).toHaveBeenLastCalledWith({ top: 0, left: 0, behavior: 'smooth' });
+  expect(screen.getByRole('heading', { name: 'Dead Letter Queue' })).toHaveFocus();
 
   await userEvent.click(screen.getByRole('button', { name: /soc command center/i }));
+  expect(screen.getByRole('heading', { name: 'SOC Command Center' })).toHaveFocus();
   main.scrollTo.mockClear();
   await userEvent.click(await screen.findByRole('button', { name: 'SOC open operations' }));
   expect(main.scrollTo).toHaveBeenLastCalledWith({ top: 0, left: 0, behavior: 'smooth' });
+  expect(screen.getByRole('heading', { name: 'Dead Letter Queue' })).toHaveFocus();
 });
 
 test('SOC attention and Open in Response Registry preserve deep navigation context', async () => {
@@ -175,6 +220,47 @@ test('SOC attention and Open in Response Registry preserve deep navigation conte
   expect(screen.getByLabelText('Response Registry workspace')).toHaveFocus();
 });
 
+test('incident and playbook Open in Response Registry preserve correlation identifiers', async () => {
+  loadCurrentSession.mockResolvedValue({ authenticated: true, user: 'analyst1', role: 'analyst' });
+  render(<App />);
+
+  await userEvent.click(await screen.findByRole('button', { name: /soar incidents/i }));
+  await userEvent.click(await screen.findByRole('button', { name: 'Incident open registry' }));
+  expect(await screen.findByTestId('response-registry-panel')).toHaveTextContent('203.0.113.10 42');
+
+  await userEvent.click(screen.getByRole('button', { name: /soar playbooks/i }));
+  await userEvent.click(await screen.findByRole('button', { name: 'Playbook open registry' }));
+  expect(await screen.findByTestId('response-registry-panel')).toHaveTextContent(
+    '198.51.100.20 9 55'
+  );
+});
+
+test('related-alert deep links preserve source-IP filter and Recent Alerts destination', async () => {
+  loadCurrentSession.mockResolvedValue({ authenticated: true, user: 'analyst1', role: 'analyst' });
+  const offsetDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetTop');
+  Object.defineProperty(HTMLElement.prototype, 'offsetTop', {
+    configurable: true,
+    get() {
+      return this.getAttribute?.('data-navigation-target') === 'recent-alerts' ? 320 : 0;
+    },
+  });
+  render(<App />);
+  await userEvent.click(await screen.findByRole('button', { name: /soar incidents/i }));
+  const main = screen.getByRole('main');
+  main.scrollTo = jest.fn();
+
+  await userEvent.click(await screen.findByRole('button', { name: 'Incident open related alerts' }));
+  expect(await screen.findByTestId('dashboard-section')).toHaveTextContent('search:203.0.113.10');
+  expect(screen.getByText('Recent Alerts target')).toHaveFocus();
+  expect(main.scrollTo).toHaveBeenCalledWith({ top: 320, left: 0, behavior: 'smooth' });
+
+  if (offsetDescriptor) {
+    Object.defineProperty(HTMLElement.prototype, 'offsetTop', offsetDescriptor);
+  } else {
+    delete HTMLElement.prototype.offsetTop;
+  }
+});
+
 test('dashboard deep links preserve registry and incident destinations', async () => {
   loadCurrentSession.mockResolvedValue({ authenticated: true, user: 'analyst1', role: 'analyst' });
   render(<App />);
@@ -186,6 +272,7 @@ test('dashboard deep links preserve registry and incident destinations', async (
   await userEvent.click(screen.getByRole('button', { name: /^dashboard$/i }));
   await userEvent.click(await screen.findByRole('button', { name: 'Dashboard open incidents' }));
   expect(await screen.findByRole('button', { name: /soar incidents/i })).toHaveAttribute('aria-current', 'page');
+  expect(screen.getByRole('heading', { name: 'Incident Visibility' })).toHaveFocus();
 });
 
 test('renders SOAR Metrics nav for analyst and loads dashboard when selected', async () => {

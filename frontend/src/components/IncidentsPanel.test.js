@@ -562,6 +562,10 @@ describe("IncidentsPanel", () => {
     const detailHeading = await screen.findByText(/Incident #7/);
     expect(detailHeading).toHaveFocus();
     expect(row).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByLabelText("Incident list and selected incident detail")).toHaveClass(
+      "master-detail-layout--open"
+    );
+    expect(screen.getByRole("complementary", { name: "Selected incident detail" })).toBeVisible();
 
     await userEvent.click(screen.getByRole("button", { name: "Close" }));
 

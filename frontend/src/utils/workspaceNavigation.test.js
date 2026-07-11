@@ -23,6 +23,24 @@ test("rejects incomplete and unsupported requests", () => {
   expect(() => createWorkspaceNavigationRequest("dashboard", { destination: "element" })).toThrow(/targetKey/i);
 });
 
+test("preserve destination skips scroll and focus effects", () => {
+  createWorkspaceNavigationRequest("dashboard", {
+    destination: NAVIGATION_DESTINATIONS.preserve,
+  });
+  expect(
+    createWorkspaceNavigationRequest("dashboard", {
+      destination: NAVIGATION_DESTINATIONS.preserve,
+      context: { filter: "open" },
+    })
+  ).toEqual(
+    expect.objectContaining({
+      sectionId: "dashboard",
+      destination: "preserve",
+      context: { filter: "open" },
+    })
+  );
+});
+
 test("respects reduced-motion preference", () => {
   const original = window.matchMedia;
   window.matchMedia = jest.fn().mockReturnValue({ matches: true });

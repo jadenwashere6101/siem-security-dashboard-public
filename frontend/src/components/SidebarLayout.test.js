@@ -455,3 +455,39 @@ test("missing element target falls back to top and reduced motion disables anima
   expect(screen.getByRole("heading", { name: "Fallback heading" })).toHaveFocus();
   window.matchMedia = originalMatchMedia;
 });
+
+test("preserve destination and same-section state updates do not steal scroll or focus", () => {
+  const { rerender } = render(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      title="SIEM Dashboard"
+      navigationRequest={{ sectionId: "alpha", destination: "top", nonce: 10 }}
+    >
+      <h2>Alpha workspace</h2>
+    </SidebarLayout>
+  );
+  const main = screen.getByRole("main");
+  main.scrollTo = jest.fn();
+  const heading = screen.getByRole("heading", { name: "Alpha workspace" });
+  expect(heading).toHaveFocus();
+  main.scrollTo.mockClear();
+
+  rerender(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      title="SIEM Dashboard"
+      navigationRequest={{ sectionId: "alpha", destination: "preserve", nonce: 11 }}
+    >
+      <h2>Alpha workspace updated</h2>
+    </SidebarLayout>
+  );
+
+  expect(main.scrollTo).not.toHaveBeenCalled();
+  expect(heading).toHaveFocus();
+});
