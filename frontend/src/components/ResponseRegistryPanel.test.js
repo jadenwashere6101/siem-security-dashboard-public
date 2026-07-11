@@ -195,6 +195,114 @@ test("blocklist tracking view embeds blocklist manager", async () => {
 test("truthful tracking-only copy is present in workspace subtitle", async () => {
   renderRegistry(<ResponseRegistryPanel {...styleProps} canTakeAlertActions />);
   expect(
-    await screen.findByText(/no firewall enforcement is implied/i)
+    await screen.findByText(/never implies firewall, provider, or host enforcement changes/i)
   ).toBeInTheDocument();
+});
+
+test("Remove Tracking is discoverable for active tracking and explains no firewall change", async () => {
+  loadRegistryDetail.mockResolvedValue({
+    record: {
+      id: 11,
+      indicator_value: "8.8.8.8",
+      current_disposition: "blocklist_tracked",
+      created_at: "2026-07-01T12:00:00+00:00",
+      updated_at: "2026-07-10T12:00:00+00:00",
+    },
+    events: [],
+    blocklist_entry: {
+      id: 44,
+      status: "active",
+      reason: "Tracked",
+      expires_at: null,
+    },
+    related_alert_ids: [],
+    related_incident_ids: [],
+    related_alert_count: 0,
+    related_incident_count: 0,
+    enforcement: "none",
+    enforcement_statement: "No firewall or host enforcement.",
+    first_seen: "2026-07-01T12:00:00+00:00",
+    last_updated: "2026-07-10T12:00:00+00:00",
+    response_source: "response_registry",
+  });
+  executeRegistryCommand.mockResolvedValue({
+    success: true,
+    action: "remove_tracking",
+    message: "SIEM Blocklist tracking removed.",
+    enforcement: "none",
+    blocked_ip_id: 44,
+    registry_record_id: 11,
+  });
+
+  renderRegistry(<ResponseRegistryPanel {...styleProps} canTakeAlertActions />);
+  const detail = await openFirstRow();
+
+  expect(within(detail).getByTestId("registry-blocklist-status")).toHaveTextContent(
+    /Remove Tracking below/i
+  );
+  const removeButton = within(detail).getByRole("button", { name: "Remove Tracking" });
+  expect(removeButton).toBeEnabled();
+  expect(removeButton).toHaveAttribute(
+    "title",
+    expect.stringMatching(/Does not change any firewall/i)
+  );
+
+  await userEvent.click(removeButton);
+  await waitFor(() => {
+    expect(executeRegistryCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "remove_tracking", indicatorValue: "8.8.8.8" })
+    );
+  });
+  expect(await screen.findByText(/No firewall or host enforcement/i)).toBeInTheDocument();
+});
+
+test("inactive tracking keeps history readable and disables Remove Tracking with reason", async () => {
+  loadRegistryDetail.mockResolvedValue({
+    record: {
+      id: 11,
+      indicator_value: "8.8.8.8",
+      current_disposition: "removed",
+      created_at: "2026-07-01T12:00:00+00:00",
+      updated_at: "2026-07-10T12:00:00+00:00",
+    },
+    events: [
+      {
+        id: 9,
+        event_type: "tracking_removed",
+        requested_action: "remove_tracking",
+        outcome: "removed",
+        disposition_after: "removed",
+        origin_surface: "response_registry",
+        created_at: "2026-07-10T12:00:00+00:00",
+        reason: "Removed earlier",
+      },
+    ],
+    blocklist_entry: {
+      id: 44,
+      status: "inactive",
+      reason: "Removed earlier",
+      expires_at: null,
+    },
+    related_alert_ids: [],
+    related_incident_ids: [],
+    related_alert_count: 0,
+    related_incident_count: 0,
+    enforcement: "none",
+    enforcement_statement: "No firewall or host enforcement.",
+    first_seen: "2026-07-01T12:00:00+00:00",
+    last_updated: "2026-07-10T12:00:00+00:00",
+    response_source: "response_registry",
+  });
+
+  renderRegistry(<ResponseRegistryPanel {...styleProps} canTakeAlertActions />);
+  const detail = await openFirstRow();
+
+  expect(within(detail).getByText(/Historical evidence remains readable/i)).toBeInTheDocument();
+  expect(within(detail).getByText(/tracking_removed/i)).toBeInTheDocument();
+  const removeButton = within(detail).getByRole("button", { name: "Remove Tracking" });
+  expect(removeButton).toBeDisabled();
+  expect(removeButton).toHaveAttribute(
+    "title",
+    expect.stringMatching(/applies only to active SIEM tracking/i)
+  );
 });

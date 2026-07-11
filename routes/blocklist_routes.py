@@ -235,7 +235,8 @@ def unblock_blocked_ip(block_id):
 
         return jsonify({
             "message": result.compatible_fields.get(
-                "message", "Blocked IP removed successfully"
+                "message",
+                "SIEM Blocklist tracking removed. History remains; no firewall enforcement changed.",
             ),
             **result.to_api_dict(),
         }), 200
@@ -243,7 +244,7 @@ def unblock_blocked_ip(block_id):
         if conn:
             conn.rollback()
         current_app.logger.error("Error in unblock_blocked_ip: %s", error)
-        return jsonify({"error": "Unable to unblock blocked IP"}), 500
+        return jsonify({"error": "Unable to remove Blocklist tracking"}), 500
     finally:
         if cur:
             cur.close()

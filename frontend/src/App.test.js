@@ -54,7 +54,8 @@ jest.mock('./components/SocCommandCenter', () => (props) => (
 
 jest.mock('./components/ResponseRegistryPanel', () => (props) => (
   <div data-testid="response-registry-panel">
-    Response Registry Mock {props.navigationRequest?.q} {props.navigationRequest?.relatedIncidentId} {props.navigationRequest?.relatedAlertId}
+    Response Registry Mock view:{props.initialView || 'all'} {props.navigationRequest?.q}{' '}
+    {props.navigationRequest?.relatedIncidentId} {props.navigationRequest?.relatedAlertId}
   </div>
 ));
 
@@ -479,6 +480,49 @@ test('falls back to dashboard when stored landing page is hidden for role', asyn
   expect(await screen.findByRole('button', { name: /^dashboard$/i })).toHaveAttribute(
     'aria-current',
     'page'
+  );
+});
+
+test('does not show a standalone Blocklist sidebar destination', async () => {
+  loadCurrentSession.mockResolvedValue({
+    authenticated: true,
+    user: 'analyst1',
+    role: 'analyst',
+  });
+
+  render(<App />);
+
+  expect(await screen.findByRole('button', { name: /response registry/i })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /^blocklist$/i })).not.toBeInTheDocument();
+});
+
+test('legacy blocklist landing preference opens Response Registry Blocklist Tracking', async () => {
+  loadCurrentSession.mockResolvedValue({
+    authenticated: true,
+    user: 'analyst1',
+    role: 'analyst',
+  });
+  window.localStorage.setItem(
+    UI_SETTINGS_STORAGE_KEY,
+    JSON.stringify({
+      version: 1,
+      settings: {
+        defaultLandingPage: 'blocklist',
+        autoRefreshIntervalMs: 5000,
+      },
+    })
+  );
+
+  render(<App />);
+
+  await waitFor(async () => {
+    expect(screen.getByRole('button', { name: /response registry/i })).toHaveAttribute(
+      'aria-current',
+      'page'
+    );
+  });
+  expect(await screen.findByTestId('response-registry-panel')).toHaveTextContent(
+    'view:blocklist_tracking'
   );
 });
 

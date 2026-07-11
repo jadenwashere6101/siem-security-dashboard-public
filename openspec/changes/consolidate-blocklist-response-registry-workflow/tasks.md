@@ -1,25 +1,25 @@
 ## 1. MAC AI — Source and Contract Audit Pass
 
-- [ ] 1.1 Reconfirm UI → handler/service → `/blocked-ips`/canonical command → response-command service → blocklist/registry/outcome/audit tables → synchronized UI flow.
-- [ ] 1.2 Inventory every `blocklist` section ID, landing preference, deep link, service call, legacy route, protected-target check, RBAC decorator, audit event, and idempotency key.
-- [ ] 1.3 Confirm no schema/migration or new removal endpoint is required and document exact VM handoff queries/endpoints without secret output.
+- [x] 1.1 Reconfirm UI → handler/service → `/blocked-ips`/canonical command → response-command service → blocklist/registry/outcome/audit tables → synchronized UI flow.
+- [x] 1.2 Inventory every `blocklist` section ID, landing preference, deep link, service call, legacy route, protected-target check, RBAC decorator, audit event, and idempotency key.
+- [x] 1.3 Confirm no schema/migration or new removal endpoint is required and document exact VM handoff queries/endpoints without secret output.
 
 ## 2. MAC AI — Consolidation Implementation Pass
 
-- [ ] 2.1 Remove the standalone visible Blocklist entry and update section-order/visibility tests.
-- [ ] 2.2 Normalize stored/default/internal legacy `blocklist` destinations to Response Registry `blocklist_tracking`.
-- [ ] 2.3 Make Blocklist Tracking and eligible Remove Tracking controls discoverable in Response Registry.
-- [ ] 2.4 Add explicit tracking-only/no-firewall copy and truthful disabled/terminal reasons.
-- [ ] 2.5 Preserve existing RBAC, protected-target rejection, audit logging, response outcomes, idempotency, refresh synchronization, and historical visibility.
+- [x] 2.1 Remove the standalone visible Blocklist entry and update section-order/visibility tests.
+- [x] 2.2 Normalize stored/default/internal legacy `blocklist` destinations to Response Registry `blocklist_tracking`.
+- [x] 2.3 Make Blocklist Tracking and eligible Remove Tracking controls discoverable in Response Registry.
+- [x] 2.4 Add explicit tracking-only/no-firewall copy and truthful disabled/terminal reasons.
+- [x] 2.5 Preserve existing RBAC, protected-target rejection, audit logging, response outcomes, idempotency, refresh synchronization, and historical visibility.
 
 ## 3. MAC AI — Verification and Handoff Pass
 
-- [ ] 3.1 Add frontend tests for sole visible navigation, legacy normalization, landing preference recovery, discoverability, terminal records, and role restrictions.
-- [ ] 3.2 Run focused backend tests for list/add/remove contracts, canonical command idempotency, protected targets, audit logging, registry events, and tracking-only outcomes.
-- [ ] 3.3 Run affected App/Sidebar/Settings/Response Registry suites and `npm run build`.
-- [ ] 3.4 Perform dark-theme, keyboard/focus, explanatory-copy, desktop/narrow viewport, and practical visual verification.
-- [ ] 3.5 Produce a VM handoff naming the approved commit/artifact gate, sanitized classification evidence, exact supported removal path, before/after counts, and stop/rollback rules.
-- [ ] 3.6 Run `openspec validate consolidate-blocklist-response-registry-workflow --strict` and `git diff --check`.
+- [x] 3.1 Add frontend tests for sole visible navigation, legacy normalization, landing preference recovery, discoverability, terminal records, and role restrictions.
+- [x] 3.2 Run focused backend tests for list/add/remove contracts, canonical command idempotency, protected targets, audit logging, registry events, and tracking-only outcomes.
+- [x] 3.3 Run affected App/Sidebar/Settings/Response Registry suites and `npm run build`.
+- [x] 3.4 Perform dark-theme, keyboard/focus, explanatory-copy, desktop/narrow viewport, and practical visual verification.
+- [x] 3.5 Produce a VM handoff naming the approved commit/artifact gate, sanitized classification evidence, exact supported removal path, before/after counts, and stop/rollback rules.
+- [x] 3.6 Run `openspec validate consolidate-blocklist-response-registry-workflow --strict` and `git diff --check`.
 
 ## 4. VM AI — Future Read-Only Classification Pass (Explicit Authorization Required)
 
@@ -39,5 +39,7 @@
 
 ## 6. MAC AI / VM AI — Global Stop Conditions
 
-- [ ] 6.1 Do not commit, push, deploy, access the VM, or mutate data without the corresponding explicit authorization.
-- [ ] 6.2 Never delete historical Blocklist, registry, outcome, or audit evidence and never edit tracked VM source.
+- [x] 6.1 Do not commit, push, deploy, access the VM, or mutate data without the corresponding explicit authorization.
+- [x] 6.2 Never delete historical Blocklist, registry, outcome, or audit evidence and never edit tracked VM source.
+
+Status: **Mac phase complete** (tasks 1–3 and stop-condition compliance). Parent remains open until VM phases 4–5 are explicitly authorized and finished. Do not archive. Handoff: `docs/blocklist_consolidation_vm_handoff.md`.

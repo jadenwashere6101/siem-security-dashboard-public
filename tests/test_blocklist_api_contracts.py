@@ -294,4 +294,5 @@ def test_patch_unblock_active_entry_returns_200(client, postgres_db):
     assert resp.status_code == 200
     data = resp.get_json()
     assert isinstance(data, dict)
-    assert data.get("message") == "Blocked IP removed successfully"
+    assert "tracking removed" in data.get("message", "").lower()
+    assert "firewall" in data.get("message", "").lower()

@@ -1,10 +1,9 @@
-import { isSectionVisible, sectionsConfig } from "./sectionsConfig";
+import { isSectionVisible, normalizeWorkspaceDestination, sectionsConfig } from "./sectionsConfig";
 
 const EXPECTED_SECTION_IDS = [
   "dashboard",
   "soc-command-center",
   "response-registry",
-  "blocklist",
   "threat-hunt",
   "live-logs-honeypot",
   "live-logs-bank-app",
@@ -63,12 +62,6 @@ const expectedVisibility = {
     unauthenticated: false,
   },
   "response-registry": {
-    super_admin: true,
-    analyst: true,
-    viewer: false,
-    unauthenticated: false,
-  },
-  blocklist: {
     super_admin: true,
     analyst: true,
     viewer: false,
@@ -192,8 +185,24 @@ const expectedVisibility = {
 
 describe("sectionsConfig", () => {
   test("contains exactly the expected section ids", () => {
-    expect(sectionsConfig).toHaveLength(23);
+    expect(sectionsConfig).toHaveLength(22);
     expect(sectionsConfig.map((section) => section.id)).toEqual(EXPECTED_SECTION_IDS);
+  });
+
+  test("does not expose a standalone Blocklist sidebar destination", () => {
+    expect(sectionsConfig.some((section) => section.id === "blocklist")).toBe(false);
+    expect(sectionsConfig.some((section) => section.label === "Blocklist")).toBe(false);
+  });
+
+  test("normalizes legacy blocklist destinations to Response Registry Blocklist Tracking", () => {
+    expect(normalizeWorkspaceDestination("blocklist")).toEqual({
+      sectionId: "response-registry",
+      registryView: "blocklist_tracking",
+    });
+    expect(normalizeWorkspaceDestination("response-registry")).toEqual({
+      sectionId: "response-registry",
+      registryView: null,
+    });
   });
 
   test("each entry defines id, label, group, and visibleWhen", () => {

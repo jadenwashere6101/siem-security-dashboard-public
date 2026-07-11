@@ -18,12 +18,6 @@ export const sectionsConfig = [
     visibleWhen: ({ canTakeAlertActions }) => canTakeAlertActions,
   },
   {
-    id: "blocklist",
-    label: "Blocklist",
-    group: "soc",
-    visibleWhen: ({ canTakeAlertActions }) => canTakeAlertActions,
-  },
-  {
     id: "threat-hunt",
     label: "Threat Hunt",
     group: "soc",
@@ -148,4 +142,16 @@ export const sectionsConfig = [
 export const isSectionVisible = (sectionId, roleFlags) => {
   const section = sectionsConfig.find((entry) => entry.id === sectionId);
   return section ? section.visibleWhen(roleFlags) : false;
+};
+
+/**
+ * Legacy standalone Blocklist nav/landing IDs normalize to Response Registry.
+ * Returns { sectionId, registryView } without creating a second state source.
+ */
+export const normalizeWorkspaceDestination = (sectionId) => {
+  const normalized = String(sectionId || "").trim();
+  if (normalized === "blocklist") {
+    return { sectionId: "response-registry", registryView: "blocklist_tracking" };
+  }
+  return { sectionId: normalized, registryView: null };
 };

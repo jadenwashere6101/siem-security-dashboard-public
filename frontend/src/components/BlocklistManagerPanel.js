@@ -61,7 +61,9 @@ function BlocklistManagerPanel({
       setExpiresAt("");
       setFeedback({
         type: "success",
-        message: data.message || "Blocked IP added successfully",
+        message:
+          data.message ||
+          "SIEM Blocklist tracking recorded. No firewall or host enforcement changed.",
       });
       await loadEntries();
       if (typeof onMutationComplete === "function") {
@@ -86,7 +88,9 @@ function BlocklistManagerPanel({
 
       setFeedback({
         type: "success",
-        message: data.message || "Blocked IP removed successfully",
+        message:
+          data.message ||
+          "SIEM Blocklist tracking removed. History remains; no firewall or host enforcement changed.",
       });
       await loadEntries();
       if (typeof onMutationComplete === "function") {
@@ -95,7 +99,7 @@ function BlocklistManagerPanel({
     } catch (err) {
       setFeedback({
         type: "error",
-        message: err.message || "Unable to unblock IP",
+        message: err.message || "Unable to remove Blocklist tracking",
       });
     } finally {
       setUnblockingId("");
@@ -106,10 +110,12 @@ function BlocklistManagerPanel({
     <section style={cardStyle}>
       <div style={cardHeaderStyle}>
         <div>
-          <p style={sectionLabelStyle}>Response Controls</p>
-          <h2 style={cardTitleStyle}>Blocklist Manager</h2>
+          <p style={sectionLabelStyle}>Response Registry · Blocklist Tracking</p>
+          <h2 style={cardTitleStyle}>Blocklist Tracking</h2>
           <p style={cardSubtitleStyle}>
-            SIEM-managed blocklist tracking only. No firewall or host-level enforcement is applied in this phase.
+            SIEM tracking records only. Add Tracking creates or renews a SIEM Blocklist entry.
+            Remove Tracking ends active SIEM tracking, preserves history and audit evidence, and
+            does not change any firewall, provider, or host.
           </p>
         </div>
       </div>
@@ -170,12 +176,13 @@ function BlocklistManagerPanel({
           </div>
 
           <button type="submit" disabled={submitting} style={submitButtonStyle}>
-            {submitting ? "Adding..." : "Add Blocked IP"}
+            {submitting ? "Adding..." : "Add Tracking"}
           </button>
         </form>
         ) : (
           <p style={emptyTextStyle} title="Viewers cannot mutate Blocklist tracking.">
-            Blocklist mutations are locked for this role. Tracking history remains visible below.
+            Remove Tracking and Add Tracking are locked for this role. Active and historical
+            tracking records remain visible below.
           </p>
         )}
 
@@ -230,18 +237,24 @@ function BlocklistManagerPanel({
                           onClick={() => handleUnblock(entry.id)}
                           disabled={unblockingId === String(entry.id)}
                           style={unblockButtonStyle}
+                          title="Ends SIEM Blocklist tracking only. History remains. Does not change any firewall, provider, or host."
                         >
-                          {unblockingId === String(entry.id) ? "Unblocking..." : "Unblock"}
+                          {unblockingId === String(entry.id) ? "Removing..." : "Remove Tracking"}
                         </button>
                       ) : entry.status === "active" ? (
                         <span
                           style={inactiveTextStyle}
-                          title="Viewers cannot remove Blocklist tracking."
+                          title="Your role cannot remove Blocklist tracking. History remains visible."
                         >
-                          Locked
+                          Locked — viewers cannot remove tracking
                         </span>
                       ) : (
-                        <span style={inactiveTextStyle}>Inactive</span>
+                        <span
+                          style={inactiveTextStyle}
+                          title="Tracking is inactive. Historical evidence remains; Remove Tracking applies only to active records."
+                        >
+                          Inactive — history preserved
+                        </span>
                       )}
                     </td>
                   </tr>

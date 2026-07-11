@@ -917,7 +917,13 @@ def _execute_remove_tracking(
             registry_record_id=registry["id"],
             alert_id=request.alert_id,
         ),
-        compatible_fields={"message": "Blocked IP removed successfully", "id": block_id},
+        compatible_fields={
+            "message": (
+                "SIEM Blocklist tracking removed. History remains; "
+                "no firewall or host enforcement changed."
+            ),
+            "id": block_id,
+        },
     )
 
 

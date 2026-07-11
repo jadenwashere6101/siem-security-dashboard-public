@@ -7,9 +7,21 @@ import {
   loadRegistryRecords,
 } from "../services/responseRegistryService";
 import { formatTimestamp } from "../utils/displayFormatting";
+import { formatCanonicalActionSuccess } from "../utils/responseStateLabels";
 import { keysOverlap, useResponseSync } from "../context/ResponseSyncContext";
 
 const PAGE_SIZE = 50;
+
+function removeTrackingControlTitle(canMutate, restrictionTitle, blocklistEntry) {
+  if (!canMutate) return restrictionTitle;
+  if (!blocklistEntry) {
+    return "No linked Blocklist tracking record. Use Track in Blocklist first, or open the Blocklist Tracking view.";
+  }
+  if (blocklistEntry.status !== "active") {
+    return `Tracking status is "${blocklistEntry.status}". History remains readable; Remove Tracking applies only to active SIEM tracking.`;
+  }
+  return "Ends SIEM Blocklist tracking only. History and audit remain. Does not change any firewall, provider, or host.";
+}
 
 const SORT_OPTIONS = [
   { value: "updated_at_desc", label: "Last updated (newest)" },
@@ -260,9 +272,7 @@ function ResponseRegistryPanel({
       });
       setFeedback({
         type: "success",
-        message:
-          result.message ||
-          `${result.outcome_label || action}${result.idempotent ? " (idempotent)" : ""}`,
+        message: formatCanonicalActionSuccess(result, action),
       });
       setNoteText("");
       setTrackReason("");
@@ -298,9 +308,9 @@ function ResponseRegistryPanel({
         <div>
           <h2 style={cardTitleStyle}>Response Registry</h2>
           <p style={cardSubtitleStyle}>
-            Canonical indicator dispositions, Blocklist tracking, monitoring, and
-            escalation history. Blocklist tracking is SIEM-only; no firewall
-            enforcement is implied.
+            Sole workspace for canonical indicator dispositions and Blocklist Tracking.
+            Blocklist tracking is SIEM-only: Remove Tracking ends active tracking and preserves
+            history; it never implies firewall, provider, or host enforcement changes.
           </p>
         </div>
         <button
@@ -654,7 +664,7 @@ function ResponseRegistryPanel({
                   </dd>
                 </dl>
 
-                {detail.blocklist_entry && (
+                {detail.blocklist_entry ? (
                   <div
                     style={{
                       marginTop: "12px",
@@ -663,14 +673,30 @@ function ResponseRegistryPanel({
                       border: "1px solid #388bfd",
                       background: "#0d1b2a",
                     }}
+                    data-testid="registry-blocklist-status"
                   >
-                    <strong>Blocklist tracking active</strong>
+                    <strong>
+                      {detail.blocklist_entry.status === "active"
+                        ? "Blocklist tracking active"
+                        : `Blocklist tracking ${detail.blocklist_entry.status}`}
+                    </strong>
                     <p style={{ margin: "6px 0 0", fontSize: "13px", color: "#c9d1d9" }}>
                       Status: {detail.blocklist_entry.status}. Tracking only; no firewall
                       enforcement. Reason: {detail.blocklist_entry.reason || "—"}.
                       Expires: {formatTimestamp(detail.blocklist_entry.expires_at) || "never"}.
+                      {detail.blocklist_entry.status !== "active"
+                        ? " Historical evidence remains readable."
+                        : " Use Remove Tracking below to end active SIEM tracking without changing any firewall."}
                     </p>
                   </div>
+                ) : (
+                  <p
+                    data-testid="registry-blocklist-absent"
+                    style={{ marginTop: "12px", color: "#8b949e", fontSize: "13px" }}
+                  >
+                    No linked Blocklist tracking record. Open the Blocklist Tracking view to
+                    manage SIEM tracking entries, or use Track in Blocklist.
+                  </p>
                 )}
 
                 <div style={{ marginTop: "16px" }}>
@@ -738,8 +764,16 @@ function ResponseRegistryPanel({
                         !detail.blocklist_entry ||
                         detail.blocklist_entry.status !== "active"
                       }
-                      title={canMutate ? "Remove Blocklist tracking" : restrictionTitle}
-                      aria-disabled={!canMutate}
+                      title={removeTrackingControlTitle(
+                        canMutate,
+                        restrictionTitle,
+                        detail.blocklist_entry
+                      )}
+                      aria-disabled={
+                        !canMutate ||
+                        !detail.blocklist_entry ||
+                        detail.blocklist_entry.status !== "active"
+                      }
                       onClick={() =>
                         runCommand("remove_tracking", { reason: "Removed from registry" })
                       }

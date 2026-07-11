@@ -42,7 +42,7 @@ import {
   loginToDashboard,
   logoutFromDashboard,
 } from "./services/authService";
-import { isSectionVisible, sectionsConfig } from "./utils/sectionsConfig";
+import { isSectionVisible, normalizeWorkspaceDestination, sectionsConfig } from "./utils/sectionsConfig";
 import { getSeverityBadgeStyle } from "./utils/severityDisplay";
 import {
   NAVIGATION_DESTINATIONS,
@@ -209,18 +209,20 @@ function AppInner() {
       isAnalyst: userRole === "analyst",
       canTakeAlertActions: userRole === "super_admin" || userRole === "analyst",
     };
+    const legacyDestination = normalizeWorkspaceDestination(settings.defaultLandingPage);
+    if (legacyDestination.registryView) {
+      setRegistryInitialView(legacyDestination.registryView);
+      setActiveSection(legacyDestination.sectionId);
+      hasAppliedLandingRef.current = true;
+      return;
+    }
     const preferredSection = isSectionVisible(settings.defaultLandingPage, visibilityFlags)
       ? settings.defaultLandingPage
       : "dashboard";
-    if (preferredSection === "blocklist") {
-      setRegistryInitialView("blocklist_tracking");
-      setActiveSection("blocklist");
-    } else {
-      if (preferredSection === "response-registry") {
-        setRegistryInitialView("all");
-      }
-      setActiveSection(preferredSection);
+    if (preferredSection === "response-registry") {
+      setRegistryInitialView("all");
     }
+    setActiveSection(preferredSection);
     hasAppliedLandingRef.current = true;
   }, [isAuthenticated, settings.defaultLandingPage, userRole]);
 
@@ -261,18 +263,19 @@ function AppInner() {
   }, []);
 
   const handleNavigate = useCallback((sectionId) => {
-    if (sectionId === "blocklist") {
-      setRegistryInitialView("blocklist_tracking");
-      navigateWorkspace("blocklist", {
+    const destination = normalizeWorkspaceDestination(sectionId);
+    if (destination.registryView) {
+      setRegistryInitialView(destination.registryView);
+      navigateWorkspace(destination.sectionId, {
         destination: NAVIGATION_DESTINATIONS.element,
         targetKey: WORKSPACE_TARGETS.responseRegistry,
       });
       return;
     }
-    if (sectionId === "response-registry") {
+    if (destination.sectionId === "response-registry") {
       setRegistryInitialView("all");
     }
-    navigateWorkspace(sectionId);
+    navigateWorkspace(destination.sectionId);
   }, [navigateWorkspace]);
 
   const handleOpenResponseRegistry = useCallback((nav = {}) => {
@@ -618,9 +621,8 @@ function AppInner() {
           />
         )}
 
-        {(activeSection === "response-registry" || activeSection === "blocklist") &&
-          (isSectionVisible("response-registry", roleFlags) ||
-            isSectionVisible("blocklist", roleFlags)) && (
+        {activeSection === "response-registry" &&
+          isSectionVisible("response-registry", roleFlags) && (
           <div
             data-navigation-target={WORKSPACE_TARGETS.responseRegistry}
             aria-label="Response Registry workspace"
@@ -633,9 +635,7 @@ function AppInner() {
               filterLabelStyle={filterLabelStyle}
               selectStyle={selectStyle}
               canTakeAlertActions={canTakeAlertActions}
-              initialView={
-                activeSection === "blocklist" ? "blocklist_tracking" : registryInitialView
-              }
+              initialView={registryInitialView}
               navigationRequest={registryNavigationRequest}
             />
           </div>
