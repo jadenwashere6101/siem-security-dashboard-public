@@ -18,6 +18,11 @@ from core.db import get_db_connection
 from core.extensions import limiter
 from core.incident_store import maybe_create_or_link_incident
 from engines.ingest_engine import ingest_normalized_event
+from engines.pfsense_ingest_filter import (
+    evaluate_event,
+    load_effective_policy,
+    record_filter_decision,
+)
 from engines.soar_playbook_orchestrator import create_pending_executions_for_committed_alerts
 from engines.soar_enqueue_orchestrator import enqueue_committed_alerts
 from helpers.ingest_normalizers import (
@@ -732,10 +737,27 @@ def add_pfsense_event():
         except ValueError as error:
             return jsonify({"error": str(error)}), 400
 
-        _add_location_to_normalized_event(normalized_event)
-
         conn = get_db_connection()
         cur = conn.cursor()
+
+        policy = load_effective_policy(cur)
+        decision = evaluate_event(normalized_event, policy)
+        record_filter_decision(decision)
+        if not decision.retain:
+            conn.rollback()
+            current_app.logger.info(
+                "pfsense_ingest_filter decision=filtered category=%s reason=%s config_status=%s",
+                decision.category,
+                decision.reason,
+                policy["status"],
+            )
+            return jsonify({
+                "status": "filtered",
+                "category": decision.category,
+                "reason": decision.reason,
+            }), 202
+
+        _add_location_to_normalized_event(normalized_event)
 
         alerts_created = ingest_normalized_event(normalized_event, conn, cur)
 

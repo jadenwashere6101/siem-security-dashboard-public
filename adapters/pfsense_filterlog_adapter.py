@@ -22,7 +22,7 @@ ACTION_SEVERITIES = {
 
 PFSENSE_INGEST_EVENT_TYPES = frozenset(ACTION_EVENT_TYPE_CANDIDATES.values())
 PFSENSE_VALID_ACTIONS = frozenset(ACTION_EVENT_TYPE_CANDIDATES.keys())
-PFSENSE_VALID_PROTOCOLS = frozenset({"tcp", "udp"})
+PFSENSE_VALID_PROTOCOLS = frozenset({"tcp", "udp", "icmp"})
 PFSENSE_VALID_DIRECTIONS = frozenset({"in", "out"})
 PFSENSE_VALID_SEVERITIES = frozenset({"low", "medium", "high", "critical"})
 MAX_PFSENSE_INGEST_BYTES = 65536
@@ -98,7 +98,7 @@ def parse_filterlog_fields(fields, *, byte_length=None, summary=None):
     if ip_version != "4":
         return _parse_failure("filterlog", "unsupported_ip_version", byte_length=byte_length, summary=summary)
 
-    if protocol not in {"tcp", "udp"}:
+    if protocol not in PFSENSE_VALID_PROTOCOLS:
         return _parse_failure("filterlog", "unsupported_protocol", byte_length=byte_length, summary=summary)
 
     if action not in ACTION_EVENT_TYPE_CANDIDATES:
@@ -109,10 +109,22 @@ def parse_filterlog_fields(fields, *, byte_length=None, summary=None):
     if source_ip is None or destination_ip is None:
         return _parse_failure("filterlog", "invalid_ip_address", byte_length=byte_length, summary=summary)
 
-    source_port = _optional_port(_field(fields, 20))
-    destination_port = _optional_port(_field(fields, 21))
-    if source_port is None or destination_port is None:
-        return _parse_failure("filterlog", "invalid_port", byte_length=byte_length, summary=summary)
+    source_port = None
+    destination_port = None
+    icmp_type = None
+    icmp_code = None
+    if protocol in {"tcp", "udp"}:
+        source_port = _optional_port(_field(fields, 20))
+        destination_port = _optional_port(_field(fields, 21))
+        if source_port is None or destination_port is None:
+            return _parse_failure("filterlog", "invalid_port", byte_length=byte_length, summary=summary)
+    else:
+        icmp_type = _optional_icmp_value(_field(fields, 20))
+        icmp_code = _optional_icmp_value(_field(fields, 21))
+        if _clean(_field(fields, 20)) and icmp_type is None:
+            return _parse_failure("filterlog", "invalid_icmp_type", byte_length=byte_length, summary=summary)
+        if _clean(_field(fields, 21)) and icmp_code is None:
+            return _parse_failure("filterlog", "invalid_icmp_code", byte_length=byte_length, summary=summary)
 
     return {
         "ok": True,
@@ -128,6 +140,8 @@ def parse_filterlog_fields(fields, *, byte_length=None, summary=None):
             "destination_ip": destination_ip,
             "source_port": source_port,
             "destination_port": destination_port,
+            "icmp_type": icmp_type,
+            "icmp_code": icmp_code,
         },
     }
 
@@ -155,7 +169,7 @@ def normalize_pfsense_filterlog_event(
         "utf8_replaced": bool(utf8_replaced),
     }
 
-    for key in ("source_port", "destination_port", "rule_id", "tracker"):
+    for key in ("source_port", "destination_port", "icmp_type", "icmp_code", "rule_id", "tracker"):
         value = parsed.get(key)
         if value not in (None, ""):
             raw_payload[key] = value
@@ -256,6 +270,17 @@ def _optional_port(value):
     if 0 <= port <= 65535:
         return port
     return None
+
+
+def _optional_icmp_value(value):
+    text = _clean(value)
+    if not text:
+        return None
+    try:
+        number = int(text)
+    except ValueError:
+        return None
+    return number if 0 <= number <= 255 else None
 
 
 def _parse_failure(stage, reason, *, byte_length=None, summary=None):
@@ -384,6 +409,14 @@ def _validate_pfsense_raw_payload(raw_payload, event_type):
         if port_value is None:
             continue
         if _optional_port(port_value) is None:
+            raise ValueError("Invalid raw_payload")
+
+    if protocol in {"tcp", "udp"} and any(raw_payload.get(name) is None for name in ("source_port", "destination_port")):
+        raise ValueError("Invalid raw_payload")
+    if protocol == "icmp" and any(name in raw_payload for name in ("source_port", "destination_port")):
+        raise ValueError("Invalid raw_payload")
+    for icmp_field in ("icmp_type", "icmp_code"):
+        if icmp_field in raw_payload and _optional_icmp_value(raw_payload.get(icmp_field)) is None:
             raise ValueError("Invalid raw_payload")
 
     for identifier_field in ("rule_id", "tracker"):

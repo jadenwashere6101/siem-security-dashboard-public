@@ -16,6 +16,12 @@ UDP_PASS = (
     "10.0.0.5,8.8.8.8,5353,53,28"
 )
 
+ICMP_BLOCK = (
+    "<134>Jul  7 12:00:03 fw filterlog: "
+    "1000000105,,,1777758299,igb1,match,block,in,4,0x0,,64,0,0,none,1,icmp,84,"
+    "198.51.100.11,203.0.113.21,8,0"
+)
+
 
 def test_valid_ipv4_tcp_block_line_parses_and_normalizes():
     result = parse_pfsense_filterlog_packet(TCP_BLOCK.encode("utf-8"), environment="test")
@@ -65,6 +71,18 @@ def test_valid_ipv4_udp_pass_line_parses_and_normalizes():
     assert event["event_type"] == "firewall_allow"
     assert event["severity"] == "low"
     assert event["raw_payload"]["event_type_candidate"] == "firewall_allow"
+
+
+def test_valid_ipv4_icmp_block_has_type_code_and_no_ports():
+    result = parse_pfsense_filterlog_packet(ICMP_BLOCK)
+
+    assert result["ok"] is True
+    assert result["parsed"]["protocol"] == "icmp"
+    assert result["parsed"]["icmp_type"] == 8
+    assert result["parsed"]["icmp_code"] == 0
+    assert result["event"]["raw_payload"]["icmp_type"] == 8
+    assert "source_port" not in result["event"]["raw_payload"]
+    assert "destination_port" not in result["event"]["raw_payload"]
 
 
 def test_malformed_input_does_not_crash_and_returns_bounded_telemetry():

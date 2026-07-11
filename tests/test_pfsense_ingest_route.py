@@ -62,14 +62,14 @@ def valid_pfsense_allow_payload(**overrides):
         "environment": "prod",
         "raw_payload": {
             "action": "pass",
-            "interface": "igb0",
-            "direction": "out",
+            "interface": "igb1",
+            "direction": "in",
             "ip_version": "4",
             "protocol": "udp",
             "source_ip": "10.0.0.5",
-            "destination_ip": "8.8.8.8",
+            "destination_ip": "203.0.113.22",
             "source_port": 5353,
-            "destination_port": 53,
+            "destination_port": 22,
             "event_type_candidate": "firewall_allow",
         },
     }
@@ -169,6 +169,35 @@ def test_valid_firewall_allow_ingests_successfully(client, monkeypatch, postgres
     assert event[0] == "firewall_allow"
     assert event[1] == "low"
     assert event[8]["action"] == "pass"
+
+
+def test_routine_allow_is_filtered_before_geolocation_or_ingest(client, monkeypatch):
+    monkeypatch.setenv("SIEM_INGEST_API_KEY", VALID_API_KEY)
+    import routes.ingest_routes as ingest_routes
+
+    conn = MagicMock()
+    cur = MagicMock()
+    conn.cursor.return_value = cur
+    cur.fetchall.return_value = []
+    geo_mock = MagicMock()
+    ingest_mock = MagicMock()
+    monkeypatch.setattr(ingest_routes, "get_db_connection", lambda: conn)
+    monkeypatch.setattr(ingest_routes, "lookup_ip_location", geo_mock)
+    monkeypatch.setattr(ingest_routes, "ingest_normalized_event", ingest_mock)
+    payload = valid_pfsense_allow_payload()
+    payload["raw_payload"] = dict(payload["raw_payload"], direction="out", destination_port=443)
+
+    response = post_pfsense(client, payload)
+
+    assert response.status_code == 202
+    assert response.get_json() == {
+        "status": "filtered",
+        "category": "routine_allow",
+        "reason": "no_enabled_retention_category",
+    }
+    geo_mock.assert_not_called()
+    ingest_mock.assert_not_called()
+    conn.rollback.assert_called_once()
 
 
 @pytest.mark.parametrize(
@@ -340,7 +369,8 @@ def test_route_does_not_directly_insert_events(client, monkeypatch):
     response = post_pfsense(client, valid_pfsense_allow_payload())
 
     assert response.status_code == 201
-    cur.execute.assert_not_called()
+    executed_sql = [str(call.args[0]).upper() for call in cur.execute.call_args_list]
+    assert not any("INSERT INTO EVENTS" in sql for sql in executed_sql)
 
 
 def test_successful_ingest_preserves_downstream_orchestration(client, monkeypatch):

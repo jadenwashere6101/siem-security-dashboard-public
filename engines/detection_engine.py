@@ -4,9 +4,9 @@ from psycopg2.extras import Json
 from engines.detection_config import (
     PFSENSE_HIGH_REPUTATION_SCORE,
     PFSENSE_SEVERITY_ESCALATION_MULTIPLIER,
-    PFSENSE_SUSPICIOUS_ALLOW_SENSITIVE_PORTS,
     get_effective_detection_rule,
 )
+from engines.pfsense_ingest_filter import get_effective_sensitive_ports
 from core.ip_helpers import determine_response_action, lookup_ip_reputation
 
 
@@ -1828,7 +1828,7 @@ def _generate_pfsense_suspicious_allow_alerts_core(cur, conn, source=None, sourc
     rule_config = get_effective_detection_rule("pfsense_firewall_suspicious_allow", cur=cur)
     threshold = rule_config["parameters"]["threshold"]
     window_minutes = rule_config["parameters"]["window_minutes"]
-    sensitive_ports = list(PFSENSE_SUSPICIOUS_ALLOW_SENSITIVE_PORTS)
+    sensitive_ports = list(get_effective_sensitive_ports(cur))
 
     cur.execute(
         f"""

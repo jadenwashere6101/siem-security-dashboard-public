@@ -156,7 +156,28 @@ def test_schema_snapshot_marker_matches_latest_migration():
         migrations_dir=repo_root / "migrations",
     )
 
-    assert version == 15
+    assert version == 16
+
+
+def test_pfsense_ingest_config_migration_scope_and_defaults():
+    migration_path = Path(__file__).resolve().parent.parent / "migrations" / "0016_pfsense_ingest_config.sql"
+    sql = migration_path.read_text(encoding="utf-8")
+
+    assert "CREATE TABLE IF NOT EXISTS pfsense_ingest_config" in sql
+    assert "CHECK (category IN" in sql
+    assert "jsonb_typeof(parameters) = 'object'" in sql
+    assert "ON CONFLICT (category) DO NOTHING" in sql
+    assert "idx_pfsense_ingest_config_updated_at" in sql
+    for category in (
+        "block_events",
+        "inbound_sensitive_port_allows",
+        "all_allow_events",
+        "dns_traffic",
+        "icmp_traffic",
+    ):
+        assert category in sql
+    for destructive in ("DROP ", "TRUNCATE ", "DELETE FROM ", "ALTER TABLE "):
+        assert destructive not in sql.upper()
 
 
 def test_schema_snapshot_validator_rejects_missing_marker(tmp_path):

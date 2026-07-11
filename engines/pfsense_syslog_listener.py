@@ -54,6 +54,9 @@ class PfSenseListenerStats:
     rate_limited: int = 0
     parse_failed: int = 0
     forwarded: int = 0
+    filtered: int = 0
+    ingested: int = 0
+    rejected: int = 0
     backend_failed: int = 0
 
     def as_dict(self) -> dict[str, int]:
@@ -64,6 +67,9 @@ class PfSenseListenerStats:
             "rate_limited": self.rate_limited,
             "parse_failed": self.parse_failed,
             "forwarded": self.forwarded,
+            "filtered": self.filtered,
+            "ingested": self.ingested,
+            "rejected": self.rejected,
             "backend_failed": self.backend_failed,
         }
 
@@ -311,6 +317,19 @@ def process_datagram(
         api_key_header=config.api_key_header,
         timeout_seconds=config.backend_timeout_seconds,
     )
+    stats.forwarded += 1
+    if ok and backend_status == 202:
+        stats.filtered += 1
+        log_listener_event("filtered", source_ip=source_ip, packet_bytes=packet_bytes, backend_status=backend_status)
+        return "filtered"
+    if ok and backend_status is not None and 200 <= backend_status < 300:
+        stats.ingested += 1
+        log_listener_event("ingested", source_ip=source_ip, packet_bytes=packet_bytes, backend_status=backend_status)
+        return "ingested"
+    if backend_status is not None and 400 <= backend_status < 500:
+        stats.rejected += 1
+        log_listener_event("rejected", source_ip=source_ip, packet_bytes=packet_bytes, backend_status=backend_status, backend_error=backend_error)
+        return "rejected"
     if not ok:
         stats.backend_failed += 1
         log_listener_event(
@@ -322,14 +341,8 @@ def process_datagram(
         )
         return "backend_failed"
 
-    stats.forwarded += 1
-    log_listener_event(
-        "forwarded",
-        source_ip=source_ip,
-        packet_bytes=packet_bytes,
-        backend_status=backend_status,
-    )
-    return "forwarded"
+    stats.backend_failed += 1
+    return "backend_failed"
 
 
 def run_pfsense_syslog_listener(

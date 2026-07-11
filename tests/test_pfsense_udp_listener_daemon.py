@@ -184,7 +184,7 @@ def test_malformed_utf8_does_not_crash_listener():
         forwarder=forward_mock,
     )
 
-    assert outcome == "forwarded"
+    assert outcome == "ingested"
     assert stats.accepted == 1
 
 
@@ -205,15 +205,36 @@ def test_valid_packet_forwards_normalized_event_to_backend_route():
         forwarder=fake_forward,
     )
 
-    assert outcome == "forwarded"
+    assert outcome == "ingested"
+    assert stats.forwarded == 1
+    assert stats.ingested == 1
     assert forwarded[0]["source_type"] == "firewall"
     assert forwarded[0]["raw_payload"]["protocol"] == "tcp"
+
+
+def test_filtered_backend_response_is_counted_without_ingested_increment():
+    stats = PfSenseListenerStats()
+
+    outcome = process_datagram(
+        TCP_BLOCK.encode("utf-8"),
+        "127.0.0.1",
+        config=make_config(),
+        stats=stats,
+        rate_limiter=RateLimiter(global_limit=10, per_source_limit=10, window_seconds=60.0),
+        forwarder=MagicMock(return_value=(True, 202, None)),
+    )
+
+    assert outcome == "filtered"
+    assert stats.forwarded == 1
+    assert stats.filtered == 1
+    assert stats.ingested == 0
+    assert stats.backend_failed == 0
 
 
 @pytest.mark.parametrize(
     "forward_result,expected_outcome",
     [
-        ((False, 400, "http_error"), "backend_failed"),
+        ((False, 400, "http_error"), "rejected"),
         ((False, 500, "http_error"), "backend_failed"),
         ((False, None, "network_error"), "backend_failed"),
         ((False, None, "timeout"), "backend_failed"),
@@ -237,7 +258,11 @@ def test_backend_failures_are_logged_safely(
     )
 
     assert outcome == expected_outcome
-    assert stats.backend_failed == 1
+    if expected_outcome == "rejected":
+        assert stats.rejected == 1
+        assert stats.backend_failed == 0
+    else:
+        assert stats.backend_failed == 1
     assert VALID_API_KEY not in caplog.text
     assert TCP_BLOCK not in caplog.text
 
@@ -295,7 +320,7 @@ def test_rate_limit_behavior_is_deterministic():
         forwarder=MagicMock(return_value=(True, 201, None)),
     )
 
-    assert first == "forwarded"
+    assert first == "ingested"
     assert second == "rate_limited"
     assert stats.rate_limited == 1
 

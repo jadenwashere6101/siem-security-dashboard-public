@@ -56,10 +56,6 @@ PFSENSE_SUSPICIOUS_ALLOW_WINDOW_MINUTES = 15
 # Sensitive/management-style destination ports. A `firewall_allow` event that lets
 # inbound traffic reach one of these ports is contextually risky even though a
 # single allow is not inherently malicious (see pfsense-firewall-detections-soar spec).
-PFSENSE_SUSPICIOUS_ALLOW_SENSITIVE_PORTS = frozenset(
-    {21, 22, 23, 25, 445, 1433, 3306, 3389, 5432, 5900}
-)
-
 # Escalation multiplier: repeated-deny/port-scan alerts escalate from medium to
 # high severity when observed volume/breadth reaches this multiple of the
 # configured threshold, independent of reputation-based escalation.
