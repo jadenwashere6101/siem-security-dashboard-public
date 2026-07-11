@@ -65,11 +65,16 @@ def process_next_action(conn, now=None, executor=None):
                 decision_id=skipped.get("decision_id"),
                 soar_correlation_id=skipped.get("soar_correlation_id"),
             )
+            terminal_reason = (
+                "approval_denied"
+                if skipped.get("approval_status") == "denied"
+                else "approval_expired"
+            )
             _append_worker_outcome_event(
                 conn,
                 skipped,
                 execution_state="blocked",
-                reason_code="approval_denied",
+                reason_code=terminal_reason,
                 summary=skipped["last_error"],
                 event_type="blocked",
                 response_action_log_id=response_action_log_id,
@@ -81,9 +86,7 @@ def process_next_action(conn, now=None, executor=None):
                 skipped,
                 outcome="skipped",
                 retryable=False,
-                code="approval_denied"
-                if skipped.get("approval_status") == "denied"
-                else "approval_expired",
+                code=terminal_reason,
                 reason=skipped["last_error"],
                 message=skipped["last_error"],
             )
@@ -449,8 +452,10 @@ def _with_canonical_outcome_savepoint(conn, queue_id, event_type, writer):
 def _canonical_worker_reason_code(code):
     if code in {"approval_required", "approval_pending"}:
         return "approval_required"
-    if code in {"approval_denied", "approval_expired"}:
+    if code == "approval_denied":
         return "approval_denied"
+    if code == "approval_expired":
+        return "approval_expired"
     if code == "unsupported_action":
         return "unsupported_action"
     if code in {
@@ -640,6 +645,9 @@ def _handle_approval_gate(conn, row, now=None):
         )
 
     reason = "approval denied" if approval["status"] == "denied" else "approval expired"
+    terminal_reason = (
+        "approval_denied" if approval["status"] == "denied" else "approval_expired"
+    )
     updated = mark_action_skipped(conn, row["id"], reason, now=now)
     response_action_log_id = log_response_action(
         conn,
@@ -653,14 +661,12 @@ def _handle_approval_gate(conn, row, now=None):
         conn,
         updated,
         execution_state="blocked",
-        reason_code="approval_denied",
+        reason_code=terminal_reason,
         summary=reason,
         event_type="blocked",
         response_action_log_id=response_action_log_id,
         approval_request_id=approval["id"],
-        error_code="approval_denied"
-        if approval["status"] == "denied"
-        else "approval_expired",
+        error_code=terminal_reason,
     )
     conn.commit()
     return _worker_result(
@@ -668,7 +674,7 @@ def _handle_approval_gate(conn, row, now=None):
         updated,
         outcome="skipped",
         retryable=False,
-        code="approval_denied" if approval["status"] == "denied" else "approval_expired",
+        code=terminal_reason,
         reason=reason,
         message=reason,
     )

@@ -117,6 +117,9 @@ test("SourceIpContext renders normalized response sections", async () => {
   expect(screen.getByText("Reputation")).toBeInTheDocument();
   expect(screen.getByText("Playbook Executions")).toBeInTheDocument();
   expect(screen.getByText("Alert status: open")).toBeInTheDocument();
+  expect(
+    screen.getByText(/Legacy response status \(non-authoritative\):/)
+  ).toBeInTheDocument();
   expect(screen.getByText("Incident status: investigating")).toBeInTheDocument();
   expect(screen.getByText("Queue execution status: awaiting_approval")).toBeInTheDocument();
   expect(screen.getByText("Blocklist effective status")).toBeInTheDocument();

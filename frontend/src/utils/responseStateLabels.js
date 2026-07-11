@@ -2,6 +2,8 @@
  * Concise analyst-facing labels for canonical response dispositions / actions.
  */
 
+import { outcomeLabel } from "./responseOutcomeDisplay";
+
 const DISPOSITION_LABELS = {
   observed: "Observed",
   monitored: "Monitored",
@@ -36,7 +38,17 @@ export function actionSummaryLabel(action) {
 export function summarizeAlertResponseState(alert) {
   if (!alert) return { label: "No response recorded", detail: null };
   const action = alert.response_action || null;
+  const outcome = alert.response_outcome || null;
   const status = alert.response_status || null;
+
+  // Canonical ResponseOutcome is authoritative over legacy alerts.response_status.
+  if (outcome && outcome.execution_mode) {
+    return {
+      label: outcomeLabel(outcome),
+      detail: actionSummaryLabel(action),
+    };
+  }
+
   if (!action) {
     return { label: "No response recorded", detail: null };
   }
@@ -54,7 +66,7 @@ export function summarizeAlertResponseState(alert) {
   }
   return {
     label: actionSummaryLabel(action) || "Response recorded",
-    detail: status ? `Status: ${status}` : null,
+    detail: status ? `Legacy status (non-authoritative): ${status}` : null,
   };
 }
 

@@ -59,6 +59,15 @@
 
 - [x] 8.1 Stop if canonical truth would be cosmetically renamed, ambiguous evidence promoted to real, or fail-closed behavior weakened.
 - [x] 8.2 Stop if work would enable Teams or real firewall execution, expose secrets, invoke an action endpoint, mutate production, or require a migration not covered here.
+  - Correction pass adds additive migration `0017_approval_expired_reason_code.sql` only (CHECK expand); no historical rewrite.
 - [x] 8.3 Do not commit, push, deploy, or access the VM without the corresponding explicit authorization.
 
-Status: **Mac phase complete** (tasks 1–5 + stop-condition compliance). Parent remains open for VM phases 6–7. Do not archive. Handoffs: `docs/soar_outcome_evidence_vm_handoff.md`, `docs/soar_metrics_source_mapping.md`.
+## 9. MAC AI — VM-found Defect Correction Pass
+
+- [x] 9.1 Remove or clearly de-authoritize user-facing `alerts.response_status` presentation so stale legacy `pending` cannot override terminal ResponseOutcome evidence (Alert Expanded Row, Alert Details side panel, Map/Source IP surfaces, ResponseStateSummary).
+- [x] 9.2 Add distinct canonical `approval_expired` reason code end-to-end (vocabulary, CHECK migration, queue/playbook/legacy producers, serializer/read model, frontend label/explanation) while preserving fail-closed no-effect booleans.
+- [x] 9.3 Keep historical `approval_denied` records safely renderable; do not rewrite production outcome rows.
+- [x] 9.4 Add regression coverage for stale pending + terminal outcome, expired vs denied, legacy denied rendering, no external-effect inference, Recent Alerts/Alert Details consistency, and ResponseOutcome evidence.
+- [x] 9.5 Update docs/handoff for migration + reason-code verification; leave VM phases 6–7 incomplete; do not archive parent.
+
+Status: **Mac correction pass complete** (tasks 1–5 + 9). Parent remains open for VM phases 6–7. Do not archive. Handoffs: `docs/soar_outcome_evidence_vm_handoff.md`, `docs/soar_metrics_source_mapping.md`.

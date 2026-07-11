@@ -257,6 +257,23 @@ def test_resolve_approval_denied_as_blocked(postgres_db):
 
 
 @pytest.mark.usefixtures("postgres_db")
+def test_resolve_approval_expired_as_blocked_distinct_reason(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur, response_action="block_ip")
+    queue_id = _insert_queue(cur, alert_id, status="awaiting_approval")
+    approval_id = _insert_approval(cur, queue_id, status="expired")
+    conn.commit()
+
+    read_model = outcomes.resolve_approval_request_outcome(conn, approval_id)
+    assert read_model["execution_state"] == "blocked"
+    assert read_model["outcome_label"] == "Blocked"
+    assert read_model["reason_code"] == "approval_expired"
+    assert read_model["external_executed"] is False
+    assert read_model["simulated"] is False
+    assert read_model["tracking_recorded"] is False
+
+
+@pytest.mark.usefixtures("postgres_db")
 def test_resolve_tracking_only_response_log(postgres_db):
     conn, cur = postgres_db
     alert_id = _insert_alert(cur, response_action="block_ip")

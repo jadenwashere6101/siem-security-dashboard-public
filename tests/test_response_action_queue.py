@@ -1303,6 +1303,39 @@ def test_process_next_action_denied_block_ip_skips_without_executor(postgres_db)
     executor.assert_not_called()
 
 
+def test_process_next_action_expired_approval_writes_blocked_event(postgres_db):
+    conn, cur = postgres_db
+    alert_id = insert_minimal_alert(cur)
+    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "block_ip")
+    link_queue_to_decision(conn, cur, row_id, "soar-worker-expired-001")
+    approval = create_approval_request(
+        conn,
+        queue_id=row_id,
+        action="block_ip",
+        expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+    )
+    conn.commit()
+    executor = Mock(return_value={"code": "ok", "message": "should not run"})
+
+    result = process_next_action(conn, executor=executor)
+
+    assert result["outcome"] == "skipped"
+    assert result["error_code"] == "approval_expired"
+    log_id = fetch_action_logs_with_links(cur, alert_id)[0][0]
+    events = fetch_detailed_outcome_events(cur, row_id)
+    assert [event[0] for event in events] == ["running", "blocked"]
+    blocked = events[1]
+    assert blocked[1:6] == (
+        "blocked",
+        "approval_expired",
+        f"queue-blocked-{row_id}-0",
+        log_id,
+        approval["id"],
+    )
+    assert blocked[7:] == (False, False, False)
+    executor.assert_not_called()
+
+
 def test_process_next_action_expired_block_ip_skips_without_executor(postgres_db):
     conn, cur = postgres_db
     alert_id = insert_minimal_alert(cur)

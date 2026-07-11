@@ -54,6 +54,23 @@ describe("responseStateLabels", () => {
     ).toBe("Pending approval");
   });
 
+  test("prefers canonical outcome over stale legacy pending status", () => {
+    const summary = summarizeAlertResponseState({
+      response_action: "block_ip",
+      response_status: "pending",
+      response_outcome: {
+        execution_mode: "simulation",
+        execution_state: "succeeded",
+        simulated: true,
+        external_executed: false,
+        tracking_recorded: false,
+        reason_code: "simulation_mode",
+      },
+    });
+    expect(summary.label).toBe("Simulated");
+    expect(summary.label).not.toBe("Pending approval");
+  });
+
   test("formats canonical success with resource identifiers", () => {
     const message = formatCanonicalActionSuccess(
       {

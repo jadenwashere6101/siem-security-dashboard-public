@@ -2580,7 +2580,9 @@ def _append_playbook_approval_decision_outcome_event(
         execution_actor="approval_service",
         reason_code=(
             "approval_denied"
-            if approval_request.get("status") in {"denied", "expired"}
+            if approval_request.get("status") == "denied"
+            else "approval_expired"
+            if approval_request.get("status") == "expired"
             else "approval_required"
         ),
         simulated=False,

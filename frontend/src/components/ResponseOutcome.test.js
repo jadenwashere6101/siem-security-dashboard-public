@@ -123,6 +123,28 @@ describe("response outcome display utilities", () => {
     ).toBe("Rejected");
   });
 
+  test("outcomeLabel returns Expired for timed-out approvals", () => {
+    expect(
+      outcomeLabel({
+        ...baseOutcome,
+        execution_state: "blocked",
+        reason_code: "approval_expired",
+        external_executed: false,
+        simulated: false,
+        tracking_recorded: false,
+      })
+    ).toBe("Expired");
+  });
+
+  test("legacy approval_denied remains distinct from approval_expired", () => {
+    expect(
+      reasonCodeExplanation("approval_denied")
+    ).toMatch(/denied/i);
+    expect(reasonCodeExplanation("approval_denied")).not.toMatch(/expired/i);
+    expect(reasonCodeExplanation("approval_expired")).toMatch(/timed out|expired/i);
+    expect(reasonCodeExplanation("approval_expired")).not.toMatch(/denied/i);
+  });
+
   test("outcomeLabel does not promote real mode without external effect", () => {
     expect(
       outcomeLabel({

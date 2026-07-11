@@ -44,3 +44,22 @@ Recent Alerts details SHALL show the canonical linked outcome and enough provena
 - **WHEN** an alert's latest canonical outcome comes from simulated queue or playbook processing
 - **THEN** Recent Alerts SHALL display Simulated plus linked evidence and SHALL NOT relabel it merely because the alert itself is real detection data
 
+#### Scenario: Stale legacy response_status is non-authoritative
+- **WHEN** `alerts.response_status` remains `pending` (or another legacy value) after the linked canonical ResponseOutcome is terminal
+- **THEN** Alert Details and Recent Alerts SHALL present the canonical ResponseOutcome label/evidence as authoritative and SHALL NOT present the legacy field as the live response status
+
+### Requirement: Distinct approval denied versus expired reasons
+Approval timeout and active human denial SHALL use distinct canonical reason codes through producer, persistence, serializer, and presentation.
+
+#### Scenario: Approval expires unanswered
+- **WHEN** an approval request times out without a human decision
+- **THEN** the system SHALL record `reason_code=approval_expired` on the blocked outcome, present an Expired label/explanation that is not an active denial, and SHALL keep all execution effect booleans false
+
+#### Scenario: Approval denied by a human
+- **WHEN** an approval request is denied by an authorized actor
+- **THEN** the system SHALL record `reason_code=approval_denied` and present a Rejected/denied label distinct from Expired
+
+#### Scenario: Legacy approval_denied evidence remains renderable
+- **WHEN** historical outcome evidence already stores `reason_code=approval_denied` (including older expire-path records)
+- **THEN** the UI SHALL continue to render that evidence safely as Rejected/denied without rewriting historical rows
+

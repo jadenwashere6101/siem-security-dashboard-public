@@ -67,13 +67,40 @@ const renderExpandedRow = (alert) =>
   );
 
 test("AlertExpandedRow renders canonical response outcome badge for non-null outcome", () => {
-  renderExpandedRow({ ...baseAlert, response_outcome: trackingOutcome });
+  renderExpandedRow({
+    ...baseAlert,
+    response_status: "pending",
+    response_outcome: trackingOutcome,
+  });
 
   expect(screen.getByText("Response Outcome:")).toBeInTheDocument();
-  expect(screen.getByText("Tracking only")).toBeInTheDocument();
+  expect(screen.getAllByText("Tracking only").length).toBeGreaterThan(0);
   expect(screen.getByLabelText(/mode tracking_only/i)).toBeInTheDocument();
   expect(screen.getByText("Response Action:")).toBeInTheDocument();
-  expect(screen.getByText("Response Status:")).toBeInTheDocument();
+  expect(screen.queryByText("Response Status:")).not.toBeInTheDocument();
+  expect(screen.queryByText(/^pending$/i)).not.toBeInTheDocument();
+});
+
+test("AlertExpandedRow prefers terminal outcome over stale legacy pending status", () => {
+  const terminalSimulated = {
+    ...trackingOutcome,
+    execution_mode: "simulation",
+    execution_state: "succeeded",
+    tracking_recorded: false,
+    simulated: true,
+    reason_code: "simulation_mode",
+    outcome_summary: "Playbook simulation completed.",
+  };
+  renderExpandedRow({
+    ...baseAlert,
+    response_status: "pending",
+    response_outcome: terminalSimulated,
+  });
+
+  expect(screen.getAllByText("Simulated").length).toBeGreaterThan(0);
+  expect(screen.queryByText("Response Status:")).not.toBeInTheDocument();
+  expect(screen.getByTestId("response-state-summary")).toHaveTextContent("Simulated");
+  expect(screen.getByTestId("response-state-summary")).not.toHaveTextContent("Pending approval");
 });
 
 test("AlertExpandedRow renders no-history badge for null response outcome", () => {

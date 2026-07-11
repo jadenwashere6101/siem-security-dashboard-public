@@ -15,6 +15,7 @@ export const EXECUTION_STATES = [
 export const REASON_CODES = [
   "approval_required",
   "approval_denied",
+  "approval_expired",
   "simulation_mode",
   "tracking_only",
   "adapter_unavailable",
@@ -64,7 +65,8 @@ const STATE_LABELS = {
 
 const REASON_EXPLANATIONS = {
   approval_required: "Human approval is required before the response can continue.",
-  approval_denied: "Approval denied or expired before enforcement.",
+  approval_denied: "A human denied approval before enforcement.",
+  approval_expired: "Approval timed out unanswered before enforcement; not an active denial.",
   simulation_mode: "Simulation mode completed without real provider or local enforcement.",
   tracking_only: "Recorded for SIEM tracking without provider or local enforcement.",
   adapter_unavailable: "Required adapter was unavailable.",
@@ -89,6 +91,9 @@ export function outcomeLabel(outcome) {
   if (STATE_LABELS[state]) {
     if (state === "blocked" && outcome.reason_code === "approval_denied") {
       return "Rejected";
+    }
+    if (state === "blocked" && outcome.reason_code === "approval_expired") {
+      return "Expired";
     }
     return STATE_LABELS[state];
   }
@@ -128,6 +133,9 @@ export function outcomeColor(outcome) {
     label === "Unknown"
   ) {
     return "danger";
+  }
+  if (label === "Expired") {
+    return "warning";
   }
   return "neutral";
 }

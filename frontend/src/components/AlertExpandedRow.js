@@ -136,10 +136,6 @@ function AlertExpandedRow({
             <span style={detailValueTextStyle}>{alert.response_action || "Not set"}</span>
           </p>
           <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
-            <strong style={detailLabelTextStyle}>Response Status:</strong>{" "}
-            <span style={detailValueTextStyle}>{alert.response_status || "Not set"}</span>
-          </p>
-          <p style={{ ...expandedTextStyle, marginBottom: "6px" }}>
             <strong style={detailLabelTextStyle}>Response Outcome:</strong>{" "}
             <ResponseOutcomeBadge outcome={alert.response_outcome || null} />
           </p>

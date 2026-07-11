@@ -322,13 +322,15 @@ function MapView({ alerts, onOpenResponseRegistry = null }) {
             <span>
               {selectedAlert.response_outcome
                 ? outcomeLabel(selectedAlert.response_outcome)
-                : selectedAlert.response_status || "Not set"}
+                : "Observed only"}
             </span>
           </p>
-          <p>
-            <strong>Legacy Response Status:</strong>{" "}
-            {selectedAlert.response_status || "Not set"}
-          </p>
+          {selectedAlert.response_status ? (
+            <p>
+              <strong>Legacy Response Status (non-authoritative):</strong>{" "}
+              {selectedAlert.response_status}
+            </p>
+          ) : null}
           <SourceIpContext
             sourceIp={selectedAlert.source_ip}
             compact

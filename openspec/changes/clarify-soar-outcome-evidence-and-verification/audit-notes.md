@@ -34,4 +34,16 @@ See `docs/soar_metrics_source_mapping.md`.
 
 ## 1.5 Stop confirmation
 
-No schema/migration, Teams enablement, real firewall execution, or writer/backfill change required. Existing serializers already expose evidence fields — no additive serializer change (task 2.4 N/A).
+Original Mac pass: no schema/migration, Teams enablement, real firewall execution, or writer/backfill change required. Existing serializers already expose evidence fields — no additive serializer change (task 2.4 N/A).
+
+## 9. Mac correction (VM-found defects)
+
+### Defect 1 — stale `alerts.response_status`
+- Legacy denormalized field can remain `pending` after terminal canonical outcomes.
+- Corrected by removing authoritative “Response Status” presentation from Alert Expanded Row / Alerts side panel, preferring ResponseOutcome in ResponseStateSummary, and labeling Map/Source IP leftovers as legacy/non-authoritative.
+- No historical `alerts` row rewrite.
+
+### Defect 2 — approval expire mapped to `approval_denied`
+- Queue/playbook/legacy producers previously collapsed expire → `reason_code=approval_denied`.
+- Corrected with additive `approval_expired` in `REASON_CODES`, migration `0017_approval_expired_reason_code.sql` (CHECK expand only), producer/mapping updates, and frontend Expired vs Rejected labels.
+- Historical `approval_denied` rows remain renderable; no outcome backfill.

@@ -105,7 +105,7 @@ test("MapView attack popup shows canonical response outcome badge and label", ()
 
   expect(screen.getByText("Response Outcome:")).toBeInTheDocument();
   expect(screen.getAllByText("Simulated").length).toBeGreaterThan(0);
-  expect(screen.getByText("Legacy Response Status:")).toBeInTheDocument();
+  expect(screen.getByText("Legacy Response Status (non-authoritative):")).toBeInTheDocument();
   expect(screen.getByText("completed")).toBeInTheDocument();
 });
 

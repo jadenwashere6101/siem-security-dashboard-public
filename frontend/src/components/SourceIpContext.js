@@ -168,7 +168,10 @@ function SourceIpContext({ sourceIp, compact = false, onOpenResponseRegistry = n
                   <span style={recordTitleStyle}>{alert.alert_type || `Alert ${alert.id}`}</span>
                   <span style={recordMetaStyle}>Alert status: {alert.status || "unknown"}</span>
                   <span style={recordMetaStyle}>Severity: {alert.severity || "unknown"}</span>
-                  <span style={recordMetaStyle}>Response status: {alert.response_status || "not set"}</span>
+                  <span style={recordMetaStyle}>
+                    Legacy response status (non-authoritative):{" "}
+                    {alert.response_status || "not set"}
+                  </span>
                 </>
               )}
             />

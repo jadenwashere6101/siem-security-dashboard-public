@@ -637,6 +637,7 @@ CREATE TABLE IF NOT EXISTS soar_response_decisions (
         OR reason_code IN (
             'approval_required',
             'approval_denied',
+            'approval_expired',
             'simulation_mode',
             'tracking_only',
             'adapter_unavailable',
@@ -732,6 +733,7 @@ CREATE TABLE IF NOT EXISTS soar_response_outcome_events (
         OR reason_code IN (
             'approval_required',
             'approval_denied',
+            'approval_expired',
             'simulation_mode',
             'tracking_only',
             'adapter_unavailable',

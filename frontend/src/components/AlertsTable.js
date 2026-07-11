@@ -712,7 +712,6 @@ function AlertsTable({
               onOpenResponseRegistry={onOpenResponseRegistry}
             />
             <p><strong>Response Action:</strong> {latestSelectedAlert.response_action || "N/A"}</p>
-            <p><strong>Response Status:</strong> {latestSelectedAlert.response_status || "N/A"}</p>
 
             <ResponseStateSummary
               alert={latestSelectedAlert}

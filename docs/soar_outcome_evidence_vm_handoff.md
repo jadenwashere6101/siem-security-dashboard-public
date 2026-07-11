@@ -16,6 +16,12 @@ VM: `jaden@4.204.25.149:/home/jaden/siem-security-dashboard`
 5. **No** action endpoints: no notification sends, simulation batch, approve/deny, queue/dead-letter retry, Teams/firewall enablement, or mutation.
 6. Rollback for source issues: redeploy prior artifact; no data rollback for read-only work.
 
+## Deploy prerequisites (when deploy is later authorized)
+
+1. Apply migration `0017_approval_expired_reason_code.sql` (additive CHECK; no row rewrite).
+2. Restart backend workers/API so producers emit `approval_expired`.
+3. Deploy frontend so Alert Details no longer treats legacy `alerts.response_status` as authoritative and Expired ≠ Rejected.
+
 ## 5.1 Representative selection (do not manufacture)
 
 Where naturally present, select sanitized samples of:
@@ -23,8 +29,11 @@ Where naturally present, select sanitized samples of:
 - simulated success
 - tracking-only
 - pending / blocked / rejected / failed / skipped
+- **expired approval** (`reason_code=approval_expired`) distinct from **denied** (`approval_denied`)
+- alert with terminal ResponseOutcome + stale legacy `alerts.response_status=pending` (presentation must prefer canonical)
 - real executed (only if `execution_mode=real` and `external_executed=true`)
 - unknown / missing evidence
+- historical `approval_denied` rows (including any pre-correction expire-path records) still render safely
 
 Absence of a class is reported, not invented.
 
@@ -36,7 +45,13 @@ Trace each selected record:
 
 Use GET/list APIs or SELECT of IDs/statuses/counts only. Redact tokens, endpoints, bodies, PII.
 
-Compare each user-facing label (Simulated, Tracking only, Real executed, Unknown, etc.) to canonical fields. Report match, missing link, or contradiction **without remediation**.
+Compare each user-facing label (Simulated, Tracking only, Real executed, Expired, Rejected, Unknown, etc.) to canonical fields. Report match, missing link, or contradiction **without remediation**.
+
+**Presentation checks (post-correction):**
+
+- Alert Details / expanded row MUST NOT show standalone authoritative “Response Status: pending” when ResponseOutcome is terminal.
+- Expired approvals MUST show `reason_code=approval_expired` on newly produced events (post-migration deploy); denied remain `approval_denied`.
+- Effect booleans remain false for blocked/expired/denied paths.
 
 ## 5.3 Metrics reconciliation
 

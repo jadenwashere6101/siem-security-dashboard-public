@@ -654,7 +654,7 @@ def test_expired_playbook_approval_appends_blocked_approval_event(postgres_db):
         "simulation",
         "blocked",
         "approval_service",
-        "approval_denied",
+        "approval_expired",
         False,
         False,
         False,

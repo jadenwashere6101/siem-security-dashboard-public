@@ -49,8 +49,8 @@ const trackingOutcome = {
 
 const styles = {};
 
-const sidePanelResponseStatus = () =>
-  screen.getAllByText(/Response Status:/).at(-1).parentElement;
+const sidePanelResponseOutcome = () =>
+  screen.getAllByText(/Response Outcome:/)[0].parentElement;
 
 function AlertsTableHarness({ initialAlerts, onSetAlerts }) {
   const [alerts, setAlertsState] = useState(initialAlerts);
@@ -113,6 +113,7 @@ test("side panel uses refreshed alert data after manual response execution", asy
     ...baseAlert,
     response_action: "block_ip",
     response_status: "success",
+    response_outcome: trackingOutcome,
   };
   const setAlerts = jest.fn();
 
@@ -133,7 +134,7 @@ test("side panel uses refreshed alert data after manual response execution", asy
     if (path.endsWith("/alerts/101/execute") && options.method === "POST") {
       return Promise.resolve({
         ok: true,
-        json: () => Promise.resolve({ response_status: "success" }),
+        json: () => Promise.resolve({ response_outcome: trackingOutcome }),
       });
     }
     if (path.endsWith("/alerts")) {
@@ -148,7 +149,8 @@ test("side panel uses refreshed alert data after manual response execution", asy
   renderAlertsTable([baseAlert], setAlerts);
 
   await userEvent.click(screen.getByText("failed_login_threshold"));
-  expect(sidePanelResponseStatus()).toHaveTextContent("pending");
+  expect(sidePanelResponseOutcome()).toHaveTextContent("Observed only");
+  expect(screen.queryByText("Response Status:")).not.toBeInTheDocument();
 
   await userEvent.click(screen.getAllByRole("button", { name: "Block IP" }).at(-1));
 
@@ -157,8 +159,38 @@ test("side panel uses refreshed alert data after manual response execution", asy
   });
 
   await waitFor(() => {
-    expect(sidePanelResponseStatus()).toHaveTextContent("success");
+    expect(sidePanelResponseOutcome()).toHaveTextContent("Tracking only");
   });
+});
+
+test("side panel ignores stale legacy pending when canonical outcome is terminal", async () => {
+  const alertWithStaleStatus = {
+    ...baseAlert,
+    response_action: "block_ip",
+    response_status: "pending",
+    response_outcome: trackingOutcome,
+  };
+
+  global.fetch = jest.fn((url) => {
+    const path = String(url);
+    if (path.endsWith("/alerts/101/response-log") || path.endsWith("/alerts/101/notes")) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve([]),
+      });
+    }
+    return Promise.reject(new Error(`Unexpected fetch: ${path}`));
+  });
+
+  renderAlertsTable([alertWithStaleStatus], jest.fn());
+  await userEvent.click(screen.getByText("failed_login_threshold"));
+
+  expect(sidePanelResponseOutcome()).toHaveTextContent("Tracking only");
+  expect(screen.queryByText("Response Status:")).not.toBeInTheDocument();
+  expect(screen.getAllByTestId("response-state-summary")[0]).toHaveTextContent(
+    "Tracking only"
+  );
+  expect(screen.queryByText("Pending approval")).not.toBeInTheDocument();
 });
 
 test("manual block_ip feedback uses tracking-only wording without executed copy", async () => {

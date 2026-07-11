@@ -62,10 +62,10 @@ After explicit authorization, clean-tree and approved-SHA checks, VM AI selects 
 ## Migration / Deployment / Rollback
 
 1. **MAC AI:** audit vocabulary/read models, implement evidence/copy/tests, build, and create read-only VM handoff.
-2. No migration expected. Any schema need stops for separate approval.
-3. Future deployment requires explicit commit/push/deploy authorization; deploy backend first only if an additive serializer changed, then frontend.
+2. Original Mac pass expected no migration. **Correction pass:** additive CHECK expansion only via `migrations/0017_approval_expired_reason_code.sql` to allow `approval_expired` (no historical rewrite).
+3. Future deployment requires explicit commit/push/deploy authorization; deploy **backend + migration first**, then frontend (reason-code + legacy-status presentation).
 4. **VM AI:** after explicit read-only authorization, verify clean approved SHA and capture sanitized traces/snapshots without mutation.
-5. Rollback deploys prior source/artifact; no data rollback is needed for read-only verification.
+5. Rollback deploys prior source/artifact; no data rollback is needed for presentation-only/read-only verification. Reverting migration is optional only if the CHECK must be narrowed again (new rows with `approval_expired` would then be blocked).
 
 ## Stop Conditions
 

@@ -49,6 +49,7 @@ REASON_CODES = frozenset(
     {
         "approval_required",
         "approval_denied",
+        "approval_expired",
         "simulation_mode",
         "tracking_only",
         "adapter_unavailable",

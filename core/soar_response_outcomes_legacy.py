@@ -375,7 +375,11 @@ def infer_alert_notification_legacy_outcome(
             simulated=False,
             execution_actor="approval_service",
             outcome_summary=failure_message or f"Linked approval request was {approval_status}.",
-            reason_code="approval_denied",
+            reason_code=(
+                "approval_denied"
+                if approval_status == "denied"
+                else "approval_expired"
+            ),
             alert_id=alert_id,
             incident_id=incident_id,
             source_ip=source_ip,
@@ -678,7 +682,9 @@ def infer_approval_request_legacy_outcome(
             simulated=False,
             execution_actor="approval_service",
             outcome_summary=request_reason or f"Legacy approval request was {status}.",
-            reason_code="approval_denied",
+            reason_code=(
+                "approval_denied" if status == "denied" else "approval_expired"
+            ),
         )
     if status == "approved":
         return LegacyMappingResult(
