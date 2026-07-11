@@ -1,18 +1,24 @@
 # response-registry-workspace Specification
 
 ## Purpose
-TBD - created by archiving change unify-analyst-response-workflows. Update Purpose after archive.
+Sole analyst workspace for canonical indicator dispositions and Blocklist Tracking, including discoverable tracking-only removal and legacy Blocklist navigation compatibility.
+
 ## Requirements
+
 ### Requirement: Response Registry navigation and views
-The sidebar SHALL provide a Response Registry workspace with All, Monitoring, Blocklist Tracking, Escalated, Pending, Failed/Rejected, and History views.
+The sidebar SHALL provide one visible Response Registry workspace with All, Monitoring, Blocklist Tracking, Escalated, Pending, Failed/Rejected, and History views; it SHALL NOT show a separate Blocklist workspace.
 
 #### Scenario: Analyst opens the registry
 - **WHEN** an authorized user selects Response Registry
 - **THEN** the workspace SHALL show paginated/filterable indicator dispositions with requested action, actual outcome, enforcement mode, risk, related counts, origin, actor, reason, expiry, and last activity
 
+#### Scenario: User opens Blocklist Tracking
+- **WHEN** an authorized user selects Blocklist Tracking in Response Registry
+- **THEN** the application SHALL show the canonical Blocklist tracking records and actions in that workspace
+
 #### Scenario: Legacy Blocklist navigation is used
-- **WHEN** a user follows the existing Blocklist navigation or deep link after migration
-- **THEN** the application SHALL open or redirect to Response Registry’s Blocklist Tracking view without losing Blocklist functionality
+- **WHEN** a stored landing preference or internal legacy request targets `blocklist`
+- **THEN** the application SHALL normalize it to Response Registry's Blocklist Tracking view without losing functionality or creating a second state source
 
 ### Requirement: Registry detail and history
 An indicator detail view SHALL expose current disposition, explicit enforcement status, complete response history, and links to authoritative related records.
@@ -39,3 +45,13 @@ Existing add, expiry, list, and unblock behavior SHALL remain available through 
 - **WHEN** an authorized analyst removes active tracking
 - **THEN** the Blocklist record SHALL become inactive, a removal event SHALL be appended, and history SHALL remain visible without implying a firewall change
 
+### Requirement: Discoverable Blocklist tracking removal
+Response Registry SHALL expose a clear supported removal action for eligible active Blocklist tracking records and SHALL explain its actual effect.
+
+#### Scenario: Eligible active record
+- **WHEN** an authorized analyst views an active non-protected Blocklist tracking record
+- **THEN** the UI SHALL offer “Remove Tracking” and explain that tracking becomes inactive, history remains, and no firewall/provider/host enforcement is changed
+
+#### Scenario: Ineligible record
+- **WHEN** a record is terminal, expired, protected, unauthorized, or otherwise ineligible
+- **THEN** the UI SHALL keep its history readable and SHALL hide or disable mutation with a truthful reason
