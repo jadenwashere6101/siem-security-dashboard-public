@@ -141,6 +141,42 @@ This spec SHALL be implemented without backend APIs, database changes, migration
 - **WHEN** this feature is implemented
 - **THEN** no new backend endpoint, database table, migration, query-limit change, or auth/RBAC/audit-log behavior SHALL be required.
 
+### Requirement: Alerts Over Time Honors Display Time Preferences
+Alerts Over Time SHALL format axis and tooltip timestamps through the authoritative shared display formatter and SHALL NOT hard-code UTC labels.
+
+#### Scenario: Local 12-hour chart display
+- **WHEN** display settings select browser-local timezone and 12-hour timestamps
+- **THEN** chart axis and tooltip labels SHALL use that timezone/format while retaining the correct underlying bucket instants and counts
+
+#### Scenario: UTC 24-hour chart display
+- **WHEN** display settings select UTC and 24-hour timestamps
+- **THEN** chart axis and tooltip labels SHALL use UTC/24-hour output without a component-specific formatter
+
+### Requirement: pfSense Ingest Filter Timestamps Honor Display Preferences
+Human-facing timestamps in pfSense Ingest Filters SHALL use the authoritative shared display formatter without changing backend counter or policy semantics.
+
+#### Scenario: Preference changes while panel is open
+- **WHEN** the user changes timezone or timestamp-format preferences and opens or revisits pfSense Ingest Filters
+- **THEN** policy and metrics timestamps SHALL reflect the selected settings and SHALL not remain forced to UTC/24-hour
+
+### Requirement: Collapsed Sidebar Content Symmetry
+The collapsed application shell SHALL provide symmetrical content gutters and SHALL remain responsive.
+
+#### Scenario: Sidebar is collapsed
+- **WHEN** the sidebar is collapsed at a supported desktop or narrow viewport
+- **THEN** the main content SHALL have equal left/right outer gutters without chart clipping or horizontal overflow
+
+### Requirement: Alert Detail Dark-Theme Contrast
+Alert Details and its secondary content SHALL use explicit dark-theme foreground colors meeting WCAG 2.1 AA contrast requirements.
+
+#### Scenario: Alert details render on dark background
+- **WHEN** an alert detail panel, canonical outcome evidence, response state/log, manual action, lifecycle notice, or source-IP context is displayed
+- **THEN** normal text SHALL meet at least 4.5:1 contrast and large text/non-text focus indicators SHALL meet at least 3:1 against their effective backgrounds
+
+#### Scenario: Muted secondary text
+- **WHEN** secondary information is visually muted
+- **THEN** it SHALL remain readable at the applicable contrast threshold and SHALL not rely on an inherited near-black foreground
+
 ### Requirement: Fully Backward Compatible Defaults
 Users who never open Settings SHALL see unchanged behavior for every preference defined by this spec, with the sole documented exception of consistent timestamp formatting replacing today's fragmented raw/forced-UTC rendering.
 

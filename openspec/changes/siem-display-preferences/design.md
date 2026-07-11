@@ -4,6 +4,8 @@
 
 This scope is frontend-only. It must not introduce backend APIs, database tables, migrations, query-limit changes, or auth/session changes.
 
+All implementation and verification groups are owned by **MAC AI**. No VM phase is required.
+
 ## Dependency On `siem-settings-foundation`
 
 This spec assumes `siem-settings-foundation` has already defined:
@@ -66,6 +68,25 @@ Unknown keys within `display` are ignored on read (per the foundation's extensib
 - `timestampFormat` controls `hour12: true` (12-hour) vs `hour12: false` (24-hour) in the shared formatter's `Intl.DateTimeFormat` options.
 - A single shared, settings-aware timestamp formatting helper (extending or replacing `utils/adminPanelDisplay.js#formatAdminTimestamp`) becomes the one place that reads `timezoneMode`/`timestampFormat` and formats a timestamp. All consumers listed under "Consuming Components" call this helper instead of formatting timestamps themselves or leaving them raw.
 - Invalid or unparseable timestamp values must render a safe fallback (matching today's existing fallback behavior per surface, e.g. `"N/A"` or the raw value) rather than `"Invalid Date"` or a thrown error.
+- Alerts Over Time must retain numeric bucket instants (not preformatted UTC strings) and format axis/tooltip labels from `display.timezoneMode` and `display.timestampFormat`. Bucket aggregation and label timezone must use one documented basis so labels do not claim local time for UTC-only grouping semantics.
+- `PfsenseIngestFiltersPanel` must accept the authoritative `display` settings and use the same helper for policy `updated_at`, metrics `started_at`, and any other human-facing timestamps. Backend counter semantics and timestamps remain unchanged.
+
+## Sidebar Gutter Symmetry And Alert Detail Contrast
+
+- `SidebarLayout` must apply equal left and right content gutters when collapsed. Expanded layout may retain sidebar separation, but the usable content area must not carry an unexplained one-sided gutter.
+- Gutter behavior must be verified at desktop, 1280px, tablet, and narrow/mobile viewports without horizontal overflow or chart clipping.
+- Alert Details and its secondary components (`ResponseOutcome`, response state/log, manual actions, lifecycle notice, source-IP context) must use explicit dark-theme foreground tokens rather than accidental inheritance.
+- Normal text must meet WCAG 2.1 AA contrast of at least 4.5:1; large text and non-text UI/focus indicators must meet at least 3:1. Muted text may be visually secondary but cannot fall below the applicable threshold.
+- The audit is targeted to the affected alert-detail surface and shared tokens it consumes; it does not introduce a light theme or a repository-wide theme rewrite.
+
+## Additional Decisions, Risks, and Rollback
+
+- Preserve the existing shared formatter/settings object as the sole authority; a chart-specific or pfSense-specific preference store is forbidden.
+- [Chart label density after local formatting] → Use responsive tick formatting and tooltip detail without discarding bucket identity.
+- [Contrast correction changes hierarchy] → Adjust explicit tokens and weights while preserving semantic emphasis; capture before/after visual evidence when practical.
+- [Gutter changes compress content] → Validate required viewports and Recharts resizing before acceptance.
+- Deployment is frontend-only after explicit authorization. Rollback is the previous Mac-built frontend artifact/approved commit; no data rollback or migration exists.
+- Stop if timestamp changes alter backend data/query semantics, if a second formatter/settings source is required, or if contrast cannot be verified objectively.
 
 ### Baseline Timestamp Behavior (Design Decision)
 

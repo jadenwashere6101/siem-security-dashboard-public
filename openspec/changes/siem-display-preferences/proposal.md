@@ -11,8 +11,10 @@
 - Define a practical v1 column-visibility subset for the three tables above (not every table in the app), each with a fixed, always-visible identifying column.
 - Define Live Logs font size and default-tab preferences that apply to `components/LiveLogsPanel.js`'s existing `VIEW_MODES` and hard-coded inline `fontSize` values.
 - Define Live Log highlighting rules as a purely presentational rule set (severity/event-type match to visual emphasis) that never mutates fetched event data.
+- **MAC AI follow-up:** Route Alerts Over Time bucket labels and pfSense Ingest Filters metadata/counter timestamps through the existing shared display formatter so local/UTC and 12/24-hour preferences are authoritative on those surfaces.
+- **MAC AI follow-up:** Make collapsed-sidebar content gutters symmetrical and perform a targeted dark-theme contrast correction for Alert Details and its secondary components, with measurable WCAG contrast gates.
 - State explicitly that adopting the shared, settings-driven timestamp formatter is an intentional, spec-scoped visual normalization: today's raw-string surfaces and forced-UTC surfaces already disagree with each other, so no single default can be pixel-identical to all of them at once. The recommended default (local browser timezone, 24-hour) is chosen deliberately per user direction; selecting UTC reproduces the prior admin-panel convention. This normalization is what "timestamp formatting updates everywhere consistently" requires, and is treated as this spec's intended outcome rather than an unplanned regression. See `design.md`'s "Baseline Timestamp Behavior" section.
-- Do not implement code, modify tests, modify application source files, modify existing specs beyond this proposal's own linkage note in the parent roadmap context, create additional child specs, touch the VM, commit, or push.
+- Keep this implementation frontend-only; do not create a parallel settings/formatter system, touch the VM, commit, push, deploy, or mutate data during specification work.
 
 ## Capabilities
 
@@ -24,9 +26,11 @@
 
 ## Impact
 
-- **Affected frontend (future implementation only):** `frontend/src/components/AlertTableRow.js`, `AlertsTable.js`, `AlertsTableHeader.js`, `AlertGroupHeader.js`, `DashboardSection.js`, `LiveLogsPanel.js`, `IncidentsPanel.js`, `DeadLettersPanel.js`, `PlaybookExecutionTimeline.js`, `ApprovalsPanel.js`; `frontend/src/utils/adminPanelDisplay.js`, `threatHuntDisplay.js`; the shared settings module added by `siem-settings-foundation`.
+- **Owner:** MAC AI only.
+- **Affected frontend (future implementation only):** existing consumers plus `TimelineChart.js`, `DashboardVisuals.js`, `PfsenseIngestFiltersPanel.js`, `SidebarLayout.js`, `AlertSidePanel.js`, Alert Details secondary components, shared display utilities, and focused tests/styles.
 - **Affected backend:** none. No route, query limit, or API contract changes.
 - **Affected database/migrations:** none.
 - **Affected authentication/session behavior:** none.
 - **Runtime behavior:** unchanged for any preference the user has not touched, except for the intentional, documented timestamp-rendering normalization described above.
 - **Parent roadmap:** this child belongs to `siem-settings-roadmap` and depends on `siem-settings-foundation`'s settings module and Settings section existing first; no parent roadmap file changes are required for this spec.
+- **Deployment:** future explicitly authorized frontend artifact deployment only; no backend restart, migration, or VM runtime verification is required.
