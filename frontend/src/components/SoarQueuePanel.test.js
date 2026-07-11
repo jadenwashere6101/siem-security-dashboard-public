@@ -705,7 +705,7 @@ test("renders queue counts and recent queue rows", async () => {
     expect(await screen.findByText("Unable to load SOAR queue item")).toBeInTheDocument();
   });
 
-  test("disables run simulation batch while request is pending", async () => {
+  test("disables process queue batch while request is pending", async () => {
     loadSoarQueueStatus.mockResolvedValue(statusFixture);
     loadRecentSoarQueueItems.mockResolvedValue({ items: [queueRowFixture] });
     const pendingRun = deferred();
@@ -714,14 +714,14 @@ test("renders queue counts and recent queue rows", async () => {
     renderPanel();
     await screen.findByText("Recent Queue Items");
 
-    const runButton = screen.getByRole("button", { name: "Run simulation batch" });
+    const runButton = screen.getByRole("button", { name: "Process queue batch" });
     await userEvent.click(runButton);
 
     expect(runSoarWorkerOnce).toHaveBeenCalledWith({ batchSize: 10 });
-    expect(screen.getByRole("button", { name: "Running..." })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Processing..." })).toBeDisabled();
   });
 
-  test("renders successful run summary and refreshes queue data", async () => {
+  test("renders successful mixed-mode run summary without a blanket simulated label", async () => {
     loadSoarQueueStatus
       .mockResolvedValueOnce(statusFixture)
       .mockResolvedValueOnce(statusFixture);
@@ -729,25 +729,36 @@ test("renders queue counts and recent queue rows", async () => {
       .mockResolvedValueOnce({ items: [queueRowFixture] })
       .mockResolvedValueOnce({ items: [queueRowFixture] });
     runSoarWorkerOnce.mockResolvedValue({
-      mode: "simulation",
+      requested_executor_mode: "simulation",
       batch_size: 10,
-      summary: { processed: 2, success: 1, failed: 0, skipped: 1, requeued: 0 },
+      summary: {
+        processed: 2,
+        success: 1,
+        failed: 0,
+        skipped: 1,
+        requeued: 0,
+        by_mode: { internal: 1, tracking_only: 1 },
+        success_by_mode: { internal: 1 },
+      },
       results: [],
     });
 
     renderPanel();
     await screen.findByText("Recent Queue Items");
 
-    await userEvent.click(screen.getByRole("button", { name: "Run simulation batch" }));
+    await userEvent.click(screen.getByRole("button", { name: "Process queue batch" }));
 
-    expect(await screen.findByText("Last manual simulation batch")).toBeInTheDocument();
-    expect(await screen.findByText(/2 queue actions simulated internally/i)).toBeInTheDocument();
+    expect(await screen.findByText("Last manual queue batch")).toBeInTheDocument();
+    expect(await screen.findByText(/2 queue actions processed internally/i)).toBeInTheDocument();
     expect(
       screen.getByText(/No notification, provider, firewall, host, or other external execution occurred/i)
     ).toBeInTheDocument();
-    expect(screen.getAllByText(/SimulationExecutor/i).length).toBeGreaterThan(0);
+    expect(await screen.findByText(/1 internal.*1 tracking-only/i)).toBeInTheDocument();
+    expect(screen.queryAllByText(/SimulationExecutor/i).length).toBe(0);
+    expect(screen.queryByText(/simulated success/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/actions executed/i)).not.toBeInTheDocument();
     expect(await screen.findByText("Processed")).toBeInTheDocument();
+    expect(await screen.findByText("Processed successfully")).toBeInTheDocument();
 
     await waitFor(() => expect(loadSoarQueueStatus).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(loadRecentSoarQueueItems).toHaveBeenCalledTimes(2));
@@ -757,9 +768,17 @@ test("renders queue counts and recent queue rows", async () => {
     loadSoarQueueStatus.mockResolvedValue(statusFixture);
     loadRecentSoarQueueItems.mockResolvedValue({ items: [queueRowFixture] });
     runSoarWorkerOnce.mockResolvedValue({
-      mode: "simulation",
+      requested_executor_mode: "simulation",
       batch_size: 10,
-      summary: { processed: 1, success: 1, failed: 0, skipped: 0, requeued: 0 },
+      summary: {
+        processed: 1,
+        success: 1,
+        failed: 0,
+        skipped: 0,
+        requeued: 0,
+        by_mode: { internal: 1 },
+        success_by_mode: { internal: 1 },
+      },
       results: [],
     });
 
@@ -775,7 +794,7 @@ test("renders queue counts and recent queue rows", async () => {
       })
     );
 
-    const runButton = screen.getByRole("button", { name: "Run simulation batch" });
+    const runButton = screen.getByRole("button", { name: "Process queue batch" });
     await waitFor(() => expect(runButton).not.toBeDisabled());
     const callCountBeforeRun = loadRecentSoarQueueItems.mock.calls.length;
 

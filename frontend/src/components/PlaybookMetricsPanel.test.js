@@ -108,7 +108,7 @@ test("renders loading state while request is in flight", async () => {
 
   expect(screen.getByText(/loading playbook metrics/i)).toBeInTheDocument();
   expect(
-    screen.getAllByRole("note").some((el) => /simulation only/i.test(el.textContent))
+    screen.getAllByRole("note").some((el) => /real workflow, worker, and visibility data/i.test(el.textContent))
   ).toBe(true);
 
   await waitFor(() => {
@@ -208,14 +208,14 @@ test("renders per-playbook breakdown with id and total", async () => {
   expect(screen.getByText(/total: 5/i)).toBeInTheDocument();
 });
 
-test("simulation notice remains visible in populated state", async () => {
+test("mode-aware notice remains visible in populated state", async () => {
   getPlaybookMetrics.mockResolvedValueOnce(fullPayload);
 
   render(<PlaybookMetricsPanel {...styleProps} />);
   await screen.findByText("block_and_notify");
 
   expect(
-    screen.getAllByRole("note").some((el) => /no real remediation/i.test(el.textContent))
+    screen.getAllByRole("note").some((el) => /simulation-safe unless per-adapter guards/i.test(el.textContent))
   ).toBe(true);
 });
 

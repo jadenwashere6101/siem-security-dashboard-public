@@ -6,7 +6,7 @@ import pytest
 from werkzeug.security import generate_password_hash
 
 import siem_backend
-from core.approval_store import create_approval_request, deny_request
+from core.approval_store import approve_request, create_approval_request, deny_request
 
 
 ADMIN_USER = "testadmin"
@@ -197,7 +197,7 @@ def test_worker_run_once_empty_queue_returns_zero_summary(client, postgres_db):
 
     assert resp.status_code == 200
     data = resp.get_json()
-    assert data["mode"] == "simulation"
+    assert data["requested_executor_mode"] == "simulation"
     assert data["requested_batch_size"] == 10
     assert data["batch_size"] == 10
     assert data["summary"] == {
@@ -206,11 +206,13 @@ def test_worker_run_once_empty_queue_returns_zero_summary(client, postgres_db):
         "failed": 0,
         "skipped": 0,
         "requeued": 0,
+        "by_mode": {},
+        "success_by_mode": {},
     }
     assert data["results"] == []
 
 
-def test_worker_run_once_admin_processes_simulation_batch(client, postgres_db):
+def test_worker_run_once_admin_processes_internal_mode_batch(client, postgres_db):
     conn, cur = postgres_db
     alert_id = _insert_alert(cur)
     queue_id = _insert_queue_row(cur, alert_id, "8.8.8.8", action="monitor")
@@ -222,12 +224,64 @@ def test_worker_run_once_admin_processes_simulation_batch(client, postgres_db):
 
     assert resp.status_code == 200
     data = resp.get_json()
-    assert data["mode"] == "simulation"
+    assert data["requested_executor_mode"] == "simulation"
     assert data["summary"]["processed"] == 1
     assert data["summary"]["success"] == 1
+    # A monitor action is real internal SIEM state, not a simulated effect.
+    assert data["summary"]["by_mode"] == {"internal": 1}
+    assert data["summary"]["success_by_mode"] == {"internal": 1}
     assert data["results"][0]["queue_id"] == queue_id
     assert data["results"][0]["outcome"] == "success"
     assert _fetch_queue_row(cur, queue_id)[1] == "success"
+
+
+def test_worker_run_once_admin_batch_summary_is_mode_aware_for_mixed_batch(client, postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    monitor_queue_id = _insert_queue_row(cur, alert_id, "8.8.8.8", action="monitor")
+    # Pre-approve the block_ip row (inserted directly as awaiting_approval) so
+    # it is claimed and executed (tracking-only SIEM Blocklist write) in the
+    # same run-once batch as the pending monitor row.
+    block_ip_queue_id = _insert_queue_row(
+        cur,
+        alert_id,
+        "8.8.4.4",
+        action="block_ip",
+        status="awaiting_approval",
+        nonce="mixed",
+    )
+    conn.commit()
+    approver_id = 501
+    cur.execute(
+        """
+        INSERT INTO users (id, username, password_hash, role, is_active)
+        VALUES (%s, 'mixed_batch_approver', %s, 'super_admin', TRUE)
+        ON CONFLICT (id) DO NOTHING
+        """,
+        (approver_id, generate_password_hash("approverpass", method="pbkdf2:sha256")),
+    )
+    approval = create_approval_request(conn, queue_id=block_ip_queue_id, action="block_ip")
+    approve_request(conn, approval["id"], actor_user_id=approver_id)
+    conn.commit()
+
+    _login_super_admin(client)
+
+    with _patched_app_db(conn):
+        resp = client.post("/admin/soar/worker/run-once", json={"batch_size": 10})
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["summary"]["processed"] == 2
+    assert data["summary"]["success"] == 2
+    # Mixed batch: neither row is a simulation, so no bucket may be globally
+    # labeled "simulation" and the two real modes must be reported distinctly.
+    assert data["summary"]["by_mode"] == {"internal": 1, "tracking_only": 1}
+    assert data["summary"]["success_by_mode"] == {"internal": 1, "tracking_only": 1}
+    assert "simulation" not in data["summary"]["by_mode"]
+    outcomes_by_queue_id = {row["queue_id"]: row["outcome"] for row in data["results"]}
+    assert outcomes_by_queue_id[monitor_queue_id] == "success"
+    assert outcomes_by_queue_id[block_ip_queue_id] == "success"
+    assert _fetch_queue_row(cur, block_ip_queue_id)[1] == "success"
 
 
 def test_worker_run_once_rejects_real_mode(client, postgres_db):
@@ -284,9 +338,12 @@ def test_worker_run_once_ignores_real_execution_env(client, postgres_db, monkeyp
 
     assert resp.status_code == 200
     data = resp.get_json()
-    assert data["mode"] == "simulation"
+    assert data["requested_executor_mode"] == "simulation"
     assert data["results"][0]["queue_id"] == queue_id
-    assert data["results"][0]["message"].startswith("Monitoring only")
+    # Monitor routes through the canonical response command service (internal
+    # mode), not the legacy SimulationExecutor "Monitoring only" message.
+    assert data["results"][0]["message"] == "Monitoring disposition recorded."
+    assert data["summary"]["by_mode"] == {"internal": 1}
 
 
 def test_worker_run_once_terminal_rows_are_not_mutated(client, postgres_db):

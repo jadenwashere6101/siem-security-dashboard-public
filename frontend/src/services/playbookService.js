@@ -112,7 +112,7 @@ export async function retryExecution(executionId) {
   return postExecutionControl(
     executionId,
     "retry",
-    "Unable to retry playbook simulation"
+    "Unable to retry playbook execution"
   );
 }
 
@@ -120,7 +120,7 @@ export async function abandonExecution(executionId) {
   return postExecutionControl(
     executionId,
     "abandon",
-    "Unable to abandon playbook simulation"
+    "Unable to abandon playbook execution"
   );
 }
 
@@ -128,7 +128,7 @@ export async function resumeExecution(executionId) {
   return postExecutionControl(
     executionId,
     "resume",
-    "Unable to resume playbook simulation"
+    "Unable to resume playbook execution"
   );
 }
 

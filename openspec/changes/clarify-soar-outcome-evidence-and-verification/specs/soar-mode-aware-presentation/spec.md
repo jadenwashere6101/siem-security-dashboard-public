@@ -26,16 +26,16 @@ Presentation SHALL keep simulation, tracking-only, read-only/observed, pending a
 - **WHEN** an action awaits approval
 - **THEN** the UI SHALL describe the requested effect as pending and SHALL NOT present it as executed
 
-### Requirement: Manual queue simulation explanation
-The Queue Visibility manual batch control SHALL explain its bounded internal processing and external-effect prohibition before and after invocation.
+### Requirement: Manual queue batch explanation
+The Queue Visibility manual batch control SHALL explain its bounded internal processing and external-effect prohibition before and after invocation, and SHALL NOT claim the batch uses a single simulation-only executor when canonical actions route through real internal/tracking-only handling.
 
-#### Scenario: Before simulation batch
-- **WHEN** a super admin reviews the Run simulation batch control
-- **THEN** the UI SHALL state that pending queue work is processed with the simulation executor, internal lifecycle records may change, and no notification/provider/firewall/host/external effect can occur
+#### Scenario: Before processing a batch
+- **WHEN** a super admin reviews the Process queue batch control
+- **THEN** the UI SHALL state that pending queue work is processed using canonical action handling (block_ip/monitor/flag_high_priority write real internal or tracking-only records; other actions use the simulation executor), internal lifecycle records may change, and no notification/provider/firewall/host/external effect can occur
 
-#### Scenario: Simulation result
-- **WHEN** the simulation batch returns results
-- **THEN** the UI SHALL report simulated/failed/skipped/requeued internal outcomes truthfully and SHALL NOT use real-execution language
+#### Scenario: Batch result
+- **WHEN** the queue batch returns results
+- **THEN** the UI SHALL report processed/failed/skipped/requeued internal outcomes truthfully, SHALL NOT label a mixed batch's successes as uniformly simulated, and SHALL NOT use real-execution language
 
 ### Requirement: Recent Alerts outcome clarity
 Recent Alerts details SHALL show the canonical linked outcome and enough provenance to identify its source record when available.

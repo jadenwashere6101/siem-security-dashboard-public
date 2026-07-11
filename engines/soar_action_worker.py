@@ -45,6 +45,19 @@ _APPROVAL_REASON_CODES = frozenset(
 )
 
 
+def classify_queue_action_mode(action, reason_code=None):
+    """Public read-only helper: canonical execution_mode for a queue action.
+
+    Mode is derived from action type (and approval reason code) only; it does
+    not depend on execution_state. Callers that only need the mode label for
+    display/summary purposes (e.g. admin_routes batch summaries) should use
+    this instead of duplicating the classification rules.
+    """
+    return _queue_outcome_classification(
+        action, execution_state="succeeded", reason_code=reason_code
+    )["execution_mode"]
+
+
 def _queue_outcome_classification(action, *, execution_state, reason_code=None):
     """Derive queue lifecycle outcome mode from the actual action/result."""
     normalized_action = str(action or "").strip()
@@ -757,6 +770,7 @@ def _worker_result(
 ):
     return {
         "queue_id": original["id"],
+        "action": original.get("action"),
         "prior_status": original["status"],
         "new_status": updated["status"],
         "outcome": outcome,

@@ -457,7 +457,7 @@ function PlaybooksPanel({
       } catch (err) {
         setExecutionActionError((current) => ({
           ...current,
-          [executionId]: err.message || "Simulation control action failed.",
+          [executionId]: err.message || "Playbook execution control action failed.",
         }));
       } finally {
         setExecutionActionInProgress((current) => ({ ...current, [executionId]: false }));

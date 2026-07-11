@@ -16,7 +16,7 @@ const NOTIFICATION_RECENT_BUCKETS = ["success", "failed", "timeout", "blocked"];
 const CIRCUIT_BREAKER_STATES = ["closed", "open", "half_open", "unknown", "invalid"];
 
 const SIMULATION_NOTICE =
-  "Simulation only: these playbook metrics reflect simulated executions and visibility data. No real remediation or live integration execution is active.";
+  "These playbook metrics reflect real workflow, worker, and visibility data. Non-adapter/lifecycle steps (monitor, escalation, tracking) are real internal or tracking-only records, not simulations; outbound adapter execution stays simulation-safe unless per-adapter guards enable real mode.";
 
 // spec: SPEC-NOTIFY-001
 const NOTIFICATION_METRICS_NOTICE =
@@ -180,7 +180,8 @@ function PlaybookMetricsPanel({ cardStyle, cardHeaderStyle, cardTitleStyle, card
           <p style={sectionLabelStyle}>SOAR</p>
           <h2 style={cardTitleStyle}>Playbook Execution Metrics</h2>
           <p style={cardSubtitleStyle}>
-            Read-only aggregate metrics for simulation-only playbook execution health.
+            Read-only aggregate metrics for playbook execution health, including real
+            internal/tracking-only outcomes alongside simulated and guarded real-mode ones.
           </p>
         </div>
       </div>

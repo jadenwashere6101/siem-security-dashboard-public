@@ -531,8 +531,8 @@ function IncidentsPanel({
                     <span style={tableMetaCountStyle}>{timeline.length}</span>
                   </div>
                   <p style={timelineNoticeStyle}>
-                    Timeline is read-only. SOAR playbook and adapter events are
-                    simulation-only unless explicitly marked otherwise by the backend.
+                    Timeline is read-only. Each event's mode (internal, tracking-only,
+                    simulated, or real) is determined by the backend and shown per event.
                   </p>
                   {timelineLoading ? (
                     <p style={emptyTextStyle}>Loading timeline...</p>

@@ -442,7 +442,7 @@ describe("IncidentsPanel", () => {
     expect(await screen.findByText("Simulated adapter step")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Timeline is read-only. SOAR playbook and adapter events are simulation-only unless explicitly marked otherwise by the backend."
+        "Timeline is read-only. Each event's mode (internal, tracking-only, simulated, or real) is determined by the backend and shown per event."
       )
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();

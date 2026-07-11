@@ -72,7 +72,7 @@ export const runSoarWorkerOnce = async ({ batchSize } = {}) => {
 
   if (!res.ok) {
     throw new Error(
-      getApiErrorMessage(data, "Unable to run SOAR simulation batch", ["error"])
+      getApiErrorMessage(data, "Unable to process SOAR queue batch", ["error"])
     );
   }
 

@@ -32,9 +32,9 @@ Terminology:
 - **Blocked/rejected/failed/skipped:** terminal or guarded non-success with reason.
 - **Unknown:** evidence insufficient; never promoted to success.
 
-### 2. Explain the manual simulation boundary before action
+### 2. Explain the manual queue-batch boundary before action
 
-Queue copy SHALL state that the bounded admin endpoint claims pending queue rows, evaluates them with `SimulationExecutor`, may update queue/outcome lifecycle records, and performs no real provider, notification, firewall, host, or external integration effect. Confirmation/help text and result copy SHALL distinguish internal state mutation from external effect.
+Queue copy SHALL state that the bounded admin endpoint claims pending queue rows and processes them using canonical action handling — `block_ip`/`monitor`/`flag_high_priority` route through the shared response command service and write real internal or tracking-only records; other actions use `SimulationExecutor` — and performs no real provider, notification, firewall, host, or external integration effect. Confirmation/help text and result copy SHALL distinguish internal state mutation from external effect, and the batch API/summary SHALL NOT label a mixed batch's outcomes as uniformly `mode: "simulation"`; per-mode counts SHALL be available (`summary.by_mode` / `summary.success_by_mode`).
 
 ### 3. Evidence uses links, not duplicated joins in the browser
 

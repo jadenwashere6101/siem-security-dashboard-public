@@ -20,7 +20,7 @@ from core.response_action_queue_store import (
     sweep_terminal_approval_queue_rows,
 )
 from core.soar_response_outcomes import get_latest_outcomes_for_queues_bulk
-from engines.soar_action_worker import process_batch
+from engines.soar_action_worker import classify_queue_action_mode, process_batch
 from engines.detection_config import (
     get_all_effective_detection_rules,
     get_detection_rule_defaults,
@@ -646,12 +646,27 @@ def _parse_soar_run_batch_size(data):
 
 
 def _summarize_soar_worker_results(results):
+    by_mode = {}
+    success_by_mode = {}
+    for row in results:
+        mode = classify_queue_action_mode(row.get("action"), reason_code=row.get("error_code"))
+        by_mode[mode] = by_mode.get(mode, 0) + 1
+        if row.get("outcome") == "success":
+            success_by_mode[mode] = success_by_mode.get(mode, 0) + 1
+
     return {
         "processed": len(results),
         "success": sum(1 for row in results if row.get("outcome") == "success"),
         "failed": sum(1 for row in results if row.get("outcome") == "failed"),
         "skipped": sum(1 for row in results if row.get("outcome") == "skipped"),
         "requeued": sum(1 for row in results if row.get("outcome") == "requeued"),
+        # Canonical execution_mode breakdown so a mixed batch (e.g. block_ip
+        # tracking-only writes alongside monitor/flag_high_priority internal
+        # state changes and legacy simulation-only actions) is never reported
+        # as uniformly "simulated". Modes: internal, tracking_only, simulation,
+        # real (per engines.soar_action_worker.classify_queue_action_mode).
+        "by_mode": by_mode,
+        "success_by_mode": success_by_mode,
     }
 
 
@@ -778,7 +793,14 @@ def get_queue_item_detail(queue_id):
 @login_required
 @super_admin_required
 def run_soar_worker_once():
-    """Run one bounded SOAR worker batch in simulation mode."""
+    """Run one bounded SOAR worker batch.
+
+    The batch worker only accepts a "simulation" executor-mode request (real
+    execution cannot be requested here), but per-row canonical outcomes are
+    classified by actual action/result (internal, tracking_only, simulation).
+    The response never labels the whole batch as simulated; see
+    summary.by_mode / summary.success_by_mode for the truthful breakdown.
+    """
     data = request.get_json(silent=True) or {}
     requested_mode = (data.get("mode") or "simulation").strip().lower() if isinstance(data.get("mode") or "simulation", str) else data.get("mode")
     if requested_mode != "simulation":
@@ -805,7 +827,7 @@ def run_soar_worker_once():
             request_path=request.path,
             source_ip=request.remote_addr,
             details={
-                "mode": "simulation",
+                "requested_executor_mode": "simulation",
                 "requested_batch_size": requested_batch_size,
                 "batch_size": batch_size,
                 "summary": summary,
@@ -819,7 +841,7 @@ def run_soar_worker_once():
         )
 
         return jsonify({
-            "mode": "simulation",
+            "requested_executor_mode": "simulation",
             "requested_batch_size": requested_batch_size,
             "batch_size": batch_size,
             "started_at": started_at,

@@ -55,7 +55,7 @@ const ADAPTER_OPERATIONS = {
   },
   firewall: {
     label: "Firewall",
-    description: "Plans containment actions in simulation only; it does not change firewall rules.",
+    description: "Records containment actions as tracking-only SIEM Blocklist entries; it does not change firewall rules.",
     usedBy: "7 core playbooks",
     requiredEnv: [],
     dryRunOnly: true,

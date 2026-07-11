@@ -16,6 +16,21 @@ const QUEUE_STATUSES = ["pending", "running", "awaiting_approval", "success", "f
 const QUEUE_STATUS_FILTERS = ["all", ...QUEUE_STATUSES];
 const QUEUE_RECENT_LIMITS = [10, 25, 50, 100];
 
+const QUEUE_MODE_LABELS = {
+  internal: "internal",
+  tracking_only: "tracking-only",
+  simulation: "simulated",
+  real: "real",
+};
+
+function formatQueueModeBreakdown(byMode) {
+  if (!byMode || typeof byMode !== "object") return "";
+  return Object.entries(byMode)
+    .filter(([, count]) => Number(count) > 0)
+    .map(([mode, count]) => `${count} ${QUEUE_MODE_LABELS[mode] || mode}`)
+    .join(" · ");
+}
+
 function SoarQueuePanel({
   cardStyle,
   cardHeaderStyle,
@@ -89,7 +104,7 @@ function SoarQueuePanel({
 
       await loadQueueVisibility({ quiet: true });
     } catch (err) {
-      setRunError(err.message || "Unable to run SOAR simulation batch.");
+      setRunError(err.message || "Unable to process SOAR queue batch.");
     } finally {
       setIsRunningBatch(false);
     }
@@ -134,8 +149,8 @@ function SoarQueuePanel({
           <p style={sectionLabelStyle}>SOAR</p>
           <h2 style={cardTitleStyle}>Queue Visibility</h2>
           <p style={cardSubtitleStyle}>
-            Read-only status for queued automated response actions. Manual simulation
-            batches process pending rows with SimulationExecutor only.
+            Read-only status for queued automated response actions. The manual batch
+            control uses canonical action handling, not a single simulation-only executor.
           </p>
         </div>
         <div style={controlsStyle}>
@@ -169,9 +184,10 @@ function SoarQueuePanel({
           </label>
           <div style={batchControlWrapperStyle}>
             <p style={simulationHelpStyle}>
-              Run simulation batch claims up to the selected pending queue rows (max 25),
-              evaluates them with SimulationExecutor, and may update internal queue/outcome
-              lifecycle records. It cannot send notifications, call providers, change
+              Process queue batch claims up to the selected pending queue rows (max 25).
+              block_ip, monitor, and flag_high_priority route through canonical response
+              handling and write real internal or tracking-only records; other actions use
+              the simulation executor. It cannot send notifications, call providers, change
               firewalls/hosts, or perform any other real external effect.
             </p>
             <label style={filterWrapperStyle}>
@@ -190,14 +206,14 @@ function SoarQueuePanel({
               type="button"
               onClick={handleRunBatch}
               disabled={loading || isRunningBatch}
-              title="Processes pending queue items with SimulationExecutor only. Internal lifecycle records may change; no notification, provider, firewall, host, or other external effect occurs."
+              title="Processes pending queue items using canonical action handling (real internal/tracking-only records for block_ip/monitor/flag_high_priority; simulation executor otherwise). No notification, provider, firewall, host, or other external effect occurs."
               style={{
                 ...runBatchButtonStyle,
                 opacity: loading || isRunningBatch ? 0.65 : 1,
                 cursor: loading || isRunningBatch ? "default" : "pointer",
               }}
             >
-              {isRunningBatch ? "Running..." : "Run simulation batch"}
+              {isRunningBatch ? "Processing..." : "Process queue batch"}
             </button>
           </div>
           <button
@@ -221,23 +237,28 @@ function SoarQueuePanel({
         {lastRunResult && lastRunResult.summary ? (
           <div style={resultSummaryStyle}>
             <div style={resultHeaderStyle}>
-              <p style={resultLabelStyle}>Last manual simulation batch</p>
+              <p style={resultLabelStyle}>Last manual queue batch</p>
               <span style={resultMetaStyle}>
-                {lastRunResult.summary.processed || 0} queue actions simulated internally ·
+                {lastRunResult.summary.processed || 0} queue actions processed internally ·
                 Batch size used: {lastRunResult.batch_size ?? "N/A"}
               </span>
             </div>
             <p style={simulationResultNoticeStyle}>
-              Counts below are simulated/failed/skipped/requeued internal queue outcomes only.
+              Counts below are processed/failed/skipped/requeued internal queue outcomes only.
               No notification, provider, firewall, host, or other external execution occurred.
             </p>
+            {formatQueueModeBreakdown(lastRunResult.summary.by_mode) ? (
+              <p style={simulationResultNoticeStyle}>
+                Modes: {formatQueueModeBreakdown(lastRunResult.summary.by_mode)}
+              </p>
+            ) : null}
             <div style={resultGridStyle}>
               <div style={resultItemStyle}>
                 <span style={resultCountLabelStyle}>Processed</span>
                 <strong style={resultCountValueStyle}>{lastRunResult.summary.processed || 0}</strong>
               </div>
               <div style={resultItemStyle}>
-                <span style={resultCountLabelStyle}>Simulated success</span>
+                <span style={resultCountLabelStyle}>Processed successfully</span>
                 <strong style={{ ...resultCountValueStyle, color: "#7ee787" }}>
                   {lastRunResult.summary.success || 0}
                 </strong>
