@@ -215,7 +215,11 @@ test("locks the sidebar to a fixed width that cannot shrink or grow from sibling
     />
   );
 
-  expect(aside).toHaveStyle({ flex: "0 0 auto", width: "64px" });
+  expect(aside).toHaveStyle({
+    flex: "0 0 auto",
+    width: "0px",
+    borderRight: "none",
+  });
 });
 
 test("sidebar width does not vary with which section is active", () => {
@@ -260,7 +264,7 @@ test("renders LIVE LOGS group from sections config for analysts", () => {
   }
 });
 
-test("renders no clipped footer text when collapsed, using a decorative status indicator instead", () => {
+test("does not render the status panel or decorative indicator when collapsed", () => {
   const { container } = render(
     <Sidebar
       sections={mockSections}
@@ -275,10 +279,11 @@ test("renders no clipped footer text when collapsed, using a decorative status i
 
   expect(screen.queryByText("Operational")).not.toBeInTheDocument();
   expect(screen.queryByText("v1.2.3")).not.toBeInTheDocument();
-  expect(container.querySelector('[title="Operational · v1.2.3"]')).toBeInTheDocument();
+  expect(screen.queryByTestId("sidebar-status-panel")).not.toBeInTheDocument();
+  expect(container.querySelector('[title="Operational · v1.2.3"]')).not.toBeInTheDocument();
 });
 
-test("renders no footer indicator when collapsed with no status/version props", () => {
+test("renders no footer panel when collapsed with no status/version props", () => {
   render(
     <Sidebar
       sections={mockSections}
@@ -289,7 +294,7 @@ test("renders no footer indicator when collapsed with no status/version props", 
     />
   );
 
-  expect(screen.getByTestId("sidebar-status-panel").querySelector("[title]")).toBeNull();
+  expect(screen.queryByTestId("sidebar-status-panel")).not.toBeInTheDocument();
 });
 
 test("renders a semantic primary nav landmark matching the exposed nav id", () => {

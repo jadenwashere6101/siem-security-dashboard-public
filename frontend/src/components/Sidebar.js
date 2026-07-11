@@ -30,7 +30,13 @@ function Sidebar({
   });
 
   return (
-    <aside style={{ ...asideStyle, width: isCollapsed ? 64 : 256 }}>
+    <aside
+      style={{
+        ...asideStyle,
+        width: isCollapsed ? 0 : 256,
+        borderRight: isCollapsed ? "none" : asideStyle.borderRight,
+      }}
+    >
       <nav id={SIDEBAR_NAV_ID} aria-label="Primary" style={navStyle}>
         {!isCollapsed &&
           groups.map((group) => (
@@ -69,30 +75,20 @@ function Sidebar({
           ))}
       </nav>
 
-      <div data-testid="sidebar-status-panel" style={statusPanelStyle}>
-        {isCollapsed
-          ? (statusLabel || versionLabel) && (
-              <span
-                aria-hidden="true"
-                title={[statusLabel, versionLabel].filter(Boolean).join(" · ")}
-                style={collapsedStatusDotStyle}
-              />
-            )
-          : (
-            <>
-              {statusLabel && (
-                <p style={statusLabelStyle} title={statusLabel}>
-                  {statusLabel}
-                </p>
-              )}
-              {versionLabel && (
-                <p style={versionLabelStyle} title={versionLabel}>
-                  {versionLabel}
-                </p>
-              )}
-            </>
+      {!isCollapsed && (
+        <div data-testid="sidebar-status-panel" style={statusPanelStyle}>
+          {statusLabel && (
+            <p style={statusLabelStyle} title={statusLabel}>
+              {statusLabel}
+            </p>
           )}
-      </div>
+          {versionLabel && (
+            <p style={versionLabelStyle} title={versionLabel}>
+              {versionLabel}
+            </p>
+          )}
+        </div>
+      )}
     </aside>
   );
 }
@@ -164,15 +160,6 @@ const activeNavButtonStyle = {
 const statusPanelStyle = {
   padding: "14px 12px",
   borderTop: "1px solid #30363d",
-};
-
-const collapsedStatusDotStyle = {
-  display: "block",
-  width: "10px",
-  height: "10px",
-  margin: "0 auto",
-  borderRadius: "50%",
-  backgroundColor: "#3fb950",
 };
 
 const statusLabelStyle = {

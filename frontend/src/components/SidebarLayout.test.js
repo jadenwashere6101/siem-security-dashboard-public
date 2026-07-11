@@ -306,8 +306,11 @@ test("main content keeps balanced gutters when the sidebar is collapsed", () => 
 
   const pageContent = screen.getByText("Page Content");
   const mainRegion = pageContent.closest("main");
+  const sidebar = mainRegion.previousElementSibling;
   expect(mainRegion).toHaveAttribute("data-sidebar-state", "collapsed");
   expect(mainRegion).toHaveStyle({ paddingLeft: "32px", paddingRight: "32px" });
+  expect(sidebar).toHaveStyle({ width: "0px", borderRight: "none" });
+  expect(screen.queryByTestId("sidebar-status-panel")).not.toBeInTheDocument();
 });
 
 test("main content keeps its left padding when the sidebar is expanded", () => {
@@ -320,6 +323,8 @@ test("main content keeps its left padding when the sidebar is expanded", () => {
       activeSectionId="alpha"
       onNavigate={() => {}}
       title="SIEM Dashboard"
+      statusLabel="Operational"
+      versionLabel="v1.0.0"
     >
       <p>Page Content</p>
     </SidebarLayout>
@@ -327,8 +332,12 @@ test("main content keeps its left padding when the sidebar is expanded", () => {
 
   const pageContent = screen.getByText("Page Content");
   const mainRegion = pageContent.closest("main");
+  const sidebar = mainRegion.previousElementSibling;
   expect(mainRegion).toHaveAttribute("data-sidebar-state", "expanded");
   expect(mainRegion).toHaveStyle({ paddingLeft: "32px", paddingRight: "32px" });
+  expect(sidebar).toHaveStyle({ width: "256px", borderRight: "1px solid #30363d" });
+  expect(screen.getByTestId("sidebar-status-panel")).toBeInTheDocument();
+  expect(screen.getByText("Operational")).toBeInTheDocument();
 });
 
 test("ordinary navigation resets the main container and focuses its primary heading", () => {
