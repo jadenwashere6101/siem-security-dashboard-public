@@ -186,3 +186,20 @@ def test_migration_0018_is_pending_when_db_at_0017(capsys):
     output = capsys.readouterr().out
     assert "Would apply migration 0018 0018_internal_read_only_execution_modes" in output
     assert "Dry run complete. 1 pending migration(s)." in output
+
+
+def test_migration_0018_execution_mode_sql_targets_membership_check_not_boolean_guards():
+    sql = (
+        REPO_ROOT / "migrations" / "0018_internal_read_only_execution_modes.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "soar_response_outcome_events_execution_mode_check" in sql
+    assert "'internal'" in sql
+    assert "'read_only'" in sql
+    assert "NOT LIKE '%execution_mode <>%'" in sql
+    assert "soar_response_outcome_events_internal_mode_booleans_check" in sql
+    assert "soar_response_outcome_events_read_only_mode_booleans_check" in sql
+    assert "DROP CONSTRAINT" in sql.upper()
+    assert "TRUNCATE" not in sql.upper()
+    assert "DELETE FROM" not in sql.upper()
+    assert "UPDATE " not in sql.upper()
