@@ -10,7 +10,7 @@ function AlertCorrelationSignals({
 
   return (
     <div style={detailSectionStyle}>
-      <strong>Behavioral Contributing Signals:</strong>
+      <strong style={{ color: "#cbd5e1" }}>Behavioral Contributing Signals:</strong>
       {contributingSignals.length > 0 ? (
         contributingSignals.map((signal) => (
           <div key={signal.signal} style={signalRowStyle}>

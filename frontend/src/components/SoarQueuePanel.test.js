@@ -822,4 +822,123 @@ test("renders queue counts and recent queue rows", async () => {
     expect(screen.queryByRole("button", { name: /replay/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /cancel/i })).not.toBeInTheDocument();
   });
+
+  describe("detail placement", () => {
+    test("clicking View makes the queue item detail immediately visible, adjacent to the table", async () => {
+      loadSoarQueueStatus.mockResolvedValue(statusFixture);
+      loadRecentSoarQueueItems.mockResolvedValue({ items: [queueRowFixture] });
+      loadSoarQueueItem.mockResolvedValue(queueDetailFixture);
+
+      renderPanel();
+      await screen.findByText("Recent Queue Items");
+
+      const layout = screen.getByLabelText(
+        "SOAR queue list and selected queue item detail"
+      );
+      expect(layout).not.toHaveClass("master-detail-layout--open");
+
+      await userEvent.click(screen.getByRole("button", { name: "View" }));
+
+      expect(await screen.findByText("queue-idempotency-key-101")).toBeInTheDocument();
+      expect(layout).toHaveClass("master-detail-layout--open");
+
+      const detailPane = screen.getByRole("complementary", {
+        name: "Selected SOAR queue item detail",
+      });
+      expect(detailPane).toContainElement(
+        screen.getByText("queue-idempotency-key-101")
+      );
+    });
+
+    test("the detail pane is the table's adjacent sibling, not content appended after the full list", async () => {
+      loadSoarQueueStatus.mockResolvedValue(statusFixture);
+      loadRecentSoarQueueItems.mockResolvedValue({ items: [queueRowFixture] });
+      loadSoarQueueItem.mockResolvedValue(queueDetailFixture);
+
+      renderPanel();
+      await screen.findByText("Recent Queue Items");
+      await userEvent.click(screen.getByRole("button", { name: "View" }));
+      await screen.findByText("queue-idempotency-key-101");
+
+      const layout = screen.getByLabelText(
+        "SOAR queue list and selected queue item detail"
+      );
+      const master = layout.querySelector(".master-detail-layout__master");
+      const detail = layout.querySelector(".master-detail-layout__detail");
+
+      expect(master.nextElementSibling).toBe(detail);
+      expect(
+        master.compareDocumentPosition(detail) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+    });
+
+    test("selecting a row anywhere in a long queue scrolls the detail pane into view", async () => {
+      const manyItems = Array.from({ length: 50 }, (_, idx) => ({
+        ...queueRowFixture,
+        id: 1000 + idx,
+      }));
+      loadSoarQueueStatus.mockResolvedValue(statusFixture);
+      loadRecentSoarQueueItems.mockResolvedValue({ items: manyItems });
+      loadSoarQueueItem.mockResolvedValue({ ...queueDetailFixture, id: 1000 });
+
+      const scrollIntoViewSpy = jest.fn();
+      window.HTMLElement.prototype.scrollIntoView = scrollIntoViewSpy;
+
+      renderPanel();
+      await screen.findByText("Recent Queue Items");
+
+      const viewButtons = screen.getAllByRole("button", { name: "View" });
+      await userEvent.click(viewButtons[0]);
+
+      await waitFor(() => expect(scrollIntoViewSpy).toHaveBeenCalled());
+
+      delete window.HTMLElement.prototype.scrollIntoView;
+    });
+
+    test("changing selection updates the visible details to the newly selected queue item", async () => {
+      const secondRow = { ...queueRowFixture, id: 202, source_ip: "9.9.9.9" };
+      const secondDetail = {
+        ...queueDetailFixture,
+        id: 202,
+        idempotency_key: "queue-idempotency-key-202",
+      };
+      loadSoarQueueStatus.mockResolvedValue(statusFixture);
+      loadRecentSoarQueueItems.mockResolvedValue({ items: [queueRowFixture, secondRow] });
+      loadSoarQueueItem.mockImplementation((id) =>
+        Promise.resolve(id === queueRowFixture.id ? queueDetailFixture : secondDetail)
+      );
+
+      renderPanel();
+      await screen.findByText("Recent Queue Items");
+
+      const viewButtons = screen.getAllByRole("button", { name: "View" });
+      await userEvent.click(viewButtons[0]);
+      expect(await screen.findByText("queue-idempotency-key-101")).toBeInTheDocument();
+
+      await userEvent.click(viewButtons[1]);
+      expect(await screen.findByText("queue-idempotency-key-202")).toBeInTheDocument();
+      expect(screen.queryByText("queue-idempotency-key-101")).not.toBeInTheDocument();
+    });
+
+    test("closing the detail panel clears the selection and restores focus to the row's View trigger", async () => {
+      loadSoarQueueStatus.mockResolvedValue(statusFixture);
+      loadRecentSoarQueueItems.mockResolvedValue({ items: [queueRowFixture] });
+      loadSoarQueueItem.mockResolvedValue(queueDetailFixture);
+
+      renderPanel();
+      await screen.findByText("Recent Queue Items");
+
+      const viewButton = screen.getByRole("button", { name: "View" });
+      await userEvent.click(viewButton);
+      expect(await screen.findByText("queue-idempotency-key-101")).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole("button", { name: "Close" }));
+
+      expect(screen.queryByText("queue-idempotency-key-101")).not.toBeInTheDocument();
+      expect(
+        await screen.findByText("Select a queue item to view details.")
+      ).toBeInTheDocument();
+      expect(viewButton).toHaveFocus();
+    });
+  });
 });

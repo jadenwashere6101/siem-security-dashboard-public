@@ -25,7 +25,7 @@ function AlertReputationDetails({
       <p style={expandedSecondaryTextStyle}>
         Provider/source: {externalReputation.source}
       </p>
-      <p style={{ marginTop: "8px" }}>
+      <p style={{ marginTop: "8px", color: "#e6edf3" }}>
         {externalReputation.summary}
       </p>
 
@@ -41,7 +41,7 @@ function AlertReputationDetails({
       <p style={expandedSecondaryTextStyle}>
         Internal SIEM-generated behavioral score
       </p>
-      <p style={{ marginTop: "8px" }}>
+      <p style={{ marginTop: "8px", color: "#e6edf3" }}>
         {behavioralReputation.summary}
       </p>
     </>

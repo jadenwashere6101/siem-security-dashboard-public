@@ -11,6 +11,12 @@ import {
   ResponseOutcomeSummary,
   outcomeLabel,
 } from "./ResponseOutcome";
+import {
+  MasterDetailLayout,
+  MasterDetailMaster,
+  MasterDetailPane,
+  useMasterDetailFocus,
+} from "./MasterDetailLayout";
 
 const QUEUE_STATUSES = ["pending", "running", "awaiting_approval", "success", "failed", "skipped"];
 const QUEUE_STATUS_FILTERS = ["all", ...QUEUE_STATUSES];
@@ -55,6 +61,7 @@ function SoarQueuePanel({
   const [selectedQueueItem, setSelectedQueueItem] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
+  const { detailRef, rememberTrigger, restoreTriggerFocus } = useMasterDetailFocus(selectedQueueId);
 
   const loadQueueVisibility = useCallback(async ({ quiet = false } = {}) => {
     try {
@@ -110,7 +117,8 @@ function SoarQueuePanel({
     }
   }, [loadQueueVisibility, runBatchSize]);
 
-  const handleViewQueueItem = useCallback(async (queueId) => {
+  const handleViewQueueItem = useCallback(async (queueId, trigger) => {
+    rememberTrigger(trigger);
     setSelectedQueueId(queueId);
     setDetailError("");
     setDetailLoading(true);
@@ -123,14 +131,15 @@ function SoarQueuePanel({
     } finally {
       setDetailLoading(false);
     }
-  }, []);
+  }, [rememberTrigger]);
 
   const handleCloseDetail = useCallback(() => {
+    restoreTriggerFocus();
     setSelectedQueueId(null);
     setSelectedQueueItem(null);
     setDetailError("");
     setDetailLoading(false);
-  }, []);
+  }, [restoreTriggerFocus]);
 
   useEffect(() => {
     loadQueueVisibility();
@@ -309,6 +318,11 @@ function SoarQueuePanel({
 
         {error ? <div style={errorStateStyle}>{error}</div> : null}
 
+        <MasterDetailLayout
+          detailOpen={selectedQueueId !== null}
+          ariaLabel="SOAR queue list and selected queue item detail"
+        >
+          <MasterDetailMaster ariaLabel="SOAR queue items">
         {loading ? (
           <p style={emptyTextStyle}>Loading SOAR queue...</p>
         ) : queueItems.length === 0 ? (
@@ -382,7 +396,7 @@ function SoarQueuePanel({
                             ...viewButtonStyle,
                             ...(selectedQueueId === item.id ? selectedViewButtonStyle : null),
                           }}
-                          onClick={() => handleViewQueueItem(item.id)}
+                          onClick={(event) => handleViewQueueItem(item.id, event.currentTarget)}
                           title={`View queue item ${item.id}`}
                         >
                           View
@@ -395,7 +409,9 @@ function SoarQueuePanel({
             </div>
           </div>
         )}
+          </MasterDetailMaster>
 
+          <MasterDetailPane ref={detailRef} ariaLabel="Selected SOAR queue item detail">
         {!loading && !error ? (
           <div style={detailPanelStyle}>
             <div style={detailHeaderStyle}>
@@ -562,6 +578,8 @@ function SoarQueuePanel({
             )}
           </div>
         ) : null}
+          </MasterDetailPane>
+        </MasterDetailLayout>
       </div>
     </section>
   );
