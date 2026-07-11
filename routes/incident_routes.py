@@ -110,6 +110,14 @@ def _map_step_event_type(entry: dict[str, Any]) -> str:
     if isinstance(out, dict) and isinstance(out.get("adapter_result"), dict):
         ar = out["adapter_result"]
         if ar.get("success") is True:
+            mode = str(
+                entry.get("mode") or out.get("adapter_mode") or ar.get("mode") or ""
+            ).strip().lower()
+            executed = entry.get("executed")
+            if executed is None:
+                executed = out.get("executed")
+            if mode == "real" and executed is True:
+                return "playbook_adapter_real"
             return "playbook_adapter_simulated"
         return "playbook_step_failed"
     if status == "success":

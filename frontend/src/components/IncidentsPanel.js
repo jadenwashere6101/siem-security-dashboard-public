@@ -662,6 +662,7 @@ const formatEventType = (value) => {
     playbook_step_failed: "Playbook step failed",
     playbook_step_skipped: "Playbook step skipped",
     playbook_adapter_simulated: "Simulated adapter step",
+    playbook_adapter_real: "Real adapter step",
     approval_requested: "Approval requested",
     approval_approved: "Approval approved",
     approval_denied: "Approval denied",

@@ -432,6 +432,13 @@ describe("IncidentsPanel", () => {
           summary: "Simulated adapter event",
           metadata: { adapter: "slack", simulated: true, executed: false },
         },
+        {
+          timestamp: "2026-05-10T18:26:00Z",
+          event_type: "playbook_adapter_real",
+          source: "playbook_execution",
+          summary: "Slack real-mode notification sent.",
+          metadata: { adapter: "slack", simulated: false, executed: true },
+        },
       ],
     });
 
@@ -440,6 +447,7 @@ describe("IncidentsPanel", () => {
     await userEvent.click(screen.getByText(incidentFixture.title));
 
     expect(await screen.findByText("Simulated adapter step")).toBeInTheDocument();
+    expect(await screen.findByText("Real adapter step")).toBeInTheDocument();
     expect(
       screen.getByText(
         "Timeline is read-only. Each event's mode (internal, tracking-only, simulated, or real) is determined by the backend and shown per event."

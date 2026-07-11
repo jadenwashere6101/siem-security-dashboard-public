@@ -7,6 +7,7 @@ from werkzeug.security import generate_password_hash
 
 from core import soar_response_outcomes as outcomes
 from core.incident_store import create_incident, link_alert_to_incident
+from routes.incident_routes import _map_step_event_type
 
 
 ADMIN_USER = "testadmin"
@@ -257,6 +258,66 @@ def test_get_incident_detail_super_admin_can_view(client, postgres_db):
     assert resp.get_json()["incident"]["id"] == incident["id"]
 
 
+def test_map_step_event_type_classifies_simulated_adapter_step():
+    entry = {
+        "status": "success",
+        "mode": "simulation",
+        "executed": False,
+        "output": {
+            "adapter_result": {"adapter": "slack", "action": "send_message", "success": True},
+        },
+    }
+    assert _map_step_event_type(entry) == "playbook_adapter_simulated"
+
+
+def test_map_step_event_type_classifies_real_executed_adapter_step():
+    entry = {
+        "status": "success",
+        "mode": "real",
+        "executed": True,
+        "output": {
+            "adapter_result": {"adapter": "slack", "action": "send_message", "success": True, "mode": "real"},
+        },
+    }
+    assert _map_step_event_type(entry) == "playbook_adapter_real"
+
+
+def test_map_step_event_type_real_mode_without_confirmed_execution_stays_simulated():
+    # Fail-closed: real mode alone is not enough without confirmed execution.
+    entry = {
+        "status": "success",
+        "mode": "real",
+        "executed": False,
+        "output": {
+            "adapter_result": {"adapter": "slack", "action": "send_message", "success": True, "mode": "real"},
+        },
+    }
+    assert _map_step_event_type(entry) == "playbook_adapter_simulated"
+
+
+def test_map_step_event_type_missing_mode_info_defaults_to_simulated():
+    # Legacy/historical entries without mode info remain safely simulated, never promoted to real.
+    entry = {
+        "status": "success",
+        "output": {
+            "adapter_result": {"adapter": "slack", "action": "send_message", "success": True},
+        },
+    }
+    assert _map_step_event_type(entry) == "playbook_adapter_simulated"
+
+
+def test_map_step_event_type_failed_adapter_step_unaffected():
+    entry = {
+        "status": "success",
+        "mode": "real",
+        "executed": True,
+        "output": {
+            "adapter_result": {"adapter": "slack", "action": "send_message", "success": False, "mode": "real"},
+        },
+    }
+    assert _map_step_event_type(entry) == "playbook_step_failed"
+
+
 def test_incident_list_detail_and_timeline_include_response_outcome(client, postgres_db):
     conn, _cur = postgres_db
     incident = _insert_incident(conn, title="Outcome incident", source_ip="203.0.113.186")
@@ -498,6 +559,27 @@ def test_get_incident_timeline_analyst_read_only_aggregate(client, postgres_db):
                 },
             },
         },
+        {
+            "step_index": 2,
+            "action": "notify_slack",
+            "status": "success",
+            "mode": "real",
+            "executed": True,
+            "started_at": "2026-05-10T12:00:04Z",
+            "completed_at": "2026-05-10T12:00:05Z",
+            "message": "Slack real-mode notification sent.",
+            "output": {
+                "simulated": False,
+                "executed": True,
+                "adapter_mode": "real",
+                "adapter_result": {
+                    "adapter": "slack",
+                    "action": "send_message",
+                    "success": True,
+                    "mode": "real",
+                },
+            },
+        },
         None,
         "not-a-step",
     ]
@@ -625,6 +707,7 @@ def test_get_incident_timeline_analyst_read_only_aggregate(client, postgres_db):
     assert "playbook_execution_created" in types
     assert "playbook_step_completed" in types
     assert "playbook_adapter_simulated" in types
+    assert "playbook_adapter_real" in types
     assert "approval_requested" in types
     assert "approval_approved" in types
     assert "audit_event" in types
@@ -633,6 +716,11 @@ def test_get_incident_timeline_analyst_read_only_aggregate(client, postgres_db):
     adapter_ev = next(e for e in body["timeline"] if e["event_type"] == "playbook_adapter_simulated")
     assert adapter_ev["metadata"].get("output", {}).get("adapter") == "slack"
     assert "params" not in str(adapter_ev.get("metadata", {}))
+
+    real_adapter_ev = next(e for e in body["timeline"] if e["event_type"] == "playbook_adapter_real")
+    assert real_adapter_ev["metadata"].get("output", {}).get("adapter") == "slack"
+    assert real_adapter_ev["summary"] == "Slack real-mode notification sent."
+    assert "params" not in str(real_adapter_ev.get("metadata", {}))
 
     ts_nonempty = [e["timestamp"] for e in body["timeline"] if e.get("timestamp")]
     assert ts_nonempty == sorted(ts_nonempty)
