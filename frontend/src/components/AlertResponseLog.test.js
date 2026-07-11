@@ -45,9 +45,19 @@ test("AlertResponseLog preserves legacy status display without response_outcome"
   expect(container).toHaveTextContent("MONITOR → success");
 });
 
-test("panel variant uses explicit readable dark-theme foregrounds", () => {
-  render(<AlertResponseLog logs={[]} variant="panel" />);
+test.each([
+  ["inline", undefined],
+  ["panel", "panel"],
+])("%s variant uses an explicit readable dark-theme foreground", (_name, variant) => {
+  render(
+    <div style={{ color: "#000000" }}>
+      <AlertResponseLog logs={[]} variant={variant} />
+    </div>
+  );
 
   expect(screen.getByText("Response Log:").parentElement).toHaveStyle({ color: "#e5e7eb" });
-  expect(screen.getByText("No response actions logged")).toHaveStyle({ color: "#cbd5e1" });
+  expect(screen.getByText("Response Log:").parentElement).not.toHaveStyle({ color: "inherit" });
+  expect(screen.getByText("No response actions logged")).toHaveStyle({
+    color: variant === "panel" ? "#cbd5e1" : "#8b949e",
+  });
 });

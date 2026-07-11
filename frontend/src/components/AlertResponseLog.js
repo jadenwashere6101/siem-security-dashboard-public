@@ -7,7 +7,7 @@ function AlertResponseLog({ logs, variant = "inline" }) {
     <div
       style={{
         marginTop: panelVariant ? "20px" : "10px",
-        color: panelVariant ? "#e5e7eb" : "inherit",
+        color: "#e5e7eb",
       }}
     >
       <strong>Response Log:</strong>

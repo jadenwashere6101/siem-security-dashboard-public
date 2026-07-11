@@ -26,6 +26,30 @@ test("locked alert actions are disabled and do not execute", async () => {
   expect(screen.getByText(/Requires analyst or super-admin privileges/i)).toBeInTheDocument();
 });
 
+test.each([
+  ["expanded row", undefined],
+  ["side panel", "panel"],
+])("manual actions use an explicit readable foreground in the %s", (_name, variant) => {
+  render(
+    <div style={{ color: "#000000" }}>
+      <AlertManualActions
+        alertId={1}
+        sourceIp="8.8.8.8"
+        executeAction={jest.fn()}
+        executingActionId={null}
+        canTakeAlertActions
+        getActionButtonStyle={(style) => style}
+        variant={variant}
+      />
+    </div>
+  );
+
+  const manualActions = screen.getByTestId("alert-manual-actions");
+  expect(manualActions).toHaveStyle({ color: "#e5e7eb" });
+  expect(manualActions).not.toHaveStyle({ color: "inherit" });
+  expect(screen.getByText("Manual Actions:").parentElement).toBe(manualActions);
+});
+
 test("response state summary exposes registry deep link", async () => {
   const onOpenRegistry = jest.fn();
   render(

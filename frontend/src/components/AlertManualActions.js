@@ -55,7 +55,13 @@ function AlertManualActions({
   ];
 
   return (
-    <div style={{ marginTop: panelVariant ? "20px" : "10px" }} data-testid="alert-manual-actions">
+    <div
+      style={{
+        marginTop: panelVariant ? "20px" : "10px",
+        color: "#e5e7eb",
+      }}
+      data-testid="alert-manual-actions"
+    >
       <strong>Manual Actions:</strong>
       {isLocked && (
         <div style={manualActionNoticeStyle} title={effectiveLockReason}>

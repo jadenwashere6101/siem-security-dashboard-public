@@ -109,3 +109,10 @@ test("AlertExpandedRow renders no-history badge for null response outcome", () =
   expect(screen.getByText("Observed only")).toBeInTheDocument();
   expect(screen.getByLabelText(/no canonical outcome recorded/i)).toBeInTheDocument();
 });
+
+test("AlertExpandedRow gives response and manual action headings explicit readable foregrounds", () => {
+  renderExpandedRow({ ...baseAlert, response_outcome: null });
+
+  expect(screen.getByText("Response Log:").parentElement).toHaveStyle({ color: "#e5e7eb" });
+  expect(screen.getByText("Manual Actions:").parentElement).toHaveStyle({ color: "#e5e7eb" });
+});
