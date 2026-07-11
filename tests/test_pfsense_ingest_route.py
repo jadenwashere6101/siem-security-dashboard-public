@@ -200,6 +200,58 @@ def test_routine_allow_is_filtered_before_geolocation_or_ingest(client, monkeypa
     conn.rollback.assert_called_once()
 
 
+def test_runtime_policy_matrix_retains_only_enabled_categories(client, monkeypatch, postgres_db):
+    monkeypatch.setenv("SIEM_INGEST_API_KEY", VALID_API_KEY)
+    install_route_db(monkeypatch, postgres_db)
+    conn, cur = postgres_db
+    import routes.ingest_routes as ingest_routes
+
+    geo_mock = MagicMock(return_value={})
+    monkeypatch.setattr(ingest_routes, "lookup_ip_location", geo_mock)
+    cur.execute("SELECT COUNT(*) FROM events")
+    before_count = cur.fetchone()[0]
+
+    blocked = post_pfsense(client, valid_pfsense_block_payload(source_ip="198.51.100.31"))
+    sensitive = post_pfsense(client, valid_pfsense_allow_payload(source_ip="198.51.100.32"))
+    routine_payload = valid_pfsense_allow_payload(source_ip="198.51.100.33")
+    routine_payload["raw_payload"] = dict(
+        routine_payload["raw_payload"], direction="out", destination_port=443
+    )
+    routine = post_pfsense(client, routine_payload)
+
+    assert [blocked.status_code, sensitive.status_code, routine.status_code] == [201, 201, 202]
+    assert geo_mock.call_count == 2
+    cur.execute("SELECT COUNT(*) FROM events")
+    assert cur.fetchone()[0] == before_count + 2
+
+    cur.execute("UPDATE pfsense_ingest_config SET enabled = TRUE WHERE category = 'dns_traffic'")
+    conn.commit()
+    dns_payload = valid_pfsense_allow_payload(source_ip="198.51.100.34")
+    dns_payload["raw_payload"] = dict(
+        dns_payload["raw_payload"], direction="out", protocol="udp", destination_port=53
+    )
+    assert post_pfsense(client, dns_payload).status_code == 201
+
+    cur.execute("UPDATE pfsense_ingest_config SET enabled = TRUE WHERE category = 'icmp_traffic'")
+    conn.commit()
+    icmp_payload = valid_pfsense_allow_payload(source_ip="198.51.100.35")
+    icmp_payload["raw_payload"] = {
+        "action": "pass",
+        "interface": "igb1",
+        "direction": "in",
+        "ip_version": "4",
+        "protocol": "icmp",
+        "source_ip": "198.51.100.35",
+        "destination_ip": "203.0.113.35",
+        "icmp_type": 8,
+        "icmp_code": 0,
+    }
+    assert post_pfsense(client, icmp_payload).status_code == 201
+
+    cur.execute("SELECT COUNT(*) FROM events")
+    assert cur.fetchone()[0] == before_count + 4
+
+
 @pytest.mark.parametrize(
     "payload,expected_error",
     [

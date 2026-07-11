@@ -20,13 +20,21 @@ class _RouteSafeConnection:
     def close(self):
         return None
 
+    def commit(self):
+        return self._conn.commit()
+
+    def rollback(self):
+        return self._conn.rollback()
+
 
 @contextmanager
 def _patched_app_db(conn):
     wrapper = _RouteSafeConnection(conn)
     with patch("routes.admin_routes.get_db_connection", return_value=wrapper), patch(
         "core.audit_helpers.get_db_connection", return_value=wrapper
-    ), patch("engines.detection_config.get_db_connection", return_value=wrapper):
+    ), patch("engines.detection_config.get_db_connection", return_value=wrapper), patch(
+        "core.db.get_db_connection", return_value=wrapper
+    ):
         yield
 
 
@@ -53,7 +61,12 @@ def _fake_analyst():
     }
 
 
-@pytest.mark.parametrize("path", ["/admin/users", "/admin/audit-log"])
+@pytest.mark.parametrize("path", [
+    "/admin/users",
+    "/admin/audit-log",
+    "/admin/pfsense-ingest-filters",
+    "/admin/pfsense-ingest-filters/metrics",
+])
 def test_admin_list_routes_without_session_return_401(client, path):
     resp = client.get(path)
     assert resp.status_code == 401
@@ -67,6 +80,10 @@ def test_admin_list_routes_without_session_return_401(client, path):
         ("/admin/users", _fake_analyst(), "analystpass"),
         ("/admin/audit-log", _fake_viewer(), "viewerpass"),
         ("/admin/audit-log", _fake_analyst(), "analystpass"),
+        ("/admin/pfsense-ingest-filters", _fake_viewer(), "viewerpass"),
+        ("/admin/pfsense-ingest-filters", _fake_analyst(), "analystpass"),
+        ("/admin/pfsense-ingest-filters/metrics", _fake_viewer(), "viewerpass"),
+        ("/admin/pfsense-ingest-filters/metrics", _fake_analyst(), "analystpass"),
     ],
 )
 def test_admin_list_routes_as_viewer_or_analyst_return_403(client, mock_db, path, fake_user, password):
@@ -194,3 +211,80 @@ def test_patch_admin_detection_rule_missing_parameters_returns_400(client):
     )
     assert resp.status_code == 400
     assert resp.get_json()["error"] == "Missing required field: parameters"
+
+
+def test_pfsense_ingest_filters_require_super_admin(client):
+    assert client.get("/admin/pfsense-ingest-filters").status_code == 401
+    assert client.get("/admin/pfsense-ingest-filters/metrics").status_code == 401
+
+
+def test_pfsense_filter_metrics_are_bounded_process_aggregates(client):
+    _login_super_admin(client)
+    response = client.get("/admin/pfsense-ingest-filters/metrics")
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["reset_on_process_restart"] is True
+    assert isinstance(data["counts"], dict)
+    assert data["listener_outcome_contract"] == [
+        "forwarded",
+        "filtered",
+        "ingested",
+        "rejected",
+        "backend_failed",
+    ]
+
+
+def test_get_and_patch_pfsense_ingest_filters_apply_immediately_and_audit(client, postgres_db):
+    conn, cur = postgres_db
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        response = client.get("/admin/pfsense-ingest-filters")
+        assert response.status_code == 200
+        policy = response.get_json()
+        assert set(policy["categories"]) == {
+            "block_events",
+            "inbound_sensitive_port_allows",
+            "all_allow_events",
+            "dns_traffic",
+            "icmp_traffic",
+        }
+        assert policy["categories"]["all_allow_events"]["enabled"] is False
+
+        updated = client.patch(
+            "/admin/pfsense-ingest-filters/all_allow_events",
+            json={"enabled": True, "parameters": {}},
+        )
+        assert updated.status_code == 200
+        assert updated.get_json()["enabled"] is True
+
+        immediate = client.get("/admin/pfsense-ingest-filters").get_json()
+        assert immediate["categories"]["all_allow_events"]["enabled"] is True
+
+    cur.execute(
+        "SELECT event_type, details FROM audit_log WHERE event_type = %s ORDER BY id DESC LIMIT 1",
+        ("pfsense_ingest_filter_updated",),
+    )
+    audit = cur.fetchone()
+    assert audit[0] == "pfsense_ingest_filter_updated"
+    assert audit[1]["category"] == "all_allow_events"
+    assert audit[1]["old"]["enabled"] is False
+    assert audit[1]["new"]["enabled"] is True
+
+
+@pytest.mark.parametrize(
+    "category,payload",
+    [
+        ("unknown", {"enabled": True}),
+        ("all_allow_events", {"enabled": "yes"}),
+        ("block_events", {"enabled": True, "extra": True}),
+        ("inbound_sensitive_port_allows", {"enabled": True, "parameters": {"sensitive_ports": [22, 22]}}),
+    ],
+)
+def test_invalid_pfsense_filter_updates_do_not_change_configuration(client, postgres_db, category, payload):
+    conn, cur = postgres_db
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        response = client.patch(f"/admin/pfsense-ingest-filters/{category}", json=payload)
+    assert response.status_code in {400, 404}
+    cur.execute("SELECT enabled FROM pfsense_ingest_config WHERE category = 'all_allow_events'")
+    assert cur.fetchone()[0] is False

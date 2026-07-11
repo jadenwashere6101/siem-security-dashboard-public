@@ -78,6 +78,12 @@ export const sectionsConfig = [
     visibleWhen: ({ isSuperAdmin }) => isSuperAdmin,
   },
   {
+    id: "pfsense-ingest-filters",
+    label: "pfSense Ingest Filters",
+    group: "administration",
+    visibleWhen: ({ isSuperAdmin }) => isSuperAdmin,
+  },
+  {
     id: "admin-users",
     label: "User Management",
     group: "administration",

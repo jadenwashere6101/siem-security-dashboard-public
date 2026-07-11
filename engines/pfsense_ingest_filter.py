@@ -24,6 +24,14 @@ DEFAULT_PFSENSE_INGEST_CONFIG = {
     "icmp_traffic": {"enabled": False, "parameters": {}},
 }
 
+PFSENSE_INGEST_CONFIG_DESCRIPTIONS = {
+    "block_events": "Retain all supported traffic blocked by pfSense.",
+    "inbound_sensitive_port_allows": "Retain inbound TCP/UDP allows to canonical sensitive destination ports.",
+    "all_allow_events": "Retain every supported allowed firewall event.",
+    "dns_traffic": "Retain allowed TCP/UDP traffic whose destination port is 53; this is not DNS query content.",
+    "icmp_traffic": "Retain allowed IPv4 ICMP traffic; blocked ICMP is covered by block retention.",
+}
+
 
 @dataclass(frozen=True)
 class FilterDecision:
@@ -79,7 +87,14 @@ def default_effective_policy(status="default"):
     return {
         "status": status,
         "categories": {
-            key: validate_config_entry(key, value["enabled"], value["parameters"])
+            key: {
+                **validate_config_entry(key, value["enabled"], value["parameters"]),
+                "description": PFSENSE_INGEST_CONFIG_DESCRIPTIONS[key],
+                "has_override": False,
+                "override_status": "default",
+                "updated_by": None,
+                "updated_at": None,
+            }
             for key, value in DEFAULT_PFSENSE_INGEST_CONFIG.items()
         },
     }
@@ -90,16 +105,30 @@ def load_effective_policy(cur):
     try:
         cur.execute("SAVEPOINT pfsense_ingest_config_read")
         cur.execute(
-            "SELECT category, enabled, parameters FROM pfsense_ingest_config ORDER BY category"
+            """
+            SELECT category, enabled, parameters, updated_by, updated_at
+            FROM pfsense_ingest_config
+            ORDER BY category
+            """
         )
         rows = cur.fetchall()
         policy = default_effective_policy(status="applied")
         seen = set()
-        for category, enabled, parameters in rows:
+        for row in rows:
+            category, enabled, parameters = row[:3]
+            updated_by = row[3] if len(row) > 3 else None
+            updated_at = row[4] if len(row) > 4 else None
             if category in seen:
                 raise ValueError("duplicate pfSense ingest filter category")
             seen.add(category)
-            policy["categories"][category] = validate_config_entry(category, enabled, parameters)
+            policy["categories"][category] = {
+                **validate_config_entry(category, enabled, parameters),
+                "description": PFSENSE_INGEST_CONFIG_DESCRIPTIONS[category],
+                "has_override": True,
+                "override_status": "applied",
+                "updated_by": updated_by,
+                "updated_at": str(updated_at) if updated_at is not None else None,
+            }
         cur.execute("RELEASE SAVEPOINT pfsense_ingest_config_read")
         return policy
     except Exception as error:
@@ -157,7 +186,41 @@ def record_filter_decision(decision):
 
 def get_filter_metrics():
     with _counter_lock:
-        return {"started_at": _counter_started_at.isoformat(), "counts": dict(_decision_counts)}
+        return {
+            "started_at": _counter_started_at.isoformat(),
+            "reset_on_process_restart": True,
+            "counts": dict(_decision_counts),
+            "listener_outcome_contract": [
+                "forwarded",
+                "filtered",
+                "ingested",
+                "rejected",
+                "backend_failed",
+            ],
+            "listener_metrics_source": "pfsense listener process statistics",
+        }
+
+
+def get_all_effective_config():
+    from core.db import get_db_connection
+
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        return load_effective_policy(cur)
+    except Exception as error:
+        logger.warning(
+            "pfsense_ingest_filter_config fallback=safe_defaults status=unavailable reason=%s",
+            type(error).__name__,
+        )
+        return default_effective_policy(status="unavailable")
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 
 def get_effective_sensitive_ports(cur):

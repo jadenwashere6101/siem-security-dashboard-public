@@ -27,6 +27,13 @@ from engines.detection_config import (
     get_effective_detection_rule,
     validate_detection_rule_config,
 )
+from engines.pfsense_ingest_filter import (
+    DEFAULT_PFSENSE_INGEST_CONFIG,
+    get_all_effective_config,
+    get_filter_metrics,
+    load_effective_policy,
+    upsert_config_override,
+)
 from engines.soar_executor import SimulationExecutor
 from core.extensions import limiter
 
@@ -34,6 +41,80 @@ from core.extensions import limiter
 admin_bp = Blueprint("admin", __name__)
 DEFAULT_ADMIN_RUN_BATCH_SIZE = 10
 MAX_ADMIN_RUN_BATCH_SIZE = 25
+
+
+@admin_bp.route("/admin/pfsense-ingest-filters", methods=["GET"])
+@login_required
+@super_admin_required
+def list_pfsense_ingest_filters():
+    policy = get_all_effective_config()
+    return jsonify(policy), 200
+
+
+@admin_bp.route("/admin/pfsense-ingest-filters/metrics", methods=["GET"])
+@login_required
+@super_admin_required
+def get_pfsense_ingest_filter_metrics():
+    return jsonify(get_filter_metrics()), 200
+
+
+@admin_bp.route("/admin/pfsense-ingest-filters/<category>", methods=["PATCH"])
+@login_required
+@super_admin_required
+def update_pfsense_ingest_filter(category):
+    if category not in DEFAULT_PFSENSE_INGEST_CONFIG:
+        return jsonify({"error": "pfSense ingest filter category not found"}), 404
+
+    payload = request.get_json()
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Invalid JSON"}), 400
+    if set(payload) - {"enabled", "parameters"}:
+        return jsonify({"error": "Unknown pfSense ingest filter field"}), 400
+    if "enabled" not in payload:
+        return jsonify({"error": "Missing required field: enabled"}), 400
+
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        old_policy = load_effective_policy(cur)
+        old_entry = old_policy["categories"][category]
+        parameters = payload.get("parameters", old_entry["parameters"])
+        try:
+            upsert_config_override(cur, category, payload["enabled"], parameters, current_user.id)
+        except ValueError as error:
+            conn.rollback()
+            return jsonify({"error": str(error)}), 400
+
+        updated_policy = load_effective_policy(cur)
+        updated_entry = updated_policy["categories"][category]
+        conn.commit()
+
+        log_audit_event(
+            "pfsense_ingest_filter_updated",
+            actor_username=current_user.id,
+            actor_role=current_user.role,
+            http_method=request.method,
+            request_path=request.path,
+            source_ip=request.remote_addr,
+            details={
+                "category": category,
+                "old": {"enabled": old_entry["enabled"], "parameters": old_entry["parameters"]},
+                "new": {"enabled": updated_entry["enabled"], "parameters": updated_entry["parameters"]},
+            },
+        )
+        return jsonify(updated_entry), 200
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        current_app.logger.error("Unable to update pfSense ingest filter category=%s: %s", category, error)
+        return jsonify({"error": "Unable to update pfSense ingest filter"}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 
 @admin_bp.route("/admin/users", methods=["POST"])

@@ -4,6 +4,7 @@ import DashboardSection from "./components/DashboardSection";
 import AdminUsersPanel from "./components/AdminUsersPanel";
 import AuditLogPanel from "./components/AuditLogPanel";
 import DetectionRulesPanel from "./components/DetectionRulesPanel";
+import PfsenseIngestFiltersPanel from "./components/PfsenseIngestFiltersPanel";
 import IncidentsPanel from "./components/IncidentsPanel";
 import ApprovalsPanel from "./components/ApprovalsPanel";
 import SoarQueuePanel from "./components/SoarQueuePanel";
@@ -676,6 +677,15 @@ function AppInner() {
 
         {activeSection === "detection-rules" && isSectionVisible("detection-rules", roleFlags) && (
           <DetectionRulesPanel
+            cardStyle={cardStyle}
+            cardHeaderStyle={cardHeaderStyle}
+            cardTitleStyle={cardTitleStyle}
+            cardSubtitleStyle={cardSubtitleStyle}
+          />
+        )}
+
+        {activeSection === "pfsense-ingest-filters" && isSectionVisible("pfsense-ingest-filters", roleFlags) && (
+          <PfsenseIngestFiltersPanel
             cardStyle={cardStyle}
             cardHeaderStyle={cardHeaderStyle}
             cardTitleStyle={cardTitleStyle}

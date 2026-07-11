@@ -12,12 +12,12 @@
 
 ## 2. Mac AI Phase 2 — Administration and End-to-End Verification
 
-- [ ] 2.1 Add super-admin-only effective-policy read and validated update APIs using existing RBAC, error, transaction, and response conventions.
-- [ ] 2.2 Emit existing-format audit records for successful configuration changes with actor and safe old/new values, and verify denied or failed updates cannot change policy.
-- [ ] 2.3 Expose bounded aggregate decision counts, reason counts, fallback state, and listener outcome statistics without persisting raw dropped events or sensitive payloads.
-- [ ] 2.4 Add the Administration service client and panel with toggles for block events, inbound sensitive-port allows, all allows, DNS port-53 traffic, and allowed ICMP plus a validated canonical sensitive-port editor.
-- [ ] 2.5 Make the panel accurately explain precedence, inbound scope, DNS port-53 semantics, restartless effect, safe-default fallback, validation failures, permissions, loading, and save results.
-- [ ] 2.6 Add API authorization/audit tests and focused React service/component tests covering each control, invalid ports, fallback display, failure states, and role restrictions.
-- [ ] 2.7 Run a local end-to-end retained/filtered matrix and prove geolocation, event inserts, detections, and other downstream work occur only for retained events.
-- [ ] 2.8 Run affected backend suites, frontend tests, production build, migration/schema verification, dark-theme/spacing/accessibility review, strict OpenSpec validation, and `git diff --check`.
-- [ ] 2.9 Produce a VM handoff containing the approved commit requirement, exact migration/deploy commands, defaults, synthetic fixtures and expected outcomes, counter/DB queries, fallback checks, restartless checks, and rollback procedure.
+- [x] 2.1 Add super-admin-only effective-policy read and validated update APIs using existing RBAC, error, transaction, and response conventions.
+- [x] 2.2 Emit existing-format audit records for successful configuration changes with actor and safe old/new values, and verify denied or failed updates cannot change policy.
+- [x] 2.3 Expose bounded aggregate decision counts, reason counts, fallback state, and listener outcome statistics without persisting raw dropped events or sensitive payloads.
+- [x] 2.4 Add the Administration service client and panel with toggles for block events, inbound sensitive-port allows, all allows, DNS port-53 traffic, and allowed ICMP plus a validated canonical sensitive-port editor.
+- [x] 2.5 Make the panel accurately explain precedence, inbound scope, DNS port-53 semantics, restartless effect, safe-default fallback, validation failures, permissions, loading, and save results.
+- [x] 2.6 Add API authorization/audit tests and focused React service/component tests covering each control, invalid ports, fallback display, failure states, and role restrictions.
+- [x] 2.7 Run a local end-to-end retained/filtered matrix and prove geolocation, event inserts, detections, and other downstream work occur only for retained events.
+- [x] 2.8 Run affected backend suites, frontend tests, production build, migration/schema verification, dark-theme/spacing/accessibility review, strict OpenSpec validation, and `git diff --check`.
+- [x] 2.9 Produce a VM handoff containing the approved commit requirement, exact migration/deploy commands, defaults, synthetic fixtures and expected outcomes, counter/DB queries, fallback checks, restartless checks, and rollback procedure.
