@@ -105,8 +105,10 @@ _CANONICAL_SPECS: tuple[CanonicalActionSpec, ...] = (
     CanonicalActionSpec(
         name="notify_teams",
         owning_executor=OWNER_NOTIFICATION_ADAPTER,
-        supported_modes=frozenset({MODE_SIMULATION, MODE_REAL}),
-        description="Provider-specific Teams notification.",
+        # Product rule: Teams remains simulation-only even if the adapter
+        # still advertises allow_real_mode (capability-contract conflict).
+        supported_modes=frozenset({MODE_SIMULATION}),
+        description="Provider-specific Teams notification (simulation-only).",
     ),
     CanonicalActionSpec(
         name="notify_email",

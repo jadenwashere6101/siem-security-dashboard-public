@@ -18,7 +18,9 @@ from typing import Any
 
 from psycopg2.extras import Json
 
-EXECUTION_MODES = frozenset({"observed", "simulation", "tracking_only", "real"})
+EXECUTION_MODES = frozenset(
+    {"observed", "simulation", "tracking_only", "real", "internal", "read_only"}
+)
 EXECUTION_STATES = frozenset(
     {
         "observed",
@@ -247,6 +249,22 @@ def validate_outcome_booleans(
     if execution_mode == "tracking_only" and (simulated or external_executed):
         raise SoarResponseOutcomeValidationError(
             "tracking_only outcomes must set simulated and external_executed to false"
+        )
+
+    if execution_mode == "internal" and (
+        simulated or external_executed or tracking_recorded
+    ):
+        raise SoarResponseOutcomeValidationError(
+            "internal outcomes must set simulated, external_executed, and "
+            "tracking_recorded to false"
+        )
+
+    if execution_mode == "read_only" and (
+        simulated or external_executed or tracking_recorded
+    ):
+        raise SoarResponseOutcomeValidationError(
+            "read_only outcomes must set simulated, external_executed, and "
+            "tracking_recorded to false"
         )
 
 

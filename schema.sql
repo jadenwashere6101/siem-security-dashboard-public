@@ -1,4 +1,4 @@
--- Schema snapshot version: 0017
+-- Schema snapshot version: 0018
 
 CREATE TABLE IF NOT EXISTS events (
     id SERIAL PRIMARY KEY,
@@ -702,7 +702,9 @@ CREATE TABLE IF NOT EXISTS soar_response_outcome_events (
             'observed',
             'simulation',
             'tracking_only',
-            'real'
+            'real',
+            'internal',
+            'read_only'
         )
     ),
     CHECK (
@@ -781,6 +783,22 @@ CREATE TABLE IF NOT EXISTS soar_response_outcome_events (
         OR (
             simulated = FALSE
             AND external_executed = FALSE
+        )
+    ),
+    CHECK (
+        execution_mode <> 'internal'
+        OR (
+            simulated = FALSE
+            AND external_executed = FALSE
+            AND tracking_recorded = FALSE
+        )
+    ),
+    CHECK (
+        execution_mode <> 'read_only'
+        OR (
+            simulated = FALSE
+            AND external_executed = FALSE
+            AND tracking_recorded = FALSE
         )
     ),
     CHECK (playbook_step_index IS NULL OR playbook_step_index >= 0)

@@ -38,6 +38,7 @@ _LOGGER = logging.getLogger(__name__)
 
 _ADAPTER_REAL_GUARDS = {
     "slack": ("SOAR_REAL_SLACK_ENABLED", ("SLACK_WEBHOOK_URL",)),
+    # Teams remains simulation-only; keep env names for status diagnostics only.
     "teams": ("SOAR_REAL_TEAMS_ENABLED", ("TEAMS_WEBHOOK_URL",)),
     "email": ("SOAR_REAL_EMAIL_ENABLED", ("SMTP_HOST", "SMTP_USERNAME")),
     "firewall": ("SOAR_REAL_FIREWALL_ENABLED", ("FIREWALL_API_TOKEN",)),
@@ -75,7 +76,8 @@ def _adapter_guard_readiness(adapter_name: str, configured_mode: str) -> dict[st
 def _safe_adapter_mode_decision(adapter_name: str, configured_mode: str) -> str:
     if configured_mode != REAL_MODE:
         return SIMULATION_MODE
-    if adapter_name in {"slack", "teams", "email", "webhook"}:
+    # Teams remains simulation-only by product rule.
+    if adapter_name in {"slack", "email", "webhook"}:
         return REAL_MODE
     return SIMULATION_MODE
 
@@ -225,8 +227,11 @@ def get_integration_status(mode: str | None = None) -> dict:
                 **(
                     {
                         "teams_configured": teams_readiness["teams_configured"],
-                        "real_mode_allowed": teams_readiness["real_mode_allowed"],
-                        "real_mode_ready": teams_readiness["real_mode_ready"],
+                        "real_mode_available": False,
+                        "real_mode_allowed": False,
+                        "real_mode_ready": False,
+                        "simulation_only": True,
+                        "real_mode_status": teams_readiness["real_mode_status"],
                         "webhook_configured": teams_readiness["webhook_configured"],
                     }
                     if name == "teams"

@@ -86,6 +86,34 @@ def fetch_action_logs(cur, alert_id=None):
     return cur.fetchall()
 
 
+def enqueue_legacy_noncanonical_action(
+    cur,
+    alert_id,
+    source_ip,
+    action,
+    *,
+    max_retries=3,
+    idempotency_key=None,
+):
+    """Insert a residual non-canonical queue row (bypasses vocabulary enqueue gates).
+
+    Used only to cover SimulationExecutor residual handling for rows that cannot
+    be created through the validated enqueue path.
+    """
+    key = idempotency_key or f"legacy-{alert_id}-{action}-{source_ip}"
+    cur.execute(
+        """
+        INSERT INTO response_actions_queue (
+            alert_id, source_ip, action, status, retry_count, max_retries, idempotency_key
+        )
+        VALUES (%s, %s::inet, %s, 'pending', 0, %s, %s)
+        RETURNING id
+        """,
+        (alert_id, source_ip, action, max_retries, key),
+    )
+    return cur.fetchone()[0]
+
+
 def fetch_action_logs_with_links(cur, alert_id=None):
     if alert_id is None:
         cur.execute(
@@ -799,22 +827,26 @@ def test_retryable_failure_stays_failed_when_retries_exhausted(postgres_db):
     assert updated["retry_count"] == 1
 
 
-def test_process_next_action_default_simulation_executor_logs_executed(postgres_db):
+def test_process_next_action_canonical_monitor_uses_response_command(postgres_db):
     conn, cur = postgres_db
-    alert_id = insert_minimal_alert(cur)
+    alert_id = insert_minimal_alert(cur, source_ip="8.8.8.8")
     row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "monitor")
     conn.commit()
+    ignored_executor = Mock(
+        side_effect=AssertionError("SimulationExecutor must not run for canonical monitor")
+    )
 
-    result = process_next_action(conn)
+    result = process_next_action(conn, executor=ignored_executor)
 
     assert result["queue_id"] == row_id
     assert result["outcome"] == "success"
     assert result["new_status"] == "success"
-    assert result["message"] == f"Monitoring only - no action taken for queue_id={row_id}"
+    assert result["message"] == "Monitoring disposition recorded."
+    ignored_executor.assert_not_called()
     logs = fetch_action_logs(cur, alert_id)
     assert len(logs) == 1
-    assert logs[0][3] == "executed"
-    assert logs[0][4] == f"Monitoring only - no action taken for queue_id={row_id}"
+    assert logs[0][2:4] == ("monitor", "executed")
+    assert "Monitoring disposition recorded" in logs[0][4]
 
 
 def test_process_next_action_writes_running_event_for_linked_queue_row(postgres_db):
@@ -839,17 +871,17 @@ def test_process_next_action_writes_running_event_for_linked_queue_row(postgres_
     assert events[:1] == [
         (
             "running",
-            "simulation",
+            "internal",
             "running",
-            True,
+            False,
             False,
             False,
             "queue_worker",
-            "simulation_mode",
+            None,
             f"queue-running-{row_id}-0",
         )
     ]
-    assert events[1][0:3] == ("succeeded", "simulation", "succeeded")
+    assert events[1][0:3] == ("succeeded", "internal", "succeeded")
 
 
 def test_running_event_idempotency_prevents_duplicate_for_same_attempt(postgres_db):
@@ -954,38 +986,46 @@ def test_running_event_write_failure_does_not_break_legacy_worker(
 
 def test_process_next_action_success_writes_linked_log_and_succeeded_event(postgres_db):
     conn, cur = postgres_db
-    alert_id = insert_minimal_alert(cur)
+    alert_id = insert_minimal_alert(cur, source_ip="8.8.8.8")
     row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "monitor")
-    decision_id = link_queue_to_decision(
-        conn, cur, row_id, "soar-worker-success-linked-001"
+    link_queue_to_decision(conn, cur, row_id, "soar-worker-success-linked-001")
+    ignored_executor = Mock(
+        side_effect=AssertionError("SimulationExecutor must not run for canonical monitor")
     )
 
-    result = process_next_action(conn, executor=SimulationExecutor())
+    result = process_next_action(conn, executor=ignored_executor)
 
     assert result["outcome"] == "success"
+    ignored_executor.assert_not_called()
     logs = fetch_action_logs_with_links(cur, alert_id)
     assert len(logs) == 1
     log_id = logs[0][0]
     assert logs[0][4] == "executed"
-    assert logs[0][6] == decision_id
-    assert logs[0][7] == "soar-worker-success-linked-001"
+    assert logs[0][6] is not None
+    assert logs[0][7] is not None
     events = fetch_detailed_outcome_events(cur, row_id)
     assert [event[0] for event in events] == ["running", "succeeded"]
     succeeded = events[1]
     assert succeeded[1:6] == (
         "succeeded",
-        "simulation_mode",
+        None,
         f"queue-succeeded-{row_id}-0",
         log_id,
         None,
     )
-    assert succeeded[7:] == (True, False, False)
+    assert succeeded[7:] == (False, False, False)
+    mode_events = fetch_outcome_events(cur, row_id)
+    assert mode_events[-1][1] == "internal"
+    assert mode_events[-1][3] is False
+    assert mode_events[-1][4] is False
 
 
 def test_process_next_action_skipped_writes_skipped_event(postgres_db):
     conn, cur = postgres_db
     alert_id = insert_minimal_alert(cur)
-    row_id = enqueue_response_action(cur, alert_id, "10.5.0.11", "monitor")
+    row_id = enqueue_legacy_noncanonical_action(
+        cur, alert_id, "10.5.0.11", "legacy_custom_action"
+    )
     link_queue_to_decision(conn, cur, row_id, "soar-worker-skipped-001")
 
     def skip(_row):
@@ -1009,7 +1049,9 @@ def test_process_next_action_skipped_writes_skipped_event(postgres_db):
 def test_process_next_action_failed_writes_failed_event(postgres_db):
     conn, cur = postgres_db
     alert_id = insert_minimal_alert(cur)
-    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "monitor")
+    row_id = enqueue_legacy_noncanonical_action(
+        cur, alert_id, "8.8.8.8", "legacy_custom_action"
+    )
     link_queue_to_decision(conn, cur, row_id, "soar-worker-failed-001")
 
     def fail(_row):
@@ -1034,7 +1076,9 @@ def test_process_next_action_failed_writes_failed_event(postgres_db):
 def test_process_next_action_retry_writes_failed_attempt_and_requeued_events(postgres_db):
     conn, cur = postgres_db
     alert_id = insert_minimal_alert(cur)
-    row_id = enqueue_response_action(cur, alert_id, "10.5.0.10", "monitor", max_retries=2)
+    row_id = enqueue_legacy_noncanonical_action(
+        cur, alert_id, "10.5.0.10", "legacy_custom_action", max_retries=2
+    )
     link_queue_to_decision(conn, cur, row_id, "soar-worker-retry-001")
 
     def fail_retryable(_row):
@@ -1362,7 +1406,9 @@ def test_process_next_action_expired_block_ip_skips_without_executor(postgres_db
 def test_process_next_action_retryable_executor_requeues(postgres_db):
     conn, cur = postgres_db
     alert_id = insert_minimal_alert(cur)
-    row_id = enqueue_response_action(cur, alert_id, "10.5.0.10", "monitor", max_retries=2)
+    row_id = enqueue_legacy_noncanonical_action(
+        cur, alert_id, "10.5.0.10", "legacy_custom_action", max_retries=2
+    )
     conn.commit()
 
     def fail_retryable(_row):
@@ -1381,7 +1427,9 @@ def test_process_next_action_retryable_executor_requeues(postgres_db):
 def test_process_next_action_skip_executor_marks_skipped(postgres_db):
     conn, cur = postgres_db
     alert_id = insert_minimal_alert(cur)
-    row_id = enqueue_response_action(cur, alert_id, "10.5.0.11", "monitor")
+    row_id = enqueue_legacy_noncanonical_action(
+        cur, alert_id, "10.5.0.11", "legacy_custom_action"
+    )
     conn.commit()
 
     def skip(_row):
@@ -1402,7 +1450,9 @@ def test_process_next_action_skip_executor_marks_skipped(postgres_db):
 def test_process_next_action_non_retryable_failure_logs_failed(postgres_db):
     conn, cur = postgres_db
     alert_id = insert_minimal_alert(cur)
-    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "monitor")
+    row_id = enqueue_legacy_noncanonical_action(
+        cur, alert_id, "8.8.8.8", "legacy_custom_action"
+    )
     conn.commit()
 
     def fail(_row):
@@ -1422,7 +1472,9 @@ def test_process_next_action_non_retryable_failure_logs_failed(postgres_db):
 def test_process_next_action_retryable_failure_exhausted_logs_failed(postgres_db):
     conn, cur = postgres_db
     alert_id = insert_minimal_alert(cur)
-    row_id = enqueue_response_action(cur, alert_id, "8.8.8.8", "monitor", max_retries=1)
+    row_id = enqueue_legacy_noncanonical_action(
+        cur, alert_id, "8.8.8.8", "legacy_custom_action", max_retries=1
+    )
     conn.commit()
 
     def fail_retryable(_row):
@@ -1536,28 +1588,35 @@ def test_process_next_action_simulation_executor_monitor_success(postgres_db):
     assert fetch_queue_row(cur, row_id)[4] == "success"
 
 
-def test_process_next_action_simulation_executor_private_block_ip_skipped(postgres_db):
+def test_process_next_action_canonical_private_block_ip_skipped(postgres_db):
     conn, cur = postgres_db
     alert_id = insert_minimal_alert(cur)
     row_id = enqueue_response_action(cur, alert_id, "10.5.0.14", "block_ip")
     user_id = insert_user(cur, "private-block-approver")
     approval = create_approval_request(conn, queue_id=row_id, action="block_ip")
-    approve_request(conn, approval["id"], actor_user_id=user_id)
+    with siem_backend.app.app_context():
+        approve_request(conn, approval["id"], actor_user_id=user_id)
     conn.commit()
+    ignored_executor = Mock(
+        side_effect=AssertionError("SimulationExecutor must not run for canonical block_ip")
+    )
 
-    result = process_next_action(conn, executor=SimulationExecutor())
+    result = process_next_action(conn, executor=ignored_executor)
 
     assert result["queue_id"] == row_id
     assert result["outcome"] == "skipped"
     assert result["new_status"] == "skipped"
-    assert result["error_code"] == "validation_private_ip"
+    assert result["error_code"] == "invalid_indicator"
     assert fetch_queue_row(cur, row_id)[4] == "skipped"
+    ignored_executor.assert_not_called()
 
 
 def test_process_next_action_simulation_executor_unknown_action_skipped(postgres_db):
     conn, cur = postgres_db
     alert_id = insert_minimal_alert(cur)
-    row_id = enqueue_response_action(cur, alert_id, "8.8.4.4", "unknown_action")
+    row_id = enqueue_legacy_noncanonical_action(
+        cur, alert_id, "8.8.4.4", "unknown_action"
+    )
     conn.commit()
 
     result = process_next_action(conn, executor=SimulationExecutor())
@@ -1581,7 +1640,9 @@ def test_process_next_action_simulation_executor_unknown_action_skipped(postgres
 def test_process_next_action_invalid_executor_result_fails_terminally(postgres_db, executor_result):
     conn, cur = postgres_db
     alert_id = insert_minimal_alert(cur)
-    row_id = enqueue_response_action(cur, alert_id, "10.5.0.15", "monitor")
+    row_id = enqueue_legacy_noncanonical_action(
+        cur, alert_id, "10.5.0.15", "legacy_custom_action"
+    )
     conn.commit()
 
     result = process_next_action(conn, executor=lambda _row: executor_result)

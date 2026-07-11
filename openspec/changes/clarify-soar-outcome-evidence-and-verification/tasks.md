@@ -70,4 +70,15 @@
 - [x] 9.4 Add regression coverage for stale pending + terminal outcome, expired vs denied, legacy denied rendering, no external-effect inference, Recent Alerts/Alert Details consistency, and ResponseOutcome evidence.
 - [x] 9.5 Update docs/handoff for migration + reason-code verification; leave VM phases 6–7 incomplete; do not archive parent.
 
-Status: **Mac correction pass complete** (tasks 1–5 + 9). Parent remains open for VM phases 6–7. Do not archive. Handoffs: `docs/soar_outcome_evidence_vm_handoff.md`, `docs/soar_metrics_source_mapping.md`.
+## 10. MAC AI — Canonical Outcome Mode Semantics Correction
+
+- [x] 10.1 Persist existing vocabulary modes `internal` / `read_only` via additive CHECK migration `0018_internal_read_only_execution_modes.sql` (no historical rewrite/backfill).
+- [x] 10.2 Write monitor / escalation successes as `execution_mode=internal` in `response_command_service`.
+- [x] 10.3 Derive queue lifecycle outcome modes from action/result instead of hard-coding simulation.
+- [x] 10.4 Classify playbook non-adapter / lifecycle outcomes by actual behavior (internal, read_only, tracking-only, simulation/real evidence).
+- [x] 10.5 Keep block-IP tracking-only distinct from simulated firewall enforcement; keep Teams simulation-only (adapter `allow_real_mode=False`, registry excludes Teams from real mode decision, readiness always disabled); leave Slack/email/webhook evidence-based.
+- [x] 10.6 Update affected fixtures/tests and add representative mode-chain regressions; run focused + affected backend suites, `git diff --check`, and OpenSpec strict validation.
+- [x] 10.6b Align `test_response_action_queue` with canonical `execute_response_command` routing; residual SimulationExecutor coverage uses non-canonical legacy rows only.
+- [ ] 10.7 VM read-only verification of newly written modes remains deferred to phases 6–7 after approved deploy (historical rows may still show simulation).
+
+Status: **Mac mode-semantics correction complete** (tasks 1–5 + 9 + 10.1–10.6). Parent remains open for VM phases 6–7. Do not archive. Handoffs: `docs/soar_outcome_evidence_vm_handoff.md`, `docs/soar_metrics_source_mapping.md`.

@@ -39,6 +39,52 @@ logger = logging.getLogger(__name__)
 
 APPROVAL_REQUIRED_ACTIONS = frozenset({"block_ip"})
 CANONICAL_QUEUE_ACTIONS = frozenset({"block_ip", "monitor", "flag_high_priority"})
+_INTERNAL_QUEUE_ACTIONS = frozenset({"monitor", "flag_high_priority", "escalate"})
+_APPROVAL_REASON_CODES = frozenset(
+    {"approval_required", "approval_denied", "approval_expired"}
+)
+
+
+def _queue_outcome_classification(action, *, execution_state, reason_code=None):
+    """Derive queue lifecycle outcome mode from the actual action/result."""
+    normalized_action = str(action or "").strip()
+    normalized_reason = str(reason_code or "").strip() or None
+
+    if normalized_reason in _APPROVAL_REASON_CODES:
+        return {
+            "execution_mode": "internal",
+            "simulated": False,
+            "tracking_recorded": False,
+            "reason_code": normalized_reason,
+        }
+
+    if normalized_action == "block_ip":
+        succeeded = execution_state == "succeeded"
+        if normalized_reason in {None, "simulation_mode"}:
+            normalized_reason = "tracking_only" if succeeded else None
+        return {
+            "execution_mode": "tracking_only",
+            "simulated": False,
+            "tracking_recorded": succeeded,
+            "reason_code": normalized_reason,
+        }
+
+    if normalized_action in _INTERNAL_QUEUE_ACTIONS:
+        if normalized_reason == "simulation_mode":
+            normalized_reason = None
+        return {
+            "execution_mode": "internal",
+            "simulated": False,
+            "tracking_recorded": False,
+            "reason_code": normalized_reason,
+        }
+
+    return {
+        "execution_mode": "simulation",
+        "simulated": execution_state == "succeeded",
+        "tracking_recorded": False,
+        "reason_code": normalized_reason or "simulation_mode",
+    }
 
 
 def process_next_action(conn, now=None, executor=None):
@@ -132,7 +178,7 @@ def process_next_action(conn, now=None, executor=None):
                 conn,
                 updated,
                 execution_state="succeeded",
-                reason_code=reason_code or "simulation_mode",
+                reason_code=reason_code,
                 summary=execution_result["message"],
                 event_type="succeeded",
                 response_action_log_id=response_action_log_id,
@@ -303,6 +349,20 @@ def _append_running_outcome_event(conn, row):
 
     queue_id = row["id"]
     retry_count = row.get("retry_count") or 0
+    classification = _queue_outcome_classification(
+        row.get("action"),
+        execution_state="running",
+        reason_code=None,
+    )
+    mode = classification["execution_mode"]
+    summary = (
+        f"Queue worker claimed response action {row['action']} for simulation."
+        if mode == "simulation"
+        else (
+            f"Queue worker claimed response action {row['action']} "
+            f"for {mode.replace('_', ' ')} processing."
+        )
+    )
     return _with_canonical_outcome_savepoint(
         conn,
         queue_id,
@@ -312,14 +372,14 @@ def _append_running_outcome_event(conn, row):
             decision_id=decision_id,
             soar_correlation_id=soar_correlation_id,
             event_type="running",
-            execution_mode="simulation",
+            execution_mode=mode,
             execution_state="running",
-            simulated=True,
+            simulated=classification["simulated"],
             external_executed=False,
             tracking_recorded=False,
             execution_actor="queue_worker",
-            reason_code="simulation_mode",
-            outcome_summary=f"Queue worker claimed response action {row['action']} for simulation.",
+            reason_code=classification["reason_code"],
+            outcome_summary=summary,
             queue_id=queue_id,
             idempotency_key=f"queue-running-{queue_id}-{retry_count}",
             metadata={
@@ -352,6 +412,11 @@ def _append_worker_outcome_event(
     retry_count = row.get("retry_count") or 0
     event_type_value = event_type or execution_state
     idempotency_key = f"queue-{event_type_value}-{queue_id}-{retry_count}"
+    classification = _queue_outcome_classification(
+        row.get("action"),
+        execution_state=execution_state,
+        reason_code=reason_code,
+    )
     return _with_canonical_outcome_savepoint(
         conn,
         queue_id,
@@ -361,13 +426,13 @@ def _append_worker_outcome_event(
             decision_id=decision_id,
             soar_correlation_id=soar_correlation_id,
             event_type=event_type_value,
-            execution_mode="simulation",
+            execution_mode=classification["execution_mode"],
             execution_state=execution_state,
-            simulated=execution_state == "succeeded",
+            simulated=classification["simulated"],
             external_executed=False,
-            tracking_recorded=False,
+            tracking_recorded=classification["tracking_recorded"],
             execution_actor="queue_worker",
-            reason_code=reason_code,
+            reason_code=classification["reason_code"],
             outcome_summary=_safe_outcome_summary(summary),
             queue_id=queue_id,
             approval_request_id=approval_request_id,

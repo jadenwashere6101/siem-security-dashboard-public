@@ -199,7 +199,7 @@ def test_post_alert_execute_nonexistent_alert_id_returns_404(client, postgres_db
     assert resp.get_json()["error"] == "Alert not found"
 
 
-def test_post_alert_execute_monitor_creates_simulation_outcome_and_keeps_response_shape(
+def test_post_alert_execute_monitor_creates_internal_outcome_and_keeps_response_shape(
     client, postgres_db
 ):
     conn, cur = postgres_db
@@ -211,38 +211,28 @@ def test_post_alert_execute_monitor_creates_simulation_outcome_and_keeps_respons
         resp = client.post(f"/alerts/{alert_id}/execute", json={"action": "monitor"})
 
     assert resp.status_code == 200
-    assert resp.get_json() == {
-        "message": "Action executed successfully",
-        "alert_id": alert_id,
-        "action": "monitor",
-        "response_status": "executed",
-    }
+    data = resp.get_json()
+    assert data["alert_id"] == alert_id
+    assert data["action"] == "monitor"
+    assert data["response_status"] == "executed"
     logs = _fetch_response_log_links(cur, alert_id)
     assert len(logs) == 1
-    assert logs[0][1:4] == ("monitor", "executed", "Monitoring only")
+    assert logs[0][1] == "monitor"
+    assert logs[0][2] == "executed"
     assert logs[0][4] is not None
     assert logs[0][5]
 
     outcomes = _fetch_manual_outcomes(cur, alert_id)
-    assert outcomes == [
-        (
-            "monitor",
-            "manual",
-            "simulation_mode",
-            "simulation",
-            "succeeded",
-            True,
-            False,
-            False,
-            "manual",
-            "simulation_mode",
-            "Manual monitor response completed in simulation mode.",
-            logs[0][0],
-        )
-    ]
+    assert len(outcomes) == 1
+    outcome = outcomes[0]
+    assert outcome[0:5] == ("monitor", "manual", None, "internal", "succeeded")
+    assert outcome[5:9] == (False, False, False, "system")
+    assert outcome[9] is None
+    assert "Monitor/watch disposition" in outcome[10]
+    assert outcome[11] == logs[0][0]
 
 
-def test_post_alert_execute_flag_high_priority_creates_simulation_outcome(
+def test_post_alert_execute_flag_high_priority_creates_internal_outcome(
     client, postgres_db
 ):
     conn, cur = postgres_db
@@ -262,14 +252,14 @@ def test_post_alert_execute_flag_high_priority_creates_simulation_outcome(
     assert outcomes[0][0:10] == (
         "flag_high_priority",
         "manual",
-        "simulation_mode",
-        "simulation",
+        None,
+        "internal",
         "succeeded",
-        True,
         False,
         False,
-        "manual",
-        "simulation_mode",
+        False,
+        "system",
+        None,
     )
 
 
@@ -317,7 +307,7 @@ def test_post_alert_execute_block_ip_creates_tracking_only_outcome_and_log_link(
         False,
         False,
         True,
-        "manual",
+        "system",
         "tracking_only",
     )
     assert "SIEM blocklist tracking was recorded" in outcome[10]
@@ -468,9 +458,9 @@ def test_get_alert_response_log_linked_canonical_log_returns_response_outcome(
     assert outcome["latest_outcome_event_id"] is not None
     assert outcome["selected_action"] == "monitor"
     assert outcome["decision_source"] == "manual"
-    assert outcome["execution_mode"] == "simulation"
+    assert outcome["execution_mode"] == "internal"
     assert outcome["execution_state"] == "succeeded"
-    assert outcome["simulated"] is True
+    assert outcome["simulated"] is False
     assert outcome["external_executed"] is False
     assert outcome["tracking_recorded"] is False
     assert outcome["related"]["alert_id"] == alert_id

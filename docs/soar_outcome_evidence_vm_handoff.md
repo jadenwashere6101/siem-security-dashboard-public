@@ -19,8 +19,11 @@ VM: `jaden@4.204.25.149:/home/jaden/siem-security-dashboard`
 ## Deploy prerequisites (when deploy is later authorized)
 
 1. Apply migration `0017_approval_expired_reason_code.sql` (additive CHECK; no row rewrite).
-2. Restart backend workers/API so producers emit `approval_expired`.
-3. Deploy frontend so Alert Details no longer treats legacy `alerts.response_status` as authoritative and Expired ≠ Rejected.
+2. Apply migration `0018_internal_read_only_execution_modes.sql` (additive CHECK for `internal`/`read_only` modes; no row rewrite/backfill).
+3. Restart backend workers/API so new outcome writers persist truthful modes and `approval_expired`.
+4. Deploy frontend so Alert Details no longer treats legacy `alerts.response_status` as authoritative, Expired ≠ Rejected, and Internal/Read-only badges render for new modes.
+
+Note: historical rows may still show `execution_mode=simulation` for monitor/escalation until naturally superseded by newer events; do not backfill.
 
 ## 5.1 Representative selection (do not manufacture)
 

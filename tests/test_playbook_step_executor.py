@@ -365,7 +365,7 @@ def test_pending_monitor_step_becomes_success(postgres_db):
     entry = row["steps_log"][0]
     assert entry["action"] == "monitor"
     assert entry["status"] == "success"
-    assert entry["mode"] == "simulation"
+    assert entry["mode"] == "internal"
     assert entry["output"]["executed"] is True
     assert entry["output"]["canonical_response"] is True
     assert entry["output"]["registry_record_id"] is not None
@@ -383,11 +383,11 @@ def test_linked_playbook_claim_appends_running_outcome_event(postgres_db):
     running = events[0]
     assert running[0:9] == (
         "running",
-        "simulation",
+        "internal",
         "running",
         "playbook_worker",
-        "simulation_mode",
-        True,
+        None,
+        False,
         False,
         False,
         f"playbook-running-{eid}",
@@ -410,11 +410,11 @@ def test_linked_playbook_success_appends_succeeded_outcome_event(postgres_db):
     succeeded = [event for event in events if event[0] == "succeeded"][0]
     assert succeeded[0:9] == (
         "succeeded",
-        "simulation",
+        "internal",
         "succeeded",
         "playbook_worker",
-        "simulation_mode",
-        True,
+        None,
+        False,
         False,
         False,
         f"playbook-success-{eid}",
@@ -437,11 +437,11 @@ def test_linked_playbook_failure_appends_failed_outcome_event(postgres_db):
     failed = [event for event in events if event[0] == "failed"][0]
     assert failed[0:9] == (
         "failed",
-        "simulation",
+        "internal",
         "failed",
         "playbook_worker",
-        "simulation_mode",
-        True,
+        None,
+        False,
         False,
         False,
         f"playbook-failed-{eid}",
@@ -505,8 +505,8 @@ def test_linked_non_adapter_steps_append_step_outcome_events(postgres_db):
         f"playbook-step-{eid}-1-succeeded",
     ]
     assert all(event[3] == "playbook_worker" for event in step_events)
-    assert all(event[1] == "simulation" for event in step_events)
-    assert all(event[5] is True for event in step_events)
+    assert all(event[1] == "internal" for event in step_events)
+    assert all(event[5] is False for event in step_events)
     assert all(event[10] != 2 for event in step_events)
 
 
@@ -530,7 +530,7 @@ def test_linked_playbook_awaiting_approval_appends_linked_event(postgres_db):
     events = _fetch_playbook_outcome_events(cur, eid)
     awaiting = [event for event in events if event[0] == "awaiting_approval"][0]
     assert awaiting[1:9] == (
-        "simulation",
+        "internal",
         "awaiting_approval",
         "playbook_worker",
         "approval_required",
@@ -569,7 +569,7 @@ def test_approved_playbook_approval_appends_decision_and_resumed_events(postgres
     approved = [event for event in events if event[0] == "approval_approved"][0]
     resumed = [event for event in events if event[0] == "resumed"][0]
     assert approved[1:9] == (
-        "simulation",
+        "internal",
         "running",
         "approval_service",
         "approval_required",
@@ -610,7 +610,7 @@ def test_denied_playbook_approval_appends_blocked_approval_event(postgres_db):
     events = _fetch_playbook_outcome_events(cur, eid)
     denied = [event for event in events if event[0] == "approval_denied"][0]
     assert denied[1:9] == (
-        "simulation",
+        "internal",
         "blocked",
         "approval_service",
         "approval_denied",
@@ -651,7 +651,7 @@ def test_expired_playbook_approval_appends_blocked_approval_event(postgres_db):
     events = _fetch_playbook_outcome_events(cur, eid)
     expired = [event for event in events if event[0] == "approval_expired"][0]
     assert expired[1:9] == (
-        "simulation",
+        "internal",
         "blocked",
         "approval_service",
         "approval_expired",
@@ -1207,12 +1207,12 @@ def test_require_approval_pauses_execution_and_creates_linked_request(postgres_d
     approval_entry = row["steps_log"][1]
     assert approval_entry["event"] == "approval_requested"
     assert approval_entry["status"] == "awaiting_approval"
-    assert approval_entry["mode"] == "simulation"
-    assert approval_entry["simulated"] is True
-    assert approval_entry["executed"] is False
+    assert approval_entry["mode"] == "internal"
+    assert approval_entry["simulated"] is False
+    assert approval_entry["executed"] is True
     assert approval_entry["output"] == {
-        "simulated": True,
-        "executed": False,
+        "simulated": False,
+        "executed": True,
         "approval_gate": True,
     }
     assert approval_entry["approval_status"] == "pending"
@@ -1441,7 +1441,8 @@ def test_unsupported_step_action_marks_execution_failed(postgres_db):
     assert row["last_completed_step"] is None
     assert row["steps_log"][0]["status"] == "failed"
     assert row["steps_log"][0]["error"]["code"] == "unsupported_action"
-    assert row["steps_log"][0]["output"]["simulated"] is True
+    assert row["steps_log"][0]["mode"] == "internal"
+    assert row["steps_log"][0]["output"]["simulated"] is False
     assert row["steps_log"][0]["output"]["executed"] is False
 
 

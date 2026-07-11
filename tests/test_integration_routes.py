@@ -297,15 +297,17 @@ def test_integration_status_teams_real_readiness_uses_safe_booleans(
     assert resp.status_code == 200
     data = resp.get_json()
     rendered = json.dumps(data, sort_keys=True)
-    assert data["mode"] == "real"
+    assert data["mode"] == "simulation"
     assert data["configured_mode"] == "real"
-    assert data["real_mode_enabled"] is True
+    assert data["real_mode_enabled"] is False
     assert data["teams_configured"] is True
-    assert data["real_mode_allowed"] is True
-    assert data["real_mode_ready"] is True
+    assert data["real_mode_allowed"] is False
+    assert data["real_mode_ready"] is False
     adapters = {adapter["name"]: adapter for adapter in data["adapters"]}
-    assert adapters["teams"]["mode"] == "real"
-    assert adapters["teams"]["real_client"] is True
+    assert adapters["teams"]["mode"] == "simulation"
+    assert adapters["teams"]["real_client"] is False
+    assert adapters["teams"]["simulation_only"] is True
+    assert adapters["teams"]["real_mode_ready"] is False
     assert adapters["teams"]["webhook_configured"] is True
     assert adapters["slack"]["mode"] == "simulation"
     assert adapters["email"]["mode"] == "simulation"
@@ -490,7 +492,9 @@ def test_integration_status_slack_and_teams_config_are_independent(
     assert resp.status_code == 200
     data = resp.get_json()
     adapters = {adapter["name"]: adapter for adapter in data["adapters"]}
-    assert adapters["teams"]["real_mode_ready"] is True
+    assert adapters["teams"]["real_mode_ready"] is False
+    assert adapters["teams"]["simulation_only"] is True
+    assert adapters["teams"]["mode"] == "simulation"
     assert adapters["slack"]["real_mode_ready"] is False
     assert adapters["slack"]["mode"] == "simulation"
     rendered = json.dumps(data, sort_keys=True)

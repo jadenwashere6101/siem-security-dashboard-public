@@ -48,6 +48,7 @@ from integrations.integration_registry import (
     normalize_registered_integration_adapter_name,
     resolve_integration_mode,
 )
+from integrations.teams_adapter import get_teams_real_mode_readiness
 
 
 EXPECTED_RESULT_KEYS = {
@@ -96,14 +97,23 @@ def test_non_simulation_mode_fails_closed(monkeypatch):
     monkeypatch.setenv("INTEGRATION_MODE", "real")
 
     assert resolve_integration_mode() == "real"
-    for adapter_name in ("slack", "teams"):
-        adapter = get_integration_adapter(adapter_name)
-        result = adapter.execute("send_message")
-        assert adapter.mode == "real"
-        assert result["success"] is False
-        assert result["simulated"] is True
-        assert result["executed"] is False
-        assert result["metadata"]["real_mode_ready"] is False
+    slack = get_integration_adapter("slack")
+    slack_result = slack.execute("send_message")
+    assert slack.mode == "real"
+    assert slack_result["success"] is False
+    assert slack_result["simulated"] is True
+    assert slack_result["executed"] is False
+    assert slack_result["metadata"]["real_mode_ready"] is False
+
+    teams = get_integration_adapter("teams")
+    teams_result = teams.execute("send_message")
+    assert teams.allow_real_mode is False
+    assert teams.mode == "simulation"
+    assert teams_result["mode"] == "simulation"
+    assert teams_result["success"] is True
+    assert teams_result["simulated"] is True
+    assert teams_result["executed"] is False
+    assert teams_result["metadata"]["delivery"] == "not_sent"
 
 
 def test_real_mode_guard_helper_reports_each_missing_guard(monkeypatch):
@@ -1052,6 +1062,7 @@ def test_real_mode_does_not_apply_to_firewall_adapter(monkeypatch, no_network):
     ("adapter_name", "action"),
     [
         ("firewall", "block_ip"),
+        ("teams", "notify_teams"),
     ],
 )
 def test_real_mode_without_adapter_flag_fails_closed_for_simulation_only_adapters(
@@ -1066,6 +1077,7 @@ def test_real_mode_without_adapter_flag_fails_closed_for_simulation_only_adapter
     adapter = get_integration_adapter(adapter_name)
     result = adapter.execute(action)
 
+    assert adapter.allow_real_mode is False
     assert adapter.mode == "simulation"
     assert result["mode"] == "simulation"
     assert result["simulated"] is True
@@ -1091,7 +1103,7 @@ def test_slack_real_mode_open_circuit_blocks_before_network(monkeypatch, no_netw
     assert result["metadata"]["retry_eligible"] is False
 
 
-def test_teams_real_mode_missing_webhook_fails_closed_without_network(monkeypatch, no_network):
+def test_teams_remains_simulation_only_when_real_env_enabled(monkeypatch, no_network):
     monkeypatch.setenv("INTEGRATION_MODE", "real")
     monkeypatch.setenv("SOAR_ENV", "staging")
     monkeypatch.setenv("SOAR_REAL_TEAMS_ENABLED", "true")
@@ -1104,22 +1116,21 @@ def test_teams_real_mode_missing_webhook_fails_closed_without_network(monkeypatc
         context={"execution_id": 1, "playbook_id": "pb"},
     )
 
-    assert adapter.mode == "real"
-    assert result["mode"] == "real"
+    assert adapter.allow_real_mode is False
+    assert adapter.mode == "simulation"
+    assert result["mode"] == "simulation"
     assert result["simulated"] is True
     assert result["executed"] is False
-    assert result["success"] is False
-    readiness = _validate_real_mode_guards(
-        "teams",
-        enabled_env="SOAR_REAL_TEAMS_ENABLED",
-        credential_envs=("TEAMS_WEBHOOK_URL",),
-    )
+    assert result["success"] is True
+    assert result["metadata"]["delivery"] == "not_sent"
+    assert result["metadata"]["simulation_only"] is True
+    readiness = get_teams_real_mode_readiness("real")
     assert readiness["real_mode_allowed"] is False
-    assert readiness["failure_classification"] == FAILURE_CLASSIFICATION_CREDENTIAL_MISSING
-    assert "TEAMS_WEBHOOK_URL" in readiness["missing_guards"]
+    assert readiness["real_mode_ready"] is False
+    assert "simulation-only" in readiness["real_mode_status"]
 
 
-def test_teams_real_mode_invalid_webhook_redacts_value(monkeypatch, no_network):
+def test_teams_simulation_redacts_webhook_secrets_in_params(monkeypatch, no_network):
     secret_url = "https://contoso.webhook.office.com/webhookb2/SECRET"
     monkeypatch.setenv("INTEGRATION_MODE", "real")
     monkeypatch.setenv("SOAR_ENV", "staging")
@@ -1133,23 +1144,24 @@ def test_teams_real_mode_invalid_webhook_redacts_value(monkeypatch, no_network):
     )
 
     rendered = json.dumps(result, sort_keys=True)
-    assert result["success"] is False
+    assert result["success"] is True
+    assert result["mode"] == "simulation"
     assert result["params"]["teams_webhook_url"] == "[redacted]"
     assert secret_url not in rendered
     assert "webhook.office.com" not in rendered
     assert "SECRET" not in rendered
 
 
-def test_teams_real_mode_staging_uses_mocked_outbound_call(monkeypatch):
+def test_teams_never_calls_outbound_webhook_even_when_env_enabled(monkeypatch):
     monkeypatch.setenv("INTEGRATION_MODE", "real")
     monkeypatch.setenv("SOAR_ENV", "staging")
     monkeypatch.setenv("SOAR_REAL_TEAMS_ENABLED", "true")
     monkeypatch.setenv("TEAMS_WEBHOOK_URL", "https://contoso.webhook.office.com/webhookb2/SECRET")
 
     with patch(
-        "integrations.teams_adapter._post_teams_webhook",
-        return_value={"status_code": 200},
-    ) as post_mock:
+        "urllib.request.urlopen",
+        side_effect=AssertionError("Teams must not open network connections"),
+    ):
         result = get_integration_adapter("teams").execute(
             "send_message",
             params={"message": "Staging Teams notification"},
@@ -1157,11 +1169,10 @@ def test_teams_real_mode_staging_uses_mocked_outbound_call(monkeypatch):
         )
 
     assert result["success"] is True
-    assert result["mode"] == "real"
-    assert result["simulated"] is False
-    assert result["executed"] is True
-    assert result["metadata"]["delivery"] == "sent"
-    post_mock.assert_called_once()
+    assert result["mode"] == "simulation"
+    assert result["simulated"] is True
+    assert result["executed"] is False
+    assert result["metadata"]["delivery"] == "not_sent"
     rendered = json.dumps(result, sort_keys=True)
     assert "webhook.office.com" not in rendered
     assert "SECRET" not in rendered
@@ -1176,8 +1187,10 @@ def test_teams_and_slack_real_mode_configs_do_not_cross_enable(monkeypatch, no_n
     monkeypatch.delenv("TEAMS_WEBHOOK_URL", raising=False)
 
     teams_result = get_integration_adapter("teams").execute("send_message")
-    assert teams_result["success"] is False
+    assert teams_result["mode"] == "simulation"
+    assert teams_result["success"] is True
     assert teams_result["executed"] is False
+    assert teams_result["metadata"]["delivery"] == "not_sent"
 
     monkeypatch.delenv("SOAR_REAL_SLACK_ENABLED", raising=False)
     monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
@@ -1418,7 +1431,7 @@ def test_webhook_real_mode_accepts_webhook_base_url_env(monkeypatch):
     post_mock.assert_called_once()
 
 
-def test_teams_real_mode_open_circuit_blocks_before_network(monkeypatch, no_network):
+def test_teams_simulation_only_open_circuit_still_blocks_before_execute(monkeypatch, no_network):
     monkeypatch.setenv("INTEGRATION_MODE", "real")
     monkeypatch.setenv("SOAR_ENV", "staging")
     monkeypatch.setenv("SOAR_REAL_TEAMS_ENABLED", "true")
@@ -1426,12 +1439,13 @@ def test_teams_real_mode_open_circuit_blocks_before_network(monkeypatch, no_netw
     configure_simulated_circuit_breaker("teams", state=CIRCUIT_STATE_OPEN, consecutive_failures=3)
 
     with patch(
-        "integrations.teams_adapter._post_teams_webhook",
-        side_effect=AssertionError("Teams network path must not run when circuit is open"),
+        "urllib.request.urlopen",
+        side_effect=AssertionError("Teams must not open network connections"),
     ):
         result = get_integration_adapter("teams").execute("send_message")
 
     assert result["success"] is False
+    assert result["mode"] == "simulation"
     assert result["metadata"]["failure_classification"] == FAILURE_CLASSIFICATION_CIRCUIT_OPEN
     assert result["metadata"]["retry_eligible"] is False
 

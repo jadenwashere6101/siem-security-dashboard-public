@@ -57,12 +57,85 @@ TERMINAL_STATUSES = frozenset({"success", "failed", "abandoned", "permanently_fa
 _NOTIFICATION_ACTIONS = frozenset(
     {"notify_slack", "notify_teams", "notify_email", "notify_webhook"}
 )
+_INTERNAL_PLAYBOOK_ACTIONS = frozenset(
+    {
+        "monitor",
+        "flag_high_priority",
+        "require_approval",
+        "branch",
+        "trigger_playbook",
+        "add_note",
+        "stop_monitor",
+    }
+)
 _PROVIDER_FOR_ACTION: dict[str, str] = {
     "notify_slack": "slack",
     "notify_teams": "teams",
     "notify_email": "email",
     "notify_webhook": "webhook",
 }
+
+
+def _playbook_step_outcome_classification(entry: dict[str, Any]) -> dict[str, Any]:
+    """Classify non-adapter playbook step outcomes by actual behavior."""
+    action = str(entry.get("action") or "").strip()
+    status = str(entry.get("status") or "").strip().lower()
+    entry_mode = str(entry.get("mode") or "").strip().lower()
+    output = entry.get("output") if isinstance(entry.get("output"), dict) else {}
+
+    if action == "enrich_context" or entry_mode == "read_only" or output.get("read_only"):
+        return {
+            "execution_mode": "read_only",
+            "simulated": False,
+            "reason_code": None if status == "success" else _canonical_playbook_reason_code(entry),
+            "summary_prefix": "Read-only",
+        }
+
+    if action in _INTERNAL_PLAYBOOK_ACTIONS or entry_mode == "internal":
+        reason = None
+        if status != "success":
+            reason = _canonical_playbook_reason_code(entry)
+        elif action == "require_approval":
+            reason = "approval_required"
+        return {
+            "execution_mode": "internal",
+            "simulated": False,
+            "reason_code": reason,
+            "summary_prefix": "Internal",
+        }
+
+    if status == "failed" and (
+        (isinstance(entry.get("error"), dict) and entry["error"].get("code") == "unsupported_action")
+        or action not in KNOWN_PLAYBOOK_ACTIONS
+    ):
+        return {
+            "execution_mode": "internal",
+            "simulated": False,
+            "reason_code": "unsupported_action",
+            "summary_prefix": "Unsupported",
+        }
+
+    # Preserve explicit adapter/simulation step modes when present.
+    if entry_mode in {"simulation", "real", "tracking_only"}:
+        return {
+            "execution_mode": entry_mode,
+            "simulated": entry_mode == "simulation",
+            "reason_code": (
+                "simulation_mode"
+                if entry_mode == "simulation" and status == "success"
+                else _canonical_playbook_reason_code(entry)
+                if status != "success"
+                else None
+            ),
+            "summary_prefix": entry_mode.replace("_", " ").title(),
+        }
+
+    return {
+        "execution_mode": "internal",
+        "simulated": False,
+        "reason_code": None if status == "success" else _canonical_playbook_reason_code(entry),
+        "summary_prefix": "Internal",
+    }
 
 
 # spec: SPEC-NOTIFY-001 / SPEC-UI-004 - delivery status feeds real workflow visibility.
@@ -1131,7 +1204,7 @@ def _process_steps(
         "success",
         "success",
         len(steps_log),
-        "Simulated playbook execution completed successfully.",
+        "Playbook execution completed successfully.",
     )
 
 
@@ -1267,7 +1340,7 @@ def _execute_canonical_response_step(
         "step_index": step_index,
         "action": action,
         "status": "success",
-        "mode": "simulation",
+        "mode": "internal",
         "started_at": _iso(now),
         "completed_at": _iso(now),
         "message": result.message,
@@ -1532,16 +1605,27 @@ def _failure_entry(
     now: datetime,
     output: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    action_name = str(action or "").strip()
+    if action_name == "enrich_context":
+        mode = "read_only"
+    elif action_name in _INTERNAL_PLAYBOOK_ACTIONS or code == "unsupported_action":
+        mode = "internal"
+    elif action_name in ADAPTER_ACTIONS or action_name in _NOTIFICATION_ACTIONS:
+        mode = "simulation"
+    else:
+        mode = "internal"
+    simulated = mode == "simulation"
     return {
         "step_index": step_index,
         "action": action,
         "status": "failed",
-        "mode": "simulation",
+        "mode": mode,
         "started_at": _iso(now),
         "completed_at": _iso(now),
         "message": message,
-        "output": output or {
-            "simulated": True,
+        "output": output
+        or {
+            "simulated": simulated,
             "executed": False,
         },
         "error": {
@@ -1563,18 +1647,19 @@ def _approval_requested_entry(
         "action": "require_approval",
         "status": "awaiting_approval",
         "event": "approval_requested",
-        "mode": "simulation",
-        "simulated": True,
-        "executed": False,
+        "mode": "internal",
+        "simulated": False,
+        "executed": True,
         "started_at": _iso(now),
         "completed_at": None,
         "approval_request_id": approval_request["id"],
         "approval_status": approval_request["status"],
         "risk_level": approval_request["risk_level"],
-        "message": step.get("reason") or "Approval requested before continuing simulated playbook.",
+        "message": step.get("reason")
+        or "Approval requested before continuing playbook execution.",
         "output": {
-            "simulated": True,
-            "executed": False,
+            "simulated": False,
+            "executed": True,
             "approval_gate": True,
         },
         "error": None,
@@ -1595,9 +1680,9 @@ def _approval_decision_entry(
         "action": "require_approval",
         "status": status,
         "event": event,
-        "mode": "simulation",
-        "simulated": True,
-        "executed": False,
+        "mode": "internal",
+        "simulated": False,
+        "executed": True,
         "started_at": _iso(now),
         "completed_at": _iso(now),
         "approval_request_id": approval_request["id"],
@@ -1605,8 +1690,8 @@ def _approval_decision_entry(
         "risk_level": approval_request["risk_level"],
         "message": message,
         "output": {
-            "simulated": True,
-            "executed": False,
+            "simulated": False,
+            "executed": True,
             "approval_gate": True,
         },
         "error": None,
@@ -1730,15 +1815,15 @@ def _execute_branch_step(
         "result": result,
         "goto_label": goto_label,
         "goto_step_index": goto_step_index,
-        "mode": "simulation",
-        "simulated": True,
-        "executed": False,
+        "mode": "internal",
+        "simulated": False,
+        "executed": True,
         "started_at": _iso(now),
         "completed_at": _iso(now),
         "message": "Branch condition evaluated.",
         "output": {
-            "simulated": True,
-            "executed": False,
+            "simulated": False,
+            "executed": True,
             "condition": condition,
             "result": result,
             "goto_label": goto_label,
@@ -1870,9 +1955,9 @@ def _execute_trigger_playbook_step(
         "action": "trigger_playbook",
         "status": "success",
         "event": "playbook_triggered",
-        "mode": "simulation",
-        "simulated": True,
-        "executed": False,
+        "mode": "internal",
+        "simulated": False,
+        "executed": True,
         "started_at": _iso(now),
         "completed_at": _iso(now),
         "message": message,
@@ -1880,8 +1965,8 @@ def _execute_trigger_playbook_step(
         "child_playbook_id": target_playbook_id,
         "chain_depth": child_depth,
         "output": {
-            "simulated": True,
-            "executed": False,
+            "simulated": False,
+            "executed": True,
             "child_execution_id": child_execution_id,
             "child_playbook_id": target_playbook_id,
             "chain_depth": child_depth,
@@ -1985,14 +2070,14 @@ def _skipped_branch_step_entries(
                 "status": "skipped",
                 "event": "skipped_by_branch",
                 "skip_reason": "branch_not_taken",
-                "mode": "simulation",
-                "simulated": True,
+                "mode": "internal",
+                "simulated": False,
                 "executed": False,
                 "started_at": None,
                 "completed_at": _iso(now),
                 "message": "Step skipped because branch chose another path.",
                 "output": {
-                    "simulated": True,
+                    "simulated": False,
                     "executed": False,
                     "skip_reason": "branch_not_taken",
                 },
@@ -2027,14 +2112,14 @@ def _skipped_later_step_entries(
                 "action": action,
                 "status": "skipped",
                 "event": "skipped_after_approval_gate",
-                "mode": "simulation",
-                "simulated": True,
+                "mode": "internal",
+                "simulated": False,
                 "executed": False,
                 "started_at": None,
                 "completed_at": _iso(now),
-                "message": f"Step skipped because {reason} stopped the simulated playbook.",
+                "message": f"Step skipped because {reason} stopped the playbook.",
                 "output": {
-                    "simulated": True,
+                    "simulated": False,
                     "executed": False,
                     "skip_reason": reason,
                 },
@@ -2242,7 +2327,7 @@ def _finalize_success(
         updated,
         execution_state="succeeded",
         event_type="succeeded",
-        summary="Simulated playbook execution completed successfully.",
+        summary="Playbook execution completed successfully.",
     )
     playbook_store.release_execution_lease(conn, execution_id, worker_id)
     return updated
@@ -2298,7 +2383,7 @@ def _finalize_failed(
         updated,
         execution_state="failed",
         event_type="failed",
-        summary="Simulated playbook execution failed.",
+        summary="Playbook execution failed.",
     )
     capture_failed_execution_dead_letter(
         conn,
@@ -2317,8 +2402,11 @@ def _append_playbook_running_outcome_event(conn, execution: dict[str, Any]):
         execution,
         event_type="running",
         execution_state="running",
-        summary=f"Playbook worker claimed playbook execution {execution['id']} for simulation.",
+        summary=f"Playbook worker claimed playbook execution {execution['id']}.",
         idempotency_key=f"playbook-running-{execution['id']}",
+        reason_code=None,
+        execution_mode="internal",
+        simulated=False,
     )
 
 
@@ -2333,12 +2421,14 @@ def _append_playbook_resumed_outcome_event(
         execution,
         event_type="resumed",
         execution_state="running",
-        summary="Simulated playbook execution resumed after approval.",
+        summary="Playbook execution resumed after approval.",
         idempotency_key=f"playbook-resumed-{execution['id']}-{approval_request['id']}",
         playbook_step_index=approval_request.get("playbook_step_index"),
         approval_request_id=approval_request["id"],
         execution_actor="playbook_worker",
         reason_code="approval_required",
+        execution_mode="internal",
+        simulated=False,
         metadata={
             "approval_request_id": approval_request["id"],
             "approval_status": approval_request.get("status"),
@@ -2389,6 +2479,11 @@ def _map_notification_delivery_outcome(delivery_attempt: dict[str, Any]) -> dict
     provider = delivery_attempt.get("provider") or "notification provider"
     metadata = delivery_attempt.get("metadata") or {}
     has_real_evidence = _notification_delivery_has_real_evidence(delivery_attempt)
+
+    # Product rule: Teams remains simulation-only regardless of adapter capability flags.
+    if str(provider).strip().lower() == "teams" or delivery_attempt.get("action") == "notify_teams":
+        mode = "simulation"
+        has_real_evidence = False
 
     if status == "blocked":
         return {
@@ -2487,23 +2582,28 @@ def _append_non_adapter_playbook_step_outcome_event(
     if status == "success":
         execution_state = "succeeded"
         event_type = "step_succeeded"
-        reason_code = "simulation_mode"
     elif status == "failed":
         execution_state = "failed"
         event_type = "step_failed"
-        reason_code = _canonical_playbook_reason_code(entry)
     else:
         return None
+
+    classification = _playbook_step_outcome_classification(entry)
+    summary = entry.get("message") or (
+        f"{classification['summary_prefix']} playbook step {step_index} {status}."
+    )
 
     return _append_playbook_execution_outcome_event(
         conn,
         execution,
         event_type=event_type,
         execution_state=execution_state,
-        summary=entry.get("message") or f"Simulated playbook step {step_index} {status}.",
+        summary=summary,
         idempotency_key=f"playbook-step-{execution['id']}-{step_index}-{execution_state}",
         playbook_step_index=step_index,
-        reason_code=reason_code,
+        reason_code=classification["reason_code"],
+        execution_mode=classification["execution_mode"],
+        simulated=classification["simulated"],
         metadata={
             "step_index": step_index,
             "action": action,
@@ -2534,6 +2634,7 @@ def _append_playbook_awaiting_approval_outcome_event(
         approval_request_id=approval_request["id"],
         execution_actor="playbook_worker",
         reason_code="approval_required",
+        execution_mode="internal",
         simulated=False,
         metadata={
             "step_index": step_index,
@@ -2585,6 +2686,7 @@ def _append_playbook_approval_decision_outcome_event(
             if approval_request.get("status") == "expired"
             else "approval_required"
         ),
+        execution_mode="internal",
         simulated=False,
         metadata=metadata,
     )
@@ -2607,6 +2709,9 @@ def _append_playbook_terminal_outcome_event(
         idempotency_key=(
             f"playbook-{_playbook_terminal_idempotency_label(event_type)}-{execution['id']}"
         ),
+        reason_code=None,
+        execution_mode="internal",
+        simulated=False,
     )
 
 
@@ -2682,7 +2787,7 @@ def try_append_playbook_lifecycle_outcome_event(
     summary: str,
     idempotency_key: str,
     execution_actor: str = "system",
-    reason_code: str = "simulation_mode",
+    reason_code: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> None:
     """
@@ -2700,8 +2805,8 @@ def try_append_playbook_lifecycle_outcome_event(
         idempotency_key=idempotency_key,
         execution_actor=execution_actor,
         reason_code=reason_code,
-        execution_mode="simulation",
-        simulated=True,
+        execution_mode="internal",
+        simulated=False,
         external_executed=False,
         metadata=metadata,
     )

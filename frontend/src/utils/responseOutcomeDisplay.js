@@ -1,4 +1,11 @@
-export const EXECUTION_MODES = ["observed", "simulation", "tracking_only", "real"];
+export const EXECUTION_MODES = [
+  "observed",
+  "simulation",
+  "tracking_only",
+  "real",
+  "internal",
+  "read_only",
+];
 
 export const EXECUTION_STATES = [
   "observed",
@@ -106,6 +113,12 @@ export function outcomeLabel(outcome) {
   if (mode === "tracking_only" || outcome.tracking_recorded === true) {
     return "Tracking only";
   }
+  if (mode === "internal") {
+    return "Internal";
+  }
+  if (mode === "read_only") {
+    return "Read only";
+  }
   if (mode === "real" && outcome.external_executed === true) {
     return "Real executed";
   }
@@ -125,7 +138,14 @@ export function outcomeColor(outcome) {
 
   if (label === "Real executed") return "success";
   if (label === "Simulated" || label === "Running" || label === "Queued") return "info";
-  if (label === "Tracking only" || label === "Awaiting approval") return "warning";
+  if (
+    label === "Tracking only" ||
+    label === "Awaiting approval" ||
+    label === "Internal" ||
+    label === "Read only"
+  ) {
+    return "warning";
+  }
   if (
     label === "Blocked by approval" ||
     label === "Rejected" ||
@@ -162,6 +182,12 @@ export function formatOutcomeStatus(outcome) {
     }
     if (mode === "tracking_only" || outcome.tracking_recorded === true) {
       return "Tracking-only recorded";
+    }
+    if (mode === "internal") {
+      return "Internal succeeded";
+    }
+    if (mode === "read_only") {
+      return "Read-only observed";
     }
     if (mode === "real" && outcome.external_executed === true) {
       return "Real executed";
@@ -246,6 +272,9 @@ export function outcomeEvidenceQuality(outcome) {
   if (mode === "tracking_only" && external) return "contradiction";
   if (mode === "real" && external && simulated) return "contradiction";
   if (mode === "observed" && external) return "contradiction";
+  if ((mode === "internal" || mode === "read_only") && (external || simulated || tracking)) {
+    return "contradiction";
+  }
   if (tracking && external) return "contradiction";
   return "ok";
 }
