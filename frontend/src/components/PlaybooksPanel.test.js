@@ -235,16 +235,20 @@ test("view definition calls getPlaybook and shows read-only JSON", async () => {
   await screen.findByText("pb_one");
 
   const viewButtons = screen.getAllByRole("button", { name: /^view$/i });
-  await userEvent.click(viewButtons[0]);
+  const viewButton = viewButtons[0];
+  await userEvent.click(viewButton);
 
   await waitFor(() => {
     expect(getPlaybook).toHaveBeenCalledWith("pb_one");
   });
 
-  expect(screen.getByText(/definition detail/i)).toBeInTheDocument();
+  expect(screen.getByText(/definition detail/i)).toHaveFocus();
   await waitFor(() => {
     expect(screen.getByText(/alert_type/, { exact: false })).toBeInTheDocument();
   });
+
+  await userEvent.click(screen.getByRole("button", { name: "Close" }));
+  expect(viewButton).toHaveFocus();
 });
 
 test("view execution calls getPlaybookExecution", async () => {

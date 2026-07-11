@@ -8,6 +8,12 @@ import {
 import { listIncidentNotificationDeliveries } from "../services/notificationDeliveryService";
 import { formatTimestamp } from "../utils/displayFormatting";
 import { getSeverityBadgeStyle } from "../utils/severityDisplay";
+import {
+  MasterDetailLayout,
+  MasterDetailMaster,
+  MasterDetailPane,
+  useMasterDetailFocus,
+} from "./MasterDetailLayout";
 
 const INCIDENT_STATUS_FILTERS = ["all", "open", "investigating", "resolved", "closed"];
 const INCIDENT_SEVERITY_FILTERS = ["all", "LOW", "MEDIUM", "HIGH", "CRITICAL"];
@@ -79,6 +85,9 @@ function IncidentsPanel({
   const [deliveryAttempts, setDeliveryAttempts] = useState([]);
   const [deliveryLoading, setDeliveryLoading] = useState(false);
   const [deliveryError, setDeliveryError] = useState("");
+  const { detailRef, rememberTrigger, restoreTriggerFocus } = useMasterDetailFocus(
+    selectedIncidentId
+  );
 
   const loadIncidentList = useCallback(async ({ quiet = false } = {}) => {
     try {
@@ -182,6 +191,7 @@ function IncidentsPanel({
   ]);
 
   const handleCloseDetail = useCallback(() => {
+    restoreTriggerFocus();
     setSelectedIncidentId(null);
     setSelectedIncident(null);
     setDetailError("");
@@ -194,7 +204,12 @@ function IncidentsPanel({
     setDeliveryAttempts([]);
     setDeliveryError("");
     setDeliveryLoading(false);
-  }, []);
+  }, [restoreTriggerFocus]);
+
+  const handleSelectIncident = useCallback((incidentId, trigger) => {
+    rememberTrigger(trigger);
+    setSelectedIncidentId(incidentId);
+  }, [rememberTrigger]);
 
   useEffect(() => {
     loadIncidentList();
@@ -293,6 +308,11 @@ function IncidentsPanel({
           </div>
         ) : null}
 
+        <MasterDetailLayout
+          detailOpen={selectedIncidentId !== null}
+          ariaLabel="Incident list and selected incident detail"
+        >
+          <MasterDetailMaster ariaLabel="Incidents">
         {loading ? (
           <p style={emptyTextStyle}>Loading incidents...</p>
         ) : incidents.length === 0 ? (
@@ -330,7 +350,15 @@ function IncidentsPanel({
                   {limitedIncidents.map((incident) => (
                     <tr
                       key={incident.id}
-                      onClick={() => setSelectedIncidentId(incident.id)}
+                      tabIndex={0}
+                      aria-selected={selectedIncidentId === incident.id}
+                      onClick={(event) => handleSelectIncident(incident.id, event.currentTarget)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          handleSelectIncident(incident.id, event.currentTarget);
+                        }
+                      }}
                       style={{
                         ...rowStyle,
                         ...(selectedIncidentId === incident.id ? selectedRowStyle : null),
@@ -372,8 +400,13 @@ function IncidentsPanel({
             </div>
           </div>
         )}
+          </MasterDetailMaster>
 
         {selectedIncidentId ? (
+          <MasterDetailPane
+            ref={detailRef}
+            ariaLabel="Selected incident detail"
+          >
           <div style={detailPanelStyle}>
             <div style={detailHeaderStyle}>
               <h3 style={detailTitleStyle}>
@@ -603,7 +636,9 @@ function IncidentsPanel({
               </>
             ) : null}
           </div>
+          </MasterDetailPane>
         ) : null}
+        </MasterDetailLayout>
       </div>
     </section>
   );

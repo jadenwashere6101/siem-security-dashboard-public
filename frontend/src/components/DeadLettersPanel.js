@@ -8,6 +8,12 @@ import {
   requestDeadLetterRetry,
 } from "../services/deadLetterService";
 import { formatTimestamp } from "../utils/displayFormatting";
+import {
+  MasterDetailLayout,
+  MasterDetailMaster,
+  MasterDetailPane,
+  useMasterDetailFocus,
+} from "./MasterDetailLayout";
 
 const DEAD_LETTER_STATUSES = ["open", "retrying", "retried", "dismissed"];
 const STATUS_FILTERS = ["all", ...DEAD_LETTER_STATUSES];
@@ -166,6 +172,7 @@ function DeadLettersPanel({
   const [dismissConfirmOpen, setDismissConfirmOpen] = useState(false);
   const [retryExecuteConfirmed, setRetryExecuteConfirmed] = useState(false);
   const [retryExecutePhrase, setRetryExecutePhrase] = useState("");
+  const { detailRef, rememberTrigger, restoreTriggerFocus } = useMasterDetailFocus(selectedId);
 
   const canMutateDeadLetters = userRole === "analyst" || userRole === "super_admin";
   const canExecuteDeadLetterRetry = userRole === "super_admin";
@@ -214,7 +221,8 @@ function DeadLettersPanel({
     [loadList, loadMetrics]
   );
 
-  const handleSelectRow = useCallback(async (deadLetterId) => {
+  const handleSelectRow = useCallback(async (deadLetterId, trigger) => {
+    rememberTrigger(trigger);
     setSelectedId(deadLetterId);
     setDetailError("");
     setActionError("");
@@ -234,9 +242,10 @@ function DeadLettersPanel({
     } finally {
       setDetailLoading(false);
     }
-  }, []);
+  }, [rememberTrigger]);
 
   const handleCloseDetail = useCallback(() => {
+    restoreTriggerFocus();
     setSelectedId(null);
     setSelectedItem(null);
     setDetailError("");
@@ -247,7 +256,7 @@ function DeadLettersPanel({
     setDismissComment("");
     setRetryExecuteConfirmed(false);
     setRetryExecutePhrase("");
-  }, []);
+  }, [restoreTriggerFocus]);
 
   const handleDismissStart = useCallback(() => {
     setActionError("");
@@ -414,6 +423,7 @@ function DeadLettersPanel({
         onRetryLoad={() => loadPanel()}
         onSelectRow={handleSelectRow}
         onCloseDetail={handleCloseDetail}
+        detailRef={detailRef}
         displaySettings={displaySettings}
       />
     </section>
@@ -547,6 +557,7 @@ function PanelBody({
   onRetryLoad,
   onSelectRow,
   onCloseDetail,
+  detailRef,
   displaySettings,
 }) {
   return (
@@ -569,8 +580,12 @@ function PanelBody({
 
       {loading ? <p style={emptyTextStyle}>Loading dead letters...</p> : null}
 
-      {!loading && !error ? (
-        <>
+      {!loading && (!error || selectedId !== null) ? (
+        <MasterDetailLayout
+          detailOpen={selectedId !== null}
+          ariaLabel="Dead letter list and selected dead letter detail"
+        >
+          <MasterDetailMaster ariaLabel="Dead letters">
           {items.length === 0 ? (
             <p style={emptyTextStyle}>No dead letters found ({filterSummary}).</p>
           ) : (
@@ -583,7 +598,9 @@ function PanelBody({
             />
             </div>
           )}
+          </MasterDetailMaster>
 
+          <MasterDetailPane ref={detailRef} ariaLabel="Selected dead letter detail">
           <div style={detailPanelStyle}>
             <div style={detailHeaderStyle}>
               <h3 style={detailTitleStyle}>Dead Letter Detail</h3>
@@ -625,7 +642,8 @@ function PanelBody({
               <p style={emptyTextStyle}>No detail available for this dead letter.</p>
             )}
           </div>
-        </>
+          </MasterDetailPane>
+        </MasterDetailLayout>
       ) : null}
     </div>
   );
@@ -690,6 +708,7 @@ function DeadLetterTable({ items, selectedId, onSelectRow, displaySettings }) {
           {items.map((item) => (
             <tr
               key={item.id}
+              aria-selected={selectedId === item.id}
               style={{
                 ...rowStyle,
                 ...(selectedId === item.id ? selectedRowStyle : null),
@@ -717,7 +736,7 @@ function DeadLetterTable({ items, selectedId, onSelectRow, displaySettings }) {
                     ...viewButtonStyle,
                     ...(selectedId === item.id ? selectedViewButtonStyle : null),
                   }}
-                  onClick={() => onSelectRow(item.id)}
+                  onClick={(event) => onSelectRow(item.id, event.currentTarget)}
                   title={`View dead letter ${item.id}`}
                 >
                   View

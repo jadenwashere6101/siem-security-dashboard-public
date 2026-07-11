@@ -9,11 +9,11 @@
 
 ## 2. MAC AI — Detail UX Pass
 
-- [ ] 2.1 Implement a reusable responsive master-detail layout/focus helper using existing React/CSS patterns and no new routing dependency.
-- [ ] 2.2 Move SOAR Incident detail into the master-detail pattern and restore focus on close.
-- [ ] 2.3 Move Playbook definition and execution detail into the master-detail pattern and restore focus on close.
-- [ ] 2.4 Move SOAR Operations/Dead Letter detail into the master-detail pattern and restore focus on close.
-- [ ] 2.5 Preserve loading, error, action, RBAC, correlation, and canonical outcome states in every moved detail.
+- [x] 2.1 Implement a reusable responsive master-detail layout/focus helper using existing React/CSS patterns and no new routing dependency.
+- [x] 2.2 Move SOAR Incident detail into the master-detail pattern and restore focus on close.
+- [x] 2.3 Move Playbook definition and execution detail into the master-detail pattern and restore focus on close.
+- [x] 2.4 Move SOAR Operations/Dead Letter detail into the master-detail pattern and restore focus on close.
+- [x] 2.5 Preserve loading, error, action, RBAC, correlation, and canonical outcome states in every moved detail.
 
 ## 3. MAC AI — Automated Verification Pass
 

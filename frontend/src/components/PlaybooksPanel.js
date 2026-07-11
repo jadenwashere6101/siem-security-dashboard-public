@@ -18,6 +18,12 @@ import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
 import { executionModeNoun, normalizeExecutionMode } from "../utils/executionModeDisplay";
 import PlaybookExecutionTimeline from "./PlaybookExecutionTimeline";
 import { ResponseOutcomeBadge, ResponseOutcomeSummary } from "./ResponseOutcome";
+import {
+  MasterDetailLayout,
+  MasterDetailMaster,
+  MasterDetailPane,
+  useMasterDetailFocus,
+} from "./MasterDetailLayout";
 
 const PAGE_LIMIT = 50;
 const EXEC_STATUSES = ["pending", "running", "awaiting_approval", "success", "failed", "abandoned"];
@@ -221,9 +227,13 @@ function PlaybooksPanel({
   const [executionActionError, setExecutionActionError] = useState({});
 
   const [detailKind, setDetailKind] = useState(null);
+  const [detailFocusKey, setDetailFocusKey] = useState(null);
   const [detailRecord, setDetailRecord] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
+  const { detailRef, rememberTrigger, restoreTriggerFocus } = useMasterDetailFocus(
+    detailFocusKey
+  );
 
   const [deliveryAttempts, setDeliveryAttempts] = useState([]);
   const [deliveryLoading, setDeliveryLoading] = useState(false);
@@ -314,16 +324,20 @@ function PlaybooksPanel({
   }, [loadDefinitions, loadExecutions]);
 
   const handleCloseDetail = useCallback(() => {
+    restoreTriggerFocus();
     setDetailKind(null);
+    setDetailFocusKey(null);
     setDetailRecord(null);
     setDetailError("");
     setDetailLoading(false);
     setDeadLetters([]);
     setDeadLetterWarning("");
-  }, []);
+  }, [restoreTriggerFocus]);
 
-  const handleViewDefinition = useCallback(async (playbookId) => {
+  const handleViewDefinition = useCallback(async (playbookId, trigger) => {
+    rememberTrigger(trigger);
     setDetailKind("definition");
+    setDetailFocusKey(`definition:${playbookId}`);
     setDetailRecord(null);
     setDetailError("");
     setDetailLoading(true);
@@ -336,10 +350,12 @@ function PlaybooksPanel({
     } finally {
       setDetailLoading(false);
     }
-  }, []);
+  }, [rememberTrigger]);
 
-  const handleViewExecution = useCallback(async (executionId) => {
+  const handleViewExecution = useCallback(async (executionId, trigger) => {
+    rememberTrigger(trigger);
     setDetailKind("execution");
+    setDetailFocusKey(`execution:${executionId}`);
     setDetailRecord(null);
     setDetailError("");
     setDetailLoading(true);
@@ -352,7 +368,7 @@ function PlaybooksPanel({
     } finally {
       setDetailLoading(false);
     }
-  }, []);
+  }, [rememberTrigger]);
 
   useEffect(() => {
     if (detailKind !== "execution" || !detailRecord?.id) {
@@ -711,6 +727,11 @@ function PlaybooksPanel({
       </div>
 
       <div style={panelContentStyle}>
+        <MasterDetailLayout
+          detailOpen={detailKind !== null}
+          ariaLabel="Playbook list and selected playbook detail"
+        >
+          <MasterDetailMaster ariaLabel="Playbook records">
         {activePanel === "definitions" ? (
           <>
             <div style={toolbarStyle}>
@@ -766,7 +787,14 @@ function PlaybooksPanel({
                   </thead>
                   <tbody>
                     {definitions.map((row) => (
-                      <tr key={row.id} style={rowStyle}>
+                      <tr
+                        key={row.id}
+                        aria-selected={detailFocusKey === `definition:${row.id}`}
+                        style={{
+                          ...rowStyle,
+                          ...(detailFocusKey === `definition:${row.id}` ? selectedRowStyle : null),
+                        }}
+                      >
                         <td style={{ ...bodyCellStyle, ...mono }}>{row.id}</td>
                         <td style={bodyCellStyle}>{row.name}</td>
                         <td style={bodyCellStyle}>{row.enabled ? "Yes" : "No"}</td>
@@ -813,7 +841,9 @@ function PlaybooksPanel({
                           <button
                             type="button"
                             style={viewButtonStyle}
-                            onClick={() => handleViewDefinition(row.id)}
+                            onClick={(event) =>
+                              handleViewDefinition(row.id, event.currentTarget)
+                            }
                           >
                             View
                           </button>
@@ -942,7 +972,14 @@ function PlaybooksPanel({
                       const actionBusy = Boolean(executionActionInProgress[row.id]);
                       const actionError = executionActionError[row.id];
                       return (
-                        <tr key={row.id} style={rowStyle}>
+                        <tr
+                          key={row.id}
+                          aria-selected={detailFocusKey === `execution:${row.id}`}
+                          style={{
+                            ...rowStyle,
+                            ...(detailFocusKey === `execution:${row.id}` ? selectedRowStyle : null),
+                          }}
+                        >
                           <td style={{ ...bodyCellStyle, ...mono }}>{row.id}</td>
                           <td style={{ ...bodyCellStyle, ...mono }}>{row.playbook_id}</td>
                           <td style={bodyCellStyle}>{row.status}</td>
@@ -1017,7 +1054,9 @@ function PlaybooksPanel({
                             <button
                               type="button"
                               style={viewButtonStyle}
-                              onClick={() => handleViewExecution(row.id)}
+                              onClick={(event) =>
+                                handleViewExecution(row.id, event.currentTarget)
+                              }
                             >
                               View
                             </button>
@@ -1032,6 +1071,9 @@ function PlaybooksPanel({
           </>
         ) : null}
 
+          </MasterDetailMaster>
+
+        <MasterDetailPane ref={detailRef} ariaLabel="Selected playbook detail">
         <div style={detailPanelStyle}>
           <div style={detailHeaderStyle}>
             <h3 style={detailTitleStyle}>
@@ -1396,6 +1438,8 @@ function PlaybooksPanel({
             <p style={emptyTextStyle}>Select a row and choose View to inspect read-only JSON.</p>
           )}
         </div>
+        </MasterDetailPane>
+        </MasterDetailLayout>
 
         {formMode && isSuperAdmin && (
           <div style={formPanelStyle}>
@@ -1644,6 +1688,10 @@ const bodyCellStyle = {
 
 const rowStyle = {
   backgroundColor: "#0b1020",
+};
+
+const selectedRowStyle = {
+  backgroundColor: "rgba(31, 111, 235, 0.12)",
 };
 
 const viewButtonStyle = {

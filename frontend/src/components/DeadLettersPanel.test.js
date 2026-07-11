@@ -196,13 +196,18 @@ test("selecting row shows detail", async () => {
 
   await screen.findByText("99");
 
-  await userEvent.click(screen.getByTitle("View dead letter 7"));
+  const viewButton = screen.getByTitle("View dead letter 7");
+  await userEvent.click(viewButton);
 
   expect(await screen.findByText(/dead letter #7/i)).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Dead Letter Detail" })).toHaveFocus();
   expect(getDeadLetter).toHaveBeenCalledWith(7);
   expect(screen.getByText(/view in soar playbooks/i)).toBeInTheDocument();
   expect(screen.getByText(/view in soar incidents/i)).toBeInTheDocument();
   expect(screen.getByText(/index 1, action notify_slack/i)).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "Close" }));
+  expect(viewButton).toHaveFocus();
 });
 
 test("empty state", async () => {

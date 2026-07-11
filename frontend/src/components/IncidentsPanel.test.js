@@ -557,11 +557,15 @@ describe("IncidentsPanel", () => {
 
     renderPanel();
     await screen.findByText(incidentFixture.title);
-    await userEvent.click(screen.getByText(incidentFixture.title));
-    expect(await screen.findByText(/Incident #7/)).toBeInTheDocument();
+    const row = screen.getByText(incidentFixture.title).closest("tr");
+    await userEvent.click(row);
+    const detailHeading = await screen.findByText(/Incident #7/);
+    expect(detailHeading).toHaveFocus();
+    expect(row).toHaveAttribute("aria-selected", "true");
 
     await userEvent.click(screen.getByRole("button", { name: "Close" }));
 
     expect(screen.queryByText(/Incident #7/)).not.toBeInTheDocument();
+    expect(row).toHaveFocus();
   });
 });
