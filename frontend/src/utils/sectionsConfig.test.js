@@ -2,6 +2,7 @@ import { isSectionVisible, normalizeWorkspaceDestination, sectionsConfig } from 
 
 const EXPECTED_SECTION_IDS = [
   "dashboard",
+  "source-health",
   "soc-command-center",
   "response-registry",
   "threat-hunt",
@@ -54,6 +55,12 @@ const expectedVisibility = {
     analyst: true,
     viewer: true,
     unauthenticated: true,
+  },
+  "source-health": {
+    super_admin: true,
+    analyst: true,
+    viewer: false,
+    unauthenticated: false,
   },
   "soc-command-center": {
     super_admin: true,
@@ -185,8 +192,15 @@ const expectedVisibility = {
 
 describe("sectionsConfig", () => {
   test("contains exactly the expected section ids", () => {
-    expect(sectionsConfig).toHaveLength(22);
+    expect(sectionsConfig).toHaveLength(23);
     expect(sectionsConfig.map((section) => section.id)).toEqual(EXPECTED_SECTION_IDS);
+  });
+
+  test("places Source Health directly beneath Dashboard in Overview", () => {
+    expect(sectionsConfig.filter((section) => section.group === "overview").map((section) => section.id)).toEqual([
+      "dashboard",
+      "source-health",
+    ]);
   });
 
   test("does not expose a standalone Blocklist sidebar destination", () => {

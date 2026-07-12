@@ -3,15 +3,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { loadLiveLogs } from "../services/liveLogsService";
 import { formatTimestamp } from "../utils/displayFormatting";
 import { getSeverityBadgeStyle } from "../utils/severityDisplay";
-
-export const LIVE_LOG_SOURCE_LABELS = {
-  honeypot: "Honeypot",
-  bank_app: "Bank App",
-  pfsense: "pfSense",
-  nginx: "NGINX",
-  azure_insights: "Azure",
-  opentelemetry: "OTEL",
-};
+import { LIVE_LOG_SOURCE_LABELS } from "../utils/sourceMetadata";
+export { LIVE_LOG_SOURCE_LABELS } from "../utils/sourceMetadata";
 
 const DEFAULT_POLL_INTERVAL_MS = 5000;
 const VIEW_MODES = {

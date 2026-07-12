@@ -124,6 +124,15 @@ jest.mock('./components/LiveLogsPanel', () => (props) => (
   </div>
 ));
 
+jest.mock('./components/SourceHealthPanel', () => (props) => (
+  <div data-testid="source-health-panel">
+    <h2>Source Health</h2>
+    <button type="button" onClick={() => props.onOpenLiveLogs('live-logs-pfsense')}>
+      Source Health open pfSense logs
+    </button>
+  </div>
+));
+
 beforeEach(() => {
   jest.clearAllMocks();
   window.localStorage.clear();
@@ -167,6 +176,18 @@ test('renders SOAR Operations nav for analyst and loads panel when selected', as
   await userEvent.click(screen.getByRole('button', { name: /soar operations/i }));
 
   expect(await screen.findByTestId('dead-letters-panel')).toHaveTextContent(/analyst/i);
+});
+
+test('renders Source Health beneath Dashboard and routes its Live Logs action', async () => {
+  loadCurrentSession.mockResolvedValue({ authenticated: true, user: 'analyst1', role: 'analyst' });
+  render(<App />);
+  const dashboard = await screen.findByRole('button', { name: /^dashboard$/i });
+  const sourceHealth = screen.getByRole('button', { name: /^source health$/i });
+  expect(dashboard.compareDocumentPosition(sourceHealth) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  await userEvent.click(sourceHealth);
+  expect(await screen.findByTestId('source-health-panel')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: /source health open pfsense logs/i }));
+  expect(await screen.findByTestId('live-logs-panel')).toHaveTextContent('pfSense pfsense');
 });
 
 test('renders SOC Command Center nav for analyst and loads command center when selected', async () => {

@@ -16,6 +16,7 @@ import SocCommandCenter from "./components/SocCommandCenter";
 import ThreatHuntPanel from "./components/ThreatHuntPanel";
 import ResponseRegistryPanel from "./components/ResponseRegistryPanel";
 import LiveLogsPanel from "./components/LiveLogsPanel";
+import SourceHealthPanel from "./components/SourceHealthPanel";
 import SettingsPanel from "./components/SettingsPanel";
 import SidebarLayout from "./components/SidebarLayout";
 import { UiSettingsProvider, useUiSettings } from "./context/UiSettingsContext";
@@ -593,6 +594,14 @@ function AppInner() {
             displaySettings={settings.display}
             onOpenResponseRegistry={handleOpenResponseRegistry}
             onReviewIncident={handleOpenIncidentWorkspace}
+          />
+        )}
+
+        {activeSection === "source-health" && isSectionVisible("source-health", roleFlags) && (
+          <SourceHealthPanel
+            pollIntervalMs={settings.autoRefreshIntervalMs}
+            displaySettings={settings.display}
+            onOpenLiveLogs={handleNavigate}
           />
         )}
 

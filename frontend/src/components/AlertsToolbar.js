@@ -1,4 +1,5 @@
 import React from "react";
+import { SOURCE_METADATA } from "../utils/sourceMetadata";
 
 function AlertsToolbar({
   filteredAlertsCount,
@@ -127,10 +128,9 @@ function AlertsToolbar({
           style={selectStyle}
         >
           <option value="all">All Sources</option>
-          <option value="bank_app">bank_app</option>
-          <option value="nginx">nginx</option>
-          <option value="azure_insights">azure_insights</option>
-          <option value="opentelemetry">opentelemetry</option>
+          {SOURCE_METADATA.map((item) => (
+            <option key={item.source} value={item.source}>{item.source}</option>
+          ))}
         </select>
       </div>
 

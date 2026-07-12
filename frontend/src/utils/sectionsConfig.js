@@ -1,9 +1,17 @@
+import { LIVE_LOG_SECTIONS } from "./sourceMetadata";
+
 export const sectionsConfig = [
   {
     id: "dashboard",
     label: "Dashboard",
     group: "overview",
     visibleWhen: () => true,
+  },
+  {
+    id: "source-health",
+    label: "Source Health",
+    group: "overview",
+    visibleWhen: ({ canTakeAlertActions }) => canTakeAlertActions,
   },
   {
     id: "soc-command-center",
@@ -23,48 +31,7 @@ export const sectionsConfig = [
     group: "soc",
     visibleWhen: ({ canTakeAlertActions }) => canTakeAlertActions,
   },
-  {
-    id: "live-logs-honeypot",
-    label: "Honeypot",
-    group: "live logs",
-    source: "honeypot",
-    visibleWhen: ({ canTakeAlertActions }) => canTakeAlertActions,
-  },
-  {
-    id: "live-logs-bank-app",
-    label: "Bank App",
-    group: "live logs",
-    source: "bank_app",
-    visibleWhen: ({ canTakeAlertActions }) => canTakeAlertActions,
-  },
-  {
-    id: "live-logs-pfsense",
-    label: "pfSense",
-    group: "live logs",
-    source: "pfsense",
-    visibleWhen: ({ canTakeAlertActions }) => canTakeAlertActions,
-  },
-  {
-    id: "live-logs-nginx",
-    label: "NGINX",
-    group: "live logs",
-    source: "nginx",
-    visibleWhen: ({ canTakeAlertActions }) => canTakeAlertActions,
-  },
-  {
-    id: "live-logs-azure",
-    label: "Azure",
-    group: "live logs",
-    source: "azure_insights",
-    visibleWhen: ({ canTakeAlertActions }) => canTakeAlertActions,
-  },
-  {
-    id: "live-logs-otel",
-    label: "OTEL",
-    group: "live logs",
-    source: "opentelemetry",
-    visibleWhen: ({ canTakeAlertActions }) => canTakeAlertActions,
-  },
+  ...LIVE_LOG_SECTIONS,
   {
     id: "detection-rules",
     label: "Detection Rules",

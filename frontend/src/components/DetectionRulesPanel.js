@@ -4,15 +4,7 @@ import {
   updateDetectionRule,
 } from "../services/detectionRulesService";
 import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
-
-const SOURCE_LABELS = {
-  honeypot: "Honeypot",
-  bank_app: "Bank App",
-  pfsense: "pfSense",
-  nginx: "NGINX",
-  azure_insights: "Azure Application Insights",
-  opentelemetry: "OpenTelemetry",
-};
+import { SOURCE_DISPLAY_LABELS } from "../utils/sourceMetadata";
 
 function DetectionRulesPanel({
   cardStyle,
@@ -174,9 +166,9 @@ function DetectionRulesPanel({
               key={evidence}
               style={sourceBadgeStyle}
               title={evidence}
-              aria-label={`${SOURCE_LABELS[source] || source}: ${evidence}`}
+              aria-label={`${SOURCE_DISPLAY_LABELS[source] || source}: ${evidence}`}
             >
-              {SOURCE_LABELS[source] || source}
+              {SOURCE_DISPLAY_LABELS[source] || source}
             </span>
           );
         })}

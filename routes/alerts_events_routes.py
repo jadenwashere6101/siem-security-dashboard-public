@@ -16,6 +16,7 @@ from core.soar_response_outcomes import (
 )
 from helpers.enrichment_helpers import enrich_alert_with_correlation_context, enrich_alert_with_mitre
 from core.ip_helpers import determine_response_action, get_ip_reputation, lookup_ip_reputation
+from core.source_inventory import CANONICAL_SOURCE_IDS
 
 
 alerts_events_bp = Blueprint("alerts_events", __name__)
@@ -27,7 +28,7 @@ VALID_EVENT_SEARCH_TYPES = VALID_EVENT_TYPES | {
     "application_exception",
     "availability_failure",
 }
-VALID_EVENT_SOURCES = {"honeypot", "bank_app", "pfsense", "nginx", "azure_insights", "opentelemetry"}
+VALID_EVENT_SOURCES = CANONICAL_SOURCE_IDS
 
 _ALERT_SELECT = """
     SELECT
