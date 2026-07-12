@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from adapters.pfsense_filterlog_adapter import (
     MAX_PACKET_BYTES,
     parse_pfsense_filterlog_packet,
@@ -24,7 +26,12 @@ ICMP_BLOCK = (
 
 
 def test_valid_ipv4_tcp_block_line_parses_and_normalizes():
-    result = parse_pfsense_filterlog_packet(TCP_BLOCK.encode("utf-8"), environment="test")
+    result = parse_pfsense_filterlog_packet(
+        TCP_BLOCK.encode("utf-8"),
+        environment="test",
+        received_at=datetime(2026, 7, 7, 12, 1, tzinfo=timezone.utc),
+        syslog_timezone="America/New_York",
+    )
 
     assert result["ok"] is True
     parsed = result["parsed"]
@@ -48,8 +55,115 @@ def test_valid_ipv4_tcp_block_line_parses_and_normalizes():
     assert event["source_type"] == "firewall"
     assert event["app_name"] == "pfsense_filterlog"
     assert event["environment"] == "test"
+    assert event["event_timestamp"] == "2026-07-07T12:00:01-04:00"
     assert event["raw_payload"]["event_type_candidate"] == "firewall_block"
     assert event["raw_payload"]["destination_port"] == 443
+    assert event["raw_payload"]["raw_syslog"] == TCP_BLOCK
+
+
+def test_single_digit_day_timestamp_parses_with_timezone_awareness():
+    result = parse_pfsense_filterlog_packet(
+        TCP_BLOCK,
+        received_at=datetime(2026, 7, 7, 12, 1, tzinfo=timezone.utc),
+        syslog_timezone="America/New_York",
+    )
+
+    assert result["ok"] is True
+    assert result["event"]["event_timestamp"] == "2026-07-07T12:00:01-04:00"
+    assert result["telemetry"]["timestamp_status"] == "parsed"
+
+
+def test_year_boundary_infers_previous_year_without_future_timestamp():
+    year_boundary = TCP_BLOCK.replace("Jul  7 12:00:01", "Dec 31 23:59:59")
+
+    result = parse_pfsense_filterlog_packet(
+        year_boundary,
+        received_at=datetime(2026, 1, 1, 0, 0, 5, tzinfo=timezone.utc),
+        syslog_timezone="America/New_York",
+    )
+
+    assert result["ok"] is True
+    assert result["event"]["event_timestamp"] == "2025-12-31T23:59:59-05:00"
+
+
+def test_configured_iana_timezone_applies_dst_offset_for_summer_date(monkeypatch):
+    monkeypatch.setenv("PFSENSE_SYSLOG_TIMEZONE", "America/New_York")
+
+    result = parse_pfsense_filterlog_packet(
+        TCP_BLOCK,
+        received_at=datetime(2026, 7, 7, 16, 1, tzinfo=timezone.utc),
+    )
+
+    assert result["event"]["event_timestamp"] == "2026-07-07T12:00:01-04:00"
+
+
+def test_iana_timezone_applies_standard_time_offset_for_winter_date():
+    winter_line = TCP_BLOCK.replace("Jul  7 12:00:01", "Jan 15 12:00:01")
+
+    result = parse_pfsense_filterlog_packet(
+        winter_line,
+        received_at=datetime(2026, 1, 15, 17, 1, tzinfo=timezone.utc),
+        syslog_timezone="America/New_York",
+    )
+
+    assert result["event"]["event_timestamp"] == "2026-01-15T12:00:01-05:00"
+
+
+def test_invalid_configured_timezone_fails_safe_without_vm_timezone_fallback():
+    result = parse_pfsense_filterlog_packet(
+        TCP_BLOCK,
+        received_at=datetime(2026, 7, 7, 16, 1, tzinfo=timezone.utc),
+        syslog_timezone="Not/A_Real_Zone",
+    )
+
+    assert result["ok"] is True
+    assert result["event"]["event_timestamp"] is None
+    assert result["telemetry"]["timestamp_status"] == "invalid"
+    assert result["telemetry"]["timestamp_reason"] == "invalid_syslog_timezone"
+    assert result["event"]["raw_payload"]["timestamp_parse_reason"] == "invalid_syslog_timezone"
+
+
+def test_rfc5424_timestamp_preserves_explicit_timezone_offset():
+    rfc5424_line = TCP_BLOCK.replace(
+        "<134>Jul  7 12:00:01 fw filterlog[12345]: ",
+        "<134>1 2026-07-07T08:00:01-04:00 fw filterlog 12345 - filterlog: ",
+    )
+
+    result = parse_pfsense_filterlog_packet(
+        rfc5424_line,
+        received_at=datetime(2026, 7, 7, 12, 1, tzinfo=timezone.utc),
+        syslog_timezone="Not/A_Real_Zone",
+    )
+
+    assert result["ok"] is True
+    assert result["event"]["event_timestamp"] == "2026-07-07T08:00:01-04:00"
+
+
+def test_invalid_timestamp_keeps_valid_event_and_records_safe_diagnostic():
+    invalid_timestamp = TCP_BLOCK.replace("Jul  7 12:00:01", "Jul 99 12:00:01")
+
+    result = parse_pfsense_filterlog_packet(
+        invalid_timestamp,
+        received_at=datetime(2026, 7, 7, 12, 1, tzinfo=timezone.utc),
+    )
+
+    assert result["ok"] is True
+    assert result["event"]["event_timestamp"] is None
+    assert result["telemetry"]["timestamp_status"] == "invalid"
+    assert result["telemetry"]["timestamp_reason"] == "invalid_bsd_timestamp"
+    assert result["event"]["raw_payload"]["timestamp_parse_reason"] == "invalid_bsd_timestamp"
+    assert invalid_timestamp not in str(result["telemetry"])
+
+
+def test_missing_timestamp_keeps_valid_raw_filterlog_payload():
+    raw_payload_only = TCP_BLOCK.split("filterlog[12345]: ", 1)[1]
+
+    result = parse_pfsense_filterlog_packet(raw_payload_only)
+
+    assert result["ok"] is True
+    assert result["event"]["event_timestamp"] is None
+    assert result["telemetry"]["timestamp_status"] == "missing"
+    assert result["event"]["raw_payload"]["raw_log"] == raw_payload_only
 
 
 def test_valid_ipv4_udp_pass_line_parses_and_normalizes():

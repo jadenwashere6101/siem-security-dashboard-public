@@ -24,6 +24,7 @@ Environment=PYTHONUNBUFFERED=1
 # PFSENSE_BACKEND_TIMEOUT_SECONDS=5.0
 # PFSENSE_RECV_TIMEOUT_SECONDS=1.0
 # PFSENSE_ENVIRONMENT=prod
+# PFSENSE_SYSLOG_TIMEZONE=America/New_York
 ExecStart=/home/jaden/siem-security-dashboard/venv/bin/python3 /home/jaden/siem-security-dashboard/scripts/pfsense_syslog_listener_daemon.py --log-level INFO
 Restart=on-failure
 RestartSec=15

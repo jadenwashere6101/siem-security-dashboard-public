@@ -1,14 +1,24 @@
 import csv
 import ipaddress
+import os
 import re
+from datetime import datetime, timedelta, timezone
 from io import StringIO
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 MAX_PACKET_BYTES = 4096
 MAX_SUMMARY_CHARS = 160
 
 FILTERLOG_MARKER_PATTERN = re.compile(r"\bfilterlog(?:\[\d+\])?:\s*(?P<payload>.+)$")
+BSD_SYSLOG_TIMESTAMP_PATTERN = re.compile(
+    r"^(?:<\d{1,3}>)?(?P<timestamp>[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})(?:\s|$)"
+)
+RFC5424_SYSLOG_TIMESTAMP_PATTERN = re.compile(
+    r"^(?:<\d{1,3}>)?\d+\s+(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))(?:\s|$)"
+)
 UNSAFE_CONTROL_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+MAX_FUTURE_SKEW = timedelta(hours=24)
 
 ACTION_EVENT_TYPE_CANDIDATES = {
     "block": "firewall_block",
@@ -28,7 +38,15 @@ PFSENSE_VALID_SEVERITIES = frozenset({"low", "medium", "high", "critical"})
 MAX_PFSENSE_INGEST_BYTES = 65536
 
 
-def parse_pfsense_filterlog_packet(packet, *, environment="prod", event_timestamp=None, sender_ip=None):
+def parse_pfsense_filterlog_packet(
+    packet,
+    *,
+    environment="prod",
+    event_timestamp=None,
+    sender_ip=None,
+    received_at=None,
+    syslog_timezone=None,
+):
     byte_length = _packet_byte_length(packet)
     if byte_length > MAX_PACKET_BYTES:
         return _parse_failure("size", "packet_too_large", byte_length=byte_length)
@@ -48,13 +66,22 @@ def parse_pfsense_filterlog_packet(packet, *, environment="prod", event_timestam
         return parsed_or_failure
 
     parsed = parsed_or_failure["parsed"]
+    timestamp_result = parse_pfsense_syslog_timestamp(
+        sanitized_text,
+        received_at=received_at,
+        syslog_timezone=syslog_timezone,
+    )
+    normalized_timestamp = event_timestamp if event_timestamp is not None else timestamp_result["event_timestamp"]
     normalized = normalize_pfsense_filterlog_event(
         parsed,
         environment=environment,
-        event_timestamp=event_timestamp,
+        event_timestamp=normalized_timestamp,
         sender_ip=sender_ip,
         sanitized_summary=payload,
+        sanitized_raw_message=sanitized_text,
         utf8_replaced=utf8_replaced,
+        timestamp_status=timestamp_result["status"],
+        timestamp_reason=timestamp_result.get("reason"),
     )
     return {
         "ok": True,
@@ -63,8 +90,64 @@ def parse_pfsense_filterlog_packet(packet, *, environment="prod", event_timestam
         "telemetry": {
             "input_byte_length": byte_length,
             "utf8_replaced": utf8_replaced,
+            "timestamp_status": timestamp_result["status"],
+            "timestamp_reason": timestamp_result.get("reason"),
         },
     }
+
+
+def parse_pfsense_syslog_timestamp(syslog_text, *, received_at=None, syslog_timezone=None):
+    text = sanitize_pfsense_text(syslog_text)
+    now = received_at or datetime.now().astimezone()
+    if now.tzinfo is None or now.utcoffset() is None:
+        now = now.replace(tzinfo=timezone.utc)
+
+    rfc5424_match = RFC5424_SYSLOG_TIMESTAMP_PATTERN.match(text)
+    if rfc5424_match:
+        timestamp_text = rfc5424_match.group("timestamp")
+        try:
+            parsed = datetime.fromisoformat(timestamp_text.replace("Z", "+00:00"))
+        except ValueError:
+            return {"event_timestamp": None, "status": "invalid", "reason": "invalid_rfc5424_timestamp"}
+        if parsed > now.astimezone(parsed.tzinfo) + MAX_FUTURE_SKEW:
+            return {"event_timestamp": None, "status": "invalid", "reason": "timestamp_too_far_in_future"}
+        return {"event_timestamp": timestamp_text, "status": "parsed", "reason": None}
+
+    bsd_match = BSD_SYSLOG_TIMESTAMP_PATTERN.match(text)
+    if not bsd_match:
+        return {"event_timestamp": None, "status": "missing", "reason": "timestamp_not_found"}
+
+    timestamp_text = bsd_match.group("timestamp")
+    try:
+        partial = datetime.strptime(timestamp_text, "%b %d %H:%M:%S")
+    except ValueError:
+        return {"event_timestamp": None, "status": "invalid", "reason": "invalid_bsd_timestamp"}
+
+    timezone_name = syslog_timezone
+    if timezone_name is None:
+        timezone_name = os.getenv("PFSENSE_SYSLOG_TIMEZONE", "")
+    timezone_name = sanitize_pfsense_text(timezone_name)
+    if not timezone_name:
+        return {"event_timestamp": None, "status": "invalid", "reason": "syslog_timezone_not_configured"}
+    try:
+        firewall_timezone = ZoneInfo(timezone_name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return {"event_timestamp": None, "status": "invalid", "reason": "invalid_syslog_timezone"}
+
+    local_now = now.astimezone(firewall_timezone)
+    candidates = []
+    for year in (local_now.year - 1, local_now.year, local_now.year + 1):
+        try:
+            candidate = partial.replace(year=year, tzinfo=firewall_timezone)
+        except ValueError:
+            continue
+        if candidate <= local_now + MAX_FUTURE_SKEW:
+            candidates.append(candidate)
+    if not candidates:
+        return {"event_timestamp": None, "status": "invalid", "reason": "timestamp_too_far_in_future"}
+
+    parsed = min(candidates, key=lambda candidate: abs(candidate - local_now))
+    return {"event_timestamp": parsed.isoformat(), "status": "parsed", "reason": None}
 
 
 def sanitize_pfsense_text(value):
@@ -153,7 +236,10 @@ def normalize_pfsense_filterlog_event(
     event_timestamp=None,
     sender_ip=None,
     sanitized_summary=None,
+    sanitized_raw_message=None,
     utf8_replaced=False,
+    timestamp_status=None,
+    timestamp_reason=None,
 ):
     action = parsed["action"]
     event_type = ACTION_EVENT_TYPE_CANDIDATES[action]
@@ -169,6 +255,11 @@ def normalize_pfsense_filterlog_event(
         "utf8_replaced": bool(utf8_replaced),
     }
 
+    if timestamp_status:
+        raw_payload["timestamp_parse_status"] = timestamp_status
+    if timestamp_reason:
+        raw_payload["timestamp_parse_reason"] = timestamp_reason
+
     for key in ("source_port", "destination_port", "icmp_type", "icmp_code", "rule_id", "tracker"):
         value = parsed.get(key)
         if value not in (None, ""):
@@ -180,6 +271,10 @@ def normalize_pfsense_filterlog_event(
     full_raw_log = sanitize_pfsense_text(sanitized_summary)
     if full_raw_log:
         raw_payload["raw_log"] = full_raw_log
+
+    full_raw_message = sanitize_pfsense_text(sanitized_raw_message)
+    if full_raw_message:
+        raw_payload["raw_syslog"] = full_raw_message
 
     summary = _bounded_summary(sanitized_summary)
     if summary:

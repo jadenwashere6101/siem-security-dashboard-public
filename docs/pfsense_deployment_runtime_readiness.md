@@ -97,7 +97,7 @@ Review these before deployment:
 
 - Backend: `SIEM_PORT`, database settings through `DATABASE_URL` or `SIEM_DB_*` / `DB_*`, ingest API key configuration used by existing ingest routes.
 - Workers: service environment files and SOAR execution mode settings required by the playbook and response-action worker runbooks.
-- Listener: `PFSENSE_LISTENER_BIND_HOST`, `PFSENSE_LISTENER_PORT`, `PFSENSE_ALLOWED_SOURCE_IPS`, `PFSENSE_BACKEND_URL`, `PFSENSE_INGEST_API_KEY`, `PFSENSE_API_KEY_HEADER`, `PFSENSE_MAX_PACKET_BYTES`, `PFSENSE_GLOBAL_RATE_LIMIT`, `PFSENSE_PER_SOURCE_RATE_LIMIT`, `PFSENSE_RATE_LIMIT_WINDOW_SECONDS`, `PFSENSE_BACKEND_TIMEOUT_SECONDS`, `PFSENSE_RECV_TIMEOUT_SECONDS`, `PFSENSE_ENVIRONMENT`, and log level from the daemon invocation.
+- Listener: `PFSENSE_LISTENER_BIND_HOST`, `PFSENSE_LISTENER_PORT`, `PFSENSE_ALLOWED_SOURCE_IPS`, `PFSENSE_BACKEND_URL`, `PFSENSE_INGEST_API_KEY`, `PFSENSE_API_KEY_HEADER`, `PFSENSE_MAX_PACKET_BYTES`, `PFSENSE_GLOBAL_RATE_LIMIT`, `PFSENSE_PER_SOURCE_RATE_LIMIT`, `PFSENSE_RATE_LIMIT_WINDOW_SECONDS`, `PFSENSE_BACKEND_TIMEOUT_SECONDS`, `PFSENSE_RECV_TIMEOUT_SECONDS`, `PFSENSE_ENVIRONMENT`, `PFSENSE_SYSLOG_TIMEZONE` (the pfSense firewall's IANA timezone, for example `America/New_York`), and log level from the daemon invocation.
 
 ## Runtime Validation
 

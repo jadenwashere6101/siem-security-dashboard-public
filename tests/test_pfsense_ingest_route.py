@@ -1,5 +1,6 @@
 import ast
 import inspect
+from datetime import datetime
 from unittest.mock import MagicMock
 
 import pytest
@@ -154,6 +155,29 @@ def test_valid_firewall_block_ingests_successfully(client, monkeypatch, postgres
     assert event[6] == "pfsense_filterlog"
     assert event[8]["action"] == "block"
     assert event[8]["destination_port"] == 443
+
+
+def test_pfsense_event_timestamp_reaches_database_contract(client, monkeypatch, postgres_db):
+    monkeypatch.setenv("SIEM_INGEST_API_KEY", VALID_API_KEY)
+    install_route_db(monkeypatch, postgres_db)
+    _conn, cur = postgres_db
+    source_ip = "198.51.100.111"
+    event_timestamp = "2026-07-07T12:00:01+00:00"
+
+    response = post_pfsense(
+        client,
+        valid_pfsense_block_payload(
+            source_ip=source_ip,
+            event_timestamp=event_timestamp,
+        ),
+    )
+
+    assert response.status_code == 201
+    cur.execute(
+        "SELECT event_timestamp FROM events WHERE source_ip = %s ORDER BY id DESC LIMIT 1",
+        (source_ip,),
+    )
+    assert cur.fetchone()[0] == datetime.fromisoformat(event_timestamp)
 
 
 def test_valid_firewall_allow_ingests_successfully(client, monkeypatch, postgres_db):
