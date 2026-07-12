@@ -3,6 +3,7 @@ import json
 from flask import current_app
 
 from core.db import get_db_connection
+from engines.detection_applicability import get_rule_applicability_metadata
 
 
 # Detector defaults.
@@ -300,6 +301,7 @@ def get_effective_detection_rule(rule_id, cur=None):
         "updated_at": None,
         "has_override": False,
         "override_status": "default",
+        **get_rule_applicability_metadata(rule_id),
     }
 
     owns_connection = cur is None
@@ -385,6 +387,7 @@ def get_all_effective_detection_rules():
                 "parameters": dict(rule_defaults["parameters"]),
                 "has_override": False,
                 "override_status": "unavailable",
+                **get_rule_applicability_metadata(rule_defaults["rule_id"]),
             }
             for rule_defaults in defaults.values()
         ]

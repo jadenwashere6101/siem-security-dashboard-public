@@ -86,6 +86,19 @@ class TestRBACDenial:
             assert resp.status_code == 403
             assert resp.get_json()["error"] == "forbidden"
 
+    def test_viewer_cannot_change_detection_rule_active_state(self, client, mock_db):
+        fake_viewer = self._make_fake_viewer()
+        with patch("routes.auth_routes.get_user_by_username", return_value=fake_viewer), patch(
+            "core.auth.get_user_by_username", return_value=fake_viewer
+        ):
+            client.post("/login", json={"username": "testviewer", "password": "viewerpass"})
+            response = client.patch(
+                "/admin/detection-rules/failed_login_threshold",
+                json={"active": False},
+            )
+        assert response.status_code == 403
+        assert response.get_json()["error"] == "forbidden"
+
     def test_viewer_denied_analyst_route_returns_403(self, client, mock_db):
         fake_viewer = self._make_fake_viewer()
         with patch("routes.auth_routes.get_user_by_username", return_value=fake_viewer), \

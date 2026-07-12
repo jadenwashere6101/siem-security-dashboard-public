@@ -158,7 +158,7 @@ def test_high_request_rate_threshold_boundary_and_alert_field_fidelity(postgres_
     assert alert[17] == "Deterministic test reputation"
 
 
-def test_high_request_rate_trigger_filters_event_type_and_source_type(postgres_db):
+def test_high_request_rate_isolates_exact_source_pair_and_event_type(postgres_db):
     conn, cur = postgres_db
     source_ip = "198.51.100.103"
 
@@ -186,6 +186,24 @@ def test_high_request_rate_trigger_filters_event_type_and_source_type(postgres_d
                 cur,
                 event_type="http_error",
                 source_type="telemetry",
+                source_ip=source_ip,
+                seconds_ago=seconds_ago,
+            )
+
+        alerts_created = backend_detection_engine._generate_high_request_rate_alerts_core(
+            cur,
+            conn,
+            source="nginx",
+            source_type="web_log",
+        )
+
+        assert alerts_created == []
+
+        for seconds_ago in range(20, 0, -1):
+            insert_request_event(
+                cur,
+                event_type="http_error",
+                source_type="web_log",
                 source_ip=source_ip,
                 seconds_ago=seconds_ago,
             )

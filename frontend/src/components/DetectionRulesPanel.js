@@ -5,6 +5,15 @@ import {
 } from "../services/detectionRulesService";
 import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
 
+const SOURCE_LABELS = {
+  honeypot: "Honeypot",
+  bank_app: "Bank App",
+  pfsense: "pfSense",
+  nginx: "NGINX",
+  azure_insights: "Azure Application Insights",
+  opentelemetry: "OpenTelemetry",
+};
+
 function DetectionRulesPanel({
   cardStyle,
   cardHeaderStyle,
@@ -19,6 +28,7 @@ function DetectionRulesPanel({
   const [saveError, setSaveError] = useState("");
   const [saveSuccess, setSaveSuccess] = useState("");
   const [saving, setSaving] = useState(false);
+  const [togglingRuleId, setTogglingRuleId] = useState("");
 
   const loadRules = async () => {
     try {
@@ -102,6 +112,32 @@ function DetectionRulesPanel({
     }
   };
 
+  const toggleRuleActive = async (rule) => {
+    const nextActive = !rule.active;
+    if (!nextActive && !window.confirm(`Disable ${rule.display_name}? Detection will stop for this rule.`)) {
+      return;
+    }
+
+    const previousRules = rules;
+    setRules((current) => current.map((item) => (
+      item.rule_id === rule.rule_id ? { ...item, active: nextActive } : item
+    )));
+    setTogglingRuleId(rule.rule_id);
+    setSaveError("");
+    setSaveSuccess("");
+
+    try {
+      await updateDetectionRule(rule.rule_id, undefined, nextActive);
+      await loadRules();
+      setSaveSuccess(`${nextActive ? "Enabled" : "Disabled"} ${rule.rule_id}`);
+    } catch (err) {
+      setRules(previousRules);
+      setSaveError(err.message || "Unable to update detection rule");
+    } finally {
+      setTogglingRuleId("");
+    }
+  };
+
   const formatParameters = (parameters) =>
     Object.entries(parameters || {}).map(([key, value]) => (
       <div key={key} style={parameterRowStyle}>
@@ -128,6 +164,27 @@ function DetectionRulesPanel({
       </div>
     ));
 
+  const renderApplicableSources = (rule) => (
+    <div style={sourcesWrapperStyle}>
+      <div style={sourceBadgesStyle} aria-label={`Applicable sources for ${rule.display_name}`}>
+        {(rule.applicable_sources || []).map(({ source, source_type: sourceType }) => {
+          const evidence = `${source}/${sourceType}`;
+          return (
+            <span
+              key={evidence}
+              style={sourceBadgeStyle}
+              title={evidence}
+              aria-label={`${SOURCE_LABELS[source] || source}: ${evidence}`}
+            >
+              {SOURCE_LABELS[source] || source}
+            </span>
+          );
+        })}
+      </div>
+      <span style={globalScopeNoteStyle}>One global configuration applies to all listed sources.</span>
+    </div>
+  );
+
   return (
     <section style={cardStyle}>
       <div style={cardHeaderStyle}>
@@ -135,13 +192,14 @@ function DetectionRulesPanel({
           <p style={sectionLabelStyle}>Administration</p>
           <h2 style={cardTitleStyle}>Detection Rules</h2>
           <p style={cardSubtitleStyle}>
-            Read-only view of the current backend detection rule settings.
+            Manage global detection settings and review read-only source coverage.
           </p>
         </div>
       </div>
 
       <div style={panelContentStyle}>
         {saveSuccess ? <div style={successStateStyle}>{saveSuccess}</div> : null}
+        {saveError && !editingRuleId ? <div role="alert" style={errorStateStyle}>{saveError}</div> : null}
         {loading ? (
           <p style={emptyTextStyle}>Loading detection rules...</p>
         ) : error ? (
@@ -155,11 +213,12 @@ function DetectionRulesPanel({
                 <tr>
                   <th style={{ ...headerCellStyle, width: "15%" }}>Rule Name</th>
                   <th style={{ ...headerCellStyle, width: "15%" }}>Rule ID</th>
-                  <th style={{ ...headerCellStyle, width: "8%" }}>Active</th>
-                  <th style={{ ...headerCellStyle, width: "22%" }}>Description</th>
-                  <th style={{ ...headerCellStyle, width: "20%" }}>Parameters</th>
-                  <th style={{ ...headerCellStyle, width: "10%" }}>Last Modified By</th>
-                  <th style={{ ...headerCellStyle, width: "10%" }}>Last Modified At</th>
+                  <th style={{ ...headerCellStyle, width: "10%" }}>Status</th>
+                  <th style={{ ...headerCellStyle, width: "18%" }}>Applicable Sources</th>
+                  <th style={{ ...headerCellStyle, width: "16%" }}>Description</th>
+                  <th style={{ ...headerCellStyle, width: "18%" }}>Global Parameters</th>
+                  <th style={{ ...headerCellStyle, width: "8%" }}>Configuration</th>
+                  <th style={{ ...headerCellStyle, width: "8%" }}>Last Modified</th>
                 </tr>
               </thead>
               <tbody>
@@ -173,7 +232,25 @@ function DetectionRulesPanel({
                       >
                         {rule.active ? "Active" : "Inactive"}
                       </span>
+                      <button
+                        type="button"
+                        onClick={() => toggleRuleActive(rule)}
+                        disabled={Boolean(togglingRuleId) || saving}
+                        aria-label={`${rule.active ? "Disable" : "Enable"} ${rule.display_name}`}
+                        aria-pressed={rule.active}
+                        style={{
+                          ...actionButtonStyle,
+                          ...toggleActionButtonStyle,
+                          opacity: togglingRuleId || saving ? 0.6 : 1,
+                          cursor: togglingRuleId || saving ? "default" : "pointer",
+                        }}
+                      >
+                        {togglingRuleId === rule.rule_id
+                          ? "Updating..."
+                          : rule.active ? "Disable" : "Enable"}
+                      </button>
                     </td>
+                    <td style={bodyCellStyle}>{renderApplicableSources(rule)}</td>
                     <td style={bodyCellStyle}>{rule.description}</td>
                     <td style={bodyCellStyle}>
                       <div style={parametersWrapperStyle}>
@@ -232,11 +309,16 @@ function DetectionRulesPanel({
                       </div>
                     </td>
                     <td style={bodyCellStyle}>
+                      <span style={rule.has_override ? overriddenBadgeStyle : defaultBadgeStyle}>
+                        {rule.has_override ? "Overridden" : "Default"}
+                      </span>
+                      <div style={modifiedDetailStyle}>
                       {rule.has_override ? (
                         rule.updated_by || <span style={mutedTextStyle}>Unknown</span>
                       ) : (
                         <span style={mutedTextStyle}>Defaults</span>
                       )}
+                      </div>
                     </td>
                     <td style={bodyCellStyle}>
                       {rule.has_override ? (
@@ -300,7 +382,7 @@ const tableWrapperStyle = {
 
 const tableStyle = {
   width: "100%",
-  minWidth: "980px",
+  minWidth: "1280px",
   borderCollapse: "collapse",
 };
 
@@ -360,6 +442,34 @@ const inactiveBadgeStyle = {
   color: "#8b949e",
   backgroundColor: "#0d1117",
   border: "1px solid #30363d",
+};
+
+const sourcesWrapperStyle = {
+  display: "grid",
+  gap: "8px",
+};
+
+const sourceBadgesStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "6px",
+};
+
+const sourceBadgeStyle = {
+  display: "inline-block",
+  padding: "4px 7px",
+  borderRadius: "999px",
+  color: "#a5d6ff",
+  backgroundColor: "rgba(56, 139, 253, 0.10)",
+  border: "1px solid rgba(56, 139, 253, 0.28)",
+  fontSize: "10px",
+  fontWeight: "700",
+};
+
+const globalScopeNoteStyle = {
+  color: "#8b949e",
+  fontSize: "11px",
+  lineHeight: "1.4",
 };
 
 const parametersWrapperStyle = {
@@ -429,6 +539,30 @@ const primaryActionButtonStyle = {
 const secondaryActionButtonStyle = {
   backgroundColor: "#0d1117",
   color: "#c9d1d9",
+};
+
+const toggleActionButtonStyle = {
+  display: "block",
+  marginTop: "8px",
+  padding: "5px 8px",
+  backgroundColor: "#0d1117",
+  color: "#c9d1d9",
+};
+
+const overriddenBadgeStyle = {
+  ...activeBadgeStyle,
+  color: "#d2a8ff",
+  backgroundColor: "rgba(163, 113, 247, 0.10)",
+  border: "1px solid rgba(163, 113, 247, 0.30)",
+};
+
+const defaultBadgeStyle = {
+  ...inactiveBadgeStyle,
+  color: "#c9d1d9",
+};
+
+const modifiedDetailStyle = {
+  marginTop: "8px",
 };
 
 const inlineErrorStyle = {

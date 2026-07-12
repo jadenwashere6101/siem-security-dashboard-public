@@ -16,16 +16,22 @@ export const loadDetectionRules = async () => {
   return data;
 };
 
-export const updateDetectionRule = async (ruleId, parameters) => {
+export const updateDetectionRule = async (ruleId, parameters, active) => {
+  const payload = {};
+  if (parameters !== undefined) {
+    payload.parameters = parameters;
+  }
+  if (active !== undefined) {
+    payload.active = active;
+  }
+
   const res = await fetch(buildSiemPath(`/admin/detection-rules/${encodeURIComponent(ruleId)}`), {
     method: "PATCH",
     credentials: "include",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      parameters,
-    }),
+    body: JSON.stringify(payload),
   });
   const data = await parseJsonResponse(res, {});
 

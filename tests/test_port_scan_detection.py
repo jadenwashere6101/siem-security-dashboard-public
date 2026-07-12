@@ -50,8 +50,8 @@ def insert_port_scan_event(
             'port_scan',
             'medium',
             %s,
-            'nginx',
-            'web_log',
+            'bank_app',
+            'custom',
             NOW() - (%s * INTERVAL '1 second'),
             'Port scan event',
             'edge_gateway',
@@ -122,7 +122,7 @@ def test_port_scan_threshold_boundary_and_alert_field_fidelity(postgres_db):
     )
 
     with siem_backend.app.app_context(), patch("engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION):
-        assert backend_detection_engine._generate_port_scan_alerts_core(cur, conn, source="nginx", source_type="web_log") == []
+        assert backend_detection_engine._generate_port_scan_alerts_core(cur, conn, source="bank_app", source_type="custom") == []
 
         insert_port_scan_event(
             cur,
@@ -137,8 +137,8 @@ def test_port_scan_threshold_boundary_and_alert_field_fidelity(postgres_db):
         alerts_created = backend_detection_engine._generate_port_scan_alerts_core(
             cur,
             conn,
-            source="nginx",
-            source_type="web_log",
+            source="bank_app",
+            source_type="custom",
         )
 
     assert len(alerts_created) == 1
@@ -152,8 +152,8 @@ def test_port_scan_threshold_boundary_and_alert_field_fidelity(postgres_db):
     assert alert[1] == "port_scan_threshold"
     assert alert[2] == "medium"
     assert alert[3] == source_ip
-    assert alert[4] == "nginx"
-    assert alert[5] == "web_log"
+    assert alert[4] == "bank_app"
+    assert alert[5] == "custom"
     assert alert[6] == f"2 port scan events detected from {source_ip}"
     assert alert[7] == "open"
     assert alert[8] == "flag_high_priority"
@@ -179,8 +179,8 @@ def test_port_scan_same_destination_port_does_not_alert(postgres_db):
         result = backend_detection_engine._generate_port_scan_alerts_core(
             cur,
             conn,
-            source="nginx",
-            source_type="web_log",
+            source="bank_app",
+            source_type="custom",
         )
 
     assert result == []
@@ -198,8 +198,8 @@ def test_port_scan_missing_destination_port_does_not_alert(postgres_db):
         result = backend_detection_engine._generate_port_scan_alerts_core(
             cur,
             conn,
-            source="nginx",
-            source_type="web_log",
+            source="bank_app",
+            source_type="custom",
         )
 
     assert result == []
@@ -217,16 +217,16 @@ def test_port_scan_invalid_destination_port_is_ignored(postgres_db):
         assert backend_detection_engine._generate_port_scan_alerts_core(
             cur,
             conn,
-            source="nginx",
-            source_type="web_log",
+            source="bank_app",
+            source_type="custom",
         ) == []
 
         insert_port_scan_event(cur, source_ip=source_ip, seconds_ago=1, destination_port=443)
         alerts_created = backend_detection_engine._generate_port_scan_alerts_core(
             cur,
             conn,
-            source="nginx",
-            source_type="web_log",
+            source="bank_app",
+            source_type="custom",
         )
 
     assert len(alerts_created) == 1
@@ -245,8 +245,8 @@ def test_port_scan_supports_common_destination_port_keys(postgres_db, port_key):
         alerts_created = backend_detection_engine._generate_port_scan_alerts_core(
             cur,
             conn,
-            source="nginx",
-            source_type="web_log",
+            source="bank_app",
+            source_type="custom",
         )
 
     assert len(alerts_created) == 1
@@ -266,16 +266,16 @@ def test_port_scan_detection_config_override_controls_distinct_port_threshold_an
         assert backend_detection_engine._generate_port_scan_alerts_core(
             cur,
             conn,
-            source="nginx",
-            source_type="web_log",
+            source="bank_app",
+            source_type="custom",
         ) == []
 
         insert_port_scan_event(cur, source_ip=source_ip, seconds_ago=1, destination_port=8080)
         alerts_created = backend_detection_engine._generate_port_scan_alerts_core(
             cur,
             conn,
-            source="nginx",
-            source_type="web_log",
+            source="bank_app",
+            source_type="custom",
         )
 
     assert len(alerts_created) == 1
@@ -293,15 +293,15 @@ def test_port_scan_duplicate_suppression_keeps_single_open_alert(postgres_db):
         first_result = backend_detection_engine._generate_port_scan_alerts_core(
             cur,
             conn,
-            source="nginx",
-            source_type="web_log",
+            source="bank_app",
+            source_type="custom",
         )
         insert_port_scan_event(cur, source_ip=source_ip, seconds_ago=1, destination_port=8080)
         second_result = backend_detection_engine._generate_port_scan_alerts_core(
             cur,
             conn,
-            source="nginx",
-            source_type="web_log",
+            source="bank_app",
+            source_type="custom",
         )
 
     assert len(first_result) == 1
@@ -328,7 +328,7 @@ def test_port_scan_currval_sets_alert_metadata_without_sync_response_log(postgre
         insert_port_scan_event(cur, source_ip=source_ip, seconds_ago=seconds_ago, destination_port=destination_port)
 
     with siem_backend.app.app_context(), patch("engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION):
-        backend_detection_engine._generate_port_scan_alerts_core(cur, conn, source="nginx", source_type="web_log")
+        backend_detection_engine._generate_port_scan_alerts_core(cur, conn, source="bank_app", source_type="custom")
 
     cur.execute(
         """

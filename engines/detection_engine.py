@@ -6,6 +6,7 @@ from engines.detection_config import (
     PFSENSE_SEVERITY_ESCALATION_MULTIPLIER,
     get_effective_detection_rule,
 )
+from engines.detection_applicability import rule_applies_to_source
 from engines.pfsense_ingest_filter import get_effective_sensitive_ports
 from core.ip_helpers import determine_response_action, lookup_ip_reputation
 
@@ -18,6 +19,32 @@ PFSENSE_ESCALATION_ALERT_TYPES = (
 PFSENSE_NOISY_SOURCE_GUARD_ALERT_TYPES = PFSENSE_ESCALATION_ALERT_TYPES + (
     "pfsense_firewall_noisy_source",
 )
+
+
+def _prepare_rule_evaluation(rule_id, cur, source, source_type, rule_config):
+    """Guard direct detector calls as well as orchestrated execution."""
+    if not rule_applies_to_source(rule_id, source, source_type):
+        return None
+    effective = rule_config or get_effective_detection_rule(rule_id, cur=cur)
+    return effective if effective["active"] else None
+
+
+def _resolve_evaluation_source_ip(cur, source_ip, source, source_type):
+    """Use the explicit ingest entity; retain deterministic direct-test compatibility."""
+    if source_ip is not None:
+        return source_ip
+    cur.execute(
+        """
+        SELECT source_ip
+        FROM events
+        WHERE source = %s AND source_type = %s
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        """,
+        (source, source_type),
+    )
+    row = cur.fetchone()
+    return row[0] if row else None
 
 
 def _pfsense_escalated_severity(base_severity, *, count, threshold, reputation_score):
@@ -39,8 +66,13 @@ def _pfsense_response_action_for_severity(severity):
 
 
 # spec: SPEC-INGEST-001
-def _generate_failed_login_alerts_core(cur, conn, source=None, source_type=None):
-    rule_config = get_effective_detection_rule("failed_login_threshold", cur=cur)
+def _generate_failed_login_alerts_core(cur, conn, source=None, source_type=None, source_ip=None, rule_config=None):
+    rule_config = _prepare_rule_evaluation("failed_login_threshold", cur, source, source_type, rule_config)
+    if rule_config is None:
+        return []
+    source_ip = _resolve_evaluation_source_ip(cur, source_ip, source, source_type)
+    if source_ip is None:
+        return []
     threshold = rule_config["parameters"]["threshold"]
     window_minutes = rule_config["parameters"]["window_minutes"]
 
@@ -49,11 +81,14 @@ def _generate_failed_login_alerts_core(cur, conn, source=None, source_type=None)
         SELECT source_ip, COUNT(*) as attempts
         FROM events
         WHERE event_type IN ('failed_login', 'login_failure', 'unauthorized_access')
+        AND (%s::inet IS NULL OR source_ip = %s)
+        AND source = %s
+        AND source_type = %s
         AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
         GROUP BY source_ip
         HAVING COUNT(*) >= %s
         """,
-        (threshold,)
+        (source_ip, source_ip, source, source_type, threshold,)
     )
 
     rows = cur.fetchall()
@@ -81,10 +116,12 @@ def _generate_failed_login_alerts_core(cur, conn, source=None, source_type=None)
             FROM events
             WHERE source_ip = %s
               AND event_type IN ('failed_login', 'login_failure', 'unauthorized_access')
+              AND source = %s
+              AND source_type = %s
             ORDER BY created_at DESC
             LIMIT 1
             """,
-            (source_ip,)
+            (source_ip, source, source_type,)
         )
 
         location_row = cur.fetchone()
@@ -176,8 +213,13 @@ def _generate_failed_login_alerts_core(cur, conn, source=None, source_type=None)
     return alerts_created
 
 
-def _generate_http_error_alerts_core(cur, conn, source=None, source_type=None):
-    rule_config = get_effective_detection_rule("http_error_threshold", cur=cur)
+def _generate_http_error_alerts_core(cur, conn, source=None, source_type=None, source_ip=None, rule_config=None):
+    rule_config = _prepare_rule_evaluation("http_error_threshold", cur, source, source_type, rule_config)
+    if rule_config is None:
+        return []
+    source_ip = _resolve_evaluation_source_ip(cur, source_ip, source, source_type)
+    if source_ip is None:
+        return []
     threshold = rule_config["parameters"]["threshold"]
     window_minutes = rule_config["parameters"]["window_minutes"]
 
@@ -186,11 +228,14 @@ def _generate_http_error_alerts_core(cur, conn, source=None, source_type=None):
         SELECT source_ip, COUNT(*) as attempts
         FROM events
         WHERE event_type = 'http_error'
+          AND (%s::inet IS NULL OR source_ip = %s)
+          AND source = %s
+          AND source_type = %s
           AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
         GROUP BY source_ip
         HAVING COUNT(*) >= %s
         """,
-        (threshold,)
+        (source_ip, source_ip, source, source_type, threshold,)
     )
 
     rows = cur.fetchall()
@@ -217,10 +262,12 @@ def _generate_http_error_alerts_core(cur, conn, source=None, source_type=None):
             FROM events
             WHERE source_ip = %s
               AND event_type = 'http_error'
+              AND source = %s
+              AND source_type = %s
             ORDER BY created_at DESC
             LIMIT 1
             """,
-            (source_ip,)
+            (source_ip, source, source_type,)
         )
 
         location_row = cur.fetchone()
@@ -304,8 +351,13 @@ def _generate_http_error_alerts_core(cur, conn, source=None, source_type=None):
     return alerts_created
 
 
-def _generate_port_scan_alerts_core(cur, conn, source=None, source_type=None):
-    rule_config = get_effective_detection_rule("port_scan_threshold", cur=cur)
+def _generate_port_scan_alerts_core(cur, conn, source=None, source_type=None, source_ip=None, rule_config=None):
+    rule_config = _prepare_rule_evaluation("port_scan_threshold", cur, source, source_type, rule_config)
+    if rule_config is None:
+        return []
+    source_ip = _resolve_evaluation_source_ip(cur, source_ip, source, source_type)
+    if source_ip is None:
+        return []
     threshold = rule_config["parameters"]["threshold"]
     window_minutes = rule_config["parameters"]["window_minutes"]
 
@@ -322,6 +374,9 @@ def _generate_port_scan_alerts_core(cur, conn, source=None, source_type=None):
                 ) AS destination_port_text
             FROM events
             WHERE event_type = 'port_scan'
+              AND (%s::inet IS NULL OR source_ip = %s)
+              AND source = %s
+              AND source_type = %s
               AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
         ),
         normalized_ports AS (
@@ -340,7 +395,7 @@ def _generate_port_scan_alerts_core(cur, conn, source=None, source_type=None):
         GROUP BY source_ip
         HAVING COUNT(DISTINCT destination_port) >= %s
         """,
-        (threshold,)
+        (source_ip, source_ip, source, source_type, threshold,)
     )
 
     rows = cur.fetchall()
@@ -367,10 +422,12 @@ def _generate_port_scan_alerts_core(cur, conn, source=None, source_type=None):
             FROM events
             WHERE source_ip = %s
               AND event_type = 'port_scan'
+              AND source = %s
+              AND source_type = %s
             ORDER BY created_at DESC
             LIMIT 1
             """,
-            (source_ip,)
+            (source_ip, source, source_type,)
         )
 
         location_row = cur.fetchone()
@@ -463,8 +520,13 @@ def _generate_port_scan_alerts_core(cur, conn, source=None, source_type=None):
     return alerts_created
 
 
-def _generate_password_spraying_alerts_core(cur, conn, source=None, source_type=None):
-    rule_config = get_effective_detection_rule("password_spraying_threshold", cur=cur)
+def _generate_password_spraying_alerts_core(cur, conn, source=None, source_type=None, source_ip=None, rule_config=None):
+    rule_config = _prepare_rule_evaluation("password_spraying_threshold", cur, source, source_type, rule_config)
+    if rule_config is None:
+        return []
+    source_ip = _resolve_evaluation_source_ip(cur, source_ip, source, source_type)
+    if source_ip is None:
+        return []
     threshold = rule_config["parameters"]["threshold"]
     window_minutes = rule_config["parameters"]["window_minutes"]
 
@@ -486,6 +548,9 @@ def _generate_password_spraying_alerts_core(cur, conn, source=None, source_type=
                 ) AS extracted_username
             FROM events
             WHERE event_type = 'failed_login'
+              AND (%s::inet IS NULL OR source_ip = %s)
+              AND source = %s
+              AND source_type = %s
               AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
         )
         SELECT source_ip, COUNT(DISTINCT extracted_username) AS distinct_username_count
@@ -494,7 +559,7 @@ def _generate_password_spraying_alerts_core(cur, conn, source=None, source_type=
         GROUP BY source_ip
         HAVING COUNT(DISTINCT extracted_username) >= %s
         """,
-        (threshold,)
+        (source_ip, source_ip, source, source_type, threshold,)
     )
 
     rows = cur.fetchall()
@@ -521,10 +586,12 @@ def _generate_password_spraying_alerts_core(cur, conn, source=None, source_type=
             FROM events
             WHERE source_ip = %s
               AND event_type = 'failed_login'
+              AND source = %s
+              AND source_type = %s
             ORDER BY created_at DESC
             LIMIT 1
             """,
-            (source_ip,)
+            (source_ip, source, source_type,)
         )
 
         location_row = cur.fetchone()
@@ -611,8 +678,13 @@ def _generate_password_spraying_alerts_core(cur, conn, source=None, source_type=
     return alerts_created
 
 
-def _generate_successful_login_after_spray_alerts_core(cur, conn, source=None, source_type=None):
-    rule_config = get_effective_detection_rule("successful_login_after_spray", cur=cur)
+def _generate_successful_login_after_spray_alerts_core(cur, conn, source=None, source_type=None, source_ip=None, rule_config=None):
+    rule_config = _prepare_rule_evaluation("successful_login_after_spray", cur, source, source_type, rule_config)
+    if rule_config is None:
+        return []
+    source_ip = _resolve_evaluation_source_ip(cur, source_ip, source, source_type)
+    if source_ip is None:
+        return []
     threshold = rule_config["parameters"]["threshold"]
     success_window_minutes = rule_config["parameters"]["success_window_minutes"]
     failed_lookback_minutes = rule_config["parameters"]["failed_lookback_minutes"]
@@ -624,6 +696,9 @@ def _generate_successful_login_after_spray_alerts_core(cur, conn, source=None, s
             SELECT source_ip, created_at AS success_at
             FROM events
             WHERE event_type = 'successful_login'
+              AND (%s::inet IS NULL OR source_ip = %s)
+              AND source = %s
+              AND source_type = %s
               AND created_at >= NOW() - INTERVAL '{success_window_minutes} minutes'
         ),
         extracted_failed_logins AS (
@@ -643,6 +718,9 @@ def _generate_successful_login_after_spray_alerts_core(cur, conn, source=None, s
                 ) AS extracted_username
             FROM events
             WHERE event_type = 'failed_login'
+              AND (%s::inet IS NULL OR source_ip = %s)
+              AND source = %s
+              AND source_type = %s
               AND created_at >= NOW() - INTERVAL '{failed_lookback_minutes} minutes'
         ),
         qualifying_successes AS (
@@ -661,7 +739,11 @@ def _generate_successful_login_after_spray_alerts_core(cur, conn, source=None, s
         SELECT source_ip, success_at
         FROM qualifying_successes
         """,
-        (threshold,)
+        (
+            source_ip, source_ip, source, source_type,
+            source_ip, source_ip, source, source_type,
+            threshold,
+        )
     )
 
     rows = cur.fetchall()
@@ -688,10 +770,12 @@ def _generate_successful_login_after_spray_alerts_core(cur, conn, source=None, s
             FROM events
             WHERE source_ip = %s
               AND event_type IN ('successful_login', 'failed_login')
+              AND source = %s
+              AND source_type = %s
             ORDER BY created_at DESC
             LIMIT 1
             """,
-            (source_ip,)
+            (source_ip, source, source_type,)
         )
 
         location_row = cur.fetchone()
@@ -775,8 +859,13 @@ def _generate_successful_login_after_spray_alerts_core(cur, conn, source=None, s
     return alerts_created
 
 
-def _generate_application_exception_alerts_core(cur, conn, source=None, source_type=None):
-    rule_config = get_effective_detection_rule("application_exception_threshold", cur=cur)
+def _generate_application_exception_alerts_core(cur, conn, source=None, source_type=None, source_ip=None, rule_config=None):
+    rule_config = _prepare_rule_evaluation("application_exception_threshold", cur, source, source_type, rule_config)
+    if rule_config is None:
+        return []
+    source_ip = _resolve_evaluation_source_ip(cur, source_ip, source, source_type)
+    if source_ip is None:
+        return []
     threshold = rule_config["parameters"]["threshold"]
     window_minutes = rule_config["parameters"]["window_minutes"]
 
@@ -785,11 +874,14 @@ def _generate_application_exception_alerts_core(cur, conn, source=None, source_t
         SELECT source_ip, COUNT(*) as attempts
         FROM events
         WHERE event_type = 'application_exception'
+          AND (%s::inet IS NULL OR source_ip = %s)
+          AND source = %s
+          AND source_type = %s
           AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
         GROUP BY source_ip
         HAVING COUNT(*) >= %s
         """,
-        (threshold,)
+        (source_ip, source_ip, source, source_type, threshold,)
     )
 
     rows = cur.fetchall()
@@ -816,10 +908,12 @@ def _generate_application_exception_alerts_core(cur, conn, source=None, source_t
             FROM events
             WHERE source_ip = %s
               AND event_type = 'application_exception'
+              AND source = %s
+              AND source_type = %s
             ORDER BY created_at DESC
             LIMIT 1
             """,
-            (source_ip,)
+            (source_ip, source, source_type,)
         )
 
         location_row = cur.fetchone()
@@ -903,8 +997,13 @@ def _generate_application_exception_alerts_core(cur, conn, source=None, source_t
     return alerts_created
 
 
-def _generate_high_request_rate_alerts_core(cur, conn, source=None, source_type=None):
-    rule_config = get_effective_detection_rule("high_request_rate_threshold", cur=cur)
+def _generate_high_request_rate_alerts_core(cur, conn, source=None, source_type=None, source_ip=None, rule_config=None):
+    rule_config = _prepare_rule_evaluation("high_request_rate_threshold", cur, source, source_type, rule_config)
+    if rule_config is None:
+        return []
+    source_ip = _resolve_evaluation_source_ip(cur, source_ip, source, source_type)
+    if source_ip is None:
+        return []
     threshold = rule_config["parameters"]["threshold"]
     window_minutes = rule_config["parameters"]["window_minutes"]
 
@@ -913,12 +1012,14 @@ def _generate_high_request_rate_alerts_core(cur, conn, source=None, source_type=
         SELECT source_ip, COUNT(*) as attempts
         FROM events
         WHERE event_type IN ('normal_activity', 'unauthorized_access', 'http_error')
-          AND source_type IN ('web_log', 'telemetry')
+          AND (%s::inet IS NULL OR source_ip = %s)
+          AND source = %s
+          AND source_type = %s
           AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
         GROUP BY source_ip
         HAVING COUNT(*) >= %s
         """,
-        (threshold,)
+        (source_ip, source_ip, source, source_type, threshold,)
     )
 
     rows = cur.fetchall()
@@ -945,11 +1046,12 @@ def _generate_high_request_rate_alerts_core(cur, conn, source=None, source_type=
             FROM events
             WHERE source_ip = %s
               AND event_type IN ('normal_activity', 'unauthorized_access', 'http_error')
-              AND source_type IN ('web_log', 'telemetry')
+              AND source = %s
+              AND source_type = %s
             ORDER BY created_at DESC
             LIMIT 1
             """,
-            (source_ip,)
+            (source_ip, source, source_type,)
         )
 
         location_row = cur.fetchone()
@@ -1033,7 +1135,7 @@ def _generate_high_request_rate_alerts_core(cur, conn, source=None, source_type=
     return alerts_created
 
 
-def _fetch_latest_honeypot_location(cur, source_ip, event_type):
+def _fetch_latest_honeypot_location(cur, source_ip, event_type, source, source_type):
     cur.execute(
         """
         SELECT
@@ -1044,10 +1146,12 @@ def _fetch_latest_honeypot_location(cur, source_ip, event_type):
         FROM events
         WHERE source_ip = %s
           AND event_type = %s
+          AND source = %s
+          AND source_type = %s
         ORDER BY created_at DESC
         LIMIT 1
         """,
-        (source_ip, event_type),
+        (source_ip, event_type, source, source_type),
     )
     location_row = cur.fetchone()
     if not location_row:
@@ -1055,8 +1159,13 @@ def _fetch_latest_honeypot_location(cur, source_ip, event_type):
     return location_row[0], location_row[1], location_row[2], location_row[3]
 
 
-def _generate_env_probe_alerts_core(cur, conn, source=None, source_type=None):
-    rule_config = get_effective_detection_rule("honeypot_env_probe_threshold", cur=cur)
+def _generate_env_probe_alerts_core(cur, conn, source=None, source_type=None, source_ip=None, rule_config=None):
+    rule_config = _prepare_rule_evaluation("honeypot_env_probe_threshold", cur, source, source_type, rule_config)
+    if rule_config is None:
+        return []
+    source_ip = _resolve_evaluation_source_ip(cur, source_ip, source, source_type)
+    if source_ip is None:
+        return []
     threshold = rule_config["parameters"]["threshold"]
     window_minutes = rule_config["parameters"]["window_minutes"]
 
@@ -1068,6 +1177,9 @@ def _generate_env_probe_alerts_core(cur, conn, source=None, source_type=None):
                 NULLIF(LOWER(TRIM(raw_payload->>'path')), '') AS normalized_path
             FROM events
             WHERE event_type = 'env_probe'
+              AND (%s::inet IS NULL OR source_ip = %s)
+              AND source = %s
+              AND source_type = %s
               AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
         )
         SELECT source_ip, COUNT(DISTINCT normalized_path) AS distinct_path_count
@@ -1076,7 +1188,7 @@ def _generate_env_probe_alerts_core(cur, conn, source=None, source_type=None):
         GROUP BY source_ip
         HAVING COUNT(DISTINCT normalized_path) >= %s
         """,
-        (threshold,),
+        (source_ip, source_ip, source, source_type, threshold,),
     )
 
     rows = cur.fetchall()
@@ -1092,7 +1204,9 @@ def _generate_env_probe_alerts_core(cur, conn, source=None, source_type=None):
         reputation_label = reputation["reputation_label"]
         reputation_source = reputation["reputation_source"]
         reputation_summary = reputation["reputation_summary"]
-        country, city, latitude, longitude = _fetch_latest_honeypot_location(cur, source_ip, "env_probe")
+        country, city, latitude, longitude = _fetch_latest_honeypot_location(
+            cur, source_ip, "env_probe", source, source_type
+        )
 
         message = (
             f"Sensitive file probing detected from {source_ip}: "
@@ -1172,8 +1286,13 @@ def _generate_env_probe_alerts_core(cur, conn, source=None, source_type=None):
     return alerts_created
 
 
-def _generate_admin_probe_alerts_core(cur, conn, source=None, source_type=None):
-    rule_config = get_effective_detection_rule("honeypot_admin_probe_threshold", cur=cur)
+def _generate_admin_probe_alerts_core(cur, conn, source=None, source_type=None, source_ip=None, rule_config=None):
+    rule_config = _prepare_rule_evaluation("honeypot_admin_probe_threshold", cur, source, source_type, rule_config)
+    if rule_config is None:
+        return []
+    source_ip = _resolve_evaluation_source_ip(cur, source_ip, source, source_type)
+    if source_ip is None:
+        return []
     threshold = rule_config["parameters"]["threshold"]
     window_minutes = rule_config["parameters"]["window_minutes"]
 
@@ -1185,6 +1304,9 @@ def _generate_admin_probe_alerts_core(cur, conn, source=None, source_type=None):
                 NULLIF(LOWER(TRIM(raw_payload->>'path')), '') AS normalized_path
             FROM events
             WHERE event_type = 'admin_probe'
+              AND (%s::inet IS NULL OR source_ip = %s)
+              AND source = %s
+              AND source_type = %s
               AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
         )
         SELECT source_ip, COUNT(DISTINCT normalized_path) AS distinct_path_count
@@ -1193,7 +1315,7 @@ def _generate_admin_probe_alerts_core(cur, conn, source=None, source_type=None):
         GROUP BY source_ip
         HAVING COUNT(DISTINCT normalized_path) >= %s
         """,
-        (threshold,),
+        (source_ip, source_ip, source, source_type, threshold,),
     )
 
     rows = cur.fetchall()
@@ -1209,7 +1331,9 @@ def _generate_admin_probe_alerts_core(cur, conn, source=None, source_type=None):
         reputation_label = reputation["reputation_label"]
         reputation_source = reputation["reputation_source"]
         reputation_summary = reputation["reputation_summary"]
-        country, city, latitude, longitude = _fetch_latest_honeypot_location(cur, source_ip, "admin_probe")
+        country, city, latitude, longitude = _fetch_latest_honeypot_location(
+            cur, source_ip, "admin_probe", source, source_type
+        )
 
         message = (
             f"Admin panel probing detected from {source_ip}: "
@@ -1289,8 +1413,13 @@ def _generate_admin_probe_alerts_core(cur, conn, source=None, source_type=None):
     return alerts_created
 
 
-def _generate_scanner_detected_alerts_core(cur, conn, source=None, source_type=None):
-    rule_config = get_effective_detection_rule("honeypot_scanner_detected", cur=cur)
+def _generate_scanner_detected_alerts_core(cur, conn, source=None, source_type=None, source_ip=None, rule_config=None):
+    rule_config = _prepare_rule_evaluation("honeypot_scanner_detected", cur, source, source_type, rule_config)
+    if rule_config is None:
+        return []
+    source_ip = _resolve_evaluation_source_ip(cur, source_ip, source, source_type)
+    if source_ip is None:
+        return []
     threshold = rule_config["parameters"]["threshold"]
     window_minutes = rule_config["parameters"]["window_minutes"]
 
@@ -1299,11 +1428,14 @@ def _generate_scanner_detected_alerts_core(cur, conn, source=None, source_type=N
         SELECT source_ip, COUNT(*) AS scanner_events
         FROM events
         WHERE event_type = 'scanner_detected'
+          AND (%s::inet IS NULL OR source_ip = %s)
+          AND source = %s
+          AND source_type = %s
           AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
         GROUP BY source_ip
         HAVING COUNT(*) >= %s
         """,
-        (threshold,),
+        (source_ip, source_ip, source, source_type, threshold,),
     )
 
     rows = cur.fetchall()
@@ -1319,7 +1451,9 @@ def _generate_scanner_detected_alerts_core(cur, conn, source=None, source_type=N
         reputation_label = reputation["reputation_label"]
         reputation_source = reputation["reputation_source"]
         reputation_summary = reputation["reputation_summary"]
-        country, city, latitude, longitude = _fetch_latest_honeypot_location(cur, source_ip, "scanner_detected")
+        country, city, latitude, longitude = _fetch_latest_honeypot_location(
+            cur, source_ip, "scanner_detected", source, source_type
+        )
 
         message = f"Scanner activity detected from {source_ip}: {scanner_events} scanner events"
 
@@ -1396,8 +1530,13 @@ def _generate_scanner_detected_alerts_core(cur, conn, source=None, source_type=N
     return alerts_created
 
 
-def _generate_credential_stuffing_alerts_core(cur, conn, source=None, source_type=None):
-    rule_config = get_effective_detection_rule("honeypot_credential_stuffing_threshold", cur=cur)
+def _generate_credential_stuffing_alerts_core(cur, conn, source=None, source_type=None, source_ip=None, rule_config=None):
+    rule_config = _prepare_rule_evaluation("honeypot_credential_stuffing_threshold", cur, source, source_type, rule_config)
+    if rule_config is None:
+        return []
+    source_ip = _resolve_evaluation_source_ip(cur, source_ip, source, source_type)
+    if source_ip is None:
+        return []
     threshold = rule_config["parameters"]["threshold"]
     window_minutes = rule_config["parameters"]["window_minutes"]
 
@@ -1409,6 +1548,9 @@ def _generate_credential_stuffing_alerts_core(cur, conn, source=None, source_typ
                 NULLIF(LOWER(TRIM(raw_payload->>'username')), '') AS normalized_username
             FROM events
             WHERE event_type = 'credential_stuffing'
+              AND (%s::inet IS NULL OR source_ip = %s)
+              AND source = %s
+              AND source_type = %s
               AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
         )
         SELECT source_ip, COUNT(DISTINCT normalized_username) AS distinct_username_count
@@ -1417,7 +1559,7 @@ def _generate_credential_stuffing_alerts_core(cur, conn, source=None, source_typ
         GROUP BY source_ip
         HAVING COUNT(DISTINCT normalized_username) >= %s
         """,
-        (threshold,),
+        (source_ip, source_ip, source, source_type, threshold,),
     )
 
     rows = cur.fetchall()
@@ -1437,6 +1579,8 @@ def _generate_credential_stuffing_alerts_core(cur, conn, source=None, source_typ
             cur,
             source_ip,
             "credential_stuffing",
+            source,
+            source_type,
         )
 
         message = (
@@ -1517,8 +1661,13 @@ def _generate_credential_stuffing_alerts_core(cur, conn, source=None, source_typ
     return alerts_created
 
 
-def _generate_pfsense_repeated_deny_alerts_core(cur, conn, source=None, source_type=None):
-    rule_config = get_effective_detection_rule("pfsense_firewall_repeated_deny", cur=cur)
+def _generate_pfsense_repeated_deny_alerts_core(cur, conn, source=None, source_type=None, source_ip=None, rule_config=None):
+    rule_config = _prepare_rule_evaluation("pfsense_firewall_repeated_deny", cur, source, source_type, rule_config)
+    if rule_config is None:
+        return []
+    source_ip = _resolve_evaluation_source_ip(cur, source_ip, source, source_type)
+    if source_ip is None:
+        return []
     threshold = rule_config["parameters"]["threshold"]
     window_minutes = rule_config["parameters"]["window_minutes"]
 
@@ -1536,11 +1685,14 @@ def _generate_pfsense_repeated_deny_alerts_core(cur, conn, source=None, source_t
             MAX(created_at) AS last_seen
         FROM events
         WHERE event_type = 'firewall_block'
+          AND (%s::inet IS NULL OR source_ip = %s)
+          AND source = %s
+          AND source_type = %s
           AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
         GROUP BY source_ip, destination_ip, destination_port, protocol, interface, direction
         HAVING COUNT(*) >= %s
         """,
-        (threshold,),
+        (source_ip, source_ip, source, source_type, threshold,),
     )
 
     rows = cur.fetchall()
@@ -1586,7 +1738,9 @@ def _generate_pfsense_repeated_deny_alerts_core(cur, conn, source=None, source_t
         response_action = _pfsense_response_action_for_severity(severity)
         response_status = "pending"
 
-        country, city, latitude, longitude = _fetch_latest_honeypot_location(cur, source_ip, "firewall_block")
+        country, city, latitude, longitude = _fetch_latest_honeypot_location(
+            cur, source_ip, "firewall_block", source, source_type
+        )
 
         destination_text = destination_ip or "unknown destination"
         if destination_port:
@@ -1670,8 +1824,13 @@ def _generate_pfsense_repeated_deny_alerts_core(cur, conn, source=None, source_t
     return alerts_created
 
 
-def _generate_pfsense_port_scan_alerts_core(cur, conn, source=None, source_type=None):
-    rule_config = get_effective_detection_rule("pfsense_firewall_port_scan", cur=cur)
+def _generate_pfsense_port_scan_alerts_core(cur, conn, source=None, source_type=None, source_ip=None, rule_config=None):
+    rule_config = _prepare_rule_evaluation("pfsense_firewall_port_scan", cur, source, source_type, rule_config)
+    if rule_config is None:
+        return []
+    source_ip = _resolve_evaluation_source_ip(cur, source_ip, source, source_type)
+    if source_ip is None:
+        return []
     threshold = rule_config["parameters"]["threshold"]
     window_minutes = rule_config["parameters"]["window_minutes"]
 
@@ -1685,6 +1844,9 @@ def _generate_pfsense_port_scan_alerts_core(cur, conn, source=None, source_type=
                 created_at
             FROM events
             WHERE event_type = 'firewall_block'
+              AND (%s::inet IS NULL OR source_ip = %s)
+              AND source = %s
+              AND source_type = %s
               AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
         ),
         normalized_ports AS (
@@ -1710,7 +1872,7 @@ def _generate_pfsense_port_scan_alerts_core(cur, conn, source=None, source_type=
         GROUP BY source_ip
         HAVING COUNT(DISTINCT destination_port) >= %s
         """,
-        (threshold,),
+        (source_ip, source_ip, source, source_type, threshold,),
     )
 
     rows = cur.fetchall()
@@ -1746,7 +1908,9 @@ def _generate_pfsense_port_scan_alerts_core(cur, conn, source=None, source_type=
         response_action = _pfsense_response_action_for_severity(severity)
         response_status = "pending"
 
-        country, city, latitude, longitude = _fetch_latest_honeypot_location(cur, source_ip, "firewall_block")
+        country, city, latitude, longitude = _fetch_latest_honeypot_location(
+            cur, source_ip, "firewall_block", source, source_type
+        )
 
         message = (
             f"pfSense firewall port scan suspected from {source_ip}: "
@@ -1824,8 +1988,13 @@ def _generate_pfsense_port_scan_alerts_core(cur, conn, source=None, source_type=
     return alerts_created
 
 
-def _generate_pfsense_suspicious_allow_alerts_core(cur, conn, source=None, source_type=None):
-    rule_config = get_effective_detection_rule("pfsense_firewall_suspicious_allow", cur=cur)
+def _generate_pfsense_suspicious_allow_alerts_core(cur, conn, source=None, source_type=None, source_ip=None, rule_config=None):
+    rule_config = _prepare_rule_evaluation("pfsense_firewall_suspicious_allow", cur, source, source_type, rule_config)
+    if rule_config is None:
+        return []
+    source_ip = _resolve_evaluation_source_ip(cur, source_ip, source, source_type)
+    if source_ip is None:
+        return []
     threshold = rule_config["parameters"]["threshold"]
     window_minutes = rule_config["parameters"]["window_minutes"]
     sensitive_ports = list(get_effective_sensitive_ports(cur))
@@ -1843,6 +2012,9 @@ def _generate_pfsense_suspicious_allow_alerts_core(cur, conn, source=None, sourc
                 created_at
             FROM events
             WHERE event_type = 'firewall_allow'
+              AND (%s::inet IS NULL OR source_ip = %s)
+              AND source = %s
+              AND source_type = %s
               AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
         ),
         qualifying_events AS (
@@ -1865,7 +2037,7 @@ def _generate_pfsense_suspicious_allow_alerts_core(cur, conn, source=None, sourc
         GROUP BY source_ip
         HAVING COUNT(*) >= %s
         """,
-        (sensitive_ports, threshold),
+        (source_ip, source_ip, source, source_type, sensitive_ports, threshold),
     )
 
     rows = cur.fetchall()
@@ -1908,7 +2080,9 @@ def _generate_pfsense_suspicious_allow_alerts_core(cur, conn, source=None, sourc
         response_action = _pfsense_response_action_for_severity(severity)
         response_status = "pending"
 
-        country, city, latitude, longitude = _fetch_latest_honeypot_location(cur, source_ip, "firewall_allow")
+        country, city, latitude, longitude = _fetch_latest_honeypot_location(
+            cur, source_ip, "firewall_allow", source, source_type
+        )
 
         message = (
             f"pfSense allowed inbound traffic from {source_ip} to sensitive port "
@@ -1989,8 +2163,13 @@ def _generate_pfsense_suspicious_allow_alerts_core(cur, conn, source=None, sourc
     return alerts_created
 
 
-def _generate_pfsense_noisy_source_alerts_core(cur, conn, source=None, source_type=None):
-    rule_config = get_effective_detection_rule("pfsense_firewall_noisy_source", cur=cur)
+def _generate_pfsense_noisy_source_alerts_core(cur, conn, source=None, source_type=None, source_ip=None, rule_config=None):
+    rule_config = _prepare_rule_evaluation("pfsense_firewall_noisy_source", cur, source, source_type, rule_config)
+    if rule_config is None:
+        return []
+    source_ip = _resolve_evaluation_source_ip(cur, source_ip, source, source_type)
+    if source_ip is None:
+        return []
     threshold = rule_config["parameters"]["threshold"]
     window_minutes = rule_config["parameters"]["window_minutes"]
 
@@ -2003,11 +2182,14 @@ def _generate_pfsense_noisy_source_alerts_core(cur, conn, source=None, source_ty
             MAX(created_at) AS last_seen
         FROM events
         WHERE event_type IN ('firewall_block', 'firewall_allow')
+          AND (%s::inet IS NULL OR source_ip = %s)
+          AND source = %s
+          AND source_type = %s
           AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
         GROUP BY source_ip
         HAVING COUNT(*) >= %s
         """,
-        (threshold,),
+        (source_ip, source_ip, source, source_type, threshold,),
     )
 
     rows = cur.fetchall()
@@ -2041,7 +2223,9 @@ def _generate_pfsense_noisy_source_alerts_core(cur, conn, source=None, source_ty
         response_action = "suppress_noisy_source"
         response_status = "pending"
 
-        country, city, latitude, longitude = _fetch_latest_honeypot_location(cur, source_ip, "firewall_block")
+        country, city, latitude, longitude = _fetch_latest_honeypot_location(
+            cur, source_ip, "firewall_block", source, source_type
+        )
 
         message = f"pfSense firewall noise suppressed from {source_ip}: {event_count} routine events"
 

@@ -5,6 +5,7 @@ import pytest
 from werkzeug.security import generate_password_hash
 
 import siem_backend
+from engines.detection_applicability import RULE_APPLICABILITY
 
 ADMIN_USER = "testadmin"
 ADMIN_PASS = "testpassword123!"
@@ -199,18 +200,215 @@ def test_get_admin_detection_rules_as_super_admin_returns_200_stable_shape(clien
             "description",
             "override_status",
             "has_override",
+            "applicable_sources",
+            "source_applicability_category",
         ):
             assert key in rule
 
+        registry_entry = RULE_APPLICABILITY[rule["rule_id"]]
+        assert rule["source_applicability_category"] == registry_entry.classification
+        assert rule["applicable_sources"] == [
+            {"source": identity.source, "source_type": identity.source_type}
+            for identity in sorted(registry_entry.allowed_sources)
+        ]
 
-def test_patch_admin_detection_rule_missing_parameters_returns_400(client):
+
+def test_patch_admin_detection_rule_empty_payload_returns_400(client):
     _login_super_admin(client)
     resp = client.patch(
         "/admin/detection-rules/failed_login_threshold",
         json={},
     )
     assert resp.status_code == 400
-    assert resp.get_json()["error"] == "Missing required field: parameters"
+    assert resp.get_json()["error"] == "At least one of parameters or active is required"
+
+
+def test_patch_detection_rule_active_false_true_and_audit(client, postgres_db):
+    conn, cur = postgres_db
+    _login_super_admin(client)
+
+    with _patched_app_db(conn), patch(
+        "engines.detection_engine.lookup_ip_reputation",
+        return_value={
+            "reputation_score": 0,
+            "reputation_label": "unknown",
+            "reputation_source": "test",
+            "reputation_summary": "test",
+        },
+    ), patch(
+        "engines.correlation_engine.lookup_ip_reputation",
+        return_value={
+            "reputation_score": 0,
+            "reputation_label": "unknown",
+            "reputation_source": "test",
+            "reputation_summary": "test",
+        },
+    ):
+        disabled = client.patch(
+            "/admin/detection-rules/failed_login_threshold",
+            json={"active": False},
+        )
+        assert disabled.status_code == 200
+        assert disabled.get_json()["active"] is False
+
+        enabled = client.patch(
+            "/admin/detection-rules/failed_login_threshold",
+            json={"active": True},
+        )
+        assert enabled.status_code == 200
+        assert enabled.get_json()["active"] is True
+
+    cur.execute(
+        """
+        SELECT active, parameters
+        FROM detection_config
+        WHERE rule_id = 'failed_login_threshold'
+        """
+    )
+    active, parameters = cur.fetchone()
+    assert active is True
+    assert parameters == {"threshold": 3, "window_minutes": 15}
+
+    cur.execute(
+        """
+        SELECT details
+        FROM audit_log
+        WHERE event_type = 'detection_rule_updated'
+        ORDER BY id
+        """
+    )
+    audits = [row[0] for row in cur.fetchall()]
+    assert [(item["old_active"], item["new_active"]) for item in audits] == [
+        (True, False),
+        (False, True),
+    ]
+    assert audits[0]["changes"] == [{"field": "active", "old": True, "new": False}]
+
+
+@pytest.mark.parametrize("invalid_active", [None, 0, 1, "false", [], {}])
+def test_patch_detection_rule_rejects_non_boolean_active(client, invalid_active):
+    _login_super_admin(client)
+    response = client.patch(
+        "/admin/detection-rules/failed_login_threshold",
+        json={"active": invalid_active},
+    )
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "Active must be a boolean"
+
+
+@pytest.mark.parametrize("field", ["applicable_sources", "source_applicability_category", "unknown"])
+def test_patch_detection_rule_rejects_read_only_or_unknown_fields(client, field):
+    _login_super_admin(client)
+    response = client.patch(
+        "/admin/detection-rules/failed_login_threshold",
+        json={field: []},
+    )
+    assert response.status_code == 400
+    assert response.get_json()["error"] == f"Unknown field: {field}"
+
+
+def test_patch_detection_rule_parameter_only_remains_compatible(client, postgres_db):
+    conn, cur = postgres_db
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        response = client.patch(
+            "/admin/detection-rules/failed_login_threshold",
+            json={"parameters": {"threshold": 7}},
+        )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["active"] is True
+    assert body["parameters"] == {"threshold": 7, "window_minutes": 15}
+    cur.execute(
+        "SELECT parameters, active FROM detection_config WHERE rule_id = 'failed_login_threshold'"
+    )
+    assert cur.fetchone() == ({"threshold": 7, "window_minutes": 15}, True)
+
+
+def test_patch_detection_rule_combines_parameters_and_active(client, postgres_db):
+    conn, cur = postgres_db
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        response = client.patch(
+            "/admin/detection-rules/http_error_threshold",
+            json={"parameters": {"threshold": 2, "window_minutes": 9}, "active": False},
+        )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["active"] is False
+    assert body["parameters"] == {"threshold": 2, "window_minutes": 9}
+    cur.execute(
+        "SELECT parameters, active FROM detection_config WHERE rule_id = 'http_error_threshold'"
+    )
+    assert cur.fetchone() == ({"threshold": 2, "window_minutes": 9}, False)
+
+
+def test_active_change_through_api_immediately_controls_detection_without_deleting_events(client, postgres_db):
+    conn, cur = postgres_db
+    source_ip = "198.51.100.230"
+    _login_super_admin(client)
+    reputation = {
+        "reputation_score": 0,
+        "reputation_label": "unknown",
+        "reputation_source": "test",
+        "reputation_summary": "test",
+    }
+    with _patched_app_db(conn), patch(
+        "engines.detection_engine.lookup_ip_reputation", return_value=reputation
+    ), patch("engines.correlation_engine.lookup_ip_reputation", return_value=reputation):
+        disabled = client.patch(
+            "/admin/detection-rules/failed_login_threshold",
+            json={"parameters": {"threshold": 1}, "active": False},
+        )
+        assert disabled.status_code == 200
+
+        result = siem_backend.ingest_normalized_event(
+            {
+                "event_type": "failed_login",
+                "severity": "medium",
+                "source_ip": source_ip,
+                "source": "bank_app",
+                "source_type": "custom",
+                "event_timestamp": None,
+                "message": "failed login",
+                "app_name": "test",
+                "environment": "test",
+                "raw_payload": {"username": "alice"},
+            },
+            conn,
+            cur,
+        )
+        assert result == []
+
+        enabled = client.patch(
+            "/admin/detection-rules/failed_login_threshold",
+            json={"active": True},
+        )
+        assert enabled.status_code == 200
+
+        result = siem_backend.ingest_normalized_event(
+            {
+                "event_type": "failed_login",
+                "severity": "medium",
+                "source_ip": source_ip,
+                "source": "bank_app",
+                "source_type": "custom",
+                "event_timestamp": None,
+                "message": "failed login",
+                "app_name": "test",
+                "environment": "test",
+                "raw_payload": {"username": "bob"},
+            },
+            conn,
+            cur,
+        )
+
+    assert len(result) == 1
+    assert result[0]["attempts"] == 2
+    cur.execute("SELECT COUNT(*) FROM events WHERE source_ip = %s", (source_ip,))
+    assert cur.fetchone()[0] == 2
 
 
 def test_pfsense_ingest_filters_require_super_admin(client):

@@ -115,7 +115,7 @@ def test_ingest_normalized_event_inserts_event_without_detection(postgres_db):
     assert count_rows(cur, "alerts") == 0
 
 
-def test_ingest_normalized_event_routes_into_port_scan_detection_core(postgres_db):
+def test_ingest_normalized_event_routes_supported_port_scan_into_detection_core(postgres_db):
     conn, cur = postgres_db
     source_ip = "198.51.100.133"
 
@@ -126,8 +126,8 @@ def test_ingest_normalized_event_routes_into_port_scan_detection_core(postgres_d
             make_event(
                 event_type="port_scan",
                 source_ip=source_ip,
-                source="nginx",
-                source_type="web_log",
+                source="bank_app",
+                source_type="custom",
                 raw_payload=port_scan_payload(22),
             ),
             conn,
@@ -137,8 +137,8 @@ def test_ingest_normalized_event_routes_into_port_scan_detection_core(postgres_d
             make_event(
                 event_type="port_scan",
                 source_ip=source_ip,
-                source="nginx",
-                source_type="web_log",
+                source="bank_app",
+                source_type="custom",
                 raw_payload=port_scan_payload(443),
             ),
             conn,
@@ -158,7 +158,7 @@ def test_ingest_normalized_event_routes_into_port_scan_detection_core(postgres_d
         """,
         (source_ip,),
     )
-    assert cur.fetchone() == ("port_scan_threshold", source_ip, "nginx", "web_log")
+    assert cur.fetchone() == ("port_scan_threshold", source_ip, "bank_app", "custom")
 
 
 def test_ingest_normalized_event_runs_detection_then_correlation_on_same_cursor(postgres_db):
@@ -195,33 +195,24 @@ def test_ingest_normalized_event_runs_detection_then_correlation_on_same_cursor(
 
         assert len(failed_login_alerts) == 1
 
-        siem_backend.ingest_normalized_event(
-            make_event(
-                event_type="port_scan",
-                source_ip=source_ip,
-                source="nginx",
-                source_type="web_log",
-                raw_payload=port_scan_payload(22),
-            ),
-            conn,
-            cur,
-        )
-        port_scan_alerts = siem_backend.ingest_normalized_event(
-            make_event(
-                event_type="port_scan",
-                source_ip=source_ip,
-                source="nginx",
-                source_type="web_log",
-                raw_payload=port_scan_payload(443),
-            ),
-            conn,
-            cur,
-        )
+        web_alerts = []
+        for index in range(5):
+            web_alerts = siem_backend.ingest_normalized_event(
+                make_event(
+                    event_type="http_error",
+                    source_ip=source_ip,
+                    source="azure_insights",
+                    source_type="cloud_api",
+                    raw_payload={"exception": f"failure-{index}"},
+                ),
+                conn,
+                cur,
+            )
 
-    assert len(port_scan_alerts) == 2
-    assert port_scan_alerts[0]["alert_id"] is not None
-    assert port_scan_alerts[0]["source_ip"] == source_ip
-    assert port_scan_alerts[1]["alert_type"] == "correlated_activity"
+    assert len(web_alerts) == 2
+    assert web_alerts[0]["alert_id"] is not None
+    assert web_alerts[0]["source_ip"] == source_ip
+    assert web_alerts[1]["alert_type"] == "correlated_activity"
 
     cur.execute(
         """
@@ -234,7 +225,7 @@ def test_ingest_normalized_event_runs_detection_then_correlation_on_same_cursor(
     )
     assert [row[0] for row in cur.fetchall()] == [
         "failed_login_threshold",
-        "port_scan_threshold",
+        "http_error_threshold",
         "correlated_activity",
     ]
 
@@ -249,7 +240,7 @@ def test_ingest_normalized_event_runs_detection_then_correlation_on_same_cursor(
     )
     assert cur.fetchone()[0] == (
         f"Multi-source suspicious activity detected from {source_ip} "
-        "involving: failed_login_threshold, port_scan_threshold"
+        "involving: failed_login_threshold, http_error_threshold"
     )
 
 
@@ -257,13 +248,13 @@ def test_ingest_normalized_event_rolls_back_event_insert_on_downstream_failure(p
     conn, cur = postgres_db
     source_ip = "198.51.100.135"
 
-    def fail_detector(_cur, _conn, source=None, source_type=None):
+    def fail_detector(_cur, _conn, **_kwargs):
         raise RuntimeError("forced downstream failure")
 
     with patch("engines.ingest_engine._generate_port_scan_alerts_core", side_effect=fail_detector):
         with pytest.raises(RuntimeError, match="forced downstream failure"):
             siem_backend.ingest_normalized_event(
-                make_event(event_type="port_scan", source_ip=source_ip, source="nginx", source_type="web_log"),
+                make_event(event_type="port_scan", source_ip=source_ip, source="bank_app", source_type="custom"),
                 conn,
                 cur,
             )
@@ -280,7 +271,7 @@ def test_ingest_normalized_event_orchestration_ordering_uses_detection_before_co
     calls = []
     shared_ids = []
 
-    def fake_port_scan(_cur, _conn, source=None, source_type=None):
+    def fake_port_scan(_cur, _conn, source=None, source_type=None, **_kwargs):
         calls.append(("detect", source, source_type))
         shared_ids.append((id(cur), id(conn), id(_cur), id(_conn)))
         return [{"source_ip": "198.51.100.136"}]
@@ -299,7 +290,7 @@ def test_ingest_normalized_event_orchestration_ordering_uses_detection_before_co
          patch("engines.ingest_engine.generate_correlated_activity_alerts", side_effect=fake_generic_correlation), \
          patch("engines.ingest_engine.generate_targeted_correlation_alerts", side_effect=fake_targeted_correlation):
         result = siem_backend.ingest_normalized_event(
-            make_event(event_type="port_scan", source_ip="198.51.100.136", source="nginx", source_type="web_log"),
+            make_event(event_type="port_scan", source_ip="198.51.100.136", source="bank_app", source_type="custom"),
             conn,
             cur,
         )
@@ -310,7 +301,7 @@ def test_ingest_normalized_event_orchestration_ordering_uses_detection_before_co
         {"alert_id": 202, "source_ip": "198.51.100.136", "response_action": "monitor", "severity": "critical"},
     ]
     assert calls == [
-        ("detect", "nginx", "web_log"),
+        ("detect", "bank_app", "custom"),
         ("generic_correlation", "198.51.100.136"),
         ("targeted_correlation", "198.51.100.136"),
     ]

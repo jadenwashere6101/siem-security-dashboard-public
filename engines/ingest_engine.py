@@ -1,6 +1,8 @@
 from psycopg2.extras import Json
 
 from engines.correlation_engine import generate_correlated_activity_alerts, generate_targeted_correlation_alerts
+from engines.detection_applicability import rule_applies_to_source
+from engines.detection_config import get_effective_detection_rule
 from engines.detection_engine import (
     _generate_application_exception_alerts_core,
     _generate_credential_stuffing_alerts_core,
@@ -19,6 +21,23 @@ from engines.detection_engine import (
     _generate_successful_login_after_spray_alerts_core,
 )
 from helpers.ingest_normalizers import reject_raw_password_fields
+
+
+def _run_detector(rule_id, detector, *, cur, conn, source_ip, source, source_type):
+    """Fail closed before detector SQL for unsupported or inactive rules."""
+    if not rule_applies_to_source(rule_id, source, source_type):
+        return []
+    rule_config = get_effective_detection_rule(rule_id, cur=cur)
+    if not rule_config["active"]:
+        return []
+    return detector(
+        cur,
+        conn,
+        source_ip=source_ip,
+        source=source,
+        source_type=source_type,
+        rule_config=rule_config,
+    )
 
 
 def ingest_normalized_event(event_dict, conn, cur):
@@ -69,57 +88,57 @@ def ingest_normalized_event(event_dict, conn, cur):
         ),
     )
 
-    alerts_created = []
+    detector_candidates = {
+        "failed_login": (
+            ("failed_login_threshold", _generate_failed_login_alerts_core),
+            ("password_spraying_threshold", _generate_password_spraying_alerts_core),
+            ("successful_login_after_spray", _generate_successful_login_after_spray_alerts_core),
+        ),
+        "unauthorized_access": (
+            ("failed_login_threshold", _generate_failed_login_alerts_core),
+            ("high_request_rate_threshold", _generate_high_request_rate_alerts_core),
+        ),
+        "http_error": (
+            ("http_error_threshold", _generate_http_error_alerts_core),
+            ("high_request_rate_threshold", _generate_high_request_rate_alerts_core),
+        ),
+        "application_exception": (
+            ("application_exception_threshold", _generate_application_exception_alerts_core),
+        ),
+        "normal_activity": (("high_request_rate_threshold", _generate_high_request_rate_alerts_core),),
+        "successful_login": (
+            ("successful_login_after_spray", _generate_successful_login_after_spray_alerts_core),
+        ),
+        "port_scan": (("port_scan_threshold", _generate_port_scan_alerts_core),),
+        "env_probe": (("honeypot_env_probe_threshold", _generate_env_probe_alerts_core),),
+        "admin_probe": (("honeypot_admin_probe_threshold", _generate_admin_probe_alerts_core),),
+        "scanner_detected": (("honeypot_scanner_detected", _generate_scanner_detected_alerts_core),),
+        "credential_stuffing": (
+            ("honeypot_credential_stuffing_threshold", _generate_credential_stuffing_alerts_core),
+        ),
+        "firewall_block": (
+            ("pfsense_firewall_repeated_deny", _generate_pfsense_repeated_deny_alerts_core),
+            ("pfsense_firewall_port_scan", _generate_pfsense_port_scan_alerts_core),
+            ("pfsense_firewall_noisy_source", _generate_pfsense_noisy_source_alerts_core),
+        ),
+        "firewall_allow": (
+            ("pfsense_firewall_suspicious_allow", _generate_pfsense_suspicious_allow_alerts_core),
+            ("pfsense_firewall_noisy_source", _generate_pfsense_noisy_source_alerts_core),
+        ),
+    }
 
-    if event_type == "failed_login":
-        alerts_created = _generate_failed_login_alerts_core(cur, conn, source=source, source_type=source_type)
-        alerts_created.extend(_generate_password_spraying_alerts_core(cur, conn, source=source, source_type=source_type))
+    alerts_created = []
+    for rule_id, detector in detector_candidates.get(event_type, ()):
         alerts_created.extend(
-            _generate_successful_login_after_spray_alerts_core(cur, conn, source=source, source_type=source_type)
-        )
-    elif event_type == "unauthorized_access":
-        alerts_created = _generate_failed_login_alerts_core(cur, conn, source=source, source_type=source_type)
-        if source_type in {"web_log", "telemetry"}:
-            alerts_created.extend(
-                _generate_high_request_rate_alerts_core(cur, conn, source=source, source_type=source_type)
+            _run_detector(
+                rule_id,
+                detector,
+                cur=cur,
+                conn=conn,
+                source_ip=source_ip,
+                source=source,
+                source_type=source_type,
             )
-    elif event_type == "http_error":
-        alerts_created = _generate_http_error_alerts_core(cur, conn, source=source, source_type=source_type)
-        if source_type in {"web_log", "telemetry"}:
-            alerts_created.extend(
-                _generate_high_request_rate_alerts_core(cur, conn, source=source, source_type=source_type)
-            )
-    elif event_type == "application_exception":
-        alerts_created = _generate_application_exception_alerts_core(cur, conn, source=source, source_type=source_type)
-    elif event_type == "normal_activity":
-        if source_type in {"web_log", "telemetry"}:
-            alerts_created = _generate_high_request_rate_alerts_core(cur, conn, source=source, source_type=source_type)
-    elif event_type == "successful_login":
-        alerts_created.extend(
-            _generate_successful_login_after_spray_alerts_core(cur, conn, source=source, source_type=source_type)
-        )
-    elif event_type == "port_scan":
-        alerts_created = _generate_port_scan_alerts_core(cur, conn, source=source, source_type=source_type)
-    elif event_type == "env_probe":
-        alerts_created = _generate_env_probe_alerts_core(cur, conn, source=source, source_type=source_type)
-    elif event_type == "admin_probe":
-        alerts_created = _generate_admin_probe_alerts_core(cur, conn, source=source, source_type=source_type)
-    elif event_type == "scanner_detected":
-        alerts_created = _generate_scanner_detected_alerts_core(cur, conn, source=source, source_type=source_type)
-    elif event_type == "credential_stuffing":
-        alerts_created = _generate_credential_stuffing_alerts_core(cur, conn, source=source, source_type=source_type)
-    elif event_type == "firewall_block":
-        alerts_created = _generate_pfsense_repeated_deny_alerts_core(cur, conn, source=source, source_type=source_type)
-        alerts_created.extend(
-            _generate_pfsense_port_scan_alerts_core(cur, conn, source=source, source_type=source_type)
-        )
-        alerts_created.extend(
-            _generate_pfsense_noisy_source_alerts_core(cur, conn, source=source, source_type=source_type)
-        )
-    elif event_type == "firewall_allow":
-        alerts_created = _generate_pfsense_suspicious_allow_alerts_core(cur, conn, source=source, source_type=source_type)
-        alerts_created.extend(
-            _generate_pfsense_noisy_source_alerts_core(cur, conn, source=source, source_type=source_type)
         )
 
     for correlated_source_ip in {

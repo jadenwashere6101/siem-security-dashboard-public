@@ -482,11 +482,16 @@ def update_detection_rule(rule_id):
     if not isinstance(payload, dict):
         return jsonify({"error": "Invalid JSON"}), 400
 
-    if "active" in payload:
-        return jsonify({"error": "Active status cannot be updated in this phase"}), 400
+    allowed_fields = {"parameters", "active"}
+    unknown_fields = sorted(set(payload) - allowed_fields)
+    if unknown_fields:
+        return jsonify({"error": f"Unknown field: {unknown_fields[0]}"}), 400
 
-    if "parameters" not in payload:
-        return jsonify({"error": "Missing required field: parameters"}), 400
+    if not payload:
+        return jsonify({"error": "At least one of parameters or active is required"}), 400
+
+    if "active" in payload and not isinstance(payload["active"], bool):
+        return jsonify({"error": "Active must be a boolean"}), 400
 
     conn = None
     cur = None
@@ -497,24 +502,29 @@ def update_detection_rule(rule_id):
 
         old_effective_rule = get_effective_detection_rule(rule_id, cur=cur)
         current_active = old_effective_rule["active"]
+        requested_active = payload.get("active", current_active)
+        requested_parameters = payload.get("parameters", {})
 
         try:
             validated = validate_detection_rule_config(
                 rule_id,
-                payload.get("parameters"),
-                current_active,
+                requested_parameters,
+                requested_active,
             )
         except ValueError as error:
             conn.rollback()
             return jsonify({"error": str(error)}), 400
 
         normalized_parameters = validated["parameters"]
+        merged_parameters = dict(old_effective_rule["parameters"])
+        merged_parameters.update(normalized_parameters)
+        updated_active = validated["active"]
         changes = []
-        all_parameter_keys = set(old_effective_rule["parameters"].keys()) | set(normalized_parameters.keys())
+        all_parameter_keys = set(old_effective_rule["parameters"].keys()) | set(merged_parameters.keys())
 
         for key in sorted(all_parameter_keys):
             old_value = old_effective_rule["parameters"].get(key)
-            new_value = normalized_parameters.get(key, old_value)
+            new_value = merged_parameters.get(key, old_value)
             if old_value != new_value:
                 changes.append({
                     "field": key,
@@ -522,19 +532,28 @@ def update_detection_rule(rule_id):
                     "new": new_value,
                 })
 
+        if current_active != updated_active:
+            changes.append({
+                "field": "active",
+                "old": current_active,
+                "new": updated_active,
+            })
+
         cur.execute(
             """
-            INSERT INTO detection_config (rule_id, parameters, updated_by, updated_at)
-            VALUES (%s, %s, %s, NOW())
+            INSERT INTO detection_config (rule_id, parameters, active, updated_by, updated_at)
+            VALUES (%s, %s, %s, %s, NOW())
             ON CONFLICT (rule_id) DO UPDATE
             SET
                 parameters = EXCLUDED.parameters,
+                active = EXCLUDED.active,
                 updated_by = EXCLUDED.updated_by,
                 updated_at = NOW()
             """,
             (
                 rule_id,
-                Json(normalized_parameters),
+                Json(merged_parameters),
+                updated_active,
                 current_user.id,
             ),
         )
@@ -553,6 +572,8 @@ def update_detection_rule(rule_id):
                 "rule_id": rule_id,
                 "old_parameters": old_effective_rule["parameters"],
                 "new_parameters": updated_effective_rule["parameters"],
+                "old_active": current_active,
+                "new_active": updated_effective_rule["active"],
                 "changes": changes,
                 "actor": current_user.id,
             },
