@@ -1,4 +1,8 @@
-export const getSourceBadgeMeta = (source, sourceType) => {
+export const getSourceBadgeMeta = (
+  source,
+  sourceType,
+  unknownBorder = "1px solid rgba(148, 163, 184, 0.22)"
+) => {
   const normalizedSource = (source || "").toLowerCase();
 
   if (normalizedSource === "bank_app") {
@@ -49,13 +53,25 @@ export const getSourceBadgeMeta = (source, sourceType) => {
     };
   }
 
+  if (normalizedSource === "pfsense") {
+    return {
+      label: "pfSense",
+      subLabel: sourceType || "firewall",
+      style: {
+        color: "#c9d1d9",
+        backgroundColor: "rgba(148, 163, 184, 0.10)",
+        border: "1px solid rgba(148, 163, 184, 0.22)",
+      },
+    };
+  }
+
   return {
     label: "Unknown",
     subLabel: sourceType || "Legacy",
     style: {
       color: "#c9d1d9",
       backgroundColor: "rgba(148, 163, 184, 0.10)",
-      border: "1px solid rgba(148, 163, 184, 0.22)",
+      border: unknownBorder,
     },
   };
 };

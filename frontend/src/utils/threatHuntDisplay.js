@@ -1,3 +1,5 @@
+import { getSourceBadgeMeta as sharedSourceBadgeMeta } from "./alertDisplay";
+
 export const formatCreatedAt = (value) => {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
@@ -106,67 +108,12 @@ export const getSeverityBadgeStyle = (severity) => {
   };
 };
 
-export const getSourceBadgeMeta = (sourceValue, sourceTypeValue) => {
-  const normalizedSource = (sourceValue || "").toLowerCase();
-
-  if (normalizedSource === "bank_app") {
-    return {
-      label: "App / Bank",
-      subLabel: sourceTypeValue || "custom",
-      style: {
-        color: "#93c5fd",
-        backgroundColor: "rgba(59, 130, 246, 0.10)",
-        border: "1px solid rgba(59, 130, 246, 0.28)",
-      },
-    };
-  }
-
-  if (normalizedSource === "nginx") {
-    return {
-      label: "Web Log",
-      subLabel: sourceTypeValue || "web_log",
-      style: {
-        color: "#fbbf24",
-        backgroundColor: "rgba(251, 191, 36, 0.10)",
-        border: "1px solid rgba(251, 191, 36, 0.28)",
-      },
-    };
-  }
-
-  if (normalizedSource === "azure_insights") {
-    return {
-      label: "Azure",
-      subLabel: sourceTypeValue || "cloud_api",
-      style: {
-        color: "#67e8f9",
-        backgroundColor: "rgba(103, 232, 249, 0.10)",
-        border: "1px solid rgba(103, 232, 249, 0.26)",
-      },
-    };
-  }
-
-  if (normalizedSource === "opentelemetry") {
-    return {
-      label: "OTEL",
-      subLabel: sourceTypeValue || "telemetry",
-      style: {
-        color: "#c4b5fd",
-        backgroundColor: "rgba(196, 181, 253, 0.10)",
-        border: "1px solid rgba(196, 181, 253, 0.26)",
-      },
-    };
-  }
-
-  return {
-    label: "Unknown",
-    subLabel: sourceTypeValue || "Legacy",
-    style: {
-      color: "#c9d1d9",
-      backgroundColor: "rgba(148, 163, 184, 0.10)",
-      border: "1px solid rgba(148, 163, 184, 0.20)",
-    },
-  };
-};
+export const getSourceBadgeMeta = (sourceValue, sourceTypeValue) =>
+  sharedSourceBadgeMeta(
+    sourceValue,
+    sourceTypeValue,
+    "1px solid rgba(148, 163, 184, 0.20)"
+  );
 
 export const getReputationBadgeStyle = (label) => {
   const normalized = (label || "").toLowerCase();
