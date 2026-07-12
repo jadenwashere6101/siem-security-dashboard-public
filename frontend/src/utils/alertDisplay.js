@@ -5,6 +5,18 @@ export const getSourceBadgeMeta = (
 ) => {
   const normalizedSource = (source || "").toLowerCase();
 
+  if (normalizedSource === "honeypot") {
+    return {
+      label: "Honeypot",
+      subLabel: sourceType || "honeypot",
+      style: {
+        color: "#60a5fa",
+        backgroundColor: "rgba(96, 165, 250, 0.10)",
+        border: "1px solid rgba(96, 165, 250, 0.28)",
+      },
+    };
+  }
+
   if (normalizedSource === "bank_app") {
     return {
       label: "App / Bank",
@@ -58,9 +70,9 @@ export const getSourceBadgeMeta = (
       label: "pfSense",
       subLabel: sourceType || "firewall",
       style: {
-        color: "#c9d1d9",
-        backgroundColor: "rgba(148, 163, 184, 0.10)",
-        border: "1px solid rgba(148, 163, 184, 0.22)",
+        color: "#d8b4fe",
+        backgroundColor: "rgba(192, 132, 252, 0.10)",
+        border: "1px solid rgba(192, 132, 252, 0.28)",
       },
     };
   }
