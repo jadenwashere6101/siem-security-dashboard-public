@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+import pytest
+
 from adapters.pfsense_filterlog_adapter import (
     MAX_PACKET_BYTES,
     parse_pfsense_filterlog_packet,
@@ -23,6 +25,20 @@ ICMP_BLOCK = (
     "1000000105,,,1777758299,igb1,match,block,in,4,0x0,,64,0,0,none,1,icmp,84,"
     "198.51.100.11,203.0.113.21,8,0"
 )
+
+GENERIC_IPV4_PREFIX = (
+    "<134>Jul  7 12:00:03 fw filterlog: "
+    "1000000105,,,1777758299,igb1,match,block,in,4,0x0,,64,0,0,none,{protocol_id},{protocol},84,"
+    "198.51.100.11,203.0.113.21"
+)
+
+
+def make_ipv4_protocol_line(protocol, protocol_id):
+    return GENERIC_IPV4_PREFIX.format(protocol=protocol, protocol_id=protocol_id)
+
+
+def make_icmp_line(*details):
+    return make_ipv4_protocol_line("icmp", 1) + "," + ",".join(str(value) for value in details)
 
 
 def test_valid_ipv4_tcp_block_line_parses_and_normalizes():
@@ -197,6 +213,69 @@ def test_valid_ipv4_icmp_block_has_type_code_and_no_ports():
     assert result["event"]["raw_payload"]["icmp_type"] == 8
     assert "source_port" not in result["event"]["raw_payload"]
     assert "destination_port" not in result["event"]["raw_payload"]
+
+
+@pytest.mark.parametrize(
+    "protocol,protocol_id",
+    [
+        ("ah", 51),
+        ("carp", 112),
+        ("esp", 50),
+        ("gre", 47),
+        ("igmp", 2),
+        ("ipencap", 4),
+        ("ospf", 89),
+        ("pfsync", 240),
+        ("pim", 103),
+        ("sctp", 132),
+    ],
+)
+def test_common_ipv4_protocol_variants_parse_without_port_assumptions(protocol, protocol_id):
+    result = parse_pfsense_filterlog_packet(make_ipv4_protocol_line(protocol, protocol_id))
+
+    assert result["ok"] is True
+    assert result["parsed"]["protocol"] == protocol
+    assert result["parsed"]["source_port"] is None
+    assert result["parsed"]["destination_port"] is None
+    assert result["event"]["raw_payload"]["protocol"] == protocol
+
+
+@pytest.mark.parametrize(
+    "details,expected_type",
+    [
+        (("request", 123, 1), "request"),
+        (("reply", 123, 1), "reply"),
+        (("unreach", "host unreachable"), "unreach"),
+        (("unreachport", "203.0.113.21", 17, 53), "unreachport"),
+        (("unreachproto", "203.0.113.21", 47), "unreachproto"),
+        (("needfrag", "203.0.113.21", 1400), "needfrag"),
+        (("timexceed", "ttl exceeded"), "timexceed"),
+        (("redirect", "host redirect"), "redirect"),
+        (("paramprob", "invalid header"), "paramprob"),
+        (("parameterprob", "invalid header"), "parameterprob"),
+        (("maskreply", "255.255.255.0"), "maskreply"),
+        (("tstamp", 123, 1), "tstamp"),
+        (("tstampreply", 123, 1, 100, 101, 102), "tstampreply"),
+    ],
+)
+def test_documented_textual_icmp_variants_parse(details, expected_type):
+    result = parse_pfsense_filterlog_packet(make_icmp_line(*details))
+
+    assert result["ok"] is True
+    assert result["parsed"]["protocol"] == "icmp"
+    assert result["parsed"]["icmp_type"] == expected_type
+    assert result["parsed"]["icmp_code"] is None
+    assert result["event"]["raw_payload"]["icmp_type"] == expected_type
+
+
+def test_unsupported_ipv4_protocol_and_icmp_type_still_fail_cleanly():
+    unsupported_protocol = parse_pfsense_filterlog_packet(make_ipv4_protocol_line("unknownproto", 253))
+    unsupported_icmp = parse_pfsense_filterlog_packet(make_icmp_line("unknownicmp", "details"))
+
+    assert unsupported_protocol["ok"] is False
+    assert unsupported_protocol["error"]["reason"] == "unsupported_protocol"
+    assert unsupported_icmp["ok"] is False
+    assert unsupported_icmp["error"]["reason"] == "invalid_icmp_type"
 
 
 def test_malformed_input_does_not_crash_and_returns_bounded_telemetry():

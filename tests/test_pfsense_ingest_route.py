@@ -180,6 +180,38 @@ def test_pfsense_event_timestamp_reaches_database_contract(client, monkeypatch, 
     assert cur.fetchone()[0] == datetime.fromisoformat(event_timestamp)
 
 
+def test_textual_icmp_variant_reaches_existing_ingest_contract(client, monkeypatch, postgres_db):
+    monkeypatch.setenv("SIEM_INGEST_API_KEY", VALID_API_KEY)
+    install_route_db(monkeypatch, postgres_db)
+    _conn, cur = postgres_db
+    source_ip = "198.51.100.112"
+    raw_payload = {
+        "action": "block",
+        "interface": "igb1",
+        "direction": "in",
+        "ip_version": "4",
+        "protocol": "icmp",
+        "source_ip": source_ip,
+        "destination_ip": "203.0.113.20",
+        "icmp_type": "unreachport",
+        "event_type_candidate": "firewall_block",
+    }
+
+    response = post_pfsense(
+        client,
+        valid_pfsense_block_payload(
+            source_ip=source_ip,
+            message=f"pfSense ICMP traffic blocked from {source_ip} to 203.0.113.20",
+            raw_payload=raw_payload,
+        ),
+    )
+
+    assert response.status_code == 201
+    event = fetch_event(cur, source_ip)
+    assert event[8]["protocol"] == "icmp"
+    assert event[8]["icmp_type"] == "unreachport"
+
+
 def test_valid_firewall_allow_ingests_successfully(client, monkeypatch, postgres_db):
     monkeypatch.setenv("SIEM_INGEST_API_KEY", VALID_API_KEY)
     install_route_db(monkeypatch, postgres_db)

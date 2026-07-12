@@ -32,7 +32,36 @@ ACTION_SEVERITIES = {
 
 PFSENSE_INGEST_EVENT_TYPES = frozenset(ACTION_EVENT_TYPE_CANDIDATES.values())
 PFSENSE_VALID_ACTIONS = frozenset(ACTION_EVENT_TYPE_CANDIDATES.keys())
-PFSENSE_VALID_PROTOCOLS = frozenset({"tcp", "udp", "icmp"})
+PFSENSE_VALID_PROTOCOLS = frozenset({
+    "ah",
+    "carp",
+    "esp",
+    "gre",
+    "icmp",
+    "igmp",
+    "ipencap",
+    "ospf",
+    "pfsync",
+    "pim",
+    "sctp",
+    "tcp",
+    "udp",
+})
+PFSENSE_TEXTUAL_ICMP_TYPES = frozenset({
+    "maskreply",
+    "needfrag",
+    "parameterprob",
+    "paramprob",
+    "redirect",
+    "reply",
+    "request",
+    "timexceed",
+    "tstamp",
+    "tstampreply",
+    "unreach",
+    "unreachport",
+    "unreachproto",
+})
 PFSENSE_VALID_DIRECTIONS = frozenset({"in", "out"})
 PFSENSE_VALID_SEVERITIES = frozenset({"low", "medium", "high", "critical"})
 MAX_PFSENSE_INGEST_BYTES = 65536
@@ -201,13 +230,17 @@ def parse_filterlog_fields(fields, *, byte_length=None, summary=None):
         destination_port = _optional_port(_field(fields, 21))
         if source_port is None or destination_port is None:
             return _parse_failure("filterlog", "invalid_port", byte_length=byte_length, summary=summary)
-    else:
-        icmp_type = _optional_icmp_value(_field(fields, 20))
-        icmp_code = _optional_icmp_value(_field(fields, 21))
-        if _clean(_field(fields, 20)) and icmp_type is None:
-            return _parse_failure("filterlog", "invalid_icmp_type", byte_length=byte_length, summary=summary)
-        if _clean(_field(fields, 21)) and icmp_code is None:
-            return _parse_failure("filterlog", "invalid_icmp_code", byte_length=byte_length, summary=summary)
+    elif protocol == "icmp":
+        icmp_result = _parse_icmp_fields(fields)
+        if not icmp_result["ok"]:
+            return _parse_failure(
+                "filterlog",
+                icmp_result["reason"],
+                byte_length=byte_length,
+                summary=summary,
+            )
+        icmp_type = icmp_result["icmp_type"]
+        icmp_code = icmp_result["icmp_code"]
 
     return {
         "ok": True,
@@ -378,6 +411,48 @@ def _optional_icmp_value(value):
     return number if 0 <= number <= 255 else None
 
 
+def _parse_icmp_fields(fields):
+    type_text = _clean(_field(fields, 20)).lower()
+    numeric_type = _optional_icmp_value(type_text)
+    if numeric_type is not None:
+        code_text = _clean(_field(fields, 21))
+        numeric_code = _optional_icmp_value(code_text)
+        if code_text and numeric_code is None:
+            return {"ok": False, "reason": "invalid_icmp_code"}
+        return {"ok": True, "icmp_type": numeric_type, "icmp_code": numeric_code}
+
+    if type_text not in PFSENSE_TEXTUAL_ICMP_TYPES:
+        return {"ok": False, "reason": "invalid_icmp_type"}
+
+    if type_text in {"request", "reply", "tstamp"}:
+        if not _all_decimal_fields(fields, 21, 22):
+            return {"ok": False, "reason": "invalid_icmp_details"}
+    elif type_text == "tstampreply":
+        if not _all_decimal_fields(fields, 21, 22, 23, 24, 25):
+            return {"ok": False, "reason": "invalid_icmp_details"}
+    elif type_text == "unreachproto":
+        if _validated_ip(_field(fields, 21)) is None or not _all_decimal_fields(fields, 22):
+            return {"ok": False, "reason": "invalid_icmp_details"}
+    elif type_text == "unreachport":
+        if (
+            _validated_ip(_field(fields, 21)) is None
+            or not _all_decimal_fields(fields, 22)
+            or _optional_port(_field(fields, 23)) is None
+        ):
+            return {"ok": False, "reason": "invalid_icmp_details"}
+    elif type_text == "needfrag":
+        if _validated_ip(_field(fields, 21)) is None or not _all_decimal_fields(fields, 22):
+            return {"ok": False, "reason": "invalid_icmp_details"}
+    elif not _clean(_field(fields, 21)):
+        return {"ok": False, "reason": "invalid_icmp_details"}
+
+    return {"ok": True, "icmp_type": type_text, "icmp_code": None}
+
+
+def _all_decimal_fields(fields, *indexes):
+    return all(_clean(_field(fields, index)).isdigit() for index in indexes)
+
+
 def _parse_failure(stage, reason, *, byte_length=None, summary=None):
     return {
         "ok": False,
@@ -510,9 +585,14 @@ def _validate_pfsense_raw_payload(raw_payload, event_type):
         raise ValueError("Invalid raw_payload")
     if protocol == "icmp" and any(name in raw_payload for name in ("source_port", "destination_port")):
         raise ValueError("Invalid raw_payload")
-    for icmp_field in ("icmp_type", "icmp_code"):
-        if icmp_field in raw_payload and _optional_icmp_value(raw_payload.get(icmp_field)) is None:
+    if "icmp_type" in raw_payload:
+        icmp_type = raw_payload.get("icmp_type")
+        numeric_icmp_type = _optional_icmp_value(icmp_type)
+        textual_icmp_type = _clean(icmp_type).lower()
+        if numeric_icmp_type is None and textual_icmp_type not in PFSENSE_TEXTUAL_ICMP_TYPES:
             raise ValueError("Invalid raw_payload")
+    if "icmp_code" in raw_payload and _optional_icmp_value(raw_payload.get("icmp_code")) is None:
+        raise ValueError("Invalid raw_payload")
 
     for identifier_field in ("rule_id", "tracker"):
         if identifier_field not in raw_payload:
