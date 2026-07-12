@@ -6,6 +6,7 @@ const EXPECTED_SECTION_IDS = [
   "soc-command-center",
   "response-registry",
   "threat-hunt",
+  "detection-simulator",
   "live-logs-honeypot",
   "live-logs-bank-app",
   "live-logs-pfsense",
@@ -75,6 +76,12 @@ const expectedVisibility = {
     unauthenticated: false,
   },
   "threat-hunt": {
+    super_admin: true,
+    analyst: true,
+    viewer: false,
+    unauthenticated: false,
+  },
+  "detection-simulator": {
     super_admin: true,
     analyst: true,
     viewer: false,
@@ -192,7 +199,7 @@ const expectedVisibility = {
 
 describe("sectionsConfig", () => {
   test("contains exactly the expected section ids", () => {
-    expect(sectionsConfig).toHaveLength(23);
+    expect(sectionsConfig).toHaveLength(24);
     expect(sectionsConfig.map((section) => section.id)).toEqual(EXPECTED_SECTION_IDS);
   });
 

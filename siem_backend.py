@@ -25,6 +25,7 @@ from routes.reporting_routes import reporting_bp
 from routes.source_ip_context_routes import source_ip_context_bp
 from routes.source_health_routes import source_health_bp
 from routes.response_registry_routes import response_registry_bp
+from routes.detection_simulator_routes import detection_simulator_bp
 
 
 # ============================================================================
@@ -130,6 +131,7 @@ def create_app():
     app.register_blueprint(source_ip_context_bp)
     app.register_blueprint(source_health_bp)
     app.register_blueprint(response_registry_bp)
+    app.register_blueprint(detection_simulator_bp)
 
     return app
 

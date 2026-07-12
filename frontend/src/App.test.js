@@ -133,6 +133,10 @@ jest.mock('./components/SourceHealthPanel', () => (props) => (
   </div>
 ));
 
+jest.mock('./components/DetectionSimulatorPanel', () => () => (
+  <div data-testid="detection-simulator-panel">Detection Simulator Panel Mock</div>
+));
+
 beforeEach(() => {
   jest.clearAllMocks();
   window.localStorage.clear();
@@ -188,6 +192,23 @@ test('renders Source Health beneath Dashboard and routes its Live Logs action', 
   expect(await screen.findByTestId('source-health-panel')).toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: /source health open pfsense logs/i }));
   expect(await screen.findByTestId('live-logs-panel')).toHaveTextContent('pfSense pfsense');
+});
+
+test('renders Detection Simulator for analyst and hides it from viewers', async () => {
+  loadCurrentSession.mockResolvedValue({ authenticated: true, user: 'analyst1', role: 'analyst' });
+  render(<App />);
+
+  const detectionSimulator = await screen.findByRole('button', { name: /detection simulator/i });
+  await userEvent.click(detectionSimulator);
+  expect(await screen.findByTestId('detection-simulator-panel')).toBeInTheDocument();
+});
+
+test('does not render Detection Simulator nav for viewer role', async () => {
+  loadCurrentSession.mockResolvedValue({ authenticated: true, user: 'viewer1', role: 'viewer' });
+  render(<App />);
+
+  await screen.findByRole('button', { name: /^dashboard$/i });
+  expect(screen.queryByRole('button', { name: /detection simulator/i })).not.toBeInTheDocument();
 });
 
 test('renders SOC Command Center nav for analyst and loads command center when selected', async () => {

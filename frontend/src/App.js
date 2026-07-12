@@ -17,6 +17,7 @@ import ThreatHuntPanel from "./components/ThreatHuntPanel";
 import ResponseRegistryPanel from "./components/ResponseRegistryPanel";
 import LiveLogsPanel from "./components/LiveLogsPanel";
 import SourceHealthPanel from "./components/SourceHealthPanel";
+import DetectionSimulatorPanel from "./components/DetectionSimulatorPanel";
 import SettingsPanel from "./components/SettingsPanel";
 import SidebarLayout from "./components/SidebarLayout";
 import { UiSettingsProvider, useUiSettings } from "./context/UiSettingsContext";
@@ -617,6 +618,10 @@ function AppInner() {
             onViewRelatedAlerts={handleViewRelatedAlerts}
             onOpenResponseRegistry={handleOpenResponseRegistry}
           />
+        )}
+
+        {activeSection === "detection-simulator" && isSectionVisible("detection-simulator", roleFlags) && (
+          <DetectionSimulatorPanel />
         )}
 
         {activeSection === "soc-command-center" && isSectionVisible("soc-command-center", roleFlags) && (

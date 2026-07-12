@@ -31,6 +31,12 @@ export const sectionsConfig = [
     group: "soc",
     visibleWhen: ({ canTakeAlertActions }) => canTakeAlertActions,
   },
+  {
+    id: "detection-simulator",
+    label: "Detection Simulator",
+    group: "soc",
+    visibleWhen: ({ canTakeAlertActions }) => canTakeAlertActions,
+  },
   ...LIVE_LOG_SECTIONS,
   {
     id: "detection-rules",
