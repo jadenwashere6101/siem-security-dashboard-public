@@ -1,6 +1,6 @@
-# Source-Aware Detection Evaluation VM Handoff (Mac Phases 1–7 complete)
+# Source-Aware Detection Evaluation VM Handoff (Phases 1–8 complete)
 
-Owner: **VM AI**, only after explicit authorization to commit, push, and deploy.
+Owner: **VM AI** for Phase 8 deployment; this document is now closeout evidence for the OpenSpec archive.
 
 Mac source of truth: `/Users/jadengomez/Projects/siem-security-dashboard-public`
 VM runtime only: per existing deployment runbook / `scripts/deploy_backend_vm.sh` target.
@@ -12,8 +12,8 @@ Do **not** edit feature source on the VM. Do **not** merge on a dirty VM.
 - OpenSpec change: `enforce-source-aware-detection-evaluation`
 - Phases 1–5 (registry, execution gate, source-isolated queries, config/API, UI): implemented, tests passing.
 - Phases 6–7 (correlation/end-to-end regression, schema confirmation, final review, quality gates, browser verification): complete, evidence below.
-- Phase 8 (VM deployment/production verification): **not started** — owned by VM AI, requires separate authorization.
-- Working tree is **uncommitted** as of this handoff. Commit and push have not occurred.
+- Deployed commit: **`6b2ca84`** ("add source-aware detection rule evaluation"), committed and pushed to `origin/main`.
+- Phase 8 (VM deployment/production verification): backend, workers, and frontend artifact deployed on `6b2ca84`; see "Phase 8 production verification" below for the evidence actually recorded and which task items remain open.
 
 ## Prerequisites
 
@@ -87,6 +87,24 @@ Note: one interaction hazard observed and worth carrying into VM smoke testing �
 5. **Deploy Mac-built frontend artifact** — build `frontend/build/` on Mac (already verified to build cleanly) and deploy/rsync it per `deploy.sh`; reload Nginx so new SPA assets are served.
 6. **Perform production verification** (see below).
 
+## Phase 8 production verification (recorded evidence)
+
+Reported and recorded as of this closeout:
+
+- **Deployed commit:** `6b2ca84`.
+- **Migration:** none required; consistent with the Phase 7 schema conclusion (no migration files in this change).
+- **Backend and workers:** reported healthy on the deployed commit.
+- **Source isolation in production:** confirmed using existing production rows (not a fresh synthetic-data-per-rule-family pass with dedicated test IPs).
+- **Correlation:** all four existing correlation families (`correlated_activity`, `web_to_app_attack_pattern`, `spray_then_success_pattern`, `cloud_app_error_pattern`) confirmed.
+- **Frontend:** Mac-built artifact deployed; Detection Rules UI verified live in production.
+
+**Not separately evidenced at this closeout** (left for a future authorized pass, not blocking archive since no defect is indicated):
+- A synthetic-data, fresh-IP verification per individual rule family (as originally scoped in task 8.3) beyond the existing-rows confirmation above.
+- An explicit production test that toggling `active=false` prevents detection without blocking ingestion.
+- Restoration/audit evidence for any `active`-state changes made specifically for smoke testing, and an explicit rollback-readiness confirmation (task 8.5).
+
+Task list below is updated to reflect exactly this: 8.1, 8.2, and 8.4 are marked complete on the strength of the evidence above; 8.3 and 8.5 remain open pending the additional evidence described.
+
 ## Production verification — safe read-only vs. mutating
 
 **Safe, read-only checks (no runtime data change):**
@@ -108,6 +126,7 @@ Note: one interaction hazard observed and worth carrying into VM smoke testing �
 
 ## Unresolved risks / open items
 
-- **Not yet committed/pushed** — this handoff describes the working tree as of Phase 7 completion; VM AI should confirm the actual authorized commit hash once commit/push is authorized, rather than assuming it matches this document verbatim.
-- Local real-browser verification used an isolated local database and a temporary WSGI mount to emulate the `/siem`-prefixed production topology (since the frontend's `homepage: "/siem"` build assumes a reverse-proxy or equivalent path-mounted deployment that isn't present in a bare local dev run). Production topology should already provide this via the existing deployment setup, but VM AI should confirm `/siem` path-mounted asset + API routing works end-to-end during its own smoke pass rather than relying solely on this Mac-side emulation.
+- Task 8.3's originally-scoped synthetic-data-per-rule-family verification and explicit `active=false`-prevents-detection production test are not separately evidenced (production isolation was confirmed via existing rows instead). No defect is indicated by this gap; it is a coverage gap in the verification record, not a known issue.
+- Task 8.5's restore/audit/rollback-readiness confirmation for smoke-testing changes is not recorded. If any `active`-state toggling was done in production during verification, confirm it was restored before treating the deployment as fully closed out.
+- Local real-browser verification (Mac-side, pre-deployment) used an isolated local database and a temporary WSGI mount to emulate the `/siem`-prefixed production topology. This was superseded by the live production Detection Rules UI verification recorded above.
 - No production data was touched by Mac-side verification (fully isolated local DB, dropped after verification).

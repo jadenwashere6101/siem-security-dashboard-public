@@ -53,8 +53,8 @@
 
 ## 8. Deployment and Production Verification — VM AI
 
-- [ ] 8.1 After explicit deployment authorization, verify the VM worktree is clean, record the approved commit, fetch, and synchronize only through the source-of-truth policy.
-- [ ] 8.2 Run the deployment helper's migration dry-run even though no migration is expected, restart only affected backend services, deploy the Mac-built frontend artifact, and verify health/status.
-- [ ] 8.3 Using authorized synthetic data and fresh IPs, verify one supported source per rule family still detects, unsupported/mixed sources do not contribute, and `active=false` prevents detection without blocking ingestion.
-- [ ] 8.4 Verify generic and targeted cross-source correlation still works from accurately attributed alerts and that Detection Rules shows matching active state and source coverage.
-- [ ] 8.5 Restore any active-state changes made for smoke testing, capture sanitized audit/runtime evidence, confirm rollback readiness, and report production outcomes without modifying durable source on the VM.
+- [x] 8.1 After explicit deployment authorization, verify the VM worktree is clean, record the approved commit, fetch, and synchronize only through the source-of-truth policy. — Deployed commit `6b2ca84` recorded; backend and workers reported healthy on this commit.
+- [x] 8.2 Run the deployment helper's migration dry-run even though no migration is expected, restart only affected backend services, deploy the Mac-built frontend artifact, and verify health/status. — No migration required (confirmed); Mac-built frontend artifact deployed; backend/workers healthy.
+- [ ] 8.3 Using authorized synthetic data and fresh IPs, verify one supported source per rule family still detects, unsupported/mixed sources do not contribute, and `active=false` prevents detection without blocking ingestion. — Partially evidenced: production source isolation confirmed using existing rows, not a fresh synthetic-data-per-rule-family pass or an explicit `active=false` production test. See handoff doc.
+- [x] 8.4 Verify generic and targeted cross-source correlation still works from accurately attributed alerts and that Detection Rules shows matching active state and source coverage. — All four correlation families confirmed; Detection Rules UI verified live in production.
+- [ ] 8.5 Restore any active-state changes made for smoke testing, capture sanitized audit/runtime evidence, confirm rollback readiness, and report production outcomes without modifying durable source on the VM. — Not separately evidenced; no restoration/audit/rollback-readiness confirmation recorded at this closeout.
