@@ -1,4 +1,4 @@
-"""Detection Simulator orchestrator — OpenSpec Phases 1-3.
+"""Detection Simulator orchestrator — OpenSpec Phases 1-4 (incl. Sigma subset).
 
 Runs analyst-pasted events through the real production ingest, detection,
 MITRE-mapping, and playbook/response-selection pipeline inside one
@@ -12,7 +12,14 @@ codebase (every commit lives in the route layer, e.g.
 and rolling back at the end reuses their exact logic without duplicating or
 forking any detection, threshold, MITRE, or playbook-matching code.
 
-See openspec/changes/add-detection-simulator-workspace/design.md for the
+Version 3 Sigma subset import (``simulation_mode='sigma_subset_import'``)
+compiles analyst-supplied Sigma YAML into the bounded temporary-rule model
+via ``engines.sigma_playground`` and executes only through
+``_run_temporary_rule_simulation`` / ``_run_temporary_pipeline``. There is
+no second evaluator and no direct Sigma execution path.
+
+See openspec/changes/add-detection-simulator-workspace/design.md and
+openspec/changes/add-sigma-subset-import-to-detection-playground/ for the
 full rationale (rollback boundary vs. a `dry_run` flag, the production
 write-boundary inventory, and the worker-safety hazard this design exists
 to prevent).
@@ -93,6 +100,10 @@ logger = logging.getLogger(__name__)
 
 class SimulationValidationError(ValueError):
     """Request-shape problem the route layer should turn into an HTTP 400."""
+
+    def __init__(self, message, *, details=None):
+        super().__init__(message)
+        self.details = details
 
 
 # Reputation lookups are stubbed for every simulation run so that pasted
@@ -192,8 +203,27 @@ _NON_EVIDENCE_ALERT_FIELDS = frozenset({"source_ip", "alert_id", "response_actio
 
 SIMULATION_MODE_EXISTING_PRODUCTION_RULE = "existing_production_rule"
 SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE = "temporary_playground_rule"
+SIMULATION_MODE_SIGMA_SUBSET_IMPORT = "sigma_subset_import"
 TEMPORARY_PLAYGROUND_ALERT_TYPE = "temporary_playground_rule"
 TEMPORARY_RULE_MITRE_PATTERN = re.compile(r"^T\d{4}(?:\.\d{3})?$")
+MAX_TEMP_PREDICATE_DEPTH = 8
+MAX_TEMP_PREDICATE_NODES = 64
+TEMPORARY_RULE_METADATA_KEYS = frozenset(
+    {
+        "title",
+        "id",
+        "status",
+        "description",
+        "author",
+        "date",
+        "level",
+        "tags",
+        "attack_tags",
+        "logsource",
+        "rule_provenance",
+        "sigma_subset",
+    }
+)
 TEMPORARY_RULE_NUMERIC_FIELDS = frozenset({"destination_port", "http_status"})
 TEMPORARY_RULE_STRING_FIELDS = frozenset(
     {
@@ -274,6 +304,9 @@ TEMPORARY_RULE_NUMERIC_OPERATORS = frozenset(
 )
 TEMPORARY_RULE_FORBIDDEN_REQUEST_KEYS = frozenset(
     {"history_mode", "draft_id", "saved_rule_id", "use_production_history", "persist_draft", "save_rule"}
+)
+SIGMA_FORBIDDEN_REQUEST_KEYS = TEMPORARY_RULE_FORBIDDEN_REQUEST_KEYS | frozenset(
+    {"temporary_rule", "rule_id", "persist_sigma", "save_sigma_rule", "promote_rule"}
 )
 TEMPORARY_RULE_MITRE_TECHNIQUES = {}
 for _mitre_data in MITRE_ATTACK_MAPPINGS.values():
@@ -519,7 +552,16 @@ def _skip_from(stages, start_stage_name, reason):
         stages[name] = {"status": "skipped", "reason": reason}
 
 
-def _finalize(*, source, stages, simulation_mode, rule_id=None, temporary_rule=None):
+def _finalize(
+    *,
+    source,
+    stages,
+    simulation_mode,
+    rule_id=None,
+    temporary_rule=None,
+    normalized_internal_rule_preview=None,
+    sigma_subset_compatibility=None,
+):
     payload = {
         "simulated": True,
         "simulation_mode": simulation_mode,
@@ -530,27 +572,54 @@ def _finalize(*, source, stages, simulation_mode, rule_id=None, temporary_rule=N
         payload["rule_id"] = rule_id
     if temporary_rule is not None:
         payload["temporary_rule"] = temporary_rule
+    if normalized_internal_rule_preview is not None:
+        payload["normalized_internal_rule_preview"] = normalized_internal_rule_preview
+    if sigma_subset_compatibility is not None:
+        payload["sigma_subset_compatibility"] = sigma_subset_compatibility
     return payload
 
 
-def _normalize_simulation_mode(simulation_mode, rule_id, temporary_rule):
+def _normalize_simulation_mode(simulation_mode, rule_id, temporary_rule, sigma_yaml=None):
     if simulation_mode is None:
+        if sigma_yaml is not None and rule_id is None and temporary_rule is None:
+            return SIMULATION_MODE_SIGMA_SUBSET_IMPORT
         if temporary_rule is not None and rule_id is None:
             return SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE
         return SIMULATION_MODE_EXISTING_PRODUCTION_RULE
     if simulation_mode not in {
         SIMULATION_MODE_EXISTING_PRODUCTION_RULE,
         SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE,
+        SIMULATION_MODE_SIGMA_SUBSET_IMPORT,
     }:
         raise SimulationValidationError("Unsupported simulation_mode")
-    if simulation_mode == SIMULATION_MODE_EXISTING_PRODUCTION_RULE and temporary_rule is not None:
-        raise SimulationValidationError(
-            "temporary_rule is only allowed for simulation_mode='temporary_playground_rule'"
-        )
-    if simulation_mode == SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE and rule_id is not None:
-        raise SimulationValidationError(
-            "rule_id is not allowed for simulation_mode='temporary_playground_rule'"
-        )
+    if simulation_mode == SIMULATION_MODE_EXISTING_PRODUCTION_RULE:
+        if temporary_rule is not None:
+            raise SimulationValidationError(
+                "temporary_rule is only allowed for simulation_mode='temporary_playground_rule'"
+            )
+        if sigma_yaml is not None:
+            raise SimulationValidationError(
+                "sigma_yaml is only allowed for simulation_mode='sigma_subset_import'"
+            )
+    if simulation_mode == SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE:
+        if rule_id is not None:
+            raise SimulationValidationError(
+                "rule_id is not allowed for simulation_mode='temporary_playground_rule'"
+            )
+        if sigma_yaml is not None:
+            raise SimulationValidationError(
+                "sigma_yaml is not allowed for simulation_mode='temporary_playground_rule'"
+            )
+    if simulation_mode == SIMULATION_MODE_SIGMA_SUBSET_IMPORT:
+        if rule_id is not None:
+            raise SimulationValidationError(
+                "rule_id is not allowed for simulation_mode='sigma_subset_import'"
+            )
+        if temporary_rule is not None:
+            raise SimulationValidationError(
+                "temporary_rule is not allowed for simulation_mode='sigma_subset_import'; "
+                "Sigma YAML is compiled server-side into the temporary-rule evaluator"
+            )
     return simulation_mode
 
 
@@ -611,6 +680,156 @@ def _validate_temporary_rule_value(field_name, operator, value):
     return _validate_non_empty_string(value, "condition.value")
 
 
+def _is_leaf_predicate(condition):
+    return isinstance(condition, dict) and set(condition) == {"field", "operator", "value"}
+
+
+def _is_predicate_tree_node(condition):
+    if not isinstance(condition, dict):
+        return False
+    keys = set(condition)
+    return keys in ({"all"}, {"any"}, {"not"})
+
+
+def _validate_predicate_node(condition, source, *, depth=1, counter=None):
+    if counter is None:
+        counter = [0]
+    counter[0] += 1
+    if counter[0] > MAX_TEMP_PREDICATE_NODES:
+        raise SimulationValidationError(
+            f"temporary_rule.condition exceeds maximum predicate nodes of {MAX_TEMP_PREDICATE_NODES}"
+        )
+    if depth > MAX_TEMP_PREDICATE_DEPTH:
+        raise SimulationValidationError(
+            f"temporary_rule.condition exceeds maximum predicate depth of {MAX_TEMP_PREDICATE_DEPTH}"
+        )
+
+    if _is_leaf_predicate(condition):
+        condition_field = _validate_non_empty_string(condition.get("field"), "temporary_rule.condition.field")
+        if condition_field not in TEMPORARY_RULE_ALLOWED_FIELDS_BY_SOURCE[source]:
+            raise SimulationValidationError(
+                f"temporary_rule.condition.field '{condition_field}' is not supported for source '{source}'"
+            )
+        condition_operator = _validate_non_empty_string(
+            condition.get("operator"), "temporary_rule.condition.operator", max_length=32
+        )
+        if condition_operator not in TEMPORARY_RULE_ALLOWED_OPERATORS:
+            raise SimulationValidationError("temporary_rule.condition.operator is unsupported")
+        condition_value = _validate_temporary_rule_value(
+            condition_field, condition_operator, condition.get("value")
+        )
+        return {
+            "field": condition_field,
+            "operator": condition_operator,
+            "value": condition_value,
+        }
+
+    if not _is_predicate_tree_node(condition):
+        raise SimulationValidationError(
+            "temporary_rule.condition must be a field predicate or an all/any/not tree"
+        )
+
+    if "all" in condition:
+        children = condition["all"]
+        if not isinstance(children, list) or not children:
+            raise SimulationValidationError("temporary_rule.condition.all must be a non-empty list")
+        if len(children) > MAX_TEMP_PREDICATE_NODES:
+            raise SimulationValidationError("temporary_rule.condition.all exceeds maximum size")
+        return {
+            "all": [
+                _validate_predicate_node(child, source, depth=depth + 1, counter=counter)
+                for child in children
+            ]
+        }
+    if "any" in condition:
+        children = condition["any"]
+        if not isinstance(children, list) or not children:
+            raise SimulationValidationError("temporary_rule.condition.any must be a non-empty list")
+        if len(children) > MAX_TEMP_PREDICATE_NODES:
+            raise SimulationValidationError("temporary_rule.condition.any exceeds maximum size")
+        return {
+            "any": [
+                _validate_predicate_node(child, source, depth=depth + 1, counter=counter)
+                for child in children
+            ]
+        }
+
+    child = condition["not"]
+    if not isinstance(child, dict):
+        raise SimulationValidationError("temporary_rule.condition.not must be a predicate object")
+    return {"not": _validate_predicate_node(child, source, depth=depth + 1, counter=counter)}
+
+
+def _validate_temporary_rule_metadata(temporary_rule):
+    metadata = {}
+    if "title" in temporary_rule and temporary_rule.get("title") is not None:
+        metadata["title"] = _validate_non_empty_string(temporary_rule.get("title"), "temporary_rule.title")
+    else:
+        metadata["title"] = None
+
+    for optional_string_key in ("id", "status", "description", "author", "date", "level"):
+        value = temporary_rule.get(optional_string_key) if optional_string_key in temporary_rule else None
+        if value is None:
+            metadata[optional_string_key] = None
+        else:
+            metadata[optional_string_key] = _validate_non_empty_string(
+                value, f"temporary_rule.{optional_string_key}"
+            )
+
+    tags = temporary_rule.get("tags") if "tags" in temporary_rule else None
+    if tags is None:
+        metadata["tags"] = []
+    else:
+        if not isinstance(tags, list) or not all(isinstance(item, str) and item.strip() for item in tags):
+            raise SimulationValidationError("temporary_rule.tags must be a list of non-empty strings")
+        metadata["tags"] = [item.strip() for item in tags]
+
+    attack_tags = temporary_rule.get("attack_tags") if "attack_tags" in temporary_rule else None
+    if attack_tags is None:
+        metadata["attack_tags"] = []
+    else:
+        if not isinstance(attack_tags, list) or not all(
+            isinstance(item, str) and item.strip() for item in attack_tags
+        ):
+            raise SimulationValidationError(
+                "temporary_rule.attack_tags must be a list of non-empty strings"
+            )
+        metadata["attack_tags"] = [item.strip() for item in attack_tags]
+
+    logsource = temporary_rule.get("logsource") if "logsource" in temporary_rule else None
+    if logsource is None:
+        metadata["logsource"] = None
+    else:
+        if not isinstance(logsource, dict) or not all(
+            isinstance(key, str) and isinstance(value, str) for key, value in logsource.items()
+        ):
+            raise SimulationValidationError(
+                "temporary_rule.logsource must be an object of string keys and values"
+            )
+        metadata["logsource"] = dict(logsource)
+
+    rule_provenance = temporary_rule.get("rule_provenance") if "rule_provenance" in temporary_rule else None
+    if rule_provenance is None:
+        metadata["rule_provenance"] = None
+    else:
+        metadata["rule_provenance"] = _validate_non_empty_string(
+            rule_provenance, "temporary_rule.rule_provenance", max_length=64
+        )
+        if metadata["rule_provenance"] != "sigma_subset_import":
+            raise SimulationValidationError(
+                "temporary_rule.rule_provenance must be 'sigma_subset_import' when provided"
+            )
+
+    if "sigma_subset" in temporary_rule:
+        if temporary_rule.get("sigma_subset") is not True:
+            raise SimulationValidationError("temporary_rule.sigma_subset must be true when provided")
+        metadata["sigma_subset"] = True
+    else:
+        metadata["sigma_subset"] = False
+
+    return metadata
+
+
 def _validate_temporary_rule_contract(temporary_rule):
     if not isinstance(temporary_rule, dict):
         raise SimulationValidationError("temporary_rule must be an object")
@@ -626,7 +845,7 @@ def _validate_temporary_rule_contract(temporary_rule):
         "window_minutes",
         "severity",
         "mitre_technique_id",
-    }
+    } | TEMPORARY_RULE_METADATA_KEYS
     unexpected_keys = sorted(set(temporary_rule) - allowed_keys)
     if unexpected_keys:
         raise SimulationValidationError(
@@ -664,21 +883,7 @@ def _validate_temporary_rule_contract(temporary_rule):
     condition = temporary_rule.get("condition")
     if not isinstance(condition, dict):
         raise SimulationValidationError("temporary_rule.condition must be an object")
-    if set(condition) != {"field", "operator", "value"}:
-        raise SimulationValidationError(
-            "temporary_rule.condition must contain exactly field, operator, and value"
-        )
-    condition_field = _validate_non_empty_string(condition.get("field"), "temporary_rule.condition.field")
-    if condition_field not in TEMPORARY_RULE_ALLOWED_FIELDS_BY_SOURCE[source]:
-        raise SimulationValidationError(
-            f"temporary_rule.condition.field '{condition_field}' is not supported for source '{source}'"
-        )
-    condition_operator = _validate_non_empty_string(
-        condition.get("operator"), "temporary_rule.condition.operator", max_length=32
-    )
-    if condition_operator not in TEMPORARY_RULE_ALLOWED_OPERATORS:
-        raise SimulationValidationError("temporary_rule.condition.operator is unsupported")
-    condition_value = _validate_temporary_rule_value(condition_field, condition_operator, condition.get("value"))
+    validated_condition = _validate_predicate_node(condition, source)
 
     aggregation = temporary_rule.get("aggregation")
     if not isinstance(aggregation, dict):
@@ -718,22 +923,37 @@ def _validate_temporary_rule_contract(temporary_rule):
         if mitre_technique_id not in TEMPORARY_RULE_MITRE_TECHNIQUES:
             raise SimulationValidationError("temporary_rule.mitre_technique_id is unsupported")
 
-    return {
+    validated = {
         "source": source,
         "source_type": source_type,
         "input_format": input_format,
         "event_type": event_type,
-        "condition": {
-            "field": condition_field,
-            "operator": condition_operator,
-            "value": condition_value,
-        },
+        "condition": validated_condition,
         "aggregation": {"type": aggregation_type, "group_by_field": group_by_field},
         "threshold": threshold,
         "window_minutes": window_minutes,
         "severity": severity,
         "mitre_technique_id": mitre_technique_id,
     }
+    provided_metadata_keys = set(temporary_rule) & TEMPORARY_RULE_METADATA_KEYS
+    if provided_metadata_keys:
+        metadata = _validate_temporary_rule_metadata(temporary_rule)
+        for key in provided_metadata_keys:
+            validated[key] = metadata[key]
+    return validated
+
+
+def _evaluate_temporary_predicate(predicate, event):
+    if _is_leaf_predicate(predicate):
+        actual_value = _extract_temporary_rule_field(event, predicate["field"])
+        return _temporary_rule_value_matches(predicate["operator"], predicate["value"], actual_value)
+    if "all" in predicate:
+        return all(_evaluate_temporary_predicate(child, event) for child in predicate["all"])
+    if "any" in predicate:
+        return any(_evaluate_temporary_predicate(child, event) for child in predicate["any"])
+    if "not" in predicate:
+        return not _evaluate_temporary_predicate(predicate["not"], event)
+    return False
 
 
 def _coerce_temp_text_items(input_format, input_text):
@@ -1016,8 +1236,20 @@ def run_detection_simulation(
     temporary_rule=None,
     input_text=None,
     sample_events=None,
+    sigma_yaml=None,
+    event_type=None,
 ):
-    mode = _normalize_simulation_mode(simulation_mode, rule_id, temporary_rule)
+    mode = _normalize_simulation_mode(simulation_mode, rule_id, temporary_rule, sigma_yaml=sigma_yaml)
+    if mode == SIMULATION_MODE_SIGMA_SUBSET_IMPORT:
+        return _run_sigma_subset_simulation(
+            sigma_yaml=sigma_yaml,
+            input_format=input_format,
+            event_type=event_type,
+            input_text=input_text,
+            sample_events=sample_events,
+            json_events=json_events,
+            environment=environment,
+        )
     if mode == SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE:
         return _run_temporary_rule_simulation(
             temporary_rule=temporary_rule,
@@ -1034,6 +1266,55 @@ def run_detection_simulation(
         json_events=json_events,
         environment=environment,
     )
+
+
+def _run_sigma_subset_simulation(
+    *,
+    sigma_yaml,
+    input_format=None,
+    event_type=None,
+    input_text=None,
+    sample_events=None,
+    json_events=None,
+    environment="prod",
+):
+    # Lazy import avoids a module-level cycle with engines.sigma_playground.
+    from engines.sigma_playground import (
+        SIGMA_SUBSET_COMPATIBILITY_NOTE,
+        build_normalized_internal_rule_preview,
+        compile_sigma_rule_to_temporary_rule,
+    )
+
+    if sigma_yaml is None:
+        raise SimulationValidationError(
+            "sigma_yaml is required for simulation_mode='sigma_subset_import'",
+            details={
+                "class": "invalid_request",
+                "element": "sigma_yaml",
+                "reason": "Sigma mode requires sigma_yaml text",
+                "compatibility": SIGMA_SUBSET_COMPATIBILITY_NOTE,
+            },
+        )
+
+    compiled_rule = compile_sigma_rule_to_temporary_rule(
+        sigma_yaml,
+        input_format=input_format,
+        event_type=event_type,
+    )
+    preview = build_normalized_internal_rule_preview(compiled_rule)
+
+    # Single evaluator: Sigma compilation terminates in the temporary-rule path.
+    result = _run_temporary_rule_simulation(
+        temporary_rule=compiled_rule,
+        input_text=input_text,
+        sample_events=sample_events,
+        json_events=json_events,
+        environment=environment,
+    )
+    result["simulation_mode"] = SIMULATION_MODE_SIGMA_SUBSET_IMPORT
+    result["normalized_internal_rule_preview"] = preview
+    result["sigma_subset_compatibility"] = SIGMA_SUBSET_COMPATIBILITY_NOTE
+    return result
 
 
 def _run_existing_detection_simulation(
@@ -1447,16 +1728,13 @@ def _run_temporary_pipeline(*, conn, cur, temporary_rule, normalized_events, sta
             event for event in normalized_events if event.get("event_type") == temporary_rule["event_type"]
         ]
 
-    condition_field = temporary_rule["condition"]["field"]
-    condition_operator = temporary_rule["condition"]["operator"]
-    condition_value = temporary_rule["condition"]["value"]
+    condition = temporary_rule["condition"]
     group_by_field = temporary_rule["aggregation"]["group_by_field"]
 
     matching_events = []
     grouped_events = defaultdict(list)
     for event in candidate_events:
-        actual_value = _extract_temporary_rule_field(event, condition_field)
-        if not _temporary_rule_value_matches(condition_operator, condition_value, actual_value):
+        if not _evaluate_temporary_predicate(condition, event):
             continue
         group_value = _extract_temporary_rule_field(event, group_by_field)
         if group_value in (None, ""):

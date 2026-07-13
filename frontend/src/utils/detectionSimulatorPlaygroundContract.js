@@ -1,5 +1,10 @@
 export const SIMULATION_MODE_EXISTING_PRODUCTION_RULE = "existing_production_rule";
 export const SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE = "temporary_playground_rule";
+export const SIMULATION_MODE_SIGMA_SUBSET_IMPORT = "sigma_subset_import";
+
+// Presentation-only label. The frontend never claims full Sigma compatibility.
+export const SIGMA_SUBSET_COMPATIBILITY_DISCLOSURE =
+  "Strict Sigma subset import for Detection Playground Version 3 — not full Sigma compatibility. Unsupported constructs are rejected by the backend.";
 
 // Presentation/UI-guidance-only mirror of engines/detection_simulator.py's
 // temporary-rule contract constants (TEMPORARY_RULE_ALLOWED_FIELDS_BY_SOURCE,

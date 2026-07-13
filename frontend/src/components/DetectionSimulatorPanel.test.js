@@ -261,22 +261,25 @@ describe("Temporary Playground Rule mode", () => {
     await userEvent.selectOptions(screen.getByLabelText(/group by field/i), "source_ip");
   };
 
-  test("presents both modes to any user who can reach this workspace, defaulting to Existing Production Rule", async () => {
+  test("presents all three modes to any user who can reach this workspace, defaulting to Existing Production Rule", async () => {
     render(<DetectionSimulatorPanel />);
     await screen.findByRole("option", { name: "Failed Login Threshold" });
 
     const modeGroup = screen.getByRole("radiogroup", { name: /detection simulator mode/i });
     const existingRadio = within(modeGroup).getByRole("radio", { name: /existing production rule/i });
     const playgroundRadio = within(modeGroup).getByRole("radio", { name: /temporary playground rule/i });
+    const sigmaRadio = within(modeGroup).getByRole("radio", { name: /sigma subset import/i });
 
-    // Both modes are offered by the same workspace with no additional
+    // All modes are offered by the same workspace with no additional
     // role-specific gating inside the panel -- the backend applies the same
-    // analyst-or-super-admin boundary to both simulation_mode values via one
+    // analyst-or-super-admin boundary to every simulation_mode value via one
     // endpoint, so no separate frontend RBAC check is introduced here.
     expect(existingRadio).toBeInTheDocument();
     expect(playgroundRadio).toBeInTheDocument();
+    expect(sigmaRadio).toBeInTheDocument();
     expect(existingRadio).toBeChecked();
     expect(playgroundRadio).not.toBeChecked();
+    expect(sigmaRadio).not.toBeChecked();
   });
 
   test("switching to Temporary Playground Rule mode hides the production-rule form and shows the guided builder", async () => {
@@ -293,6 +296,21 @@ describe("Temporary Playground Rule mode", () => {
     await userEvent.click(screen.getByRole("radio", { name: /existing production rule/i }));
     expect(screen.getByLabelText(/^detection rule$/i)).toBeInTheDocument();
     expect(screen.queryByLabelText(/playground source/i)).not.toBeInTheDocument();
+  });
+
+  test("switching to Sigma Subset Import shows the YAML surface and subset disclosure", async () => {
+    render(<DetectionSimulatorPanel />);
+    await screen.findByRole("option", { name: "Failed Login Threshold" });
+
+    await userEvent.click(screen.getByRole("radio", { name: /sigma subset import/i }));
+
+    expect(screen.queryByLabelText(/^detection rule$/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/playground source/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/sigma yaml input/i)).toBeInTheDocument();
+    expect(screen.getByTestId("sigma-mode-disclosure")).toHaveTextContent(/not full Sigma compatibility/i);
+    expect(screen.getByRole("button", { name: /load sample sigma rule/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /reset \/ discard/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /save rule/i })).not.toBeInTheDocument();
   });
 
   test("submits the builder-assembled payload and renders backend evidence only, without recomputing the match client-side", async () => {
@@ -330,6 +348,81 @@ describe("Temporary Playground Rule mode", () => {
     expect(within(results).getByText(/Grouped evidence: source_ip=198.51.100.201 \(2\)/)).toBeInTheDocument();
     expect(within(results).getByText(/Observed count: 2 \(required: 2\)/)).toBeInTheDocument();
     expect(within(results).getByText(/Nothing was persisted or executed by this evaluation\./)).toBeInTheDocument();
+  });
+
+  test("submits Sigma subset payload and renders backend preview plus shared pipeline evidence", async () => {
+    runDetectionSimulation.mockResolvedValue({
+      simulated: true,
+      simulation_mode: "sigma_subset_import",
+      source: "bank_app",
+      sigma_subset_compatibility: "Strict Sigma subset import; not full Sigma compatibility.",
+      normalized_internal_rule_preview: {
+        title: "Bank failed login subset",
+        source: "bank_app",
+        source_type: "custom",
+        severity: "high",
+        level: "high",
+        tags: ["attack.t1110"],
+        attack_tags: ["T1110"],
+        logsource: { product: "bank_app" },
+        evaluator: "temporary_playground_rule",
+        condition: { field: "event_type", operator: "equals", value: "failed_login" },
+        sigma_subset: true,
+      },
+      stages: temporaryStages,
+    });
+    render(<DetectionSimulatorPanel />);
+    await screen.findByRole("option", { name: "Failed Login Threshold" });
+    await userEvent.click(screen.getByRole("radio", { name: /sigma subset import/i }));
+
+    await userEvent.click(screen.getByRole("button", { name: /load sample sigma rule/i }));
+    await userEvent.click(screen.getByRole("button", { name: /load sample events/i }));
+    await userEvent.click(screen.getByRole("button", { name: /run simulation/i }));
+
+    await waitFor(() =>
+      expect(runDetectionSimulation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          simulation_mode: "sigma_subset_import",
+          input_format: "json_array",
+        })
+      )
+    );
+    const payload = runDetectionSimulation.mock.calls[0][0];
+    expect(payload.sigma_yaml).toContain("product: bank_app");
+    expect(payload).not.toHaveProperty("temporary_rule");
+
+    const results = await screen.findByTestId("detection-simulator-results");
+    expect(within(results).getByTestId("sigma-internal-rule-preview")).toHaveTextContent(
+      /Bank failed login subset/
+    );
+    expect(within(results).getByTestId("sigma-compatibility-disclosure")).toHaveTextContent(
+      /not full Sigma compatibility/i
+    );
+    expect(within(results).getByText(/Grouped evidence: source_ip=198.51.100.201 \(2\)/)).toBeInTheDocument();
+    expect(within(results).getByText(/Nothing was persisted or executed by this evaluation\./)).toBeInTheDocument();
+  });
+
+  test("surfaces backend Sigma validation details without rendering results", async () => {
+    const error = new Error("Unsupported Sigma modifier 're' on field 'UserName'");
+    error.validation = {
+      class: "unsupported_modifier",
+      element: "UserName|re",
+      reason: "modifier 're' is not approved",
+      compatibility: "Strict Sigma subset import; not full Sigma compatibility.",
+    };
+    runDetectionSimulation.mockRejectedValue(error);
+    render(<DetectionSimulatorPanel />);
+    await screen.findByRole("option", { name: "Failed Login Threshold" });
+    await userEvent.click(screen.getByRole("radio", { name: /sigma subset import/i }));
+
+    await userEvent.click(screen.getByRole("button", { name: /load sample sigma rule/i }));
+    await userEvent.click(screen.getByRole("button", { name: /load sample events/i }));
+    await userEvent.click(screen.getByRole("button", { name: /run simulation/i }));
+
+    expect(await screen.findByText(/Unsupported Sigma modifier/)).toBeInTheDocument();
+    expect(screen.getByTestId("sigma-validation-details")).toHaveTextContent(/unsupported_modifier/);
+    expect(screen.getByTestId("sigma-validation-details")).toHaveTextContent(/not full Sigma compatibility/);
+    expect(screen.queryByTestId("detection-simulator-results")).not.toBeInTheDocument();
   });
 
   test("surfaces a backend validation error for the playground request without rendering results", async () => {
@@ -374,8 +467,10 @@ describe("Temporary Playground Rule mode", () => {
 
     const existingRadio = screen.getByRole("radio", { name: /existing production rule/i });
     const playgroundRadio = screen.getByRole("radio", { name: /temporary playground rule/i });
+    const sigmaRadio = screen.getByRole("radio", { name: /sigma subset import/i });
     expect(existingRadio.tabIndex).not.toBe(-1);
     expect(playgroundRadio.tabIndex).not.toBe(-1);
+    expect(sigmaRadio.tabIndex).not.toBe(-1);
 
     await userEvent.click(playgroundRadio);
     expect(playgroundRadio).toBeChecked();

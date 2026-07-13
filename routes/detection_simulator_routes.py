@@ -4,6 +4,10 @@ See openspec/changes/add-detection-simulator-workspace/ for the approved
 architecture. This route never calls conn.commit(); engines.detection_simulator
 owns the rollback-only transaction boundary that guarantees zero durable
 writes. This route must never call routes.ingest_routes' handlers directly.
+
+Version 3 Sigma subset import accepts ``simulation_mode='sigma_subset_import'``
+and ``sigma_yaml``. The backend compiles Sigma into the temporary-rule model
+and evaluates only through that path — never a second engine.
 """
 from flask import Blueprint, current_app, jsonify, request
 from flask_login import login_required
@@ -11,7 +15,9 @@ from flask_login import login_required
 from core.auth import analyst_or_super_admin_required
 from engines.detection_config import get_all_effective_detection_rules
 from engines.detection_simulator import (
+    SIGMA_FORBIDDEN_REQUEST_KEYS,
     SIMULATION_MODE_EXISTING_PRODUCTION_RULE,
+    SIMULATION_MODE_SIGMA_SUBSET_IMPORT,
     SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE,
     TEMPORARY_RULE_FORBIDDEN_REQUEST_KEYS,
     SimulationValidationError,
@@ -20,6 +26,14 @@ from engines.detection_simulator import (
 
 
 detection_simulator_bp = Blueprint("detection_simulator", __name__)
+
+
+def _validation_error_response(error):
+    payload = {"error": str(error)}
+    details = getattr(error, "details", None)
+    if isinstance(details, dict):
+        payload["validation"] = details
+    return jsonify(payload), 400
 
 
 @detection_simulator_bp.route("/detection-simulator/rules", methods=["GET"])
@@ -66,7 +80,54 @@ def run_simulation():
         return jsonify({"error": "environment must be a non-empty string"}), 400
 
     try:
-        if simulation_mode == SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE:
+        if simulation_mode == SIMULATION_MODE_SIGMA_SUBSET_IMPORT:
+            forbidden_keys = sorted(key for key in SIGMA_FORBIDDEN_REQUEST_KEYS if key in data)
+            if forbidden_keys:
+                return jsonify(
+                    {
+                        "error": (
+                            "Sigma subset requests do not support persisted drafts, promotion, "
+                            f"or history-aware fields: {', '.join(forbidden_keys)}"
+                        ),
+                        "validation": {
+                            "class": "invalid_request",
+                            "element": ",".join(forbidden_keys),
+                            "reason": "Persisted-rule and alternate execution fields are rejected",
+                        },
+                    }
+                ), 400
+
+            sigma_yaml = data.get("sigma_yaml")
+            input_text = data.get("input_text")
+            sample_events = data.get("sample_events")
+            json_events = data.get("json_events")
+            input_format = data.get("input_format")
+            event_type = data.get("event_type")
+
+            if sigma_yaml is not None and not isinstance(sigma_yaml, str):
+                return jsonify({"error": "sigma_yaml must be a string"}), 400
+            if input_text is not None and not isinstance(input_text, str):
+                return jsonify({"error": "input_text must be a string"}), 400
+            if sample_events is not None and not isinstance(sample_events, list):
+                return jsonify({"error": "sample_events must be a list"}), 400
+            if json_events is not None and not isinstance(json_events, list):
+                return jsonify({"error": "json_events must be a list"}), 400
+            if input_format is not None and not isinstance(input_format, str):
+                return jsonify({"error": "input_format must be a string"}), 400
+            if event_type is not None and not isinstance(event_type, str):
+                return jsonify({"error": "event_type must be a string"}), 400
+
+            result = run_detection_simulation(
+                simulation_mode=simulation_mode,
+                sigma_yaml=sigma_yaml,
+                input_format=input_format,
+                event_type=event_type,
+                input_text=input_text,
+                sample_events=sample_events,
+                json_events=json_events,
+                environment=environment,
+            )
+        elif simulation_mode == SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE:
             forbidden_keys = sorted(key for key in TEMPORARY_RULE_FORBIDDEN_REQUEST_KEYS if key in data)
             if forbidden_keys:
                 return jsonify(
@@ -127,7 +188,7 @@ def run_simulation():
             )
         return jsonify(result), 200
     except SimulationValidationError as error:
-        return jsonify({"error": str(error)}), 400
+        return _validation_error_response(error)
     except Exception as error:
         current_app.logger.error("[DETECTION SIMULATOR] run failed: %s", error)
         return jsonify({"error": "Internal server error"}), 500

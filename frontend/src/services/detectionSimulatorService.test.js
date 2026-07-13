@@ -87,4 +87,25 @@ describe("runDetectionSimulation", () => {
     fetch.mockResolvedValue({ ok: false, json: async () => ({ error: "Unknown rule_id" }) });
     await expect(runDetectionSimulation({})).rejects.toThrow("Unknown rule_id");
   });
+
+  test("attaches backend validation details on Sigma subset failures", async () => {
+    fetch.mockResolvedValue({
+      ok: false,
+      json: async () => ({
+        error: "Unsupported Sigma modifier 're' on field 'UserName'",
+        validation: {
+          class: "unsupported_modifier",
+          element: "UserName|re",
+          reason: "modifier 're' is not approved",
+        },
+      }),
+    });
+    await expect(runDetectionSimulation({})).rejects.toMatchObject({
+      message: "Unsupported Sigma modifier 're' on field 'UserName'",
+      validation: {
+        class: "unsupported_modifier",
+        element: "UserName|re",
+      },
+    });
+  });
 });

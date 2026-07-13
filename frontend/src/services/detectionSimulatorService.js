@@ -43,7 +43,12 @@ export const runDetectionSimulation = async (payload) => {
   const data = await parseJsonResponse(res, {});
 
   if (!res.ok) {
-    throw new Error(getApiErrorMessage(data, "Unable to run simulation", ["error"]));
+    const message = getApiErrorMessage(data, "Unable to run simulation", ["error"]);
+    const error = new Error(message);
+    if (data && typeof data.validation === "object" && data.validation !== null) {
+      error.validation = data.validation;
+    }
+    throw error;
   }
   if (!isValidSimulationResponse(data)) {
     throw new Error("Invalid simulation response");

@@ -5,18 +5,32 @@ import { SOURCE_METADATA } from "../utils/sourceMetadata";
 import { SIMULATOR_SOURCE_INPUT_FORMATS } from "../utils/detectionSimulatorStages";
 import {
   SIMULATION_MODE_EXISTING_PRODUCTION_RULE,
+  SIMULATION_MODE_SIGMA_SUBSET_IMPORT,
   SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE,
 } from "../utils/detectionSimulatorPlaygroundContract";
 import DetectionSimulatorPipeline from "./DetectionSimulatorPipeline";
 import DetectionSimulatorExplainability from "./DetectionSimulatorExplainability";
 import DetectionSimulatorPlaygroundBuilder from "./DetectionSimulatorPlaygroundBuilder";
+import DetectionSimulatorSigmaImport from "./DetectionSimulatorSigmaImport";
+import DetectionSimulatorSigmaPreview from "./DetectionSimulatorSigmaPreview";
 
 const FORMAT_LABELS = { raw: "Raw log line(s)", json: "JSON event(s)" };
 
 const MODE_OPTIONS = [
   { value: SIMULATION_MODE_EXISTING_PRODUCTION_RULE, label: "Existing Production Rule" },
   { value: SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE, label: "Temporary Playground Rule" },
+  { value: SIMULATION_MODE_SIGMA_SUBSET_IMPORT, label: "Sigma Subset Import" },
 ];
+
+function formatValidationDetails(validation) {
+  if (!validation || typeof validation !== "object") return "";
+  const parts = [];
+  if (validation.class) parts.push(`class: ${validation.class}`);
+  if (validation.element) parts.push(`element: ${validation.element}`);
+  if (validation.reason) parts.push(`reason: ${validation.reason}`);
+  if (validation.compatibility) parts.push(validation.compatibility);
+  return parts.join(" · ");
+}
 
 function DetectionSimulatorPanel() {
   const [mode, setMode] = useState(SIMULATION_MODE_EXISTING_PRODUCTION_RULE);
@@ -33,10 +47,12 @@ function DetectionSimulatorPanel() {
 
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState("");
+  const [runValidation, setRunValidation] = useState(null);
   const [result, setResult] = useState(null);
 
   const clearRunState = () => {
     setRunError("");
+    setRunValidation(null);
     setResult(null);
   };
 
@@ -46,8 +62,9 @@ function DetectionSimulatorPanel() {
     clearRunState();
   };
 
-  const handlePlaygroundRun = async (payload) => {
+  const handlePlaygroundOrSigmaRun = async (payload) => {
     setRunError("");
+    setRunValidation(null);
     setResult(null);
     setRunning(true);
     try {
@@ -55,6 +72,7 @@ function DetectionSimulatorPanel() {
       setResult(response);
     } catch (err) {
       setRunError(err.message || "Unable to run simulation");
+      setRunValidation(err.validation || null);
     } finally {
       setRunning(false);
     }
@@ -102,6 +120,7 @@ function DetectionSimulatorPanel() {
   const handleSubmit = async (event) => {
     event.preventDefault();
     setRunError("");
+    setRunValidation(null);
 
     if (!source || !ruleId || !inputFormat) {
       setRunError("Select a source, rule, and input format before running a simulation.");
@@ -140,10 +159,13 @@ function DetectionSimulatorPanel() {
       setResult(response);
     } catch (err) {
       setRunError(err.message || "Unable to run simulation");
+      setRunValidation(err.validation || null);
     } finally {
       setRunning(false);
     }
   };
+
+  const validationDetails = formatValidationDetails(runValidation);
 
   return (
     <section aria-labelledby="detection-simulator-heading" style={panelStyle}>
@@ -177,9 +199,24 @@ function DetectionSimulatorPanel() {
       {mode === SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE && (
         <DetectionSimulatorPlaygroundBuilder
           running={running}
-          onRun={handlePlaygroundRun}
+          onRun={handlePlaygroundOrSigmaRun}
           onReset={clearRunState}
-          onValidationError={setRunError}
+          onValidationError={(message) => {
+            setRunValidation(null);
+            setRunError(message);
+          }}
+        />
+      )}
+
+      {mode === SIMULATION_MODE_SIGMA_SUBSET_IMPORT && (
+        <DetectionSimulatorSigmaImport
+          running={running}
+          onRun={handlePlaygroundOrSigmaRun}
+          onReset={clearRunState}
+          onValidationError={(message) => {
+            setRunValidation(null);
+            setRunError(message);
+          }}
         />
       )}
 
@@ -276,13 +313,25 @@ function DetectionSimulatorPanel() {
       </form>
       )}
 
-      {runError && <p role="alert" style={inlineErrorStyle}>{runError}</p>}
+      {runError && (
+        <div role="alert" style={inlineErrorStyle} data-testid="detection-simulator-run-error">
+          <p style={errorMessageStyle}>{runError}</p>
+          {validationDetails && (
+            <p style={errorDetailsStyle} data-testid="sigma-validation-details">
+              {validationDetails}
+            </p>
+          )}
+        </div>
+      )}
 
       <div aria-live="polite">
         {running && <p role="status" style={stateStyle}>Running simulation…</p>}
 
         {!running && result && (
           <div style={resultsStyle} data-testid="detection-simulator-results">
+            {mode === SIMULATION_MODE_SIGMA_SUBSET_IMPORT && (
+              <DetectionSimulatorSigmaPreview result={result} />
+            )}
             <h3 style={resultsHeadingStyle}>Simulation Pipeline</h3>
             <DetectionSimulatorPipeline stages={result.stages} />
             <h3 style={resultsHeadingStyle}>Explanation</h3>
@@ -296,6 +345,13 @@ function DetectionSimulatorPanel() {
 
         {!running && !result && !runError && mode === SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE && (
           <p style={emptyStyle}>Build a temporary rule and run a simulation to see results.</p>
+        )}
+
+        {!running && !result && !runError && mode === SIMULATION_MODE_SIGMA_SUBSET_IMPORT && (
+          <p style={emptyStyle}>
+            Paste a strict Sigma subset rule and events, then run a simulation to see validation feedback and
+            results.
+          </p>
         )}
       </div>
     </section>
@@ -315,7 +371,9 @@ const fieldLabelStyle = { color: "#8c96a1", fontSize: "12px", textTransform: "up
 const selectStyle = { background: "#0d1117", color: "#f0f6fc", border: "1px solid #30363d", borderRadius: "8px", padding: "8px 10px", fontSize: "14px" };
 const textAreaStyle = { background: "#0d1117", color: "#f0f6fc", border: "1px solid #30363d", borderRadius: "8px", padding: "10px", fontSize: "13px", fontFamily: "monospace", resize: "vertical" };
 const runButtonStyle = { alignSelf: "flex-start", border: "1px solid #388bfd", background: "#1f6feb", color: "#fff", borderRadius: "8px", padding: "9px 18px", fontWeight: 600, cursor: "pointer" };
-const inlineErrorStyle = { border: "1px solid #f85149", background: "rgba(248,81,73,.12)", color: "#ffa198", padding: "10px 12px", borderRadius: "8px", margin: 0 };
+const inlineErrorStyle = { border: "1px solid #f85149", background: "rgba(248,81,73,.12)", color: "#ffa198", padding: "10px 12px", borderRadius: "8px", margin: "0 0 12px" };
+const errorMessageStyle = { margin: 0 };
+const errorDetailsStyle = { margin: "8px 0 0", fontSize: "12px", color: "#ffd8d3" };
 const stateStyle = { color: "#9da7b3", padding: "12px 0" };
 const emptyStyle = { color: "#c9d1d9", background: "#161b22", border: "1px solid #30363d", padding: "14px", borderRadius: "8px" };
 const resultsStyle = { display: "flex", flexDirection: "column", gap: "10px" };
