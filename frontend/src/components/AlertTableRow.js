@@ -41,6 +41,8 @@ function AlertTableRow({
 }) {
   const externalReputation = getExternalReputation(alert);
   const behavioralReputation = getBehavioralReputation(alert);
+  const cooldownActive = Boolean(alert.pfsense_quality?.cooldown?.active);
+  const suppressedRollup = Boolean(alert.pfsense_quality?.suppressed_rollup);
 
   return (
     <tr
@@ -138,7 +140,39 @@ function AlertTableRow({
       </td>
       )}
 
-      {visibleColumns.message && <td style={bodyCellStyle}>{alert.message}</td>}
+      {visibleColumns.message && (
+      <td style={bodyCellStyle}>
+        <div>{alert.message}</div>
+        {cooldownActive || suppressedRollup ? (
+          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginTop: "8px" }}>
+            {cooldownActive ? (
+              <span
+                style={{
+                  ...sourceBadgeStyle,
+                  backgroundColor: "rgba(250, 204, 21, 0.12)",
+                  color: "#fde68a",
+                  borderColor: "rgba(250, 204, 21, 0.32)",
+                }}
+              >
+                Cooldown active
+              </span>
+            ) : null}
+            {suppressedRollup ? (
+              <span
+                style={{
+                  ...sourceBadgeStyle,
+                  backgroundColor: "rgba(96, 165, 250, 0.12)",
+                  color: "#bfdbfe",
+                  borderColor: "rgba(96, 165, 250, 0.32)",
+                }}
+              >
+                Suppressed roll-up
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+      </td>
+      )}
 
       {visibleColumns.createdAt && (
       <td style={{ ...bodyCellStyle, ...monoCellStyle }}>

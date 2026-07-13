@@ -240,3 +240,33 @@ test("manual block_ip feedback uses tracking-only wording without executed copy"
   expect(feedback).toHaveTextContent("No firewall, provider, external, or local enforcement occurred.");
   expect(feedback).not.toHaveTextContent("Executed");
 });
+
+test("pfSense alert rows show cooldown and suppressed roll-up indicators", async () => {
+  global.fetch = jest.fn((url) => {
+    const path = String(url);
+    if (path.endsWith("/alerts/101/response-log") || path.endsWith("/alerts/101/notes")) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve([]),
+      });
+    }
+    return Promise.reject(new Error(`Unexpected fetch: ${path}`));
+  });
+
+  renderAlertsTable([
+    {
+      ...baseAlert,
+      alert_type: "pfsense_firewall_noisy_source",
+      source: "pfsense",
+      source_type: "firewall",
+      pfsense_quality: {
+        why_fired_available: true,
+        suppressed_rollup: true,
+        cooldown: { active: true },
+      },
+    },
+  ], jest.fn());
+
+  expect(screen.getByText("Cooldown active")).toBeInTheDocument();
+  expect(screen.getByText("Suppressed roll-up")).toBeInTheDocument();
+});

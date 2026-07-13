@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, current_app, jsonify, request
 from flask_login import login_required
@@ -17,6 +17,7 @@ from core.soar_response_outcomes import (
 from helpers.enrichment_helpers import enrich_alert_with_correlation_context, enrich_alert_with_mitre
 from core.ip_helpers import determine_response_action, get_ip_reputation, lookup_ip_reputation
 from core.source_inventory import CANONICAL_SOURCE_IDS
+from engines.detection_config import PFSENSE_ALERT_COOLDOWN_MINUTES, get_detection_rule_defaults
 
 
 alerts_events_bp = Blueprint("alerts_events", __name__)
@@ -29,6 +30,28 @@ VALID_EVENT_SEARCH_TYPES = VALID_EVENT_TYPES | {
     "availability_failure",
 }
 VALID_EVENT_SOURCES = CANONICAL_SOURCE_IDS
+PFSENSE_ALERT_TYPES = frozenset(
+    {
+        "pfsense_firewall_repeated_deny",
+        "pfsense_firewall_port_scan",
+        "pfsense_firewall_suspicious_allow",
+        "pfsense_firewall_noisy_source",
+    }
+)
+PFSENSE_WHY_FIRED_LABELS = {
+    "action": "Firewall action",
+    "direction": "Traffic direction",
+    "event_count": "Matching events",
+    "destination_ip": "Destination IP",
+    "destination_port": "Destination port",
+    "protocol": "Protocol",
+    "interface": "Interface",
+    "distinct_port_count": "Distinct destination ports",
+    "distinct_destination_count": "Distinct destination hosts",
+    "distinct_sensitive_port_count": "Distinct sensitive ports",
+    "first_seen": "First seen",
+    "last_seen": "Last seen",
+}
 
 _ALERT_SELECT = """
     SELECT
@@ -72,12 +95,172 @@ def _resolve_alert_list_response_outcomes(conn, alert_ids: list[int]) -> dict[in
     return outcomes
 
 
+def _serialize_pfsense_cooldown_state(resolved_at):
+    if resolved_at is None:
+        return {
+            "active": False,
+            "resolved_at": None,
+            "cooldown_until": None,
+            "window_minutes": PFSENSE_ALERT_COOLDOWN_MINUTES,
+        }
+
+    if resolved_at.tzinfo is None:
+        resolved_at = resolved_at.replace(tzinfo=timezone.utc)
+    else:
+        resolved_at = resolved_at.astimezone(timezone.utc)
+
+    cooldown_until = resolved_at + timedelta(minutes=PFSENSE_ALERT_COOLDOWN_MINUTES)
+    return {
+        "active": cooldown_until > datetime.now(timezone.utc),
+        "resolved_at": resolved_at.isoformat(),
+        "cooldown_until": cooldown_until.isoformat(),
+        "window_minutes": PFSENSE_ALERT_COOLDOWN_MINUTES,
+    }
+
+
+def _fetch_latest_resolved_audits(cur, alert_ids: list[int]) -> dict[int, dict]:
+    filtered_ids = [int(alert_id) for alert_id in alert_ids if alert_id is not None]
+    if not filtered_ids:
+        return {}
+
+    cur.execute(
+        """
+        SELECT DISTINCT ON (target_alert_id)
+            target_alert_id,
+            created_at
+        FROM audit_log
+        WHERE event_type = 'UPDATE_ALERT_STATUS'
+          AND (details->>'status') = 'resolved'
+          AND target_alert_id = ANY(%s)
+        ORDER BY target_alert_id, created_at DESC
+        """,
+        (filtered_ids,),
+    )
+    return {
+        row[0]: _serialize_pfsense_cooldown_state(row[1])
+        for row in cur.fetchall()
+    }
+
+
+def _build_pfsense_quality_metadata(row, cooldown_by_alert_id: dict[int, dict]):
+    alert_id = row[0]
+    alert_type = row[1]
+    source = row[17] or "unknown"
+    context = row[19] if isinstance(row[19], dict) else {}
+
+    if source != "pfsense" or alert_type not in PFSENSE_ALERT_TYPES:
+        return None
+
+    cooldown = cooldown_by_alert_id.get(alert_id) or _serialize_pfsense_cooldown_state(None)
+    return {
+        "why_fired_available": True,
+        "suppressed_rollup": bool(context.get("suppressed")),
+        "cooldown": cooldown,
+    }
+
+
+def _format_pfsense_context_value(field_name, value):
+    if value in (None, "", []):
+        return None
+    if field_name == "direction":
+        return "LAN → WAN (outbound)" if value == "out" else "WAN → LAN (inbound)" if value == "in" else value
+    if field_name == "action":
+        return "pass" if value == "pass" else "block" if value == "block" else value
+    return value
+
+
+def _build_pfsense_why_fired_payload(row, cooldown_by_alert_id: dict[int, dict]):
+    alert_id = row[0]
+    alert_type = row[1]
+    source = row[17] or "unknown"
+    source_type = row[18] or "legacy"
+    context = row[19] if isinstance(row[19], dict) else {}
+
+    if source != "pfsense" or alert_type not in PFSENSE_ALERT_TYPES:
+        return None
+
+    rule_defaults = get_detection_rule_defaults().get(alert_type, {})
+    evidence_fields_by_type = {
+        "pfsense_firewall_repeated_deny": (
+            "action",
+            "direction",
+            "event_count",
+            "destination_ip",
+            "destination_port",
+            "protocol",
+            "interface",
+            "first_seen",
+            "last_seen",
+        ),
+        "pfsense_firewall_port_scan": (
+            "action",
+            "distinct_port_count",
+            "distinct_destination_count",
+            "first_seen",
+            "last_seen",
+        ),
+        "pfsense_firewall_suspicious_allow": (
+            "action",
+            "direction",
+            "event_count",
+            "distinct_sensitive_port_count",
+            "destination_ip",
+            "destination_port",
+            "protocol",
+            "interface",
+            "first_seen",
+            "last_seen",
+        ),
+        "pfsense_firewall_noisy_source": (
+            "event_count",
+            "first_seen",
+            "last_seen",
+        ),
+    }
+    evidence = []
+    for field_name in evidence_fields_by_type.get(alert_type, ()):
+        formatted_value = _format_pfsense_context_value(field_name, context.get(field_name))
+        if formatted_value in (None, "", []):
+            continue
+        evidence.append(
+            {
+                "field": field_name,
+                "label": PFSENSE_WHY_FIRED_LABELS.get(field_name, field_name.replace("_", " ").title()),
+                "value": formatted_value,
+            }
+        )
+
+    if bool(context.get("suppressed")):
+        evidence.append(
+            {
+                "field": "suppressed",
+                "label": "Suppression mode",
+                "value": "Routine traffic was rolled up into one noisy-source alert.",
+            }
+        )
+
+    cooldown = cooldown_by_alert_id.get(alert_id) or _serialize_pfsense_cooldown_state(None)
+    return {
+        "alert_id": alert_id,
+        "rule_id": alert_type,
+        "rule_name": rule_defaults.get("display_name", alert_type),
+        "source": source,
+        "source_type": source_type,
+        "summary": row[3],
+        "context": context,
+        "evidence": evidence,
+        "suppressed_rollup": bool(context.get("suppressed")),
+        "cooldown": cooldown,
+    }
+
+
 def _build_alert_payload(
     row,
     *,
     cur,
     reputation_by_ip: dict,
     response_outcome,
+    cooldown_by_alert_id: dict[int, dict],
 ) -> dict:
     source_ip = str(row[4]) if row[4] is not None else None
     if source_ip not in reputation_by_ip:
@@ -117,6 +300,7 @@ def _build_alert_payload(
                 "source": row[17] or "unknown",
                 "source_type": row[18] or "legacy",
                 "context": row[19] if row[19] is not None else {},
+                "pfsense_quality": _build_pfsense_quality_metadata(row, cooldown_by_alert_id),
             }
         )
     )
@@ -134,6 +318,7 @@ def get_alerts():
         rows = cur.fetchall()
         alert_ids = [row[0] for row in rows]
         response_outcomes_by_alert = _resolve_alert_list_response_outcomes(conn, alert_ids)
+        cooldown_by_alert_id = _fetch_latest_resolved_audits(cur, alert_ids)
         reputation_by_ip = {}
 
         alerts = []
@@ -144,6 +329,7 @@ def get_alerts():
                     cur=cur,
                     reputation_by_ip=reputation_by_ip,
                     response_outcome=response_outcomes_by_alert.get(row[0]),
+                    cooldown_by_alert_id=cooldown_by_alert_id,
                 )
             )
 
@@ -172,11 +358,13 @@ def get_alert(alert_id):
             return jsonify({"error": "Alert not found"}), 404
 
         response_outcome = serialize_latest_outcome(conn, alert_id=alert_id)
+        cooldown_by_alert_id = _fetch_latest_resolved_audits(cur, [alert_id])
         alert = _build_alert_payload(
             row,
             cur=cur,
             reputation_by_ip={},
             response_outcome=response_outcome,
+            cooldown_by_alert_id=cooldown_by_alert_id,
         )
 
         cur.close()
@@ -187,6 +375,37 @@ def get_alert(alert_id):
     except Exception as e:
         current_app.logger.error("Error in get_alert: %s", e)
         return jsonify({"error": "Internal server error"}), 500
+
+
+@alerts_events_bp.route("/alerts/<int:alert_id>/why-fired", methods=["GET"])
+@login_required
+def get_pfsense_why_fired(alert_id):
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(f"{_ALERT_SELECT} WHERE id = %s", (alert_id,))
+        row = cur.fetchone()
+        if row is None:
+            return jsonify({"error": "Alert not found"}), 404
+
+        payload = _build_pfsense_why_fired_payload(
+            row,
+            _fetch_latest_resolved_audits(cur, [alert_id]),
+        )
+        if payload is None:
+            return jsonify({"error": "Why this fired is available only for pfSense alerts"}), 400
+
+        return jsonify(payload), 200
+    except Exception as error:
+        current_app.logger.error("Error in get_pfsense_why_fired: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 
 @alerts_events_bp.route("/alerts/backfill-reputation", methods=["POST"])

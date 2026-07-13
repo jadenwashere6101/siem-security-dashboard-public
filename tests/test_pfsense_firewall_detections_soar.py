@@ -309,6 +309,153 @@ def test_repeated_deny_duplicate_suppression_keeps_single_open_alert(postgres_db
     assert cur.fetchone()[0] == 1
 
 
+def test_repeated_deny_outbound_direction_escalates_at_base_threshold(postgres_db):
+    conn, cur = postgres_db
+    source_ip = "198.51.100.35"
+
+    # Outbound (LAN->WAN) denies escalate at the base threshold rather than
+    # requiring the multiplier-scaled count inbound denies need, since a host
+    # repeatedly denied reaching external destinations is a stronger signal.
+    for seconds_ago in range(5, 0, -1):
+        insert_pfsense_event(
+            cur,
+            event_type="firewall_block",
+            source_ip=source_ip,
+            destination_ip="203.0.113.60",
+            destination_port=443,
+            direction="out",
+            seconds_ago=seconds_ago,
+        )
+
+    with siem_backend.app.app_context(), patch(
+        "engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION_LOW
+    ):
+        alerts_created = backend_detection_engine._generate_pfsense_repeated_deny_alerts_core(
+            cur, conn, source="pfsense", source_type="firewall"
+        )
+
+    assert len(alerts_created) == 1
+    assert alerts_created[0]["severity"] == "high"
+    assert alerts_created[0]["response_action"] == "block_ip"
+
+    alert = fetch_alert_by_type(cur, source_ip, "pfsense_firewall_repeated_deny")
+    assert alert is not None
+    _, _, _, _, _, context = alert
+    assert context["direction"] == "out"
+
+
+def test_repeated_deny_inbound_direction_uses_existing_multiplier(postgres_db):
+    conn, cur = postgres_db
+    source_ip = "198.51.100.36"
+
+    # Same count, same threshold, but inbound (direction="in", the fixture
+    # default) — severity behavior is unchanged from before direction-awareness.
+    for seconds_ago in range(5, 0, -1):
+        insert_pfsense_event(
+            cur,
+            event_type="firewall_block",
+            source_ip=source_ip,
+            destination_ip="203.0.113.61",
+            destination_port=443,
+            seconds_ago=seconds_ago,
+        )
+
+    with siem_backend.app.app_context(), patch(
+        "engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION_LOW
+    ):
+        alerts_created = backend_detection_engine._generate_pfsense_repeated_deny_alerts_core(
+            cur, conn, source="pfsense", source_type="firewall"
+        )
+
+    assert len(alerts_created) == 1
+    assert alerts_created[0]["severity"] == "medium"
+    assert alerts_created[0]["response_action"] == "enrich_source_ip"
+
+
+def test_repeated_deny_cooldown_suppresses_equal_severity_recurrence_after_close(postgres_db):
+    conn, cur = postgres_db
+    source_ip = "198.51.100.37"
+
+    for seconds_ago in range(5, 0, -1):
+        insert_pfsense_event(
+            cur,
+            event_type="firewall_block",
+            source_ip=source_ip,
+            destination_ip="203.0.113.62",
+            destination_port=445,
+            seconds_ago=seconds_ago,
+        )
+
+    with siem_backend.app.app_context(), patch(
+        "engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION_LOW
+    ):
+        first = backend_detection_engine._generate_pfsense_repeated_deny_alerts_core(
+            cur, conn, source="pfsense", source_type="firewall"
+        )
+    assert len(first) == 1
+    alert_id = first[0]["alert_id"]
+
+    cur.execute("UPDATE alerts SET status = 'resolved' WHERE id = %s", (alert_id,))
+    cur.execute(
+        "INSERT INTO audit_log (event_type, target_alert_id, details) VALUES (%s, %s, %s)",
+        ("UPDATE_ALERT_STATUS", alert_id, Json({"status": "resolved"})),
+    )
+    conn.commit()
+
+    with siem_backend.app.app_context(), patch(
+        "engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION_LOW
+    ):
+        second = backend_detection_engine._generate_pfsense_repeated_deny_alerts_core(
+            cur, conn, source="pfsense", source_type="firewall"
+        )
+
+    assert second == []
+
+
+def test_repeated_deny_escalation_breaks_cooldown_suppression(postgres_db):
+    conn, cur = postgres_db
+    source_ip = "198.51.100.38"
+
+    for seconds_ago in range(5, 0, -1):
+        insert_pfsense_event(
+            cur,
+            event_type="firewall_block",
+            source_ip=source_ip,
+            destination_ip="203.0.113.63",
+            destination_port=445,
+            seconds_ago=seconds_ago,
+        )
+
+    with siem_backend.app.app_context(), patch(
+        "engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION_LOW
+    ):
+        first = backend_detection_engine._generate_pfsense_repeated_deny_alerts_core(
+            cur, conn, source="pfsense", source_type="firewall"
+        )
+    assert first[0]["severity"] == "medium"
+    alert_id = first[0]["alert_id"]
+
+    cur.execute("UPDATE alerts SET status = 'resolved' WHERE id = %s", (alert_id,))
+    cur.execute(
+        "INSERT INTO audit_log (event_type, target_alert_id, details) VALUES (%s, %s, %s)",
+        ("UPDATE_ALERT_STATUS", alert_id, Json({"status": "resolved"})),
+    )
+    conn.commit()
+
+    # Same source now carries known-bad reputation, so the new candidate computes
+    # "high" — strictly above the closed alert's "medium" — and must break through
+    # the cooldown rather than being suppressed.
+    with siem_backend.app.app_context(), patch(
+        "engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION_HIGH
+    ):
+        second = backend_detection_engine._generate_pfsense_repeated_deny_alerts_core(
+            cur, conn, source="pfsense", source_type="firewall"
+        )
+
+    assert len(second) == 1
+    assert second[0]["severity"] == "high"
+
+
 # ---------------------------------------------------------------------------
 # Port scan
 # ---------------------------------------------------------------------------
@@ -390,14 +537,48 @@ def test_port_scan_breadth_escalates_to_high_severity(postgres_db):
     assert alerts_created[0]["response_action"] == "block_ip"
 
 
+def test_port_scan_host_breadth_sweep_triggers_alert_with_few_ports(postgres_db):
+    conn, cur = postgres_db
+    source_ip = "198.51.100.43"
+
+    # Only 1 distinct destination port (below the port-count threshold of 2) but
+    # 5 distinct destination hosts (>= host_threshold), i.e. a horizontal sweep on
+    # one port across many hosts rather than a port scan on one host.
+    for index in range(5):
+        insert_pfsense_event(
+            cur,
+            event_type="firewall_block",
+            source_ip=source_ip,
+            destination_ip=f"203.0.113.{120 + index}",
+            destination_port=443,
+            seconds_ago=5 - index,
+        )
+
+    with siem_backend.app.app_context(), patch(
+        "engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION_LOW
+    ):
+        alerts_created = backend_detection_engine._generate_pfsense_port_scan_alerts_core(
+            cur, conn, source="pfsense", source_type="firewall"
+        )
+
+    assert len(alerts_created) == 1
+    assert alerts_created[0]["severity"] == "medium"
+    assert alerts_created[0]["response_action"] == "enrich_source_ip"
+
+    alert = fetch_alert_by_type(cur, source_ip, "pfsense_firewall_port_scan")
+    assert alert is not None
+    _, _, _, _, _, context = alert
+    assert context["distinct_port_count"] == 1
+    assert context["distinct_destination_count"] == 5
+
+
 # ---------------------------------------------------------------------------
 # Suspicious allow
 # ---------------------------------------------------------------------------
 
 
-def test_suspicious_allow_sensitive_port_inbound_creates_high_severity_alert(postgres_db):
+def test_suspicious_allow_single_uncorroborated_event_is_medium_severity(postgres_db):
     conn, cur = postgres_db
-    seed_core_playbook_pack_v1(conn)
     source_ip = "198.51.100.50"
 
     insert_pfsense_event(
@@ -410,6 +591,43 @@ def test_suspicious_allow_sensitive_port_inbound_creates_high_severity_alert(pos
 
     with siem_backend.app.app_context(), patch(
         "engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION_LOW
+    ):
+        alerts_created = backend_detection_engine._generate_pfsense_suspicious_allow_alerts_core(
+            cur, conn, source="pfsense", source_type="firewall"
+        )
+
+    assert len(alerts_created) == 1
+    assert alerts_created[0]["severity"] == "medium"
+    assert alerts_created[0]["response_action"] == "enrich_source_ip"
+
+    alert = fetch_alert_by_type(cur, source_ip, "pfsense_firewall_suspicious_allow")
+    assert alert is not None
+    _, alert_type, severity, response_action, _, context = alert
+    assert severity == "medium"
+    assert response_action == "enrich_source_ip"
+    assert context["destination_port"] == "3389"
+    assert context["direction"] == "in"
+    assert context["distinct_sensitive_port_count"] == 1
+
+    mitre = enrich_alert_with_mitre({"alert_type": alert_type})
+    assert mitre["mitre_technique_id"] is None
+
+
+def test_suspicious_allow_high_reputation_single_event_creates_high_severity_alert(postgres_db):
+    conn, cur = postgres_db
+    seed_core_playbook_pack_v1(conn)
+    source_ip = "198.51.100.150"
+
+    insert_pfsense_event(
+        cur,
+        event_type="firewall_allow",
+        source_ip=source_ip,
+        destination_port=3389,
+        direction="in",
+    )
+
+    with siem_backend.app.app_context(), patch(
+        "engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION_HIGH
     ):
         alerts_created = backend_detection_engine._generate_pfsense_suspicious_allow_alerts_core(
             cur, conn, source="pfsense", source_type="firewall"
@@ -435,6 +653,67 @@ def test_suspicious_allow_sensitive_port_inbound_creates_high_severity_alert(pos
         match["id"] == CORE_V1_PFSENSE_SUSPICIOUS_ALLOW_CONTAINMENT_ID
         for match in matches
     )
+
+
+def test_suspicious_allow_repeated_events_escalate_to_high_severity(postgres_db):
+    conn, cur = postgres_db
+    source_ip = "198.51.100.151"
+
+    # 3 qualifying events (>= the high-confidence repeat threshold) accumulated
+    # before the detector's first pass, corroborating via repetition alone.
+    for seconds_ago in range(3, 0, -1):
+        insert_pfsense_event(
+            cur,
+            event_type="firewall_allow",
+            source_ip=source_ip,
+            destination_port=3389,
+            direction="in",
+            seconds_ago=seconds_ago,
+        )
+
+    with siem_backend.app.app_context(), patch(
+        "engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION_LOW
+    ):
+        alerts_created = backend_detection_engine._generate_pfsense_suspicious_allow_alerts_core(
+            cur, conn, source="pfsense", source_type="firewall"
+        )
+
+    assert len(alerts_created) == 1
+    assert alerts_created[0]["severity"] == "high"
+    assert alerts_created[0]["response_action"] == "block_ip"
+
+
+def test_suspicious_allow_distinct_sensitive_ports_escalate_to_high_severity(postgres_db):
+    conn, cur = postgres_db
+    source_ip = "198.51.100.152"
+
+    # 2 distinct sensitive ports touched (>= the distinct-port escalation
+    # threshold), a single event each — corroborating via port diversity rather
+    # than repetition or reputation.
+    insert_pfsense_event(
+        cur, event_type="firewall_allow", source_ip=source_ip, destination_port=3389,
+        direction="in", seconds_ago=2,
+    )
+    insert_pfsense_event(
+        cur, event_type="firewall_allow", source_ip=source_ip, destination_port=22,
+        direction="in", seconds_ago=1,
+    )
+
+    with siem_backend.app.app_context(), patch(
+        "engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION_LOW
+    ):
+        alerts_created = backend_detection_engine._generate_pfsense_suspicious_allow_alerts_core(
+            cur, conn, source="pfsense", source_type="firewall"
+        )
+
+    assert len(alerts_created) == 1
+    assert alerts_created[0]["severity"] == "high"
+    assert alerts_created[0]["response_action"] == "block_ip"
+
+    alert = fetch_alert_by_type(cur, source_ip, "pfsense_firewall_suspicious_allow")
+    assert alert is not None
+    _, _, _, _, _, context = alert
+    assert context["distinct_sensitive_port_count"] == 2
 
 
 def test_suspicious_allow_outbound_sensitive_port_does_not_alert(postgres_db):
@@ -492,19 +771,26 @@ def test_noisy_source_suppression_creates_single_low_severity_rollup(postgres_db
     conn, cur = postgres_db
     source_ip = "198.51.100.60"
 
-    # 20 routine block events to 20 distinct destinations on the same port keeps
-    # every individual (destination, port, protocol) tuple under the repeated-deny
-    # threshold (5) and keeps distinct destination ports at 1, under the port-scan
-    # threshold (2), so only noisy-source volume logic should trigger.
-    for index in range(20):
-        insert_pfsense_event(
-            cur,
-            event_type="firewall_block",
-            source_ip=source_ip,
-            destination_ip=f"203.0.113.{index + 1}",
-            destination_port=443,
-            seconds_ago=20 - index,
-        )
+    # 24 routine block events split across 2 destination hosts and 3 protocols
+    # (4 events per host/protocol tuple) keeps every individual
+    # (destination, port, protocol) tuple under the repeated-deny threshold (5),
+    # keeps distinct destination ports at 1 (under the port-scan port threshold
+    # of 2) and distinct destination hosts at 2 (under the port-scan host
+    # threshold of 5), so only noisy-source volume logic should trigger.
+    seconds_ago = 24
+    for destination_ip in ("203.0.113.1", "203.0.113.2"):
+        for protocol in ("tcp", "udp", "icmp"):
+            for _ in range(4):
+                insert_pfsense_event(
+                    cur,
+                    event_type="firewall_block",
+                    source_ip=source_ip,
+                    destination_ip=destination_ip,
+                    destination_port=443,
+                    protocol=protocol,
+                    seconds_ago=seconds_ago,
+                )
+                seconds_ago -= 1
 
     with siem_backend.app.app_context(), patch(
         "engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION_LOW
@@ -526,7 +812,7 @@ def test_noisy_source_suppression_creates_single_low_severity_rollup(postgres_db
     alert = fetch_alert_by_type(cur, source_ip, "pfsense_firewall_noisy_source")
     assert alert is not None
     _, alert_type, severity, response_action, _, context = alert
-    assert context["event_count"] == 20
+    assert context["event_count"] == 24
     assert context["suppressed"] is True
 
     mitre = enrich_alert_with_mitre({"alert_type": alert_type})
@@ -626,8 +912,10 @@ def test_ingest_normalized_event_dispatches_firewall_allow_detectors(postgres_db
     conn, cur = postgres_db
     source_ip = "198.51.100.71"
 
+    # High reputation corroborates a single event so the dispatch wiring is
+    # exercised on the "high severity -> block_ip" path.
     with siem_backend.app.app_context(), patch(
-        "engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION_LOW
+        "engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION_HIGH
     ):
         event = make_pfsense_event(
             event_type="firewall_allow",

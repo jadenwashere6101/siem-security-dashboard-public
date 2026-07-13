@@ -1,10 +1,15 @@
 import { render, screen } from "@testing-library/react";
 
 import AlertDetailsPanel from "./AlertDetailsPanel";
+import { loadPfsenseWhyFired } from "../services/pfsenseAlertInvestigationService";
 import { loadSourceIpContext } from "../services/sourceIpContextService";
 
 jest.mock("../services/sourceIpContextService", () => ({
   loadSourceIpContext: jest.fn(),
+}));
+
+jest.mock("../services/pfsenseAlertInvestigationService", () => ({
+  loadPfsenseWhyFired: jest.fn(),
 }));
 
 const selectedAlert = {
@@ -50,6 +55,7 @@ const trackingOutcome = {
 
 beforeEach(() => {
   loadSourceIpContext.mockReset();
+  loadPfsenseWhyFired.mockReset();
   loadSourceIpContext.mockResolvedValue({
     source_ip: "8.8.8.8",
     alerts: { counts: { total: 1, open: 1, resolved: 0 }, recent: [] },
@@ -62,6 +68,20 @@ beforeEach(() => {
       external_snapshots: [],
     },
     playbook_executions: { count: 0, recent: [] },
+  });
+  loadPfsenseWhyFired.mockResolvedValue({
+    alert_id: 101,
+    rule_id: "pfsense_firewall_repeated_deny",
+    summary: "Repeated deny threshold exceeded",
+    evidence: [
+      { field: "event_count", label: "Matching events", value: 6 },
+      { field: "destination_port", label: "Destination port", value: 22 },
+    ],
+    suppressed_rollup: false,
+    cooldown: {
+      active: true,
+      cooldown_until: "2026-07-13T14:10:00+00:00",
+    },
   });
 });
 
@@ -140,4 +160,42 @@ test("AlertDetailsPanel renders no-history response outcome summary", () => {
   );
 
   expect(screen.getByText("No response outcome recorded.")).toBeInTheDocument();
+});
+
+test("AlertDetailsPanel renders pfSense why-fired evidence from the backend", async () => {
+  render(
+    <AlertDetailsPanel
+      selectedAlert={{
+        ...selectedAlert,
+        alert_type: "pfsense_firewall_repeated_deny",
+        source: "pfsense",
+        source_type: "firewall",
+        pfsense_quality: {
+          why_fired_available: true,
+          suppressed_rollup: false,
+          cooldown: { active: true },
+        },
+      }}
+      selectedAlertTimeline={[]}
+      getSourceBadgeMeta={() => ({ label: "pfSense", style: {} })}
+      getTargetedAlertMeta={() => null}
+      isCorrelationAlert={() => false}
+      getCorrelationAlertTypes={() => []}
+      correlationPanelStyle={{}}
+      targetedAlertPanelStyle={{}}
+      expandedLabelStyle={{}}
+      expandedTextStyle={{}}
+      monoCellStyle={{}}
+      correlationListStyle={{}}
+      signalRowStyle={{}}
+      sourceTypeTextStyle={{}}
+    />
+  );
+
+  expect(await screen.findByText("Why this fired")).toBeInTheDocument();
+  expect(await screen.findByText("Repeated deny threshold exceeded")).toBeInTheDocument();
+  expect(screen.getByText("Matching events")).toBeInTheDocument();
+  expect(screen.getByText("6")).toBeInTheDocument();
+  expect(screen.getByText("Cooldown active until 2026-07-13T14:10:00+00:00")).toBeInTheDocument();
+  expect(loadPfsenseWhyFired).toHaveBeenCalledWith(101);
 });

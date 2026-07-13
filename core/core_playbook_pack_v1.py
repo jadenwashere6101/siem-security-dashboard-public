@@ -257,7 +257,9 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
         "name": "pfSense Repeated Deny Investigation",
         "description": (
             "Investigate repeated pfSense firewall denies with enriched context "
-            "and no automatic blocking."
+            "and no automatic blocking. Investigation-only outcome: visible on "
+            "the alert dashboard and Detection Health, does not page Slack "
+            "(reserved for containment-outcome playbooks)."
         ),
         "trigger_config": {
             "alert_type": "pfsense_firewall_repeated_deny",
@@ -266,7 +268,6 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
         "steps": [
             {"action": "enrich_context"},
             {"action": "monitor"},
-            {"action": "notify_slack", "params": {"message": "{{alert.message}}"}},
         ],
     },
     {
@@ -274,7 +275,9 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
         "name": "pfSense Port Scan Investigation",
         "description": (
             "Investigate medium-severity pfSense firewall port scan activity "
-            "with enriched context and no automatic blocking."
+            "with enriched context and no automatic blocking. Investigation-only "
+            "outcome: visible on the alert dashboard and Detection Health, does "
+            "not page Slack (reserved for containment-outcome playbooks)."
         ),
         "trigger_config": {
             "alert_type": "pfsense_firewall_port_scan",
@@ -283,7 +286,6 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
         "steps": [
             {"action": "enrich_context"},
             {"action": "monitor"},
-            {"action": "notify_slack", "params": {"message": "{{alert.message}}"}},
         ],
     },
     {

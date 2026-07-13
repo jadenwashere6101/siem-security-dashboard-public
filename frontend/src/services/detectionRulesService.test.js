@@ -1,4 +1,8 @@
-import { loadDetectionRules, updateDetectionRule } from "./detectionRulesService";
+import {
+  loadDetectionRules,
+  loadPfsenseDetectionHealth,
+  updateDetectionRule,
+} from "./detectionRulesService";
 
 beforeEach(() => {
   global.fetch = jest.fn();
@@ -14,6 +18,16 @@ test("loads detection rules with credentials", async () => {
 
   await expect(loadDetectionRules()).resolves.toEqual(rules);
   expect(fetch).toHaveBeenCalledWith("/admin/detection-rules", {
+    credentials: "include",
+  });
+});
+
+test("loads pfSense detection health with credentials", async () => {
+  const rows = [{ rule_id: "pfsense_firewall_port_scan" }];
+  fetch.mockResolvedValue({ ok: true, json: async () => rows });
+
+  await expect(loadPfsenseDetectionHealth()).resolves.toEqual(rows);
+  expect(fetch).toHaveBeenCalledWith("/admin/detection-rules/pfsense-health", {
     credentials: "include",
   });
 });

@@ -2,8 +2,12 @@ from flask import current_app
 from psycopg2.extras import Json
 
 from engines.detection_config import (
+    PFSENSE_ALERT_COOLDOWN_MINUTES,
     PFSENSE_HIGH_REPUTATION_SCORE,
+    PFSENSE_PORT_SCAN_HOST_THRESHOLD,
     PFSENSE_SEVERITY_ESCALATION_MULTIPLIER,
+    PFSENSE_SUSPICIOUS_ALLOW_DISTINCT_PORT_ESCALATION_THRESHOLD,
+    PFSENSE_SUSPICIOUS_ALLOW_HIGH_CONFIDENCE_REPEAT_THRESHOLD,
     get_effective_detection_rule,
 )
 from engines.detection_applicability import rule_applies_to_source
@@ -19,6 +23,47 @@ PFSENSE_ESCALATION_ALERT_TYPES = (
 PFSENSE_NOISY_SOURCE_GUARD_ALERT_TYPES = PFSENSE_ESCALATION_ALERT_TYPES + (
     "pfsense_firewall_noisy_source",
 )
+
+# Ordinal ranking used only to decide whether a post-closure recurrence is an
+# escalation (breaks cooldown suppression) or an equal-or-lower-severity repeat
+# (stays suppressed for PFSENSE_ALERT_COOLDOWN_MINUTES).
+_PFSENSE_SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+
+
+def _pfsense_cooldown_suppresses(cur, source_ip, alert_type, candidate_severity):
+    """True when a resolved alert for this (source_ip, alert_type) closed within
+    the cooldown window at a severity at or above the new candidate's severity.
+
+    A strictly higher-severity candidate always breaks through (escalation
+    breakout); this mirrors the noisy-source rule's existing
+    "suppression breaks on escalation" pattern rather than introducing a new one.
+    Derives closure time from the existing alert-status audit trail
+    (`audit_log`) so no new persisted timestamp column is required.
+    """
+    cur.execute(
+        f"""
+        SELECT a.severity
+        FROM alerts a
+        JOIN audit_log al ON al.target_alert_id = a.id
+        WHERE a.source_ip = %s
+          AND a.alert_type = %s
+          AND a.status = 'resolved'
+          AND al.event_type = 'UPDATE_ALERT_STATUS'
+          AND (al.details->>'status') = 'resolved'
+          AND al.created_at >= NOW() - INTERVAL '{int(PFSENSE_ALERT_COOLDOWN_MINUTES)} minutes'
+        ORDER BY al.created_at DESC
+        LIMIT 1
+        """,
+        (source_ip, alert_type),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return False
+    last_closed_severity = row[0]
+    return (
+        _PFSENSE_SEVERITY_RANK.get(candidate_severity, 0)
+        <= _PFSENSE_SEVERITY_RANK.get(last_closed_severity, 0)
+    )
 
 
 def _prepare_rule_evaluation(rule_id, cur, source, source_type, rule_config):
@@ -47,12 +92,21 @@ def _resolve_evaluation_source_ip(cur, source_ip, source, source_type):
     return row[0] if row else None
 
 
-def _pfsense_escalated_severity(base_severity, *, count, threshold, reputation_score):
+def _pfsense_escalated_severity(base_severity, *, count, threshold, reputation_score, direction=None):
+    """Escalate medium to high on reputation or volume/breadth multiple of threshold.
+
+    An outbound (LAN->WAN) candidate uses a multiplier of 1 instead of
+    PFSENSE_SEVERITY_ESCALATION_MULTIPLIER: an internal host repeatedly denied
+    when reaching external destinations is a stronger investigative signal
+    (possible compromised host) than the same count of inbound WAN noise, so it
+    escalates at the base threshold rather than requiring a multiple of it.
+    """
     if base_severity != "medium":
         return base_severity
     if reputation_score is not None and reputation_score >= PFSENSE_HIGH_REPUTATION_SCORE:
         return "high"
-    if threshold and count >= threshold * PFSENSE_SEVERITY_ESCALATION_MULTIPLIER:
+    effective_multiplier = 1 if direction == "out" else PFSENSE_SEVERITY_ESCALATION_MULTIPLIER
+    if threshold and count >= threshold * effective_multiplier:
         return "high"
     return "medium"
 
@@ -1734,7 +1788,12 @@ def _generate_pfsense_repeated_deny_alerts_core(cur, conn, source=None, source_t
             count=event_count,
             threshold=threshold,
             reputation_score=reputation_score,
+            direction=direction,
         )
+
+        if _pfsense_cooldown_suppresses(cur, source_ip, "pfsense_firewall_repeated_deny", severity):
+            continue
+
         response_action = _pfsense_response_action_for_severity(severity)
         response_status = "pending"
 
@@ -1745,10 +1804,17 @@ def _generate_pfsense_repeated_deny_alerts_core(cur, conn, source=None, source_t
         destination_text = destination_ip or "unknown destination"
         if destination_port:
             destination_text = f"{destination_text}:{destination_port}"
-        message = (
-            f"pfSense blocked {event_count} connections from {source_ip} to "
-            f"{destination_text} ({protocol or 'unknown protocol'})"
-        )
+        if direction == "out":
+            message = (
+                f"pfSense blocked {event_count} outbound connections from internal host "
+                f"{source_ip} to {destination_text} ({protocol or 'unknown protocol'}) "
+                "— possible compromised internal host"
+            )
+        else:
+            message = (
+                f"pfSense blocked {event_count} connections from {source_ip} to "
+                f"{destination_text} ({protocol or 'unknown protocol'})"
+            )
 
         context = {
             "action": "block",
@@ -1833,6 +1899,7 @@ def _generate_pfsense_port_scan_alerts_core(cur, conn, source=None, source_type=
         return []
     threshold = rule_config["parameters"]["threshold"]
     window_minutes = rule_config["parameters"]["window_minutes"]
+    host_threshold = rule_config["parameters"].get("host_threshold", PFSENSE_PORT_SCAN_HOST_THRESHOLD)
 
     cur.execute(
         f"""
@@ -1870,9 +1937,9 @@ def _generate_pfsense_port_scan_alerts_core(cur, conn, source=None, source_type=
         FROM normalized_ports
         WHERE destination_port BETWEEN 1 AND 65535
         GROUP BY source_ip
-        HAVING COUNT(DISTINCT destination_port) >= %s
+        HAVING COUNT(DISTINCT destination_port) >= %s OR COUNT(DISTINCT destination_ip) >= %s
         """,
-        (source_ip, source_ip, source, source_type, threshold,),
+        (source_ip, source_ip, source, source_type, threshold, host_threshold),
     )
 
     rows = cur.fetchall()
@@ -1899,12 +1966,29 @@ def _generate_pfsense_port_scan_alerts_core(cur, conn, source=None, source_type=
         reputation_source = reputation["reputation_source"]
         reputation_summary = reputation["reputation_summary"]
 
+        # Breadth is measured on two independent axes: many ports on one host
+        # (port breadth) and one/few ports swept across many hosts (host
+        # breadth). Either axis crossing its own escalation bar is sufficient;
+        # they are not summed or blended into a single score.
         severity = _pfsense_escalated_severity(
             "medium",
             count=distinct_port_count,
             threshold=threshold,
             reputation_score=reputation_score,
         )
+        if severity != "high":
+            host_breadth_severity = _pfsense_escalated_severity(
+                "medium",
+                count=distinct_destination_count,
+                threshold=host_threshold,
+                reputation_score=reputation_score,
+            )
+            if host_breadth_severity == "high":
+                severity = "high"
+
+        if _pfsense_cooldown_suppresses(cur, source_ip, "pfsense_firewall_port_scan", severity):
+            continue
+
         response_action = _pfsense_response_action_for_severity(severity)
         response_status = "pending"
 
@@ -1913,8 +1997,9 @@ def _generate_pfsense_port_scan_alerts_core(cur, conn, source=None, source_type=
         )
 
         message = (
-            f"pfSense firewall port scan suspected from {source_ip}: "
-            f"{distinct_port_count} distinct destination ports"
+            f"pfSense firewall scan activity suspected from {source_ip}: "
+            f"{distinct_port_count} distinct destination ports across "
+            f"{distinct_destination_count} distinct destination hosts"
         )
 
         context = {
@@ -2027,6 +2112,7 @@ def _generate_pfsense_suspicious_allow_alerts_core(cur, conn, source=None, sourc
         SELECT
             source_ip,
             COUNT(*) AS event_count,
+            COUNT(DISTINCT destination_port_text) AS distinct_port_count,
             MIN(created_at) AS first_seen,
             MAX(created_at) AS last_seen,
             (ARRAY_AGG(destination_ip ORDER BY created_at DESC))[1] AS destination_ip,
@@ -2043,10 +2129,20 @@ def _generate_pfsense_suspicious_allow_alerts_core(cur, conn, source=None, sourc
     rows = cur.fetchall()
     alerts_created = []
 
+    high_confidence_repeat_threshold = rule_config["parameters"].get(
+        "high_confidence_repeat_threshold",
+        PFSENSE_SUSPICIOUS_ALLOW_HIGH_CONFIDENCE_REPEAT_THRESHOLD,
+    )
+    distinct_port_escalation_threshold = rule_config["parameters"].get(
+        "distinct_port_escalation_threshold",
+        PFSENSE_SUSPICIOUS_ALLOW_DISTINCT_PORT_ESCALATION_THRESHOLD,
+    )
+
     for row in rows:
         (
             source_ip,
             event_count,
+            distinct_port_count,
             first_seen,
             last_seen,
             destination_ip,
@@ -2073,10 +2169,23 @@ def _generate_pfsense_suspicious_allow_alerts_core(cur, conn, source=None, sourc
         reputation_source = reputation["reputation_source"]
         reputation_summary = reputation["reputation_summary"]
 
-        # A single allow of inbound traffic to a sensitive management port is
-        # treated as high-confidence per the pfsense-firewall-detections-soar
-        # spec's "contextual allow" guidance, independent of reputation.
-        severity = "high"
+        # High severity requires repetition or corroborating context, not event
+        # count alone: known-bad reputation, enough repeated allows to rule out
+        # a one-off intentionally-forwarded port, or multiple distinct sensitive
+        # ports touched by the same source in-window. An uncorroborated single
+        # allow is real signal but not yet high-confidence.
+        if reputation_score is not None and reputation_score >= PFSENSE_HIGH_REPUTATION_SCORE:
+            severity = "high"
+        elif event_count >= high_confidence_repeat_threshold:
+            severity = "high"
+        elif distinct_port_count >= distinct_port_escalation_threshold:
+            severity = "high"
+        else:
+            severity = "medium"
+
+        if _pfsense_cooldown_suppresses(cur, source_ip, "pfsense_firewall_suspicious_allow", severity):
+            continue
+
         response_action = _pfsense_response_action_for_severity(severity)
         response_status = "pending"
 
@@ -2097,6 +2206,7 @@ def _generate_pfsense_suspicious_allow_alerts_core(cur, conn, source=None, sourc
             "interface": interface,
             "direction": "in",
             "event_count": event_count,
+            "distinct_sensitive_port_count": distinct_port_count,
             "first_seen": str(first_seen) if first_seen else None,
             "last_seen": str(last_seen) if last_seen else None,
         }
@@ -2213,13 +2323,17 @@ def _generate_pfsense_noisy_source_alerts_core(cur, conn, source=None, source_ty
         if cur.fetchone():
             continue
 
+        severity = "low"
+
+        if _pfsense_cooldown_suppresses(cur, source_ip, "pfsense_firewall_noisy_source", severity):
+            continue
+
         reputation = lookup_ip_reputation(str(source_ip))
         reputation_score = reputation["reputation_score"]
         reputation_label = reputation["reputation_label"]
         reputation_source = reputation["reputation_source"]
         reputation_summary = reputation["reputation_summary"]
 
-        severity = "low"
         response_action = "suppress_noisy_source"
         response_status = "pending"
 

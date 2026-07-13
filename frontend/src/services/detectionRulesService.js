@@ -16,6 +16,21 @@ export const loadDetectionRules = async () => {
   return data;
 };
 
+export const loadPfsenseDetectionHealth = async () => {
+  const res = await fetch(buildSiemPath("/admin/detection-rules/pfsense-health"), {
+    credentials: "include",
+  });
+  const data = await parseJsonResponse(res, []);
+
+  if (!res.ok) {
+    throw new Error(
+      getApiErrorMessage(data, "Unable to load pfSense detection health", ["error"])
+    );
+  }
+
+  return data;
+};
+
 export const updateDetectionRule = async (ruleId, parameters, active) => {
   const payload = {};
   if (parameters !== undefined) {

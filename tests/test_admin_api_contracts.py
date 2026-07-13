@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
@@ -67,6 +68,7 @@ def _fake_analyst():
     "/admin/audit-log",
     "/admin/pfsense-ingest-filters",
     "/admin/pfsense-ingest-filters/metrics",
+    "/admin/detection-rules/pfsense-health",
 ])
 def test_admin_list_routes_without_session_return_401(client, path):
     resp = client.get(path)
@@ -85,6 +87,8 @@ def test_admin_list_routes_without_session_return_401(client, path):
         ("/admin/pfsense-ingest-filters", _fake_analyst(), "analystpass"),
         ("/admin/pfsense-ingest-filters/metrics", _fake_viewer(), "viewerpass"),
         ("/admin/pfsense-ingest-filters/metrics", _fake_analyst(), "analystpass"),
+        ("/admin/detection-rules/pfsense-health", _fake_viewer(), "viewerpass"),
+        ("/admin/detection-rules/pfsense-health", _fake_analyst(), "analystpass"),
     ],
 )
 def test_admin_list_routes_as_viewer_or_analyst_return_403(client, mock_db, path, fake_user, password):
@@ -211,6 +215,182 @@ def test_get_admin_detection_rules_as_super_admin_returns_200_stable_shape(clien
             {"source": identity.source, "source_type": identity.source_type}
             for identity in sorted(registry_entry.allowed_sources)
         ]
+
+
+def test_get_pfsense_detection_health_returns_ranked_utc_windowed_read_only_summary(client, postgres_db):
+    conn, cur = postgres_db
+    now = datetime.now(timezone.utc)
+    inside_window = now - timedelta(hours=2)
+    older_than_window = now - timedelta(hours=26)
+
+    cur.execute(
+        """
+        INSERT INTO alerts (alert_type, severity, source_ip, source, source_type, message, status, created_at)
+        VALUES
+            (%s, %s, %s, 'pfsense', 'firewall', %s, 'open', %s),
+            (%s, %s, %s, 'pfsense', 'firewall', %s, 'open', %s),
+            (%s, %s, %s, 'pfsense', 'firewall', %s, 'open', %s),
+            (%s, %s, %s, 'pfsense', 'firewall', %s, 'open', %s),
+            (%s, %s, %s, 'pfsense', 'firewall', %s, 'open', %s),
+            (%s, %s, %s, 'pfsense', 'firewall', %s, 'open', %s),
+            (%s, %s, %s, 'pfsense', 'firewall', %s, 'open', %s),
+            (%s, %s, %s, 'pfsense', 'firewall', %s, 'open', %s),
+            (%s, %s, %s, 'pfsense', 'firewall', %s, 'open', %s),
+            (%s, %s, %s, 'pfsense', 'firewall', %s, 'open', %s),
+            (%s, %s, %s, 'pfsense', 'firewall', %s, 'open', %s)
+        """,
+        (
+            "pfsense_firewall_repeated_deny", "medium", "198.51.100.31", "Repeated deny 1", inside_window,
+            "pfsense_firewall_repeated_deny", "high", "198.51.100.32", "Repeated deny 2", inside_window + timedelta(minutes=10),
+            "pfsense_firewall_repeated_deny", "low", "198.51.100.33", "Repeated deny 3", inside_window + timedelta(minutes=20),
+            "pfsense_firewall_repeated_deny", "critical", "198.51.100.34", "Repeated deny stale", older_than_window,
+            "pfsense_firewall_port_scan", "critical", "198.51.100.41", "Port scan 1", inside_window + timedelta(minutes=5),
+            "pfsense_firewall_port_scan", "low", "198.51.100.42", "Port scan 2", inside_window + timedelta(minutes=15),
+            "pfsense_firewall_suspicious_allow", "medium", "198.51.100.51", "Suspicious allow 1", inside_window + timedelta(minutes=25),
+            "pfsense_firewall_suspicious_allow", "medium", "198.51.100.52", "Suspicious allow 2", inside_window + timedelta(minutes=26),
+            "pfsense_firewall_suspicious_allow", "medium", "198.51.100.53", "Suspicious allow 3", inside_window + timedelta(minutes=27),
+            "pfsense_firewall_suspicious_allow", "medium", "198.51.100.54", "Suspicious allow 4", inside_window + timedelta(minutes=28),
+            "pfsense_firewall_suspicious_allow", "medium", "198.51.100.55", "Suspicious allow 5", inside_window + timedelta(minutes=29),
+        ),
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get("/admin/detection-rules/pfsense-health")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert [row["rule_id"] for row in data] == [
+        "pfsense_firewall_suspicious_allow",
+        "pfsense_firewall_repeated_deny",
+        "pfsense_firewall_port_scan",
+        "pfsense_firewall_noisy_source",
+    ]
+
+    suspicious_allow = data[0]
+    assert suspicious_allow["fired_count_24h"] == 5
+    assert suspicious_allow["highest_severity_24h"] == "medium"
+    assert suspicious_allow["health_badge"] == "Needs Review"
+
+    repeated_deny = data[1]
+    assert repeated_deny["fired_count_24h"] == 3
+    assert repeated_deny["highest_severity_24h"] == "high"
+    assert repeated_deny["last_fired_at"] == (inside_window + timedelta(minutes=20)).astimezone(timezone.utc).isoformat()
+    assert repeated_deny["health_badge"] == "Normal"
+
+    port_scan = data[2]
+    assert port_scan == {
+        "rule_id": "pfsense_firewall_port_scan",
+        "rule_name": "pfSense Firewall Port Scan",
+        "fired_count_24h": 2,
+        "highest_severity_24h": "critical",
+        "last_fired_at": (inside_window + timedelta(minutes=15)).astimezone(timezone.utc).isoformat(),
+        "health_badge": "Normal",
+    }
+
+    noisy_source = data[3]
+    assert noisy_source == {
+        "rule_id": "pfsense_firewall_noisy_source",
+        "rule_name": "pfSense Firewall Noisy Source",
+        "fired_count_24h": 0,
+        "highest_severity_24h": None,
+        "last_fired_at": None,
+        "health_badge": "Normal",
+    }
+
+
+def test_get_pfsense_detection_health_returns_zero_count_rows_when_no_alerts_exist(client, postgres_db):
+    conn, _ = postgres_db
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get("/admin/detection-rules/pfsense-health")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert len(data) == 4
+    assert all(row["fired_count_24h"] == 0 for row in data)
+    assert all(row["highest_severity_24h"] is None for row in data)
+    assert all(row["last_fired_at"] is None for row in data)
+    assert all(row["health_badge"] == "Normal" for row in data)
+
+
+def test_get_pfsense_detection_health_single_rule_and_tie_breaking_by_rule_name(client, postgres_db):
+    conn, cur = postgres_db
+    now = datetime.now(timezone.utc)
+    cur.execute(
+        """
+        INSERT INTO alerts (alert_type, severity, source_ip, source, source_type, message, status, created_at)
+        VALUES
+            (%s, 'high', %s, 'pfsense', 'firewall', %s, 'open', %s),
+            (%s, 'medium', %s, 'pfsense', 'firewall', %s, 'open', %s),
+            (%s, 'medium', %s, 'pfsense', 'firewall', %s, 'open', %s),
+            (%s, 'medium', %s, 'pfsense', 'firewall', %s, 'open', %s)
+        """,
+        (
+            "pfsense_firewall_noisy_source", "198.51.100.61", "Noisy source 1", now - timedelta(minutes=20),
+            "pfsense_firewall_noisy_source", "198.51.100.62", "Noisy source 2", now - timedelta(minutes=10),
+            "pfsense_firewall_port_scan", "198.51.100.63", "Port scan 1", now - timedelta(minutes=19),
+            "pfsense_firewall_port_scan", "198.51.100.64", "Port scan 2", now - timedelta(minutes=9),
+        ),
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get("/admin/detection-rules/pfsense-health")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert [row["rule_id"] for row in data[:2]] == [
+        "pfsense_firewall_noisy_source",
+        "pfsense_firewall_port_scan",
+    ]
+    assert data[0]["fired_count_24h"] == 2
+    assert data[1]["fired_count_24h"] == 2
+
+
+def test_get_pfsense_detection_health_badge_boundaries_are_exact(client, postgres_db):
+    conn, cur = postgres_db
+    now = datetime.now(timezone.utc)
+    rows = []
+    for index in range(5):
+        rows.extend([
+            "pfsense_firewall_suspicious_allow",
+            "medium",
+            f"198.51.100.{70 + index}",
+            f"Suspicious allow {index}",
+            now - timedelta(minutes=index),
+        ])
+    for index in range(20):
+        rows.extend([
+            "pfsense_firewall_port_scan",
+            "medium",
+            f"198.51.100.{90 + index}",
+            f"Port scan {index}",
+            now - timedelta(minutes=index),
+        ])
+
+    placeholders = ", ".join(["(%s, %s, %s, 'pfsense', 'firewall', %s, 'open', %s)"] * 25)
+    cur.execute(
+        f"""
+        INSERT INTO alerts (alert_type, severity, source_ip, source, source_type, message, status, created_at)
+        VALUES {placeholders}
+        """,
+        tuple(rows),
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get("/admin/detection-rules/pfsense-health")
+
+    assert resp.status_code == 200
+    data = {row["rule_id"]: row for row in resp.get_json()}
+    assert data["pfsense_firewall_suspicious_allow"]["fired_count_24h"] == 5
+    assert data["pfsense_firewall_suspicious_allow"]["health_badge"] == "Needs Review"
+    assert data["pfsense_firewall_port_scan"]["fired_count_24h"] == 20
+    assert data["pfsense_firewall_port_scan"]["health_badge"] == "Noisy"
 
 
 def test_patch_admin_detection_rule_empty_payload_returns_400(client):

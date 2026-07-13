@@ -47,12 +47,26 @@ PFSENSE_REPEATED_DENY_WINDOW_MINUTES = 15
 
 PFSENSE_PORT_SCAN_THRESHOLD = 2
 PFSENSE_PORT_SCAN_WINDOW_MINUTES = 15
+# A source sweeping this many distinct destination hosts within the window is
+# breadth-worthy even if it never reaches the distinct-port threshold above.
+PFSENSE_PORT_SCAN_HOST_THRESHOLD = 5
 
 PFSENSE_NOISY_SOURCE_THRESHOLD = 20
 PFSENSE_NOISY_SOURCE_WINDOW_MINUTES = 15
 
 PFSENSE_SUSPICIOUS_ALLOW_THRESHOLD = 1
 PFSENSE_SUSPICIOUS_ALLOW_WINDOW_MINUTES = 15
+# Event count at/above which a suspicious-allow candidate escalates to high
+# severity from repetition alone, independent of reputation or port diversity.
+PFSENSE_SUSPICIOUS_ALLOW_HIGH_CONFIDENCE_REPEAT_THRESHOLD = 3
+# Distinct sensitive destination ports touched in-window at/above which a
+# suspicious-allow candidate escalates to high severity as corroborating context.
+PFSENSE_SUSPICIOUS_ALLOW_DISTINCT_PORT_ESCALATION_THRESHOLD = 2
+
+# Minutes after a pfSense alert for a given (source_ip, alert_type) is resolved
+# during which an equal-or-lower-severity recurrence is suppressed rather than
+# regenerated. A strictly higher-severity recurrence always breaks through.
+PFSENSE_ALERT_COOLDOWN_MINUTES = 60
 
 # Sensitive/management-style destination ports. A `firewall_allow` event that lets
 # inbound traffic reach one of these ports is contextually risky even though a
@@ -202,9 +216,10 @@ def get_detection_rule_defaults():
             "parameters": {
                 "threshold": PFSENSE_PORT_SCAN_THRESHOLD,
                 "window_minutes": PFSENSE_PORT_SCAN_WINDOW_MINUTES,
+                "host_threshold": PFSENSE_PORT_SCAN_HOST_THRESHOLD,
             },
             "active": True,
-            "description": "Triggers when pfSense firewall events show one source contacting multiple distinct destination ports.",
+            "description": "Triggers when pfSense firewall events show one source contacting multiple distinct destination ports, or sweeping multiple distinct destination hosts.",
         },
         "pfsense_firewall_noisy_source": {
             "rule_id": "pfsense_firewall_noisy_source",
@@ -222,9 +237,11 @@ def get_detection_rule_defaults():
             "parameters": {
                 "threshold": PFSENSE_SUSPICIOUS_ALLOW_THRESHOLD,
                 "window_minutes": PFSENSE_SUSPICIOUS_ALLOW_WINDOW_MINUTES,
+                "high_confidence_repeat_threshold": PFSENSE_SUSPICIOUS_ALLOW_HIGH_CONFIDENCE_REPEAT_THRESHOLD,
+                "distinct_port_escalation_threshold": PFSENSE_SUSPICIOUS_ALLOW_DISTINCT_PORT_ESCALATION_THRESHOLD,
             },
             "active": True,
-            "description": "Triggers when pfSense allows inbound traffic to a sensitive destination port.",
+            "description": "Triggers when pfSense allows inbound traffic to a sensitive destination port; escalates to high severity only on repetition, reputation, or multi-port corroboration.",
         },
     }
 

@@ -1,8 +1,9 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import AlertTimeline from "./AlertTimeline";
 import { ResponseOutcomeSummary } from "./ResponseOutcome";
 import SourceIpContext from "./SourceIpContext";
 import { getBehavioralReputation, getExternalReputation } from "../utils/alertDisplay";
+import { loadPfsenseWhyFired } from "../services/pfsenseAlertInvestigationService";
 
 function AlertDetailsPanel({
   selectedAlert,
@@ -24,6 +25,46 @@ function AlertDetailsPanel({
   const externalReputation = getExternalReputation(selectedAlert);
   const behavioralReputation = getBehavioralReputation(selectedAlert);
   const contributingSignals = behavioralReputation.contributing_signals;
+  const [whyFired, setWhyFired] = useState(null);
+  const [whyFiredLoading, setWhyFiredLoading] = useState(false);
+  const [whyFiredError, setWhyFiredError] = useState("");
+  const shouldLoadWhyFired = Boolean(selectedAlert?.pfsense_quality?.why_fired_available);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!shouldLoadWhyFired || !selectedAlert?.id) {
+      setWhyFired(null);
+      setWhyFiredLoading(false);
+      setWhyFiredError("");
+      return undefined;
+    }
+
+    setWhyFiredLoading(true);
+    setWhyFiredError("");
+
+    loadPfsenseWhyFired(selectedAlert.id)
+      .then((data) => {
+        if (!cancelled) {
+          setWhyFired(data);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setWhyFired(null);
+          setWhyFiredError(error.message || "Unable to load why this fired");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setWhyFiredLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedAlert?.id, shouldLoadWhyFired]);
 
   return (
     <div style={{ fontSize: "14px", lineHeight: "1.7", color: "#e6edf3" }}>
@@ -70,6 +111,40 @@ function AlertDetailsPanel({
       <p><strong>Severity:</strong> {selectedAlert.severity}</p>
       <p><strong>Status:</strong> {selectedAlert.status}</p>
       <p><strong>Message:</strong> {selectedAlert.message}</p>
+      {shouldLoadWhyFired ? (
+        <div style={whyFiredPanelStyle}>
+          <strong>Why this fired</strong>
+          {whyFiredLoading ? (
+            <div style={whyFiredMutedStyle}>Loading detection evidence...</div>
+          ) : whyFiredError ? (
+            <div role="alert" style={whyFiredErrorStyle}>{whyFiredError}</div>
+          ) : whyFired ? (
+            <div style={{ marginTop: "8px" }}>
+              <p style={{ margin: "0 0 8px 0" }}>{whyFired.summary}</p>
+              {Array.isArray(whyFired.evidence) && whyFired.evidence.length > 0 ? (
+                whyFired.evidence.map((item) => (
+                  <div key={item.field} style={signalRowStyle}>
+                    <span>{item.label}</span>
+                    <span style={sourceTypeTextStyle}>{String(item.value)}</span>
+                  </div>
+                ))
+              ) : (
+                <div style={whyFiredMutedStyle}>No persisted detection evidence was recorded.</div>
+              )}
+              {whyFired.cooldown?.active ? (
+                <p style={whyFiredNoticeStyle}>
+                  Cooldown active until {whyFired.cooldown.cooldown_until}
+                </p>
+              ) : null}
+              {whyFired.suppressed_rollup ? (
+                <p style={whyFiredInfoStyle}>
+                  This alert represents a suppression roll-up for repeated noisy traffic.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       <div style={{ margin: "14px 0" }}>
         <strong>Response Outcome:</strong>
         <div style={{ marginTop: "8px" }}>
@@ -139,5 +214,33 @@ function AlertDetailsPanel({
     </div>
   );
 }
+
+const whyFiredPanelStyle = {
+  margin: "14px 0",
+  padding: "12px",
+  border: "1px solid #223449",
+  borderRadius: "10px",
+  backgroundColor: "#0f1720",
+};
+
+const whyFiredMutedStyle = {
+  marginTop: "8px",
+  color: "#94a3b8",
+};
+
+const whyFiredErrorStyle = {
+  marginTop: "8px",
+  color: "#fca5a5",
+};
+
+const whyFiredNoticeStyle = {
+  margin: "8px 0 0 0",
+  color: "#fde68a",
+};
+
+const whyFiredInfoStyle = {
+  margin: "8px 0 0 0",
+  color: "#bfdbfe",
+};
 
 export default AlertDetailsPanel;

@@ -2,10 +2,15 @@ import React from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import DetectionRulesPanel from "./DetectionRulesPanel";
-import { loadDetectionRules, updateDetectionRule } from "../services/detectionRulesService";
+import {
+  loadDetectionRules,
+  loadPfsenseDetectionHealth,
+  updateDetectionRule,
+} from "../services/detectionRulesService";
 
 jest.mock("../services/detectionRulesService", () => ({
   loadDetectionRules: jest.fn(),
+  loadPfsenseDetectionHealth: jest.fn(),
   updateDetectionRule: jest.fn(),
 }));
 
@@ -78,6 +83,24 @@ const clickAndFlush = async (element) => {
 beforeEach(() => {
   jest.clearAllMocks();
   loadDetectionRules.mockResolvedValue(rules);
+  loadPfsenseDetectionHealth.mockResolvedValue([
+    {
+      rule_id: "pfsense_firewall_port_scan",
+      rule_name: "pfSense Firewall Port Scan",
+      fired_count_24h: 21,
+      highest_severity_24h: "critical",
+      last_fired_at: "2026-07-13T14:00:00Z",
+      health_badge: "Noisy",
+    },
+    {
+      rule_id: "pfsense_firewall_noisy_source",
+      rule_name: "pfSense Firewall Noisy Source",
+      fired_count_24h: 0,
+      highest_severity_24h: null,
+      last_fired_at: null,
+      health_badge: "Normal",
+    },
+  ]);
   updateDetectionRule.mockResolvedValue({});
   window.confirm = jest.fn(() => true);
 });
@@ -86,6 +109,10 @@ test("renders active state, source coverage, global parameters, and override sta
   renderPanel();
 
   expect(await screen.findByText("Failed Login Threshold")).toBeInTheDocument();
+  expect(await screen.findByText("pfSense Detection Health")).toBeInTheDocument();
+  expect(screen.getByText("24h UTC window")).toBeInTheDocument();
+  expect(screen.getByText("21 fires")).toBeInTheDocument();
+  expect(screen.getByText("Noisy")).toBeInTheDocument();
   expect(screen.getAllByText("Active").length).toBeGreaterThan(0);
   expect(screen.getByText("Inactive")).toBeInTheDocument();
   for (const label of [
@@ -163,4 +190,22 @@ test("existing threshold and window editor remains compatible", async () => {
     "failed_login_threshold",
     { threshold: 6, window_minutes: 15 }
   );
+});
+
+test("detection health rows navigate to the existing rule workspace row", async () => {
+  const scrollIntoView = jest.fn();
+  window.HTMLElement.prototype.scrollIntoView = scrollIntoView;
+
+  renderPanel();
+  await screen.findByText("21 fires");
+  const healthButton = screen.getAllByRole("button").find((button) => (
+    button.textContent.includes("pfSense Firewall Port Scan") &&
+    button.textContent.includes("21 fires")
+  ));
+  fireEvent.click(healthButton);
+
+  expect(scrollIntoView).toHaveBeenCalled();
+  await waitFor(() => {
+    expect(document.activeElement).toHaveAttribute("id", "detection-rule-row-pfsense_firewall_port_scan");
+  });
 });

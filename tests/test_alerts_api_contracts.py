@@ -90,6 +90,13 @@ def _fetch_alerts_response(client, conn):
         return client.get("/alerts")
 
 
+def _fetch_why_fired_response(client, conn, alert_id):
+    with patch("routes.alerts_events_routes.get_db_connection", return_value=_RouteSafeConnection(conn)), patch(
+        "routes.alerts_events_routes.get_ip_reputation", return_value=BEHAVIORAL_REPUTATION
+    ):
+        return client.get(f"/alerts/{alert_id}/why-fired")
+
+
 def _alert_by_type(alerts, alert_type):
     return next(alert for alert in alerts if alert.get("alert_type") == alert_type)
 
@@ -395,3 +402,120 @@ def test_get_alerts_unknown_mitre_mapping_keeps_null_field_shape(client, postgre
     assert isinstance(data, list)
 
     _assert_null_mitre(_alert_by_type(data, "custom_unmapped_alert"))
+
+
+def test_get_alerts_pfsense_quality_metadata_and_why_fired_use_persisted_context_only(client, postgres_db):
+    conn, cur = postgres_db
+    context = {
+        "action": "block",
+        "direction": "out",
+        "event_count": 6,
+        "destination_ip": "203.0.113.10",
+        "destination_port": 22,
+        "protocol": "tcp",
+        "interface": "wan",
+        "first_seen": "2026-07-13T13:00:00Z",
+        "last_seen": "2026-07-13T13:09:00Z",
+    }
+    cur.execute(
+        """
+        INSERT INTO alerts (
+            alert_type,
+            severity,
+            source_ip,
+            source,
+            source_type,
+            message,
+            status,
+            context,
+            reputation_score,
+            reputation_label,
+            reputation_source,
+            reputation_summary
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
+        """,
+        (
+            "pfsense_firewall_repeated_deny",
+            "high",
+            "198.51.100.250",
+            "pfsense",
+            "firewall",
+            "Repeated deny threshold exceeded",
+            "resolved",
+            Json(context),
+            EXTERNAL_REPUTATION["reputation_score"],
+            EXTERNAL_REPUTATION["reputation_label"],
+            EXTERNAL_REPUTATION["reputation_source"],
+            EXTERNAL_REPUTATION["reputation_summary"],
+        ),
+    )
+    alert_id = cur.fetchone()[0]
+    cur.execute(
+        """
+        INSERT INTO audit_log (
+            event_type,
+            actor_username,
+            actor_role,
+            target_alert_id,
+            request_path,
+            details
+        )
+        VALUES (%s, %s, %s, %s, %s, %s)
+        """,
+        (
+            "UPDATE_ALERT_STATUS",
+            "testadmin",
+            "super_admin",
+            alert_id,
+            f"/alerts/{alert_id}/status",
+            Json({"status": "resolved"}),
+        ),
+    )
+    conn.commit()
+
+    _login_as_super_admin(client)
+    alerts_resp = _fetch_alerts_response(client, conn)
+    assert alerts_resp.status_code == 200
+    alert = _alert_by_type(alerts_resp.get_json(), "pfsense_firewall_repeated_deny")
+    assert alert["pfsense_quality"]["why_fired_available"] is True
+    assert alert["pfsense_quality"]["suppressed_rollup"] is False
+    assert alert["pfsense_quality"]["cooldown"]["window_minutes"] > 0
+    assert alert["pfsense_quality"]["cooldown"]["resolved_at"] is not None
+    assert alert["context"] == context
+
+    why_fired_resp = _fetch_why_fired_response(client, conn, alert_id)
+    assert why_fired_resp.status_code == 200
+    payload = why_fired_resp.get_json()
+    assert payload["alert_id"] == alert_id
+    assert payload["rule_id"] == "pfsense_firewall_repeated_deny"
+    assert payload["source"] == "pfsense"
+    assert payload["source_type"] == "firewall"
+    assert payload["context"] == context
+    assert payload["suppressed_rollup"] is False
+    assert payload["cooldown"]["window_minutes"] > 0
+    evidence = {item["field"]: item["value"] for item in payload["evidence"]}
+    assert evidence["action"] == "block"
+    assert evidence["direction"] == "LAN → WAN (outbound)"
+    assert evidence["event_count"] == 6
+    assert evidence["destination_ip"] == "203.0.113.10"
+    assert evidence["destination_port"] == 22
+
+
+def test_get_alert_why_fired_rejects_non_pfsense_alerts(client, postgres_db):
+    conn, cur = postgres_db
+    _insert_alert(
+        cur,
+        alert_type="failed_login_threshold",
+        source_ip="198.51.100.251",
+        message="Failed login threshold exceeded",
+    )
+    cur.execute("SELECT id FROM alerts WHERE alert_type = %s", ("failed_login_threshold",))
+    alert_id = cur.fetchone()[0]
+    conn.commit()
+
+    _login_as_super_admin(client)
+    resp = _fetch_why_fired_response(client, conn, alert_id)
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "Why this fired is available only for pfSense alerts"

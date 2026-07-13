@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import {
   loadDetectionRules,
+  loadPfsenseDetectionHealth,
   updateDetectionRule,
 } from "../services/detectionRulesService";
 import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
@@ -21,6 +22,9 @@ function DetectionRulesPanel({
   const [saveSuccess, setSaveSuccess] = useState("");
   const [saving, setSaving] = useState(false);
   const [togglingRuleId, setTogglingRuleId] = useState("");
+  const [healthRows, setHealthRows] = useState([]);
+  const [healthLoading, setHealthLoading] = useState(true);
+  const [healthError, setHealthError] = useState("");
 
   const loadRules = async () => {
     try {
@@ -38,8 +42,23 @@ function DetectionRulesPanel({
     }
   };
 
+  const loadHealth = async () => {
+    try {
+      setHealthLoading(true);
+      setHealthError("");
+      const data = await loadPfsenseDetectionHealth();
+      setHealthRows(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setHealthError(err.message || "Unable to load pfSense detection health");
+      setHealthRows([]);
+    } finally {
+      setHealthLoading(false);
+    }
+  };
+
   useEffect(() => {
     loadRules();
+    loadHealth();
   }, []);
 
   useEffect(() => {
@@ -93,6 +112,7 @@ function DetectionRulesPanel({
       await updateDetectionRule(ruleId, payloadParameters);
 
       await loadRules();
+      await loadHealth();
       setEditingRuleId("");
       setDraftParameters({});
       setSaveError("");
@@ -121,6 +141,7 @@ function DetectionRulesPanel({
     try {
       await updateDetectionRule(rule.rule_id, undefined, nextActive);
       await loadRules();
+      await loadHealth();
       setSaveSuccess(`${nextActive ? "Enabled" : "Disabled"} ${rule.rule_id}`);
     } catch (err) {
       setRules(previousRules);
@@ -177,6 +198,15 @@ function DetectionRulesPanel({
     </div>
   );
 
+  const navigateToRule = (ruleId) => {
+    const row = document.getElementById(`detection-rule-row-${ruleId}`);
+    if (!row) {
+      return;
+    }
+    row.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    row.focus?.();
+  };
+
   return (
     <section style={cardStyle}>
       <div style={cardHeaderStyle}>
@@ -192,6 +222,37 @@ function DetectionRulesPanel({
       <div style={panelContentStyle}>
         {saveSuccess ? <div style={successStateStyle}>{saveSuccess}</div> : null}
         {saveError && !editingRuleId ? <div role="alert" style={errorStateStyle}>{saveError}</div> : null}
+        <section style={healthPanelStyle} aria-labelledby="pfsense-detection-health-heading">
+          <div style={healthHeaderStyle}>
+            <div>
+              <p style={sectionLabelStyle}>Read-only</p>
+              <h3 id="pfsense-detection-health-heading" style={healthTitleStyle}>pfSense Detection Health</h3>
+            </div>
+            <span style={healthWindowStyle}>24h UTC window</span>
+          </div>
+          {healthLoading ? (
+            <p style={emptyTextStyle}>Loading detection health...</p>
+          ) : healthError ? (
+            <div role="alert" style={errorStateStyle}>{healthError}</div>
+          ) : (
+            <div style={healthListStyle}>
+              {healthRows.map((row) => (
+                <button
+                  key={row.rule_id}
+                  type="button"
+                  onClick={() => navigateToRule(row.rule_id)}
+                  style={healthRowButtonStyle}
+                >
+                  <span style={healthRuleNameStyle}>{row.rule_name}</span>
+                  <span style={healthMetaStyle}>{row.fired_count_24h} fires</span>
+                  <span style={healthMetaStyle}>Highest {row.highest_severity_24h || "none"}</span>
+                  <span style={healthMetaStyle}>Last {row.last_fired_at || "never"}</span>
+                  <span style={getHealthBadgeStyle(row.health_badge)}>{row.health_badge}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
         {loading ? (
           <p style={emptyTextStyle}>Loading detection rules...</p>
         ) : error ? (
@@ -215,7 +276,7 @@ function DetectionRulesPanel({
               </thead>
               <tbody>
                 {rules.map((rule) => (
-                  <tr key={rule.rule_id} style={rowStyle}>
+                  <tr key={rule.rule_id} id={`detection-rule-row-${rule.rule_id}`} tabIndex={-1} style={rowStyle}>
                     <td style={bodyCellStyle}>{rule.display_name}</td>
                     <td style={{ ...bodyCellStyle, ...monoCellStyle }}>{rule.rule_id}</td>
                     <td style={bodyCellStyle}>
@@ -333,6 +394,91 @@ function DetectionRulesPanel({
 const panelContentStyle = {
   padding: "24px 20px 22px",
 };
+
+const healthPanelStyle = {
+  marginBottom: "18px",
+  border: "1px solid #233044",
+  borderRadius: "12px",
+  padding: "14px",
+  backgroundColor: "#0f1621",
+};
+
+const healthHeaderStyle = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: "12px",
+  flexWrap: "wrap",
+  marginBottom: "10px",
+};
+
+const healthTitleStyle = {
+  margin: 0,
+  color: "#e6edf3",
+  fontSize: "18px",
+};
+
+const healthWindowStyle = {
+  color: "#94a3b8",
+  fontSize: "12px",
+};
+
+const healthListStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "8px",
+};
+
+const healthRowButtonStyle = {
+  display: "grid",
+  gridTemplateColumns: "minmax(180px, 2fr) repeat(3, minmax(110px, 1fr)) auto",
+  gap: "10px",
+  alignItems: "center",
+  width: "100%",
+  padding: "10px 12px",
+  borderRadius: "10px",
+  border: "1px solid #263244",
+  backgroundColor: "#111927",
+  color: "#e6edf3",
+  textAlign: "left",
+  cursor: "pointer",
+};
+
+const healthRuleNameStyle = {
+  fontWeight: "700",
+};
+
+const healthMetaStyle = {
+  color: "#94a3b8",
+  fontSize: "12px",
+};
+
+const getHealthBadgeStyle = (badge) => ({
+  justifySelf: "end",
+  padding: "4px 8px",
+  borderRadius: "999px",
+  fontSize: "12px",
+  fontWeight: "700",
+  border: "1px solid transparent",
+  backgroundColor:
+    badge === "Noisy"
+      ? "rgba(248, 113, 113, 0.14)"
+      : badge === "Needs Review"
+        ? "rgba(250, 204, 21, 0.14)"
+        : "rgba(74, 222, 128, 0.14)",
+  color:
+    badge === "Noisy"
+      ? "#fca5a5"
+      : badge === "Needs Review"
+        ? "#fde68a"
+        : "#86efac",
+  borderColor:
+    badge === "Noisy"
+      ? "rgba(248, 113, 113, 0.28)"
+      : badge === "Needs Review"
+        ? "rgba(250, 204, 21, 0.28)"
+        : "rgba(74, 222, 128, 0.28)",
+});
 
 const sectionLabelStyle = {
   margin: "0 0 8px 0",

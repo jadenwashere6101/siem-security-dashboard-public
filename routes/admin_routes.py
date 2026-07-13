@@ -1,5 +1,5 @@
 import psycopg2
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from flask import Blueprint, current_app, jsonify, request
 from flask_login import current_user, login_required
 from psycopg2.extras import Json
@@ -41,6 +41,22 @@ from core.extensions import limiter
 admin_bp = Blueprint("admin", __name__)
 DEFAULT_ADMIN_RUN_BATCH_SIZE = 10
 MAX_ADMIN_RUN_BATCH_SIZE = 25
+PFSENSE_DETECTION_HEALTH_RULE_IDS = (
+    "pfsense_firewall_noisy_source",
+    "pfsense_firewall_port_scan",
+    "pfsense_firewall_repeated_deny",
+    "pfsense_firewall_suspicious_allow",
+)
+_SEVERITY_TO_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+_RANK_TO_SEVERITY = {rank: severity for severity, rank in _SEVERITY_TO_RANK.items()}
+
+
+def _pfsense_detection_health_badge(fired_count):
+    if fired_count >= 20:
+        return "Noisy"
+    if fired_count >= 5:
+        return "Needs Review"
+    return "Normal"
 
 
 @admin_bp.route("/admin/pfsense-ingest-filters", methods=["GET"])
@@ -468,6 +484,88 @@ def list_audit_log():
 @super_admin_required
 def list_detection_rules():
     return jsonify(get_all_effective_detection_rules()), 200
+
+
+@admin_bp.route("/admin/detection-rules/pfsense-health", methods=["GET"])
+@login_required
+@super_admin_required
+def list_pfsense_detection_health():
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        rule_defaults = get_detection_rule_defaults()
+        window_end = datetime.now(timezone.utc)
+        window_start = window_end - timedelta(hours=24)
+
+        cur.execute(
+            """
+            SELECT
+                alert_type,
+                COUNT(*)::integer AS fired_count,
+                MAX(
+                    CASE severity
+                        WHEN 'critical' THEN 4
+                        WHEN 'high' THEN 3
+                        WHEN 'medium' THEN 2
+                        WHEN 'low' THEN 1
+                        ELSE 0
+                    END
+                ) AS highest_severity_rank,
+                MAX(created_at) AS last_fired_at
+            FROM alerts
+            WHERE source = 'pfsense'
+              AND source_type = 'firewall'
+              AND alert_type = ANY(%s)
+              AND created_at >= %s
+              AND created_at < %s
+            GROUP BY alert_type
+            """,
+            (list(PFSENSE_DETECTION_HEALTH_RULE_IDS), window_start, window_end),
+        )
+        aggregate_by_rule = {
+            row[0]: {
+                "fired_count_24h": row[1],
+                "highest_severity_24h": _RANK_TO_SEVERITY.get(row[2]),
+                "last_fired_at": row[3].astimezone(timezone.utc).isoformat() if row[3] is not None else None,
+            }
+            for row in cur.fetchall()
+        }
+
+        rows = []
+        for rule_id in PFSENSE_DETECTION_HEALTH_RULE_IDS:
+            rule = rule_defaults[rule_id]
+            aggregate = aggregate_by_rule.get(
+                rule_id,
+                {
+                    "fired_count_24h": 0,
+                    "highest_severity_24h": None,
+                    "last_fired_at": None,
+                },
+            )
+            rows.append(
+                {
+                    "rule_id": rule_id,
+                    "rule_name": rule["display_name"],
+                    "fired_count_24h": aggregate["fired_count_24h"],
+                    "highest_severity_24h": aggregate["highest_severity_24h"],
+                    "last_fired_at": aggregate["last_fired_at"],
+                    "health_badge": _pfsense_detection_health_badge(aggregate["fired_count_24h"]),
+                }
+            )
+
+        rows.sort(key=lambda item: (-item["fired_count_24h"], item["rule_name"]))
+        return jsonify(rows), 200
+    except Exception as error:
+        current_app.logger.error("Unable to list pfSense detection health: %s", error)
+        return jsonify({"error": "Unable to load pfSense detection health"}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 
 @admin_bp.route("/admin/detection-rules/<rule_id>", methods=["PATCH"])
