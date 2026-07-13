@@ -208,3 +208,188 @@ test("shows an empty state before any simulation has been run", async () => {
   await screen.findByRole("option", { name: "Failed Login Threshold" });
   expect(screen.getByText(/Select a source, rule, and input/i)).toBeInTheDocument();
 });
+
+describe("Temporary Playground Rule mode", () => {
+  const temporaryStages = {
+    raw_input: { status: "succeeded", input_count: 2, input_format: "json_lines" },
+    parser: { status: "succeeded", results: [] },
+    normalized_event: { status: "succeeded", events: [] },
+    detection_applicability: {
+      status: "succeeded",
+      source: "bank_app",
+      source_type: "custom",
+      event_type_filter: "failed_login",
+      allowed_condition_fields: ["source_ip", "username", "event_type", "event_outcome", "severity"],
+      allowed_group_by_fields: ["source_ip", "username"],
+    },
+    detection_evaluation: { status: "succeeded", candidate_event_count: 2, matching_event_count: 2 },
+    threshold_window_evaluation: {
+      status: "succeeded",
+      matched: true,
+      matched_group: "198.51.100.201",
+      observed_value_label: "count",
+      observed_value: 2,
+      configured_threshold: 2,
+      evaluated_window_minutes: 15,
+      group_by_field: "source_ip",
+      grouped_results: [{ group_value: "198.51.100.201", match_count: 2, window_basis: "request_scope_without_timestamps" }],
+      evidence_available: true,
+      pasted_event_only: true,
+      nothing_persisted: true,
+      nothing_executed: true,
+    },
+    alert_preview: {
+      status: "succeeded",
+      alert: { alert_type: "temporary_playground_rule", severity: "high", message: "msg", reputation_source: "simulated" },
+      temporary_rule_semantics: true,
+      persistence: "request_scoped_rollback_only",
+    },
+    mitre_mapping: { status: "succeeded", mitre_technique_id: "T1110", mitre_technique_name: "Brute Force", mitre_tactic: "Credential Access", reason: "temporary_rule_selected_mitre_technique" },
+    soar_preview: { status: "succeeded", matched_playbooks: [], no_playbook_match: true, selected_response_action: "monitor" },
+  };
+
+  const fillMinimalBuilderRule = async () => {
+    await userEvent.selectOptions(screen.getByLabelText(/playground source/i), "bank_app");
+    await userEvent.selectOptions(screen.getByLabelText(/playground input format/i), "json_lines");
+    pasteInto(
+      screen.getByLabelText(/playground event input/i),
+      '{"event_type": "failed_login", "source_ip": "198.51.100.201", "username": "alice"}'
+    );
+    await userEvent.selectOptions(screen.getByLabelText(/condition field/i), "username");
+    await userEvent.selectOptions(screen.getByLabelText(/condition operator/i), "equals");
+    await userEvent.type(screen.getByLabelText(/condition value/i), "alice");
+    await userEvent.selectOptions(screen.getByLabelText(/group by field/i), "source_ip");
+  };
+
+  test("presents both modes to any user who can reach this workspace, defaulting to Existing Production Rule", async () => {
+    render(<DetectionSimulatorPanel />);
+    await screen.findByRole("option", { name: "Failed Login Threshold" });
+
+    const modeGroup = screen.getByRole("radiogroup", { name: /detection simulator mode/i });
+    const existingRadio = within(modeGroup).getByRole("radio", { name: /existing production rule/i });
+    const playgroundRadio = within(modeGroup).getByRole("radio", { name: /temporary playground rule/i });
+
+    // Both modes are offered by the same workspace with no additional
+    // role-specific gating inside the panel -- the backend applies the same
+    // analyst-or-super-admin boundary to both simulation_mode values via one
+    // endpoint, so no separate frontend RBAC check is introduced here.
+    expect(existingRadio).toBeInTheDocument();
+    expect(playgroundRadio).toBeInTheDocument();
+    expect(existingRadio).toBeChecked();
+    expect(playgroundRadio).not.toBeChecked();
+  });
+
+  test("switching to Temporary Playground Rule mode hides the production-rule form and shows the guided builder", async () => {
+    render(<DetectionSimulatorPanel />);
+    await screen.findByRole("option", { name: "Failed Login Threshold" });
+
+    await userEvent.click(screen.getByRole("radio", { name: /temporary playground rule/i }));
+
+    expect(screen.queryByLabelText(/^detection rule$/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/playground source/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /reset rule/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /save rule/i })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("radio", { name: /existing production rule/i }));
+    expect(screen.getByLabelText(/^detection rule$/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/playground source/i)).not.toBeInTheDocument();
+  });
+
+  test("submits the builder-assembled payload and renders backend evidence only, without recomputing the match client-side", async () => {
+    runDetectionSimulation.mockResolvedValue({
+      simulated: true,
+      simulation_mode: "temporary_playground_rule",
+      source: "bank_app",
+      temporary_rule: { source: "bank_app" },
+      stages: temporaryStages,
+    });
+    render(<DetectionSimulatorPanel />);
+    await screen.findByRole("option", { name: "Failed Login Threshold" });
+    await userEvent.click(screen.getByRole("radio", { name: /temporary playground rule/i }));
+
+    await fillMinimalBuilderRule();
+    await userEvent.click(screen.getByRole("button", { name: /run simulation/i }));
+
+    await waitFor(() =>
+      expect(runDetectionSimulation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          simulation_mode: "temporary_playground_rule",
+          temporary_rule: expect.objectContaining({
+            source: "bank_app",
+            condition: { field: "username", operator: "equals", value: "alice" },
+            aggregation: { type: "count", group_by_field: "source_ip" },
+          }),
+        })
+      )
+    );
+
+    const results = await screen.findByTestId("detection-simulator-results");
+    // Rendered evidence is read verbatim from the mocked backend response --
+    // the grouped count (2) and threshold (2) below come only from
+    // temporaryStages, never from re-evaluating the pasted event in React.
+    expect(within(results).getByText(/Grouped evidence: source_ip=198.51.100.201 \(2\)/)).toBeInTheDocument();
+    expect(within(results).getByText(/Observed count: 2 \(required: 2\)/)).toBeInTheDocument();
+    expect(within(results).getByText(/Nothing was persisted or executed by this evaluation\./)).toBeInTheDocument();
+  });
+
+  test("surfaces a backend validation error for the playground request without rendering results", async () => {
+    runDetectionSimulation.mockRejectedValue(new Error("temporary_rule.condition.field is not supported for source 'bank_app'"));
+    render(<DetectionSimulatorPanel />);
+    await screen.findByRole("option", { name: "Failed Login Threshold" });
+    await userEvent.click(screen.getByRole("radio", { name: /temporary playground rule/i }));
+
+    await fillMinimalBuilderRule();
+    await userEvent.click(screen.getByRole("button", { name: /run simulation/i }));
+
+    expect(await screen.findByText(/is not supported for source/)).toBeInTheDocument();
+    expect(screen.queryByTestId("detection-simulator-results")).not.toBeInTheDocument();
+  });
+
+  test("Reset Rule discards the current draft and clears any displayed result, with no persistence implied", async () => {
+    runDetectionSimulation.mockResolvedValue({
+      simulated: true,
+      simulation_mode: "temporary_playground_rule",
+      source: "bank_app",
+      stages: temporaryStages,
+    });
+    render(<DetectionSimulatorPanel />);
+    await screen.findByRole("option", { name: "Failed Login Threshold" });
+    await userEvent.click(screen.getByRole("radio", { name: /temporary playground rule/i }));
+
+    await fillMinimalBuilderRule();
+    await userEvent.click(screen.getByRole("button", { name: /run simulation/i }));
+    await screen.findByTestId("detection-simulator-results");
+
+    await userEvent.click(screen.getByRole("button", { name: /reset rule/i }));
+
+    expect(screen.queryByTestId("detection-simulator-results")).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/playground source/i).value).toBe("");
+    expect(screen.getByText(/Build a temporary rule and run a simulation/i)).toBeInTheDocument();
+  });
+
+  test("mode selector and builder controls are keyboard-focusable in a logical order with no new console errors", async () => {
+    const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    render(<DetectionSimulatorPanel />);
+    await screen.findByRole("option", { name: "Failed Login Threshold" });
+
+    const existingRadio = screen.getByRole("radio", { name: /existing production rule/i });
+    const playgroundRadio = screen.getByRole("radio", { name: /temporary playground rule/i });
+    expect(existingRadio.tabIndex).not.toBe(-1);
+    expect(playgroundRadio.tabIndex).not.toBe(-1);
+
+    await userEvent.click(playgroundRadio);
+    expect(playgroundRadio).toBeChecked();
+
+    // Selecting a source first enables the dependent format/field selects,
+    // so tabbing through them exercises the real (non-disabled) focus order.
+    await userEvent.selectOptions(screen.getByLabelText(/playground source/i), "bank_app");
+    screen.getByLabelText(/playground source/i).focus();
+    await userEvent.tab();
+    expect(screen.getByLabelText(/playground input format/i)).toHaveFocus();
+    await userEvent.tab();
+    expect(screen.getByLabelText(/playground event type filter/i)).toHaveFocus();
+
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+});

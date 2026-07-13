@@ -10,7 +10,13 @@ from flask_login import login_required
 
 from core.auth import analyst_or_super_admin_required
 from engines.detection_config import get_all_effective_detection_rules
-from engines.detection_simulator import SimulationValidationError, run_detection_simulation
+from engines.detection_simulator import (
+    SIMULATION_MODE_EXISTING_PRODUCTION_RULE,
+    SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE,
+    TEMPORARY_RULE_FORBIDDEN_REQUEST_KEYS,
+    SimulationValidationError,
+    run_detection_simulation,
+)
 
 
 detection_simulator_bp = Blueprint("detection_simulator", __name__)
@@ -53,35 +59,72 @@ def run_simulation():
     if not isinstance(data, dict):
         return jsonify({"error": "Invalid JSON"}), 400
 
-    source = data.get("source")
-    rule_id = data.get("rule_id")
-    input_format = data.get("input_format")
-    raw_lines = data.get("raw_lines")
-    json_events = data.get("json_events")
+    simulation_mode = data.get("simulation_mode") or SIMULATION_MODE_EXISTING_PRODUCTION_RULE
     environment = data.get("environment") or "prod"
 
-    if not isinstance(source, str) or not source:
-        return jsonify({"error": "Missing required field: source"}), 400
-    if not isinstance(rule_id, str) or not rule_id:
-        return jsonify({"error": "Missing required field: rule_id"}), 400
-    if not isinstance(input_format, str) or not input_format:
-        return jsonify({"error": "Missing required field: input_format"}), 400
-    if raw_lines is not None and not isinstance(raw_lines, list):
-        return jsonify({"error": "raw_lines must be a list"}), 400
-    if json_events is not None and not isinstance(json_events, list):
-        return jsonify({"error": "json_events must be a list"}), 400
     if not isinstance(environment, str) or not environment.strip():
         return jsonify({"error": "environment must be a non-empty string"}), 400
 
     try:
-        result = run_detection_simulation(
-            source=source,
-            rule_id=rule_id,
-            input_format=input_format,
-            raw_lines=raw_lines,
-            json_events=json_events,
-            environment=environment,
-        )
+        if simulation_mode == SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE:
+            forbidden_keys = sorted(key for key in TEMPORARY_RULE_FORBIDDEN_REQUEST_KEYS if key in data)
+            if forbidden_keys:
+                return jsonify(
+                    {
+                        "error": (
+                            "Temporary playground requests do not support persisted drafts or "
+                            f"history-aware fields: {', '.join(forbidden_keys)}"
+                        )
+                    }
+                ), 400
+
+            temporary_rule = data.get("temporary_rule")
+            input_text = data.get("input_text")
+            sample_events = data.get("sample_events")
+            json_events = data.get("json_events")
+
+            if input_text is not None and not isinstance(input_text, str):
+                return jsonify({"error": "input_text must be a string"}), 400
+            if sample_events is not None and not isinstance(sample_events, list):
+                return jsonify({"error": "sample_events must be a list"}), 400
+            if json_events is not None and not isinstance(json_events, list):
+                return jsonify({"error": "json_events must be a list"}), 400
+
+            result = run_detection_simulation(
+                simulation_mode=simulation_mode,
+                temporary_rule=temporary_rule,
+                input_text=input_text,
+                sample_events=sample_events,
+                json_events=json_events,
+                environment=environment,
+            )
+        else:
+            source = data.get("source")
+            rule_id = data.get("rule_id")
+            input_format = data.get("input_format")
+            raw_lines = data.get("raw_lines")
+            json_events = data.get("json_events")
+
+            if not isinstance(source, str) or not source:
+                return jsonify({"error": "Missing required field: source"}), 400
+            if not isinstance(rule_id, str) or not rule_id:
+                return jsonify({"error": "Missing required field: rule_id"}), 400
+            if not isinstance(input_format, str) or not input_format:
+                return jsonify({"error": "Missing required field: input_format"}), 400
+            if raw_lines is not None and not isinstance(raw_lines, list):
+                return jsonify({"error": "raw_lines must be a list"}), 400
+            if json_events is not None and not isinstance(json_events, list):
+                return jsonify({"error": "json_events must be a list"}), 400
+
+            result = run_detection_simulation(
+                simulation_mode=SIMULATION_MODE_EXISTING_PRODUCTION_RULE,
+                source=source,
+                rule_id=rule_id,
+                input_format=input_format,
+                raw_lines=raw_lines,
+                json_events=json_events,
+                environment=environment,
+            )
         return jsonify(result), 200
     except SimulationValidationError as error:
         return jsonify({"error": str(error)}), 400

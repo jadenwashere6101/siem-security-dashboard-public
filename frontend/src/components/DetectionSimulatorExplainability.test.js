@@ -186,3 +186,98 @@ test("explains no playbook match", () => {
   render(<DetectionSimulatorExplainability stages={stages} />);
   expect(screen.getByText(/No enabled playbook's trigger configuration matched this alert\./)).toBeInTheDocument();
 });
+
+describe("temporary playground rule evidence", () => {
+  test("explains playground rule applicability using the backend's allowed-field evidence", () => {
+    const stages = {
+      detection_applicability: {
+        status: "succeeded",
+        source: "bank_app",
+        allowed_condition_fields: ["source_ip", "username"],
+        allowed_group_by_fields: ["source_ip"],
+      },
+    };
+    render(<DetectionSimulatorExplainability stages={stages} />);
+    expect(screen.getByText(/Playground rule applicability/i)).toBeInTheDocument();
+    expect(screen.getByText(/supported for source "bank_app"/)).toBeInTheDocument();
+  });
+
+  test("renders grouped evidence and the pasted-event-only, nothing-persisted disclosure", () => {
+    const stages = {
+      threshold_window_evaluation: {
+        status: "succeeded",
+        matched: true,
+        matched_group: "198.51.100.201",
+        observed_value_label: "count",
+        observed_value: 2,
+        configured_threshold: 2,
+        evaluated_window_minutes: 15,
+        group_by_field: "source_ip",
+        grouped_results: [
+          { group_value: "198.51.100.201", match_count: 2 },
+          { group_value: "198.51.100.202", match_count: 1 },
+        ],
+        evidence_available: true,
+        pasted_event_only: true,
+        nothing_persisted: true,
+      },
+    };
+    render(<DetectionSimulatorExplainability stages={stages} />);
+    expect(screen.getByText(/Observed count: 2 \(required: 2\)/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Grouped evidence: source_ip=198.51.100.201 \(2\), source_ip=198.51.100.202 \(1\)\./)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/no committed production event history was blended/)).toBeInTheDocument();
+    expect(screen.getByText(/Nothing was persisted or executed by this evaluation\./)).toBeInTheDocument();
+  });
+
+  test("explains no grouped entity matching the condition without fabricating an observed value", () => {
+    const stages = {
+      threshold_window_evaluation: {
+        status: "succeeded",
+        matched: false,
+        observed_value_label: "count",
+        observed_value: 0,
+        configured_threshold: 3,
+        evaluated_window_minutes: 15,
+        group_by_field: "source_ip",
+        grouped_results: [],
+        evidence_available: false,
+        pasted_event_only: true,
+        nothing_persisted: true,
+      },
+    };
+    render(<DetectionSimulatorExplainability stages={stages} />);
+    expect(screen.getByText(/No grouped entity matched the condition in the pasted or sample events\./)).toBeInTheDocument();
+    expect(screen.queryByText(/An exact observed value was not available/)).not.toBeInTheDocument();
+  });
+
+  test("explains a temporary alert preview with request-scoped, non-persistence language", () => {
+    const stages = {
+      alert_preview: {
+        status: "succeeded",
+        alert: { alert_type: "temporary_playground_rule", severity: "high", message: "matched 2 events", reputation_source: "simulated" },
+        temporary_rule_semantics: true,
+        persistence: "request_scoped_rollback_only",
+      },
+    };
+    render(<DetectionSimulatorExplainability stages={stages} />);
+    expect(screen.getByText(/request-scoped only; nothing was persisted or executed/)).toBeInTheDocument();
+  });
+
+  test("explains a temporary rule threshold-not-reached alert preview", () => {
+    const stages = {
+      alert_preview: { status: "succeeded", alert: null, reason: "temporary_rule_threshold_not_reached" },
+    };
+    render(<DetectionSimulatorExplainability stages={stages} />);
+    expect(screen.getByText(/threshold was not reached for any grouped entity/)).toBeInTheDocument();
+  });
+
+  test("explains that no MITRE technique was selected for the temporary rule", () => {
+    const stages = {
+      mitre_mapping: { status: "succeeded", mitre_technique_id: null, reason: "no_temporary_rule_mitre_selected" },
+    };
+    render(<DetectionSimulatorExplainability stages={stages} />);
+    expect(screen.getByText(/No MITRE ATT&CK technique was selected for this temporary rule\./)).toBeInTheDocument();
+  });
+});

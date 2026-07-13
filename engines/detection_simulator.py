@@ -20,7 +20,11 @@ to prevent).
 from __future__ import annotations
 
 import ipaddress
+import json
 import logging
+import re
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from adapters.azure_insights_adapter import (
@@ -34,6 +38,7 @@ from adapters.pfsense_filterlog_adapter import (
     validate_pfsense_normalized_event,
 )
 from core.db import get_db_connection
+from core.ip_helpers import determine_response_action
 from engines.detection_applicability import (
     CANONICAL_SOURCE_IDENTITIES,
     get_rule_applicability_metadata,
@@ -63,8 +68,13 @@ from engines.detection_engine import (
 )
 from engines.ingest_engine import ingest_normalized_event
 from engines.playbook_engine import match_playbooks
-from helpers.enrichment_helpers import enrich_alert_with_correlation_context, enrich_alert_with_mitre
+from helpers.enrichment_helpers import (
+    MITRE_ATTACK_MAPPINGS,
+    enrich_alert_with_correlation_context,
+    enrich_alert_with_mitre,
+)
 from helpers.ingest_normalizers import (
+    HONEYPOT_EVENT_TYPES,
     _get_azure_app_name,
     _get_azure_identity_app_name,
     _get_otel_app_name,
@@ -124,6 +134,13 @@ STAGE_NAMES = (
 )
 
 MAX_BATCH_SIZE = 25
+MAX_TEMP_EVENT_COUNT = 100
+MAX_TEMP_TOTAL_INPUT_BYTES = 256 * 1024
+MAX_TEMP_EVENT_BYTES = 8 * 1024
+MAX_TEMP_STRING_LENGTH = 256
+MAX_TEMP_EVENT_TYPE_LENGTH = 64
+MAX_TEMP_IN_LIST_SIZE = 20
+MAX_TEMP_GROUP_RESULTS = 50
 
 ALERT_ROW_COLUMNS = (
     "id",
@@ -172,6 +189,102 @@ RULE_ID_TO_DETECTOR = {
 # Every detector's alerts_created dict carries these bookkeeping fields; none
 # of them is the rule's observed count/condition value.
 _NON_EVIDENCE_ALERT_FIELDS = frozenset({"source_ip", "alert_id", "response_action", "severity", "success_at"})
+
+SIMULATION_MODE_EXISTING_PRODUCTION_RULE = "existing_production_rule"
+SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE = "temporary_playground_rule"
+TEMPORARY_PLAYGROUND_ALERT_TYPE = "temporary_playground_rule"
+TEMPORARY_RULE_MITRE_PATTERN = re.compile(r"^T\d{4}(?:\.\d{3})?$")
+TEMPORARY_RULE_NUMERIC_FIELDS = frozenset({"destination_port", "http_status"})
+TEMPORARY_RULE_STRING_FIELDS = frozenset(
+    {
+        "source_ip",
+        "destination_ip",
+        "username",
+        "event_type",
+        "event_outcome",
+        "action",
+        "severity",
+    }
+)
+TEMPORARY_RULE_ALLOWED_FIELDS_BY_SOURCE = {
+    "honeypot": frozenset({"source_ip", "username", "event_type", "severity"}),
+    "bank_app": frozenset({"source_ip", "username", "event_type", "event_outcome", "severity"}),
+    "pfsense": frozenset(
+        {"source_ip", "destination_ip", "destination_port", "event_type", "action", "severity"}
+    ),
+    "nginx": frozenset({"source_ip", "event_type", "http_status", "severity"}),
+    "azure_insights": frozenset(
+        {"source_ip", "username", "event_type", "event_outcome", "http_status", "severity"}
+    ),
+    "opentelemetry": frozenset({"source_ip", "event_type", "http_status", "severity"}),
+}
+TEMPORARY_RULE_GROUPABLE_FIELDS_BY_SOURCE = {
+    "honeypot": frozenset({"source_ip", "username"}),
+    "bank_app": frozenset({"source_ip", "username"}),
+    "pfsense": frozenset({"source_ip", "destination_ip", "destination_port"}),
+    "nginx": frozenset({"source_ip"}),
+    "azure_insights": frozenset({"source_ip", "username"}),
+    "opentelemetry": frozenset({"source_ip"}),
+}
+TEMPORARY_RULE_SUPPORTED_INPUT_FORMATS = {
+    "honeypot": frozenset({"json_lines", "json_array"}),
+    "bank_app": frozenset({"json_lines", "json_array"}),
+    "pfsense": frozenset({"raw_text", "json_lines", "json_array"}),
+    "nginx": frozenset({"raw_text"}),
+    "azure_insights": frozenset({"json_lines", "json_array"}),
+    "opentelemetry": frozenset({"json_lines", "json_array"}),
+}
+TEMPORARY_RULE_ALLOWED_EVENT_TYPES_BY_SOURCE = {
+    "honeypot": HONEYPOT_EVENT_TYPES,
+    "bank_app": frozenset(VALID_EVENT_TYPES),
+    "pfsense": frozenset({"firewall_block", "firewall_allow"}),
+    "nginx": frozenset({"unauthorized_access", "http_error", "normal_activity"}),
+    "azure_insights": frozenset(
+        {"failed_login", "successful_login", "application_exception", "availability_failure", "http_error", "normal_activity"}
+    ),
+    "opentelemetry": frozenset({"unauthorized_access", "http_error", "application_exception", "normal_activity"}),
+}
+TEMPORARY_RULE_ALLOWED_OPERATORS = frozenset(
+    {
+        "equals",
+        "not_equals",
+        "contains",
+        "starts_with",
+        "ends_with",
+        "greater_than",
+        "greater_than_or_equal",
+        "less_than",
+        "less_than_or_equal",
+        "in_list",
+    }
+)
+TEMPORARY_RULE_STRING_OPERATORS = frozenset(
+    {"equals", "not_equals", "contains", "starts_with", "ends_with", "in_list"}
+)
+TEMPORARY_RULE_NUMERIC_OPERATORS = frozenset(
+    {
+        "equals",
+        "not_equals",
+        "greater_than",
+        "greater_than_or_equal",
+        "less_than",
+        "less_than_or_equal",
+        "in_list",
+    }
+)
+TEMPORARY_RULE_FORBIDDEN_REQUEST_KEYS = frozenset(
+    {"history_mode", "draft_id", "saved_rule_id", "use_production_history", "persist_draft", "save_rule"}
+)
+TEMPORARY_RULE_MITRE_TECHNIQUES = {}
+for _mitre_data in MITRE_ATTACK_MAPPINGS.values():
+    technique_id = _mitre_data.get("mitre_technique_id")
+    if not technique_id or technique_id in TEMPORARY_RULE_MITRE_TECHNIQUES:
+        continue
+    TEMPORARY_RULE_MITRE_TECHNIQUES[technique_id] = {
+        "mitre_technique_id": technique_id,
+        "mitre_technique_name": _mitre_data.get("mitre_technique_name"),
+        "mitre_tactic": _mitre_data.get("mitre_tactic"),
+    }
 
 
 def _extract_observed_value(alert_result):
@@ -406,11 +519,524 @@ def _skip_from(stages, start_stage_name, reason):
         stages[name] = {"status": "skipped", "reason": reason}
 
 
-def _finalize(source, rule_id, stages):
-    return {"simulated": True, "source": source, "rule_id": rule_id, "stages": stages}
+def _finalize(*, source, stages, simulation_mode, rule_id=None, temporary_rule=None):
+    payload = {
+        "simulated": True,
+        "simulation_mode": simulation_mode,
+        "source": source,
+        "stages": stages,
+    }
+    if rule_id is not None:
+        payload["rule_id"] = rule_id
+    if temporary_rule is not None:
+        payload["temporary_rule"] = temporary_rule
+    return payload
+
+
+def _normalize_simulation_mode(simulation_mode, rule_id, temporary_rule):
+    if simulation_mode is None:
+        if temporary_rule is not None and rule_id is None:
+            return SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE
+        return SIMULATION_MODE_EXISTING_PRODUCTION_RULE
+    if simulation_mode not in {
+        SIMULATION_MODE_EXISTING_PRODUCTION_RULE,
+        SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE,
+    }:
+        raise SimulationValidationError("Unsupported simulation_mode")
+    if simulation_mode == SIMULATION_MODE_EXISTING_PRODUCTION_RULE and temporary_rule is not None:
+        raise SimulationValidationError(
+            "temporary_rule is only allowed for simulation_mode='temporary_playground_rule'"
+        )
+    if simulation_mode == SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE and rule_id is not None:
+        raise SimulationValidationError(
+            "rule_id is not allowed for simulation_mode='temporary_playground_rule'"
+        )
+    return simulation_mode
+
+
+def _validate_non_empty_string(value, field_name, *, max_length=MAX_TEMP_STRING_LENGTH):
+    if not isinstance(value, str):
+        raise SimulationValidationError(f"{field_name} must be a string")
+    trimmed = value.strip()
+    if not trimmed:
+        raise SimulationValidationError(f"{field_name} must be a non-empty string")
+    if len(trimmed) > max_length:
+        raise SimulationValidationError(f"{field_name} exceeds maximum length of {max_length}")
+    return trimmed
+
+
+def _validate_bounded_int(value, field_name, minimum, maximum):
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise SimulationValidationError(f"{field_name} must be an integer")
+    if value < minimum or value > maximum:
+        raise SimulationValidationError(f"{field_name} must be between {minimum} and {maximum}")
+    return value
+
+
+def _validate_temporary_rule_value(field_name, operator, value):
+    is_numeric = field_name in TEMPORARY_RULE_NUMERIC_FIELDS
+    allowed_operators = (
+        TEMPORARY_RULE_NUMERIC_OPERATORS if is_numeric else TEMPORARY_RULE_STRING_OPERATORS
+    )
+    if operator not in allowed_operators:
+        raise SimulationValidationError(
+            f"Operator '{operator}' is not allowed for condition.field '{field_name}'"
+        )
+
+    if operator == "in_list":
+        if not isinstance(value, list):
+            raise SimulationValidationError("condition.value must be a list for operator 'in_list'")
+        if not value or len(value) > MAX_TEMP_IN_LIST_SIZE:
+            raise SimulationValidationError(
+                f"condition.value list must contain between 1 and {MAX_TEMP_IN_LIST_SIZE} items"
+            )
+        normalized_values = []
+        seen_type = None
+        for item in value:
+            normalized_item = (
+                _validate_bounded_int(item, "condition.value item", -65535, 65535)
+                if is_numeric
+                else _validate_non_empty_string(item, "condition.value item")
+            )
+            item_type = type(normalized_item)
+            if seen_type is None:
+                seen_type = item_type
+            elif item_type is not seen_type:
+                raise SimulationValidationError("condition.value list items must have the same type")
+            normalized_values.append(normalized_item)
+        return normalized_values
+
+    if is_numeric:
+        return _validate_bounded_int(value, "condition.value", -65535, 65535)
+    return _validate_non_empty_string(value, "condition.value")
+
+
+def _validate_temporary_rule_contract(temporary_rule):
+    if not isinstance(temporary_rule, dict):
+        raise SimulationValidationError("temporary_rule must be an object")
+
+    allowed_keys = {
+        "source",
+        "source_type",
+        "input_format",
+        "event_type",
+        "condition",
+        "aggregation",
+        "threshold",
+        "window_minutes",
+        "severity",
+        "mitre_technique_id",
+    }
+    unexpected_keys = sorted(set(temporary_rule) - allowed_keys)
+    if unexpected_keys:
+        raise SimulationValidationError(
+            f"temporary_rule contains unsupported fields: {', '.join(unexpected_keys)}"
+        )
+
+    source = _validate_non_empty_string(temporary_rule.get("source"), "temporary_rule.source", max_length=64)
+    if source not in SOURCE_TYPE_BY_SOURCE:
+        raise SimulationValidationError("Unknown temporary_rule.source")
+
+    source_type = _validate_non_empty_string(
+        temporary_rule.get("source_type"), "temporary_rule.source_type", max_length=64
+    )
+    if SOURCE_TYPE_BY_SOURCE[source] != source_type:
+        raise SimulationValidationError("temporary_rule.source_type does not match the canonical source type")
+
+    input_format = _validate_non_empty_string(
+        temporary_rule.get("input_format"), "temporary_rule.input_format", max_length=32
+    )
+    if input_format not in TEMPORARY_RULE_SUPPORTED_INPUT_FORMATS[source]:
+        raise SimulationValidationError(
+            f"Source '{source}' does not support temporary_rule.input_format '{input_format}'"
+        )
+
+    event_type = temporary_rule.get("event_type")
+    if event_type is not None:
+        event_type = _validate_non_empty_string(
+            event_type, "temporary_rule.event_type", max_length=MAX_TEMP_EVENT_TYPE_LENGTH
+        )
+        if event_type not in TEMPORARY_RULE_ALLOWED_EVENT_TYPES_BY_SOURCE[source]:
+            raise SimulationValidationError(
+                f"temporary_rule.event_type '{event_type}' is not supported for source '{source}'"
+            )
+
+    condition = temporary_rule.get("condition")
+    if not isinstance(condition, dict):
+        raise SimulationValidationError("temporary_rule.condition must be an object")
+    if set(condition) != {"field", "operator", "value"}:
+        raise SimulationValidationError(
+            "temporary_rule.condition must contain exactly field, operator, and value"
+        )
+    condition_field = _validate_non_empty_string(condition.get("field"), "temporary_rule.condition.field")
+    if condition_field not in TEMPORARY_RULE_ALLOWED_FIELDS_BY_SOURCE[source]:
+        raise SimulationValidationError(
+            f"temporary_rule.condition.field '{condition_field}' is not supported for source '{source}'"
+        )
+    condition_operator = _validate_non_empty_string(
+        condition.get("operator"), "temporary_rule.condition.operator", max_length=32
+    )
+    if condition_operator not in TEMPORARY_RULE_ALLOWED_OPERATORS:
+        raise SimulationValidationError("temporary_rule.condition.operator is unsupported")
+    condition_value = _validate_temporary_rule_value(condition_field, condition_operator, condition.get("value"))
+
+    aggregation = temporary_rule.get("aggregation")
+    if not isinstance(aggregation, dict):
+        raise SimulationValidationError("temporary_rule.aggregation must be an object")
+    if set(aggregation) != {"type", "group_by_field"}:
+        raise SimulationValidationError(
+            "temporary_rule.aggregation must contain exactly type and group_by_field"
+        )
+    aggregation_type = _validate_non_empty_string(
+        aggregation.get("type"), "temporary_rule.aggregation.type", max_length=32
+    )
+    if aggregation_type != "count":
+        raise SimulationValidationError("temporary_rule.aggregation.type must be 'count'")
+    group_by_field = _validate_non_empty_string(
+        aggregation.get("group_by_field"), "temporary_rule.aggregation.group_by_field"
+    )
+    if group_by_field not in TEMPORARY_RULE_GROUPABLE_FIELDS_BY_SOURCE[source]:
+        raise SimulationValidationError(
+            f"temporary_rule.aggregation.group_by_field '{group_by_field}' is not supported for source '{source}'"
+        )
+
+    threshold = _validate_bounded_int(temporary_rule.get("threshold"), "temporary_rule.threshold", 1, 100)
+    window_minutes = _validate_bounded_int(
+        temporary_rule.get("window_minutes"), "temporary_rule.window_minutes", 1, 1440
+    )
+    severity = _validate_non_empty_string(temporary_rule.get("severity"), "temporary_rule.severity", max_length=16)
+    if severity not in VALID_SEVERITIES:
+        raise SimulationValidationError("temporary_rule.severity is unsupported")
+
+    mitre_technique_id = temporary_rule.get("mitre_technique_id")
+    if mitre_technique_id is not None:
+        mitre_technique_id = _validate_non_empty_string(
+            mitre_technique_id, "temporary_rule.mitre_technique_id", max_length=16
+        )
+        if not TEMPORARY_RULE_MITRE_PATTERN.match(mitre_technique_id):
+            raise SimulationValidationError("temporary_rule.mitre_technique_id must match Txxxx or Txxxx.xxx")
+        if mitre_technique_id not in TEMPORARY_RULE_MITRE_TECHNIQUES:
+            raise SimulationValidationError("temporary_rule.mitre_technique_id is unsupported")
+
+    return {
+        "source": source,
+        "source_type": source_type,
+        "input_format": input_format,
+        "event_type": event_type,
+        "condition": {
+            "field": condition_field,
+            "operator": condition_operator,
+            "value": condition_value,
+        },
+        "aggregation": {"type": aggregation_type, "group_by_field": group_by_field},
+        "threshold": threshold,
+        "window_minutes": window_minutes,
+        "severity": severity,
+        "mitre_technique_id": mitre_technique_id,
+    }
+
+
+def _coerce_temp_text_items(input_format, input_text):
+    if not isinstance(input_text, str) or not input_text.strip():
+        raise SimulationValidationError("input_text must be a non-empty string")
+    encoded = input_text.encode("utf-8")
+    if len(encoded) > MAX_TEMP_TOTAL_INPUT_BYTES:
+        raise SimulationValidationError(
+            f"Temporary playground input exceeds maximum size of {MAX_TEMP_TOTAL_INPUT_BYTES} bytes"
+        )
+
+    if input_format == "raw_text":
+        items = [line for line in input_text.splitlines() if isinstance(line, str) and line.strip()]
+    elif input_format == "json_lines":
+        items = []
+        for line in input_text.splitlines():
+            if not line.strip():
+                continue
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise SimulationValidationError(f"Invalid JSON line: {error.msg}") from error
+            if not isinstance(parsed, dict):
+                raise SimulationValidationError("Each json_lines item must decode to an object")
+            items.append(parsed)
+    else:
+        try:
+            parsed = json.loads(input_text)
+        except json.JSONDecodeError as error:
+            raise SimulationValidationError(f"Invalid JSON array payload: {error.msg}") from error
+        if not isinstance(parsed, list) or not parsed:
+            raise SimulationValidationError("json_array input must decode to a non-empty array of objects")
+        if not all(isinstance(item, dict) for item in parsed):
+            raise SimulationValidationError("json_array input must contain only objects")
+        items = parsed
+
+    if not items:
+        raise SimulationValidationError("Temporary playground input must contain at least one event")
+    if len(items) > MAX_TEMP_EVENT_COUNT:
+        raise SimulationValidationError(
+            f"Temporary playground input exceeds maximum event count of {MAX_TEMP_EVENT_COUNT}"
+        )
+    return items
+
+
+def _coerce_temp_sample_events(sample_events):
+    if not isinstance(sample_events, list) or not sample_events:
+        raise SimulationValidationError("sample_events must be a non-empty list")
+    if len(sample_events) > MAX_TEMP_EVENT_COUNT:
+        raise SimulationValidationError(
+            f"Temporary playground input exceeds maximum event count of {MAX_TEMP_EVENT_COUNT}"
+        )
+    if not all(isinstance(item, dict) for item in sample_events):
+        raise SimulationValidationError("sample_events must contain only objects")
+    encoded = json.dumps(sample_events).encode("utf-8")
+    if len(encoded) > MAX_TEMP_TOTAL_INPUT_BYTES:
+        raise SimulationValidationError(
+            f"Temporary playground input exceeds maximum size of {MAX_TEMP_TOTAL_INPUT_BYTES} bytes"
+        )
+    return sample_events
+
+
+def _validate_temp_event_size(raw_item, index):
+    if isinstance(raw_item, str):
+        encoded = raw_item.encode("utf-8")
+    else:
+        encoded = json.dumps(raw_item).encode("utf-8")
+    if len(encoded) > MAX_TEMP_EVENT_BYTES:
+        raise SimulationValidationError(
+            f"Temporary playground event {index} exceeds maximum size of {MAX_TEMP_EVENT_BYTES} bytes"
+        )
+
+
+def _parse_iso_timestamp(value):
+    if not value:
+        return None
+    if not isinstance(value, str):
+        return None
+    try:
+        normalized = value.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _temporary_rule_event_outcome(event_type):
+    if event_type in {"failed_login", "login_failure"}:
+        return "failure"
+    if event_type == "successful_login":
+        return "success"
+    return None
+
+
+def _extract_temporary_rule_field(event_dict, field_name):
+    raw_payload = event_dict.get("raw_payload") if isinstance(event_dict.get("raw_payload"), dict) else {}
+    if field_name == "source_ip":
+        return event_dict.get("source_ip")
+    if field_name == "destination_ip":
+        return event_dict.get("destination_ip") or raw_payload.get("destination_ip")
+    if field_name == "destination_port":
+        value = event_dict.get("destination_port") or raw_payload.get("destination_port")
+        if value in (None, "") or isinstance(value, bool):
+            return None
+        return int(value) if isinstance(value, int) or (isinstance(value, str) and value.strip().isdigit()) else None
+    if field_name == "username":
+        return event_dict.get("username") or raw_payload.get("username") or raw_payload.get("userPrincipalName")
+    if field_name == "event_type":
+        return event_dict.get("event_type")
+    if field_name == "event_outcome":
+        return _temporary_rule_event_outcome(event_dict.get("event_type"))
+    if field_name == "http_status":
+        candidates = (
+            raw_payload.get("status"),
+            raw_payload.get("status_code"),
+            raw_payload.get("statusCode"),
+            raw_payload.get("responseCode"),
+            raw_payload.get("resultCode"),
+        )
+        for candidate in candidates:
+            if isinstance(candidate, bool) or candidate in (None, ""):
+                continue
+            if isinstance(candidate, int):
+                return candidate
+            if isinstance(candidate, str) and candidate.strip().isdigit():
+                return int(candidate.strip())
+        return None
+    if field_name == "action":
+        return raw_payload.get("action")
+    if field_name == "severity":
+        return event_dict.get("severity")
+    return None
+
+
+def _temporary_rule_value_matches(operator, expected, actual):
+    if actual is None:
+        return False
+    if isinstance(expected, list):
+        if isinstance(actual, str):
+            actual = actual.strip().lower()
+            expected = [item.strip().lower() if isinstance(item, str) else item for item in expected]
+        return actual in expected
+    if isinstance(expected, int):
+        if not isinstance(actual, int):
+            return False
+        if operator == "equals":
+            return actual == expected
+        if operator == "not_equals":
+            return actual != expected
+        if operator == "greater_than":
+            return actual > expected
+        if operator == "greater_than_or_equal":
+            return actual >= expected
+        if operator == "less_than":
+            return actual < expected
+        if operator == "less_than_or_equal":
+            return actual <= expected
+        return False
+
+    actual_text = str(actual).strip().lower()
+    expected_text = str(expected).strip().lower()
+    if operator == "equals":
+        return actual_text == expected_text
+    if operator == "not_equals":
+        return actual_text != expected_text
+    if operator == "contains":
+        return expected_text in actual_text
+    if operator == "starts_with":
+        return actual_text.startswith(expected_text)
+    if operator == "ends_with":
+        return actual_text.endswith(expected_text)
+    return False
+
+
+def _apply_temporary_rule_mitre_selection(alert_dict, mitre_technique_id):
+    mitre = TEMPORARY_RULE_MITRE_TECHNIQUES.get(mitre_technique_id)
+    alert_dict["mitre_technique_id"] = mitre["mitre_technique_id"] if mitre else None
+    alert_dict["mitre_technique_name"] = mitre.get("mitre_technique_name") if mitre else None
+    alert_dict["mitre_tactic"] = mitre.get("mitre_tactic") if mitre else None
+    return alert_dict
+
+
+def _build_temporary_alert_message(temporary_rule, matched_group, observed_value):
+    event_type = temporary_rule.get("event_type") or "any event type"
+    return (
+        f"Temporary playground rule matched {observed_value} event(s) for "
+        f"{temporary_rule['aggregation']['group_by_field']}={matched_group} "
+        f"within {temporary_rule['window_minutes']} minute(s) on {event_type}."
+    )
+
+
+def _insert_temporary_alert_preview(cur, temporary_rule, matched_group, observed_value, source_ip):
+    response_action = determine_response_action(SIMULATED_REPUTATION["reputation_score"])
+    cur.execute(
+        """
+        INSERT INTO alerts (
+            source_ip,
+            alert_type,
+            severity,
+            source,
+            source_type,
+            message,
+            status,
+            response_action,
+            response_status,
+            reputation_score,
+            reputation_label,
+            reputation_source,
+            reputation_summary,
+            context
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, 'open', %s, 'not_executed', %s, %s, %s, %s, %s::jsonb)
+        RETURNING id
+        """,
+        (
+            source_ip,
+            TEMPORARY_PLAYGROUND_ALERT_TYPE,
+            temporary_rule["severity"],
+            temporary_rule["source"],
+            temporary_rule["source_type"],
+            _build_temporary_alert_message(temporary_rule, matched_group, observed_value),
+            response_action,
+            SIMULATED_REPUTATION["reputation_score"],
+            SIMULATED_REPUTATION["reputation_label"],
+            SIMULATED_REPUTATION["reputation_source"],
+            SIMULATED_REPUTATION["reputation_summary"],
+            json.dumps(
+                {
+                    "simulation_mode": SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE,
+                    "group_by_field": temporary_rule["aggregation"]["group_by_field"],
+                    "matched_group": matched_group,
+                    "observed_value": observed_value,
+                    "configured_threshold": temporary_rule["threshold"],
+                    "evaluated_window_minutes": temporary_rule["window_minutes"],
+                }
+            ),
+        ),
+    )
+    return cur.fetchone()[0]
+
+
+def _build_temporary_soar_preview(conn, alert_row):
+    matched_playbooks = match_playbooks(conn, alert_row["id"])
+    soar_preview_playbooks = []
+    for playbook in matched_playbooks:
+        steps = playbook.get("steps") or []
+        approval_steps = [
+            step for step in steps if isinstance(step, dict) and step.get("action") == "require_approval"
+        ]
+        soar_preview_playbooks.append(
+            {
+                "playbook_id": playbook.get("id"),
+                "name": playbook.get("name"),
+                "approval_required": bool(approval_steps),
+                "approval_risk_levels": [step.get("risk_level", "high") for step in approval_steps],
+            }
+        )
+    return {
+        "status": "succeeded",
+        "matched_playbooks": soar_preview_playbooks,
+        "no_playbook_match": len(soar_preview_playbooks) == 0,
+        "selected_response_action": alert_row.get("response_action"),
+        "response_action_basis": (
+            "computed from a stubbed simulated reputation score; not the source IP's real reputation"
+        ),
+    }
 
 
 def run_detection_simulation(
+    *,
+    source=None,
+    rule_id=None,
+    input_format=None,
+    raw_lines=None,
+    json_events=None,
+    environment="prod",
+    simulation_mode=None,
+    temporary_rule=None,
+    input_text=None,
+    sample_events=None,
+):
+    mode = _normalize_simulation_mode(simulation_mode, rule_id, temporary_rule)
+    if mode == SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE:
+        return _run_temporary_rule_simulation(
+            temporary_rule=temporary_rule,
+            input_text=input_text,
+            sample_events=sample_events,
+            json_events=json_events,
+            environment=environment,
+        )
+    return _run_existing_detection_simulation(
+        source=source,
+        rule_id=rule_id,
+        input_format=input_format,
+        raw_lines=raw_lines,
+        json_events=json_events,
+        environment=environment,
+    )
+
+
+def _run_existing_detection_simulation(
     *,
     source,
     rule_id,
@@ -419,9 +1045,11 @@ def run_detection_simulation(
     json_events=None,
     environment="prod",
 ):
-    """Entry point. Validates the request, parses/normalizes input, then runs
-    the rollback-only transaction. Raises SimulationValidationError for
-    request-shape problems; never touches the database for those.
+    """Version 1 production-rule simulator entry point.
+
+    Validates the request, parses/normalizes input, then runs the rollback-only
+    transaction. Raises SimulationValidationError for request-shape problems;
+    never touches the database for those.
     """
     if source not in SOURCE_TYPE_BY_SOURCE:
         raise SimulationValidationError("Unknown source")
@@ -476,7 +1104,12 @@ def run_detection_simulation(
 
     if not any_parsed:
         _skip_from(stages, "normalized_event", "parser_failed")
-        return _finalize(source, rule_id, stages)
+        return _finalize(
+            source=source,
+            rule_id=rule_id,
+            stages=stages,
+            simulation_mode=SIMULATION_MODE_EXISTING_PRODUCTION_RULE,
+        )
 
     stages["normalized_event"] = {"status": "succeeded", "events": normalized_events}
 
@@ -489,7 +1122,12 @@ def run_detection_simulation(
             "metadata": applicability_metadata,
         }
         _skip_from(stages, "detection_evaluation", "rule_not_applicable_to_source")
-        return _finalize(source, rule_id, stages)
+        return _finalize(
+            source=source,
+            rule_id=rule_id,
+            stages=stages,
+            simulation_mode=SIMULATION_MODE_EXISTING_PRODUCTION_RULE,
+        )
 
     stages["detection_applicability"] = {"status": "succeeded", "metadata": applicability_metadata}
 
@@ -517,7 +1155,119 @@ def run_detection_simulation(
         if conn is not None:
             conn.close()
 
-    return _finalize(source, rule_id, stages)
+    return _finalize(
+        source=source,
+        rule_id=rule_id,
+        stages=stages,
+        simulation_mode=SIMULATION_MODE_EXISTING_PRODUCTION_RULE,
+    )
+
+
+def _run_temporary_rule_simulation(
+    *,
+    temporary_rule,
+    input_text=None,
+    sample_events=None,
+    json_events=None,
+    environment="prod",
+):
+    if not isinstance(environment, str) or not environment.strip():
+        raise SimulationValidationError("environment must be a non-empty string")
+    validated_rule = _validate_temporary_rule_contract(temporary_rule)
+    source = validated_rule["source"]
+    input_format = validated_rule["input_format"]
+
+    if input_text is not None and sample_events is not None:
+        raise SimulationValidationError("Provide either input_text or sample_events, not both")
+
+    if input_text is not None:
+        items = _coerce_temp_text_items(input_format, input_text)
+    elif sample_events is not None:
+        items = _coerce_temp_sample_events(sample_events)
+    elif json_events is not None:
+        items = _coerce_temp_sample_events(json_events)
+    else:
+        raise SimulationValidationError("Temporary playground requests require input_text or sample_events")
+
+    for index, raw_item in enumerate(items):
+        _validate_temp_event_size(raw_item, index)
+
+    stages = _new_stages()
+    stages["raw_input"] = {
+        "status": "succeeded",
+        "input_count": len(items),
+        "input_format": input_format,
+    }
+
+    parse_key = {
+        "raw_text": "raw",
+        "json_lines": "json",
+        "json_array": "json",
+    }[input_format]
+    handler = PARSE_DISPATCH[(source, parse_key)]
+
+    parser_results = []
+    normalized_events = []
+    for index, raw_item in enumerate(items):
+        try:
+            normalized = handler(raw_item, environment)
+            parser_results.append({"index": index, "status": "succeeded"})
+            normalized_events.append(normalized)
+        except ValueError as error:
+            parser_results.append({"index": index, "status": "failed", "error": str(error)})
+        except Exception:
+            logger.exception(
+                "[DETECTION SIMULATOR] unexpected temporary-rule parser failure source=%s index=%s",
+                source,
+                index,
+            )
+            parser_results.append({"index": index, "status": "failed", "error": "Unexpected parser error"})
+
+    any_parsed = len(normalized_events) > 0
+    stages["parser"] = {"status": "succeeded" if any_parsed else "failed", "results": parser_results}
+    if not any_parsed:
+        _skip_from(stages, "normalized_event", "parser_failed")
+        return _finalize(
+            source=source,
+            stages=stages,
+            simulation_mode=SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE,
+            temporary_rule=validated_rule,
+        )
+
+    stages["normalized_event"] = {"status": "succeeded", "events": normalized_events}
+    stages["detection_applicability"] = {
+        "status": "succeeded",
+        "source": source,
+        "source_type": validated_rule["source_type"],
+        "event_type_filter": validated_rule["event_type"],
+        "allowed_condition_fields": sorted(TEMPORARY_RULE_ALLOWED_FIELDS_BY_SOURCE[source]),
+        "allowed_group_by_fields": sorted(TEMPORARY_RULE_GROUPABLE_FIELDS_BY_SOURCE[source]),
+    }
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        try:
+            _run_temporary_pipeline(
+                conn=conn,
+                cur=cur,
+                temporary_rule=validated_rule,
+                normalized_events=normalized_events,
+                stages=stages,
+            )
+        finally:
+            conn.rollback()
+    finally:
+        if conn is not None:
+            conn.close()
+
+    return _finalize(
+        source=source,
+        stages=stages,
+        simulation_mode=SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE,
+        temporary_rule=validated_rule,
+    )
 
 
 def _fetch_alert_rows(cur, alert_ids):
@@ -688,3 +1438,147 @@ def _run_pipeline(*, conn, cur, rule_id, source, source_type, normalized_events,
             "computed from a stubbed simulated reputation score; not the source IP's real reputation"
         ),
     }
+
+
+def _run_temporary_pipeline(*, conn, cur, temporary_rule, normalized_events, stages):
+    candidate_events = normalized_events
+    if temporary_rule.get("event_type"):
+        candidate_events = [
+            event for event in normalized_events if event.get("event_type") == temporary_rule["event_type"]
+        ]
+
+    condition_field = temporary_rule["condition"]["field"]
+    condition_operator = temporary_rule["condition"]["operator"]
+    condition_value = temporary_rule["condition"]["value"]
+    group_by_field = temporary_rule["aggregation"]["group_by_field"]
+
+    matching_events = []
+    grouped_events = defaultdict(list)
+    for event in candidate_events:
+        actual_value = _extract_temporary_rule_field(event, condition_field)
+        if not _temporary_rule_value_matches(condition_operator, condition_value, actual_value):
+            continue
+        group_value = _extract_temporary_rule_field(event, group_by_field)
+        if group_value in (None, ""):
+            continue
+        matching_events.append(event)
+        grouped_events[group_value].append(event)
+
+    stages["detection_evaluation"] = {
+        "status": "succeeded",
+        "candidate_event_count": len(candidate_events),
+        "matching_event_count": len(matching_events),
+        "event_type_filter_applied": temporary_rule.get("event_type"),
+        "condition": temporary_rule["condition"],
+    }
+
+    grouped_results = []
+    for group_value, events in grouped_events.items():
+        parsed_timestamps = [_parse_iso_timestamp(event.get("event_timestamp")) for event in events]
+        use_timestamp_window = bool(events) and all(timestamp is not None for timestamp in parsed_timestamps)
+        if use_timestamp_window:
+            window_end = max(parsed_timestamps)
+            window_start = window_end - timedelta(minutes=temporary_rule["window_minutes"])
+            events_in_window = [
+                event
+                for event, parsed_timestamp in zip(events, parsed_timestamps)
+                if parsed_timestamp is not None and parsed_timestamp >= window_start
+            ]
+            window_basis = "event_timestamps"
+        else:
+            events_in_window = list(events)
+            window_basis = "request_scope_without_timestamps"
+
+        grouped_results.append(
+            {
+                "group_value": str(group_value),
+                "match_count": len(events_in_window),
+                "window_basis": window_basis,
+                "sample_source_ip": next(
+                    (event.get("source_ip") for event in events_in_window if event.get("source_ip")),
+                    None,
+                ),
+            }
+        )
+
+    grouped_results.sort(key=lambda item: (-item["match_count"], item["group_value"]))
+    grouped_results = grouped_results[:MAX_TEMP_GROUP_RESULTS]
+
+    top_group = grouped_results[0] if grouped_results else None
+    matched = bool(top_group and top_group["match_count"] >= temporary_rule["threshold"])
+    matched_group = top_group["group_value"] if top_group else None
+    observed_value = top_group["match_count"] if top_group else 0
+
+    stages["threshold_window_evaluation"] = {
+        "status": "succeeded",
+        "matched": matched,
+        "matched_group": matched_group,
+        "observed_value_label": "count",
+        "observed_value": observed_value,
+        "configured_threshold": temporary_rule["threshold"],
+        "evaluated_window_minutes": temporary_rule["window_minutes"],
+        "window_basis": top_group["window_basis"] if top_group else "request_scope_without_timestamps",
+        "group_by_field": group_by_field,
+        "grouped_results": grouped_results,
+        "evidence_available": top_group is not None,
+        "pasted_event_only": True,
+        "nothing_persisted": True,
+        "nothing_executed": True,
+    }
+
+    if not matched:
+        stages["alert_preview"] = {
+            "status": "succeeded",
+            "alert": None,
+            "reason": "temporary_rule_threshold_not_reached",
+        }
+        stages["mitre_mapping"] = (
+            {
+                "status": "succeeded",
+                "mitre_technique_id": None,
+                "mitre_technique_name": None,
+                "mitre_tactic": None,
+                "reason": "no_temporary_rule_mitre_selected",
+            }
+            if temporary_rule.get("mitre_technique_id") is None
+            else {
+                "status": "skipped",
+                "reason": "no_alert_created_for_temporary_rule",
+            }
+        )
+        stages["soar_preview"] = {"status": "skipped", "reason": "no_alert_created_for_temporary_rule"}
+        return
+
+    matched_group_events = grouped_events[matched_group]
+    preview_source_ip = next(
+        (event.get("source_ip") for event in matched_group_events if event.get("source_ip")),
+        None,
+    )
+    alert_id = _insert_temporary_alert_preview(
+        cur,
+        temporary_rule,
+        matched_group,
+        observed_value,
+        preview_source_ip,
+    )
+    alert_row = _fetch_alert_rows(cur, [alert_id])[0]
+    alert_row = _apply_temporary_rule_mitre_selection(alert_row, temporary_rule.get("mitre_technique_id"))
+
+    stages["alert_preview"] = {
+        "status": "succeeded",
+        "alert": alert_row,
+        "temporary_rule_semantics": True,
+        "persistence": "request_scoped_rollback_only",
+    }
+    stages["mitre_mapping"] = {
+        "status": "succeeded",
+        "mitre_technique_id": alert_row.get("mitre_technique_id"),
+        "mitre_technique_name": alert_row.get("mitre_technique_name"),
+        "mitre_tactic": alert_row.get("mitre_tactic"),
+        "reason": (
+            "temporary_rule_selected_mitre_technique"
+            if temporary_rule.get("mitre_technique_id")
+            else "no_temporary_rule_mitre_selected"
+        ),
+    }
+    stages["soar_preview"] = _build_temporary_soar_preview(conn, alert_row)

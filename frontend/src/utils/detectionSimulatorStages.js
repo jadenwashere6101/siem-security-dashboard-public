@@ -31,6 +31,9 @@ export const SIMULATOR_STAGE_REASON_TEXT = Object.freeze({
   parser_failed: "No input line or event could be parsed for this source.",
   rule_not_applicable_to_source: "The selected rule does not apply to the selected source.",
   no_alert_created_for_selected_rule: "The selected rule did not produce an alert for this input.",
+  temporary_rule_threshold_not_reached: "The temporary rule's threshold was not reached for any grouped entity.",
+  no_alert_created_for_temporary_rule: "No alert was created for the temporary rule with this input.",
+  no_temporary_rule_mitre_selected: "No MITRE ATT&CK technique was selected for this temporary rule.",
 });
 
 export const describeStageReason = (reason) => {

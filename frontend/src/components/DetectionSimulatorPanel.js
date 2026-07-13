@@ -3,12 +3,24 @@ import React, { useEffect, useMemo, useState } from "react";
 import { loadSimulatorRules, runDetectionSimulation } from "../services/detectionSimulatorService";
 import { SOURCE_METADATA } from "../utils/sourceMetadata";
 import { SIMULATOR_SOURCE_INPUT_FORMATS } from "../utils/detectionSimulatorStages";
+import {
+  SIMULATION_MODE_EXISTING_PRODUCTION_RULE,
+  SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE,
+} from "../utils/detectionSimulatorPlaygroundContract";
 import DetectionSimulatorPipeline from "./DetectionSimulatorPipeline";
 import DetectionSimulatorExplainability from "./DetectionSimulatorExplainability";
+import DetectionSimulatorPlaygroundBuilder from "./DetectionSimulatorPlaygroundBuilder";
 
 const FORMAT_LABELS = { raw: "Raw log line(s)", json: "JSON event(s)" };
 
+const MODE_OPTIONS = [
+  { value: SIMULATION_MODE_EXISTING_PRODUCTION_RULE, label: "Existing Production Rule" },
+  { value: SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE, label: "Temporary Playground Rule" },
+];
+
 function DetectionSimulatorPanel() {
+  const [mode, setMode] = useState(SIMULATION_MODE_EXISTING_PRODUCTION_RULE);
+
   const [rules, setRules] = useState([]);
   const [rulesLoading, setRulesLoading] = useState(true);
   const [rulesError, setRulesError] = useState("");
@@ -22,6 +34,31 @@ function DetectionSimulatorPanel() {
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState("");
   const [result, setResult] = useState(null);
+
+  const clearRunState = () => {
+    setRunError("");
+    setResult(null);
+  };
+
+  const handleModeChange = (nextMode) => {
+    if (nextMode === mode) return;
+    setMode(nextMode);
+    clearRunState();
+  };
+
+  const handlePlaygroundRun = async (payload) => {
+    setRunError("");
+    setResult(null);
+    setRunning(true);
+    try {
+      const response = await runDetectionSimulation(payload);
+      setResult(response);
+    } catch (err) {
+      setRunError(err.message || "Unable to run simulation");
+    } finally {
+      setRunning(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -122,6 +159,31 @@ function DetectionSimulatorPanel() {
         </p>
       </header>
 
+      <div role="radiogroup" aria-label="Detection Simulator mode" style={modeSelectorStyle}>
+        {MODE_OPTIONS.map((option) => (
+          <label key={option.value} style={modeOptionStyle}>
+            <input
+              type="radio"
+              name="detection-simulator-mode"
+              value={option.value}
+              checked={mode === option.value}
+              onChange={() => handleModeChange(option.value)}
+            />
+            {option.label}
+          </label>
+        ))}
+      </div>
+
+      {mode === SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE && (
+        <DetectionSimulatorPlaygroundBuilder
+          running={running}
+          onRun={handlePlaygroundRun}
+          onReset={clearRunState}
+          onValidationError={setRunError}
+        />
+      )}
+
+      {mode === SIMULATION_MODE_EXISTING_PRODUCTION_RULE && (
       <form onSubmit={handleSubmit} style={formStyle} aria-label="Simulation input">
         <div style={fieldRowStyle}>
           <label style={fieldStyle}>
@@ -208,12 +270,13 @@ function DetectionSimulatorPanel() {
           </label>
         )}
 
-        {runError && <p role="alert" style={inlineErrorStyle}>{runError}</p>}
-
         <button type="submit" disabled={!canSubmit} style={runButtonStyle}>
           {running ? "Running simulation…" : "Run Simulation"}
         </button>
       </form>
+      )}
+
+      {runError && <p role="alert" style={inlineErrorStyle}>{runError}</p>}
 
       <div aria-live="polite">
         {running && <p role="status" style={stateStyle}>Running simulation…</p>}
@@ -227,8 +290,12 @@ function DetectionSimulatorPanel() {
           </div>
         )}
 
-        {!running && !result && !runError && (
+        {!running && !result && !runError && mode === SIMULATION_MODE_EXISTING_PRODUCTION_RULE && (
           <p style={emptyStyle}>Select a source, rule, and input, then run a simulation to see results.</p>
+        )}
+
+        {!running && !result && !runError && mode === SIMULATION_MODE_TEMPORARY_PLAYGROUND_RULE && (
+          <p style={emptyStyle}>Build a temporary rule and run a simulation to see results.</p>
         )}
       </div>
     </section>
@@ -253,5 +320,7 @@ const stateStyle = { color: "#9da7b3", padding: "12px 0" };
 const emptyStyle = { color: "#c9d1d9", background: "#161b22", border: "1px solid #30363d", padding: "14px", borderRadius: "8px" };
 const resultsStyle = { display: "flex", flexDirection: "column", gap: "10px" };
 const resultsHeadingStyle = { margin: "18px 0 6px", fontSize: "16px", color: "#f0f6fc" };
+const modeSelectorStyle = { display: "flex", flexWrap: "wrap", gap: "16px", marginBottom: "16px", background: "#161b22", border: "1px solid #30363d", borderRadius: "12px", padding: "12px 16px" };
+const modeOptionStyle = { display: "flex", alignItems: "center", gap: "8px", color: "#f0f6fc", fontSize: "14px", fontWeight: 600, cursor: "pointer" };
 
 export default DetectionSimulatorPanel;

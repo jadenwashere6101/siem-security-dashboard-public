@@ -83,11 +83,19 @@ function normalizedEventExplanation(normalizedStage, parserStage) {
 
 function applicabilityExplanation(stage) {
   if (!stage) return null;
+  const isTemporaryRule = Array.isArray(stage.allowed_condition_fields);
   if (stage.status === "failed") {
     return {
       key: "detection_applicability",
       title: "Rule not applicable",
       body: stage.reason || "The selected rule does not apply to the selected source.",
+    };
+  }
+  if (stage.status === "succeeded" && isTemporaryRule) {
+    return {
+      key: "detection_applicability",
+      title: "Playground rule applicability",
+      body: `This temporary rule's condition and group-by fields are supported for source "${stage.source}".`,
     };
   }
   if (stage.status === "succeeded") {
@@ -122,13 +130,14 @@ function thresholdExplanation(stage) {
   // Numeric evidence always comes from the backend's real detector
   // evaluation (see engines/detection_simulator.py's evidence-call
   // instrumentation) -- this component only renders it, never computes it.
+  const isTemporaryRule = Array.isArray(stage.grouped_results);
   if (stage.evidence_available && Number.isInteger(stage.observed_value)) {
     const label = stage.observed_value_label ? stage.observed_value_label.replace(/_/g, " ") : "observed value";
     const thresholdText = Number.isInteger(stage.configured_threshold)
       ? ` (required: ${stage.configured_threshold})`
       : "";
     parts.push(`Observed ${label}: ${stage.observed_value}${thresholdText}.`);
-  } else if (!stage.matched && !stage.existing_open_alert_for_rule) {
+  } else if (!stage.matched && !stage.existing_open_alert_for_rule && !isTemporaryRule) {
     parts.push("An exact observed value was not available for this evaluation.");
   }
   if (stage.existing_open_alert_for_rule) {
@@ -143,6 +152,26 @@ function thresholdExplanation(stage) {
     );
   }
 
+  if (isTemporaryRule) {
+    if (stage.grouped_results.length > 0) {
+      const groupSummary = stage.grouped_results
+        .slice(0, 5)
+        .map((group) => `${stage.group_by_field || "group"}=${group.group_value} (${group.match_count})`)
+        .join(", ");
+      parts.push(`Grouped evidence: ${groupSummary}.`);
+    } else {
+      parts.push("No grouped entity matched the condition in the pasted or sample events.");
+    }
+  }
+  if (stage.pasted_event_only) {
+    parts.push(
+      "This result reflects only the pasted or sample events included in this request; no committed production event history was blended."
+    );
+  }
+  if (stage.nothing_persisted) {
+    parts.push("Nothing was persisted or executed by this evaluation.");
+  }
+
   return {
     key: "threshold_window_evaluation",
     title: "Threshold / window evaluation",
@@ -152,18 +181,25 @@ function thresholdExplanation(stage) {
 
 function alertExplanation(stage) {
   if (!stage || stage.status !== "succeeded") return null;
+  const isTemporaryRule =
+    stage.reason === "temporary_rule_threshold_not_reached" || stage.temporary_rule_semantics === true;
   if (!stage.alert) {
     return {
       key: "alert_preview",
       title: "Alert preview",
-      body: "No alert would be created for the selected rule with this input.",
+      body: isTemporaryRule
+        ? "No alert would be created: the temporary rule's threshold was not reached for any grouped entity in the pasted or sample events."
+        : "No alert would be created for the selected rule with this input.",
     };
   }
   const alert = stage.alert;
+  const persistenceNote = isTemporaryRule
+    ? " This preview is request-scoped only; nothing was persisted or executed."
+    : "";
   return {
     key: "alert_preview",
     title: "Alert preview",
-    body: `Would create a ${alert.severity || "unspecified"}-severity "${alert.alert_type}" alert: "${alert.message}". Reputation source: ${alert.reputation_source} (stubbed for simulation, not the source IP's real reputation).`,
+    body: `Would create a ${alert.severity || "unspecified"}-severity "${alert.alert_type}" alert: "${alert.message}". Reputation source: ${alert.reputation_source} (stubbed for simulation, not the source IP's real reputation).${persistenceNote}`,
   };
 }
 
@@ -174,7 +210,10 @@ function mitreExplanation(stage) {
     return {
       key: "mitre_mapping",
       title: "MITRE mapping",
-      body: "This alert type does not have a specific MITRE ATT&CK technique mapping.",
+      body:
+        stage.reason === "no_temporary_rule_mitre_selected"
+          ? "No MITRE ATT&CK technique was selected for this temporary rule."
+          : "This alert type does not have a specific MITRE ATT&CK technique mapping.",
     };
   }
   if (stage.status === "succeeded") {

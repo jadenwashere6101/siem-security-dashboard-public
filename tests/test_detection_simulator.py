@@ -22,6 +22,41 @@ def run_sim(**kwargs):
         return run_detection_simulation(**kwargs)
 
 
+def run_temp_sim(*, temporary_rule=None, input_text=None, sample_events=None, json_events=None, environment="prod"):
+    base_rule = {
+        "source": "bank_app",
+        "source_type": "custom",
+        "input_format": "json_array",
+        "event_type": "failed_login",
+        "condition": {"field": "event_type", "operator": "equals", "value": "failed_login"},
+        "aggregation": {"type": "count", "group_by_field": "source_ip"},
+        "threshold": 2,
+        "window_minutes": 15,
+        "severity": "high",
+        "mitre_technique_id": "T1110",
+    }
+    if temporary_rule:
+        merged_rule = dict(base_rule)
+        merged_rule.update(temporary_rule)
+        if "condition" in temporary_rule:
+            merged_rule["condition"] = temporary_rule["condition"]
+        if "aggregation" in temporary_rule:
+            merged_rule["aggregation"] = temporary_rule["aggregation"]
+        temporary_rule = merged_rule
+    else:
+        temporary_rule = base_rule
+
+    with siem_backend.app.app_context():
+        return run_detection_simulation(
+            simulation_mode="temporary_playground_rule",
+            temporary_rule=temporary_rule,
+            input_text=input_text,
+            sample_events=sample_events,
+            json_events=json_events,
+            environment=environment,
+        )
+
+
 ADMIN_USER = "testadmin"
 ADMIN_PASS = "testpassword123!"
 
@@ -165,6 +200,134 @@ def test_batch_size_over_limit_is_rejected():
             rule_id="failed_login_threshold",
             input_format="json",
             json_events=[{"event_type": "failed_login"}] * 26,
+        )
+
+
+# --- temporary playground rule contract ------------------------------------
+
+
+def test_temporary_rule_valid_contract_is_accepted(postgres_db):
+    conn, cur = postgres_db
+
+    with patch("engines.detection_simulator.get_db_connection", return_value=RollbackOnlyConnection(conn)):
+        result = run_temp_sim(
+            sample_events=[
+                _make_temp_bank_app_event("temp1", source_ip="198.51.100.150"),
+                _make_temp_bank_app_event("temp2", source_ip="198.51.100.150"),
+            ]
+        )
+    assert result["simulation_mode"] == "temporary_playground_rule"
+    assert result["temporary_rule"]["aggregation"]["type"] == "count"
+    assert result["stages"]["threshold_window_evaluation"]["matched"] is True
+
+
+def test_temporary_rule_invalid_source_is_rejected():
+    with pytest.raises(SimulationValidationError, match="Unknown temporary_rule.source"):
+        run_temp_sim(
+            temporary_rule={"source": "not-real"},
+            sample_events=[_make_temp_bank_app_event("temp1")],
+        )
+
+
+def test_temporary_rule_invalid_source_type_is_rejected():
+    with pytest.raises(SimulationValidationError, match="source_type does not match"):
+        run_temp_sim(
+            temporary_rule={"source_type": "wrong"},
+            sample_events=[_make_temp_bank_app_event("temp1")],
+        )
+
+
+def test_temporary_rule_invalid_field_is_rejected():
+    with pytest.raises(SimulationValidationError, match="condition.field 'message' is not supported"):
+        run_temp_sim(
+            temporary_rule={"condition": {"field": "message", "operator": "equals", "value": "x"}},
+            sample_events=[_make_temp_bank_app_event("temp1")],
+        )
+
+
+def test_temporary_rule_invalid_operator_is_rejected():
+    with pytest.raises(SimulationValidationError, match="condition.operator is unsupported"):
+        run_temp_sim(
+            temporary_rule={"condition": {"field": "event_type", "operator": "regex", "value": "failed.*"}},
+            sample_events=[_make_temp_bank_app_event("temp1")],
+        )
+
+
+def test_temporary_rule_invalid_comparison_value_is_rejected():
+    with pytest.raises(SimulationValidationError, match="condition.value must be an integer"):
+        run_temp_sim(
+            temporary_rule={
+                "source": "pfsense",
+                "source_type": "firewall",
+                "input_format": "json_array",
+                "event_type": "firewall_block",
+                "condition": {"field": "destination_port", "operator": "greater_than", "value": "443"},
+                "aggregation": {"type": "count", "group_by_field": "source_ip"},
+                "threshold": 1,
+                "window_minutes": 15,
+                "severity": "high",
+                "mitre_technique_id": "T1046",
+            },
+            sample_events=[
+                {
+                    "event_type": "firewall_block",
+                    "severity": "medium",
+                    "source_ip": "203.0.113.50",
+                    "destination_ip": "198.51.100.50",
+                    "destination_port": 443,
+                    "message": "blocked",
+                    "source": "pfsense",
+                    "source_type": "firewall",
+                    "environment": "test",
+                    "app_name": "pfSense",
+                    "raw_payload": {
+                        "event_type": "firewall_block",
+                        "source_ip": "203.0.113.50",
+                        "destination_ip": "198.51.100.50",
+                        "destination_port": 443,
+                        "action": "block",
+                    },
+                }
+            ],
+        )
+
+
+def test_temporary_rule_invalid_threshold_is_rejected():
+    with pytest.raises(SimulationValidationError, match="temporary_rule.threshold must be between 1 and 100"):
+        run_temp_sim(
+            temporary_rule={"threshold": 101},
+            sample_events=[_make_temp_bank_app_event("temp1")],
+        )
+
+
+def test_temporary_rule_invalid_window_is_rejected():
+    with pytest.raises(SimulationValidationError, match="temporary_rule.window_minutes must be between 1 and 1440"):
+        run_temp_sim(
+            temporary_rule={"window_minutes": 0},
+            sample_events=[_make_temp_bank_app_event("temp1")],
+        )
+
+
+def test_temporary_rule_unsupported_group_by_is_rejected():
+    with pytest.raises(SimulationValidationError, match="group_by_field 'destination_port' is not supported for source 'bank_app'"):
+        run_temp_sim(
+            temporary_rule={"aggregation": {"type": "count", "group_by_field": "destination_port"}},
+            sample_events=[_make_temp_bank_app_event("temp1")],
+        )
+
+
+def test_temporary_rule_event_count_limit_is_enforced():
+    with pytest.raises(SimulationValidationError, match="maximum event count of 100"):
+        run_temp_sim(sample_events=[_make_temp_bank_app_event(f"temp{i}") for i in range(101)])
+
+
+def test_temporary_rule_payload_size_limit_is_enforced():
+    with pytest.raises(SimulationValidationError, match="maximum size"):
+        run_temp_sim(
+            sample_events=[
+                _make_temp_bank_app_event("x", source_ip="198.51.100.151")
+                | {"message": "A" * (260 * 1024)}
+            ]
         )
 
 
@@ -323,6 +486,13 @@ def _make_bank_app_event(username, source_ip="198.51.100.201"):
     }
 
 
+def _make_temp_bank_app_event(username, source_ip="198.51.100.201", *, event_timestamp=None):
+    event = _make_bank_app_event(username, source_ip=source_ip)
+    if event_timestamp is not None:
+        event["event_timestamp"] = event_timestamp
+    return event
+
+
 def test_zero_durable_writes_across_all_guarded_tables(postgres_db):
     conn, cur = postgres_db
     insert_playbook(
@@ -447,6 +617,223 @@ def test_never_commits_even_when_wrapper_forbids_commit(postgres_db):
         )
 
     assert result["stages"]["detection_evaluation"]["status"] == "succeeded"
+
+
+def test_temporary_rule_is_pasted_event_only_even_when_real_history_exists(postgres_db):
+    conn, cur = postgres_db
+    cur.execute(
+        """
+        INSERT INTO events (event_type, severity, source_ip, source, source_type, message, app_name, environment, raw_payload)
+        VALUES ('failed_login', 'medium', '198.51.100.240', 'bank_app', 'custom', 'real prior event', 'bank_app', 'test', '{}'::jsonb)
+        """
+    )
+    conn.commit()
+
+    with patch("engines.detection_simulator.get_db_connection", return_value=RollbackOnlyConnection(conn)):
+        result = run_temp_sim(
+            sample_events=[_make_temp_bank_app_event("temp-history", source_ip="198.51.100.240")]
+        )
+
+    stage = result["stages"]["threshold_window_evaluation"]
+    assert stage["matched"] is False
+    assert stage["observed_value"] == 1
+    assert stage["pasted_event_only"] is True
+
+
+def test_temporary_rule_one_event_match_builds_alert_preview(postgres_db):
+    conn, cur = postgres_db
+
+    with patch("engines.detection_simulator.get_db_connection", return_value=RollbackOnlyConnection(conn)):
+        result = run_temp_sim(
+            temporary_rule={"threshold": 1},
+            sample_events=[_make_temp_bank_app_event("temp-match", source_ip="198.51.100.241")],
+        )
+
+    assert result["stages"]["threshold_window_evaluation"]["matched"] is True
+    alert = result["stages"]["alert_preview"]["alert"]
+    assert alert["alert_type"] == "temporary_playground_rule"
+    assert alert["severity"] == "high"
+    assert alert["reputation_source"] == "simulated"
+
+
+def test_temporary_rule_threshold_not_reached_is_explained(postgres_db):
+    conn, cur = postgres_db
+
+    with patch("engines.detection_simulator.get_db_connection", return_value=RollbackOnlyConnection(conn)):
+        result = run_temp_sim(
+            sample_events=[_make_temp_bank_app_event("temp-threshold", source_ip="198.51.100.242")]
+        )
+
+    stage = result["stages"]["threshold_window_evaluation"]
+    assert stage["matched"] is False
+    assert stage["matched_group"] == "198.51.100.242"
+    assert stage["observed_value"] == 1
+    assert stage["configured_threshold"] == 2
+    assert result["stages"]["alert_preview"]["alert"] is None
+
+
+def test_temporary_rule_grouped_aggregation_uses_group_by_field(postgres_db):
+    conn, cur = postgres_db
+    events = [
+        _make_temp_bank_app_event("temp-a1", source_ip="198.51.100.243"),
+        _make_temp_bank_app_event("temp-a2", source_ip="198.51.100.243"),
+        _make_temp_bank_app_event("temp-b1", source_ip="198.51.100.244"),
+    ]
+
+    with patch("engines.detection_simulator.get_db_connection", return_value=RollbackOnlyConnection(conn)):
+        result = run_temp_sim(sample_events=events)
+
+    grouped = result["stages"]["threshold_window_evaluation"]["grouped_results"]
+    assert grouped[0]["group_value"] == "198.51.100.243"
+    assert grouped[0]["match_count"] == 2
+    assert grouped[1]["group_value"] == "198.51.100.244"
+    assert grouped[1]["match_count"] == 1
+
+
+def test_temporary_rule_window_boundary_uses_event_timestamps(postgres_db):
+    conn, cur = postgres_db
+    events = [
+        _make_temp_bank_app_event(
+            "temp-window-1",
+            source_ip="198.51.100.245",
+            event_timestamp="2026-07-13T10:00:00+00:00",
+        ),
+        _make_temp_bank_app_event(
+            "temp-window-2",
+            source_ip="198.51.100.245",
+            event_timestamp="2026-07-13T10:10:00+00:00",
+        ),
+        _make_temp_bank_app_event(
+            "temp-window-3",
+            source_ip="198.51.100.245",
+            event_timestamp="2026-07-13T10:20:00+00:00",
+        ),
+    ]
+
+    with patch("engines.detection_simulator.get_db_connection", return_value=RollbackOnlyConnection(conn)):
+        result = run_temp_sim(
+            temporary_rule={"window_minutes": 15, "threshold": 2},
+            sample_events=events,
+        )
+
+    stage = result["stages"]["threshold_window_evaluation"]
+    assert stage["window_basis"] == "event_timestamps"
+    assert stage["observed_value"] == 2
+    assert stage["matched"] is True
+
+
+def test_temporary_rule_mitre_preview_uses_selected_technique(postgres_db):
+    conn, cur = postgres_db
+
+    with patch("engines.detection_simulator.get_db_connection", return_value=RollbackOnlyConnection(conn)):
+        result = run_temp_sim(
+            temporary_rule={"threshold": 1, "mitre_technique_id": "T1110.003"},
+            sample_events=[_make_temp_bank_app_event("temp-mitre", source_ip="198.51.100.246")],
+        )
+
+    mitre = result["stages"]["mitre_mapping"]
+    assert mitre["mitre_technique_id"] == "T1110.003"
+    assert mitre["mitre_technique_name"] == "Password Spraying"
+    assert mitre["mitre_tactic"] == "Credential Access"
+
+
+def test_temporary_rule_no_selected_mitre_returns_explicit_no_mapping(postgres_db):
+    conn, cur = postgres_db
+
+    with patch("engines.detection_simulator.get_db_connection", return_value=RollbackOnlyConnection(conn)):
+        result = run_temp_sim(
+            temporary_rule={"threshold": 1, "mitre_technique_id": None},
+            sample_events=[_make_temp_bank_app_event("temp-no-mitre", source_ip="198.51.100.247")],
+        )
+
+    mitre = result["stages"]["mitre_mapping"]
+    assert mitre["status"] == "succeeded"
+    assert mitre["mitre_technique_id"] is None
+    assert mitre["reason"] == "no_temporary_rule_mitre_selected"
+
+
+def test_temporary_rule_soar_preview_matches_source_and_severity_playbook(postgres_db):
+    conn, cur = postgres_db
+    insert_playbook(
+        cur,
+        "pb-temp-rule",
+        trigger_config={"source": "bank_app", "min_severity": "high"},
+        steps=[{"action": "require_approval", "risk_level": "critical"}],
+    )
+    conn.commit()
+
+    with patch("engines.detection_simulator.get_db_connection", return_value=RollbackOnlyConnection(conn)):
+        result = run_temp_sim(
+            temporary_rule={"threshold": 1},
+            sample_events=[_make_temp_bank_app_event("temp-soar", source_ip="198.51.100.248")],
+        )
+
+    soar = result["stages"]["soar_preview"]
+    assert soar["status"] == "succeeded"
+    assert soar["no_playbook_match"] is False
+    matched = next(playbook for playbook in soar["matched_playbooks"] if playbook["playbook_id"] == "pb-temp-rule")
+    assert matched["approval_required"] is True
+
+
+def test_temporary_rule_no_external_calls_and_zero_writes(postgres_db):
+    conn, cur = postgres_db
+    guarded_tables = (
+        "events",
+        "alerts",
+        "playbook_executions",
+        "soar_response_decisions",
+        "response_actions_queue",
+        "incidents",
+        "incident_alerts",
+        "audit_log",
+    )
+    before_counts = {table: count_rows(cur, table) for table in guarded_tables}
+
+    with patch("engines.detection_simulator.get_db_connection", return_value=RollbackOnlyConnection(conn)), patch(
+        "core.ip_helpers.requests.get"
+    ) as mock_get, patch("integrations.slack_adapter._post_slack_webhook") as mock_slack:
+        result = run_temp_sim(
+            temporary_rule={"threshold": 1},
+            sample_events=[_make_temp_bank_app_event("temp-safe", source_ip="198.51.100.249")],
+        )
+
+    assert result["stages"]["alert_preview"]["alert"] is not None
+    mock_get.assert_not_called()
+    mock_slack.assert_not_called()
+    after_counts = {table: count_rows(cur, table) for table in guarded_tables}
+    assert after_counts == before_counts
+
+
+def test_temporary_rule_no_pending_row_visible_to_separate_connection(postgres_db):
+    conn, cur = postgres_db
+    cur.execute("SELECT current_schema()")
+    schema_name = cur.fetchone()[0]
+    insert_playbook(
+        cur,
+        "pb-temp-worker-visibility",
+        trigger_config={"source": "bank_app", "min_severity": "high"},
+        steps=[{"action": "notify_slack", "params": {}}],
+    )
+    conn.commit()
+
+    with patch("engines.detection_simulator.get_db_connection", return_value=RollbackOnlyConnection(conn)):
+        result = run_temp_sim(
+            temporary_rule={"threshold": 1},
+            sample_events=[_make_temp_bank_app_event("temp-worker", source_ip="198.51.100.250")],
+        )
+
+    assert result["stages"]["soar_preview"]["status"] == "succeeded"
+    dsn = os.getenv("SIEM_TEST_DATABASE_URL") or os.getenv("TEST_DATABASE_URL") or "dbname=postgres"
+    worker_conn = psycopg2.connect(dsn)
+    try:
+        worker_cur = worker_conn.cursor()
+        worker_cur.execute(sql.SQL("SET search_path TO {}, public").format(sql.Identifier(schema_name)))
+        worker_cur.execute("SELECT COUNT(*) FROM playbook_executions WHERE status = 'pending'")
+        assert worker_cur.fetchone()[0] == 0
+        worker_cur.execute("SELECT COUNT(*) FROM response_actions_queue WHERE status = 'pending'")
+        assert worker_cur.fetchone()[0] == 0
+    finally:
+        worker_conn.close()
 
 
 # --- detection matched: alert preview, MITRE, and disclosures ---------------
@@ -855,3 +1242,65 @@ def test_route_rejects_unsupported_source_rule_input_combo(client):
             },
         )
     assert response.status_code == 400
+
+
+def test_temporary_rule_route_allows_analyst_and_returns_simulation_result(client, postgres_db):
+    conn, cur = postgres_db
+
+    with logged_in_role(client, "analyst"):
+        with patch(
+            "engines.detection_simulator.get_db_connection",
+            return_value=RollbackOnlyConnection(conn),
+        ):
+            response = client.post(
+                "/detection-simulator/run",
+                json={
+                    "simulation_mode": "temporary_playground_rule",
+                    "temporary_rule": {
+                        "source": "bank_app",
+                        "source_type": "custom",
+                        "input_format": "json_array",
+                        "event_type": "failed_login",
+                        "condition": {"field": "event_type", "operator": "equals", "value": "failed_login"},
+                        "aggregation": {"type": "count", "group_by_field": "source_ip"},
+                        "threshold": 1,
+                        "window_minutes": 15,
+                        "severity": "high",
+                        "mitre_technique_id": "T1110",
+                    },
+                    "sample_events": [_make_temp_bank_app_event("route-temp", source_ip="198.51.100.251")],
+                },
+            )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["simulation_mode"] == "temporary_playground_rule"
+    assert payload["temporary_rule"]["source"] == "bank_app"
+    assert payload["stages"]["threshold_window_evaluation"]["matched"] is True
+
+
+def test_temporary_rule_route_rejects_history_mode_shape(client):
+    with logged_in_role(client, "analyst"):
+        response = client.post(
+            "/detection-simulator/run",
+            json={
+                "simulation_mode": "temporary_playground_rule",
+                "history_mode": "blended_with_production_history",
+                "temporary_rule": {
+                    "source": "bank_app",
+                    "source_type": "custom",
+                    "input_format": "json_array",
+                    "event_type": "failed_login",
+                    "condition": {"field": "event_type", "operator": "equals", "value": "failed_login"},
+                    "aggregation": {"type": "count", "group_by_field": "source_ip"},
+                    "threshold": 1,
+                    "window_minutes": 15,
+                    "severity": "high",
+                    "mitre_technique_id": "T1110",
+                },
+                "sample_events": [_make_temp_bank_app_event("route-temp-history")],
+            },
+        )
+
+    assert response.status_code == 400
+    assert "history-aware" in response.get_json()["error"]
