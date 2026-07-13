@@ -26,7 +26,7 @@ import {
 } from "./MasterDetailLayout";
 
 const PAGE_LIMIT = 50;
-const EXEC_STATUSES = ["pending", "running", "awaiting_approval", "success", "failed", "abandoned"];
+const EXEC_STATUSES = ["pending", "running", "awaiting_approval", "success", "failed", "abandoned", "not_actioned"];
 const ENABLED_OPTIONS = [
   { value: "all", label: "All definitions" },
   { value: "enabled", label: "Enabled only" },
@@ -50,6 +50,12 @@ function stepCount(steps) {
 
 function formatDetailValue(value, emptyValue = "—") {
   return value === null || value === undefined || value === "" ? emptyValue : value;
+}
+
+function formatExecutionStatusLabel(value) {
+  return String(value || "unknown")
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function formatFlagValue(value) {
@@ -92,6 +98,8 @@ function getExecutionStatusSummary(status, execution) {
       return `${subject[0].toUpperCase()}${subject.slice(1)} failed before completing all steps.`;
     case "abandoned":
       return "Execution was abandoned and will not continue in this view.";
+    case "not_actioned":
+      return "Approval resolved without action; no protected step executed and no failure retry is expected.";
     default:
       return "Execution status is unknown.";
   }
@@ -205,6 +213,7 @@ function PlaybooksPanel({
   selectStyle,
   userRole,
   onOpenResponseRegistry = null,
+  initialExecutionRequest = null,
 }) {
   const isSuperAdmin = userRole === "super_admin";
   const canLaunchPlaybooks = userRole === "analyst" || userRole === "super_admin";
@@ -369,6 +378,13 @@ function PlaybooksPanel({
       setDetailLoading(false);
     }
   }, [rememberTrigger]);
+
+  useEffect(() => {
+    if (!initialExecutionRequest?.executionId) {
+      return;
+    }
+    handleViewExecution(initialExecutionRequest.executionId, null);
+  }, [handleViewExecution, initialExecutionRequest]);
 
   useEffect(() => {
     if (detailKind !== "execution" || !detailRecord?.id) {
@@ -982,7 +998,7 @@ function PlaybooksPanel({
                         >
                           <td style={{ ...bodyCellStyle, ...mono }}>{row.id}</td>
                           <td style={{ ...bodyCellStyle, ...mono }}>{row.playbook_id}</td>
-                          <td style={bodyCellStyle}>{row.status}</td>
+                          <td style={bodyCellStyle}>{formatExecutionStatusLabel(row.status)}</td>
                           <td style={bodyCellStyle}>
                             <ResponseOutcomeBadge outcome={row.response_outcome || null} />
                           </td>
@@ -1123,7 +1139,7 @@ function PlaybooksPanel({
                     </div>
                     <div style={detailFieldStyle}>
                       <span style={detailLabelStyle}>Status</span>
-                      <span style={detailValueStyle}>{formatDetailValue(detailRecord.status)}</span>
+                      <span style={detailValueStyle}>{formatExecutionStatusLabel(detailRecord.status)}</span>
                     </div>
                     <div style={detailFieldStyle}>
                       <span style={detailLabelStyle}>Alert ID</span>

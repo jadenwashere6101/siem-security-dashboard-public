@@ -161,6 +161,9 @@ function SoarQueuePanel({
             Read-only status for queued automated response actions. The manual batch
             control uses canonical action handling, not a single simulation-only executor.
           </p>
+          <div style={historicalQueueBannerStyle} role="note">
+            Legacy response queue is frozen/historical for current alert automation. New unattended alert handling runs through playbook executions and approvals, not this queue.
+          </div>
         </div>
         <div style={controlsStyle}>
           <label style={filterWrapperStyle}>
@@ -697,6 +700,18 @@ const sectionLabelStyle = {
   fontWeight: "700",
   letterSpacing: "0.14em",
   textTransform: "uppercase",
+};
+
+const historicalQueueBannerStyle = {
+  marginTop: "10px",
+  padding: "10px 12px",
+  borderRadius: "10px",
+  border: "1px solid rgba(96, 165, 250, 0.28)",
+  backgroundColor: "rgba(96, 165, 250, 0.12)",
+  color: "#bfdbfe",
+  fontSize: "12px",
+  lineHeight: 1.5,
+  maxWidth: "760px",
 };
 
 const controlsStyle = {

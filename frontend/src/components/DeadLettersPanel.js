@@ -7,6 +7,7 @@ import {
   getDeadLetters,
   requestDeadLetterRetry,
 } from "../services/deadLetterService";
+import { loadSoarOperationsSummary } from "../services/soarOperationsService";
 import { formatTimestamp } from "../utils/displayFormatting";
 import {
   MasterDetailLayout,
@@ -52,6 +53,44 @@ function truncateText(value, maxLength = 48) {
   const text = String(value || "");
   if (text.length <= maxLength) return text;
   return `${text.slice(0, maxLength)}...`;
+}
+
+function formatStatusLabel(value) {
+  return String(value || "unknown")
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function classifyFailure(item) {
+  const kind = item?.classification?.kind || item?.failure_classification?.kind;
+  const label = item?.classification?.label || item?.failure_classification?.label;
+  if (kind && label) {
+    return { kind, label };
+  }
+  const failureClass = String(item?.failure_class || "").trim();
+  if (failureClass === "approval_expired") {
+    return { kind: "expected_expiration", label: "Expected expiration" };
+  }
+  if (failureClass === "approval_denied") {
+    return { kind: "expected_denial", label: "Expected denial" };
+  }
+  return { kind: "system_failure", label: "System failure" };
+}
+
+function getFailureBadgeStyle(item) {
+  const classification = classifyFailure(item);
+  if (classification.kind === "expected_expiration" || classification.kind === "expected_denial") {
+    return {
+      color: "#bfdbfe",
+      border: "1px solid rgba(96, 165, 250, 0.32)",
+      backgroundColor: "rgba(96, 165, 250, 0.12)",
+    };
+  }
+  return {
+    color: "#fca5a5",
+    border: "1px solid rgba(248, 113, 113, 0.32)",
+    backgroundColor: "rgba(248, 113, 113, 0.12)",
+  };
 }
 
 function formatRetryExecuteSuccess(newExecutionId) {
@@ -111,34 +150,34 @@ function getStatusBadgeStyle(status) {
   if (status === "open") {
     return {
       color: "#f5d487",
-      borderColor: "rgba(245, 212, 135, 0.38)",
+      border: "1px solid rgba(245, 212, 135, 0.38)",
       backgroundColor: "rgba(245, 212, 135, 0.1)",
     };
   }
   if (status === "retrying") {
     return {
       color: "#93c5fd",
-      borderColor: "rgba(88, 166, 255, 0.38)",
+      border: "1px solid rgba(88, 166, 255, 0.38)",
       backgroundColor: "rgba(31, 111, 235, 0.12)",
     };
   }
   if (status === "retried") {
     return {
       color: "#7ee787",
-      borderColor: "rgba(126, 231, 135, 0.35)",
+      border: "1px solid rgba(126, 231, 135, 0.35)",
       backgroundColor: "rgba(126, 231, 135, 0.1)",
     };
   }
   if (status === "dismissed") {
     return {
       color: "#c9d1d9",
-      borderColor: "rgba(201, 209, 217, 0.35)",
+      border: "1px solid rgba(201, 209, 217, 0.35)",
       backgroundColor: "rgba(201, 209, 217, 0.08)",
     };
   }
   return {
     color: "#c9d1d9",
-    borderColor: "rgba(201, 209, 217, 0.35)",
+    border: "1px solid rgba(201, 209, 217, 0.35)",
     backgroundColor: "rgba(201, 209, 217, 0.08)",
   };
 }
@@ -152,7 +191,12 @@ function DeadLettersPanel({
   selectStyle,
   userRole,
   displaySettings,
+  onOpenPlaybookExecution = null,
+  onOpenResponseRegistry = null,
+  onOpenPendingApprovals = null,
+  onOpenPlaybooks = null,
 }) {
+  const [summary, setSummary] = useState(null);
   const [metrics, setMetrics] = useState(null);
   const [items, setItems] = useState([]);
   const [statusFilter, setStatusFilter] = useState("all");
@@ -187,6 +231,11 @@ function DeadLettersPanel({
     setMetrics(data && typeof data === "object" ? data : null);
   }, []);
 
+  const loadSummary = useCallback(async () => {
+    const data = await loadSoarOperationsSummary();
+    setSummary(data && typeof data === "object" ? data : null);
+  }, []);
+
   const loadList = useCallback(async () => {
     const filters = buildListFilters({
       statusFilter,
@@ -206,10 +255,11 @@ function DeadLettersPanel({
           setLoading(true);
         }
         setError("");
-        await Promise.all([loadMetrics(), loadList()]);
+        await Promise.all([loadSummary(), loadMetrics(), loadList()]);
       } catch (err) {
         setError(err.message || "Unable to load dead letters.");
         if (!quiet) {
+          setSummary(null);
           setMetrics(null);
           setItems([]);
         }
@@ -218,7 +268,7 @@ function DeadLettersPanel({
         setRefreshing(false);
       }
     },
-    [loadList, loadMetrics]
+    [loadList, loadMetrics, loadSummary]
   );
 
   const handleSelectRow = useCallback(async (deadLetterId, trigger) => {
@@ -397,6 +447,7 @@ function DeadLettersPanel({
         items={items}
         loading={loading}
         refreshing={refreshing}
+        summary={summary}
         error={error}
         filterSummary={filterSummary}
         selectedId={selectedId}
@@ -423,6 +474,10 @@ function DeadLettersPanel({
         onRetryLoad={() => loadPanel()}
         onSelectRow={handleSelectRow}
         onCloseDetail={handleCloseDetail}
+        onOpenPlaybookExecution={onOpenPlaybookExecution}
+        onOpenResponseRegistry={onOpenResponseRegistry}
+        onOpenPendingApprovals={onOpenPendingApprovals}
+        onOpenPlaybooks={onOpenPlaybooks}
         detailRef={detailRef}
         displaySettings={displaySettings}
       />
@@ -527,6 +582,7 @@ function PanelTitle({ cardTitleStyle, cardSubtitleStyle }) {
 }
 
 function PanelBody({
+  summary,
   metrics,
   items,
   loading,
@@ -557,11 +613,24 @@ function PanelBody({
   onRetryLoad,
   onSelectRow,
   onCloseDetail,
+  onOpenPlaybookExecution,
+  onOpenResponseRegistry,
+  onOpenPendingApprovals,
+  onOpenPlaybooks,
   detailRef,
   displaySettings,
 }) {
   return (
     <div style={panelContentStyle}>
+      <OperationsSummaryStrip
+        summary={summary}
+        displaySettings={displaySettings}
+        onOpenPlaybookExecution={onOpenPlaybookExecution}
+        onOpenResponseRegistry={onOpenResponseRegistry}
+        onOpenPendingApprovals={onOpenPendingApprovals}
+        onOpenPlaybooks={onOpenPlaybooks}
+      />
+
       <div style={operationalNoticeStyle} role="note">
         {OPERATIONAL_NOTICE}
       </div>
@@ -636,6 +705,8 @@ function PanelBody({
                 onRetryExecute={onRetryExecute}
                 onRetryExecuteConfirmedChange={onRetryExecuteConfirmedChange}
                 onRetryExecutePhraseChange={onRetryExecutePhraseChange}
+                onOpenPlaybookExecution={onOpenPlaybookExecution}
+                onOpenResponseRegistry={onOpenResponseRegistry}
                 displaySettings={displaySettings}
               />
             ) : (
@@ -645,6 +716,229 @@ function PanelBody({
           </MasterDetailPane>
         </MasterDetailLayout>
       ) : null}
+    </div>
+  );
+}
+
+function OperationsSummaryStrip({
+  summary,
+  displaySettings,
+  onOpenPlaybookExecution,
+  onOpenResponseRegistry,
+  onOpenPendingApprovals,
+  onOpenPlaybooks,
+}) {
+  if (!summary) {
+    return null;
+  }
+
+  const expectedBacklogCount = Number(summary?.legacy_expected_backlog?.open_count || 0);
+
+  return (
+    <div style={summaryStripWrapperStyle}>
+      <div style={summaryGridStyle}>
+        <SummaryCard
+          title="Running Playbooks"
+          count={summary?.running_playbooks?.count ?? summary?.counts?.active_playbooks ?? 0}
+          meta={`${summary?.running_playbooks?.running_count ?? 0} running · ${summary?.running_playbooks?.awaiting_approval_count ?? 0} awaiting approval`}
+          items={summary?.running_playbooks?.items || []}
+          renderItem={(item) => (
+            <SummaryExecutionItem
+              item={item}
+              displaySettings={displaySettings}
+              onOpenPlaybookExecution={onOpenPlaybookExecution}
+            />
+          )}
+          onOpenAll={onOpenPlaybooks}
+          openAllLabel="Open SOAR Playbooks"
+        />
+        <SummaryCard
+          title="Pending Approvals"
+          count={summary?.pending_approvals?.count ?? summary?.counts?.pending_approvals ?? 0}
+          items={summary?.pending_approvals?.items || []}
+          renderItem={(item) => (
+            <SummaryApprovalItem
+              item={item}
+              displaySettings={displaySettings}
+              onOpenPlaybookExecution={onOpenPlaybookExecution}
+              onOpenResponseRegistry={onOpenResponseRegistry}
+            />
+          )}
+          onOpenAll={onOpenPendingApprovals}
+          openAllLabel="Open SOAR Approvals"
+        />
+        <SummaryCard
+          title="Recently Expired/Denied"
+          count={summary?.recently_expired_denied?.count ?? summary?.counts?.recently_expired_denied ?? 0}
+          meta={`Last ${summary?.recently_expired_denied?.window_hours ?? summary?.window_hours ?? 24}h`}
+          items={summary?.recently_expired_denied?.items || []}
+          renderItem={(item) => (
+            <SummaryApprovalItem
+              item={item}
+              displaySettings={displaySettings}
+              onOpenPlaybookExecution={onOpenPlaybookExecution}
+              onOpenResponseRegistry={onOpenResponseRegistry}
+              showTerminalState
+            />
+          )}
+        />
+        <SummaryCard
+          title="Failed Executions"
+          count={summary?.failed_executions?.count ?? summary?.counts?.failed_executions ?? 0}
+          items={summary?.failed_executions?.items || []}
+          renderItem={(item) => (
+            <SummaryExecutionItem
+              item={item}
+              displaySettings={displaySettings}
+              onOpenPlaybookExecution={onOpenPlaybookExecution}
+              showFailureReason
+            />
+          )}
+          onOpenAll={onOpenPlaybooks}
+          openAllLabel="Review failed executions"
+        />
+        <SummaryCard
+          title="Actionable Dead Letters"
+          count={summary?.actionable_dead_letters?.count ?? summary?.counts?.actionable_dead_letters ?? 0}
+          items={summary?.actionable_dead_letters?.items || []}
+          renderItem={(item) => (
+            <SummaryDeadLetterItem item={item} displaySettings={displaySettings} />
+          )}
+        />
+      </div>
+
+      <div style={summaryDisclaimerStyle}>
+        <strong>Review workflow:</strong> expired or denied approvals now end as <code>not_actioned</code>. Historical approval-expired or approval-denied dead letters remain read-only backlog until an operator dismisses each row with a reason.
+      </div>
+
+      {expectedBacklogCount > 0 ? (
+        <div style={historicalBacklogBannerStyle} role="note">
+          Historical expected-approval backlog: {expectedBacklogCount} open dead letters are labeled as expected approval outcomes. Review individually, do not retry expired or denied approvals.
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function SummaryCard({ title, count, meta = "", items, renderItem, onOpenAll = null, openAllLabel = "Open" }) {
+  return (
+    <section style={summaryCardStyle} aria-label={title}>
+      <div style={summaryCardHeaderStyle}>
+        <div>
+          <p style={summaryCardTitleStyle}>{title}</p>
+          {meta ? <p style={summaryCardMetaStyle}>{meta}</p> : null}
+        </div>
+        <strong style={summaryCountStyle}>{count}</strong>
+      </div>
+      {items.length > 0 ? (
+        <div style={summaryItemsStyle}>{items.map((item, index) => <div key={item.id || item.execution_id || item.approval_id || item.dead_letter_id || index}>{renderItem(item)}</div>)}</div>
+      ) : (
+        <p style={summaryEmptyStyle}>None right now.</p>
+      )}
+      {typeof onOpenAll === "function" ? (
+        <button type="button" style={summaryActionButtonStyle} onClick={onOpenAll}>
+          {openAllLabel}
+        </button>
+      ) : null}
+    </section>
+  );
+}
+
+function SummaryExecutionItem({
+  item,
+  displaySettings,
+  onOpenPlaybookExecution,
+  showFailureReason = false,
+}) {
+  return (
+    <div style={summaryItemStyle}>
+      <div style={summaryItemHeaderStyle}>
+        <span style={summaryItemTitleStyle}>{item.playbook_id || `Execution #${item.execution_id}`}</span>
+        <span style={summaryMiniBadgeStyle}>{formatStatusLabel(item.status)}</span>
+      </div>
+      <div style={summaryItemMetaStyle}>
+        Execution #{item.execution_id}
+        {item.alert_id != null ? ` · Alert #${item.alert_id}` : ""}
+      </div>
+      <div style={summaryItemMetaStyle}>
+        {formatTimestamp(item.completed_at || item.created_at, displaySettings, "—")}
+      </div>
+      {showFailureReason && item.failure_reason ? (
+        <div style={summaryItemReasonStyle}>{item.failure_reason}</div>
+      ) : null}
+      {typeof onOpenPlaybookExecution === "function" ? (
+        <button
+          type="button"
+          style={summaryInlineButtonStyle}
+          onClick={() => onOpenPlaybookExecution(item.execution_id)}
+        >
+          Open execution
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function SummaryApprovalItem({
+  item,
+  displaySettings,
+  onOpenPlaybookExecution,
+  onOpenResponseRegistry,
+  showTerminalState = false,
+}) {
+  return (
+    <div style={summaryItemStyle}>
+      <div style={summaryItemHeaderStyle}>
+        <span style={summaryItemTitleStyle}>Approval #{item.approval_id}</span>
+        <span style={summaryMiniBadgeStyle}>{formatStatusLabel(item.status)}</span>
+      </div>
+      <div style={summaryItemMetaStyle}>
+        {formatStatusLabel(item.action)} · {formatStatusLabel(item.risk_level)}
+      </div>
+      <div style={summaryItemMetaStyle}>
+        {formatTimestamp(item.decided_at || item.expires_at || item.created_at, displaySettings, "—")}
+      </div>
+      {showTerminalState && item.execution_status ? (
+        <div style={summaryItemReasonStyle}>Execution ended as {formatStatusLabel(item.execution_status)}.</div>
+      ) : null}
+      <div style={summaryInlineActionsStyle}>
+        {typeof onOpenPlaybookExecution === "function" && item.playbook_execution_id != null ? (
+          <button
+            type="button"
+            style={summaryInlineButtonStyle}
+            onClick={() => onOpenPlaybookExecution(item.playbook_execution_id)}
+          >
+            Execution #{item.playbook_execution_id}
+          </button>
+        ) : null}
+        {typeof onOpenResponseRegistry === "function" && item.alert_id != null ? (
+          <button
+            type="button"
+            style={summaryInlineButtonStyle}
+            onClick={() => onOpenResponseRegistry({ relatedAlertId: item.alert_id, relatedIncidentId: item.incident_id })}
+          >
+            Alert #{item.alert_id}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function SummaryDeadLetterItem({ item, displaySettings }) {
+  const classification = classifyFailure(item);
+  return (
+    <div style={summaryItemStyle}>
+      <div style={summaryItemHeaderStyle}>
+        <span style={summaryItemTitleStyle}>Dead letter #{item.dead_letter_id}</span>
+        <span style={{ ...summaryMiniBadgeStyle, ...getFailureBadgeStyle(item) }}>{classification.label}</span>
+      </div>
+      <div style={summaryItemMetaStyle}>
+        {formatStatusLabel(item.source_type)} · {item.failure_class}
+      </div>
+      <div style={summaryItemMetaStyle}>
+        {formatTimestamp(item.created_at, displaySettings, "—")}
+      </div>
     </div>
   );
 }
@@ -723,7 +1017,12 @@ function DeadLetterTable({ items, selectedId, onSelectRow, displaySettings }) {
               <td style={bodyCellStyle}>{formatLabel(item.source_type)}</td>
               <td style={{ ...bodyCellStyle, ...monoCellStyle }}>{item.source_id}</td>
               <td style={bodyCellStyle} title={item.failure_class || ""}>
-                {truncateText(item.failure_class, 40)}
+                <div style={failureClassCellStyle}>
+                  <span style={{ ...statusBadgeStyle, ...getFailureBadgeStyle(item) }}>
+                    {classifyFailure(item).label}
+                  </span>
+                  <span>{truncateText(item.failure_class, 40)}</span>
+                </div>
               </td>
               <td style={{ ...bodyCellStyle, ...monoCellStyle }}>{item.retry_count ?? 0}</td>
               <td style={{ ...bodyCellStyle, ...timeCellStyle }} title={item.created_at || ""}>
@@ -769,6 +1068,8 @@ function DeadLetterDetail({
   onRetryExecute,
   onRetryExecuteConfirmedChange,
   onRetryExecutePhraseChange,
+  onOpenPlaybookExecution,
+  onOpenResponseRegistry,
   displaySettings,
 }) {
   const payloadEntries = getPayloadEntries(item.payload_json);
@@ -784,7 +1085,13 @@ function DeadLetterDetail({
       <div style={detailSectionStyle}>
         <PayloadSection payloadEntries={payloadEntries} />
       </div>
-      {hasLinkedContext(item) ? <LinkedContextSection item={item} /> : null}
+      {hasLinkedContext(item) ? (
+        <LinkedContextSection
+          item={item}
+          onOpenPlaybookExecution={onOpenPlaybookExecution}
+          onOpenResponseRegistry={onOpenResponseRegistry}
+        />
+      ) : null}
       {item.dismiss_reason || item.dismissed_at ? (
         <div style={detailSectionStyle}>
           <DismissalSection item={item} displaySettings={displaySettings} />
@@ -973,11 +1280,13 @@ function DeadLetterActions({
 }
 
 function DetailSummaryGrid({ item, displaySettings }) {
+  const classification = classifyFailure(item);
   return (
     <div style={detailGridStyle}>
       <DetailField label="Status" value={formatLabel(item.status)} />
       <DetailField label="Source Type" value={formatLabel(item.source_type)} />
       <DetailField label="Source ID" value={item.source_id} mono />
+      <DetailField label="Category" value={classification.label} />
       <DetailField label="Failure Class" value={item.failure_class || "—"} />
       <DetailField label="Retry Count" value={item.retry_count ?? 0} mono />
       <DetailField label="Retryable" value={item.retryable} />
@@ -1020,17 +1329,27 @@ function PayloadRow({ fieldKey, value }) {
   );
 }
 
-function LinkedContextSection({ item }) {
+function LinkedContextSection({ item, onOpenPlaybookExecution, onOpenResponseRegistry }) {
   return (
     <div style={detailSectionStyle}>
       <div style={detailSectionTitleStyle}>Linked Context</div>
       <div style={detailGridStyle}>
         {item.execution_id != null ? (
-          <DetailField
-            label="Execution"
-            value={`#${item.execution_id} — View in SOAR Playbooks`}
-            wrap
-          />
+          <div style={detailFieldStyle}>
+            <span style={detailLabelStyle}>Execution</span>
+            <span style={{ ...detailValueStyle, ...detailWrappedValueStyle }}>
+              #{item.execution_id}
+            </span>
+            {typeof onOpenPlaybookExecution === "function" ? (
+              <button
+                type="button"
+                style={summaryInlineButtonStyle}
+                onClick={() => onOpenPlaybookExecution(item.execution_id)}
+              >
+                Open execution
+              </button>
+            ) : null}
+          </div>
         ) : null}
         {item.incident_id != null ? (
           <DetailField
@@ -1040,7 +1359,26 @@ function LinkedContextSection({ item }) {
           />
         ) : null}
         {item.alert_id != null ? (
-          <DetailField label="Alert" value={`#${item.alert_id}`} mono />
+          <div style={detailFieldStyle}>
+            <span style={detailLabelStyle}>Alert</span>
+            <span style={{ ...detailValueStyle, ...detailMonoValueStyle }}>
+              #{item.alert_id}
+            </span>
+            {typeof onOpenResponseRegistry === "function" ? (
+              <button
+                type="button"
+                style={summaryInlineButtonStyle}
+                onClick={() =>
+                  onOpenResponseRegistry({
+                    relatedAlertId: item.alert_id,
+                    relatedIncidentId: item.incident_id,
+                  })
+                }
+              >
+                Open alert
+              </button>
+            ) : null}
+          </div>
         ) : null}
         {item.playbook_id ? (
           <DetailField label="Playbook" value={item.playbook_id} mono wrap />
@@ -1120,6 +1458,174 @@ const sectionLabelStyle = {
 
 const panelContentStyle = {
   padding: "16px 20px 20px",
+};
+
+const summaryStripWrapperStyle = {
+  marginBottom: "16px",
+  display: "flex",
+  flexDirection: "column",
+  gap: "12px",
+};
+
+const summaryGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+  gap: "12px",
+};
+
+const summaryCardStyle = {
+  padding: "12px",
+  borderRadius: "12px",
+  border: "1px solid #30363d",
+  backgroundColor: "#11161d",
+  display: "flex",
+  flexDirection: "column",
+  gap: "10px",
+  minHeight: "160px",
+};
+
+const summaryCardHeaderStyle = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "flex-start",
+  gap: "12px",
+};
+
+const summaryCardTitleStyle = {
+  margin: 0,
+  color: "#e6edf3",
+  fontSize: "13px",
+  fontWeight: "700",
+};
+
+const summaryCardMetaStyle = {
+  margin: "4px 0 0",
+  color: "#8b949e",
+  fontSize: "12px",
+  lineHeight: 1.4,
+};
+
+const summaryCountStyle = {
+  color: "#f0f6fc",
+  fontSize: "24px",
+  lineHeight: 1,
+  fontWeight: "700",
+};
+
+const summaryItemsStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "8px",
+  flex: 1,
+};
+
+const summaryEmptyStyle = {
+  margin: 0,
+  color: "#8b949e",
+  fontSize: "12px",
+  lineHeight: 1.5,
+  flex: 1,
+};
+
+const summaryActionButtonStyle = {
+  minHeight: "32px",
+  padding: "7px 10px",
+  borderRadius: "8px",
+  border: "1px solid #30363d",
+  backgroundColor: "#161b22",
+  color: "#c9d1d9",
+  fontSize: "12px",
+  fontWeight: "700",
+  cursor: "pointer",
+  alignSelf: "flex-start",
+};
+
+const summaryItemStyle = {
+  padding: "10px",
+  borderRadius: "10px",
+  border: "1px solid rgba(48, 54, 61, 0.85)",
+  backgroundColor: "rgba(13, 17, 23, 0.9)",
+  display: "flex",
+  flexDirection: "column",
+  gap: "6px",
+};
+
+const summaryItemHeaderStyle = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "flex-start",
+  gap: "8px",
+};
+
+const summaryItemTitleStyle = {
+  color: "#e6edf3",
+  fontSize: "12px",
+  fontWeight: "700",
+};
+
+const summaryMiniBadgeStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: "2px 8px",
+  borderRadius: "999px",
+  border: "1px solid rgba(201, 209, 217, 0.25)",
+  backgroundColor: "rgba(201, 209, 217, 0.08)",
+  color: "#c9d1d9",
+  fontSize: "11px",
+  fontWeight: "700",
+  whiteSpace: "nowrap",
+};
+
+const summaryItemMetaStyle = {
+  color: "#8b949e",
+  fontSize: "12px",
+  lineHeight: 1.4,
+};
+
+const summaryItemReasonStyle = {
+  color: "#f5d487",
+  fontSize: "12px",
+  lineHeight: 1.4,
+};
+
+const summaryInlineActionsStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "8px",
+};
+
+const summaryInlineButtonStyle = {
+  minHeight: "28px",
+  padding: "5px 9px",
+  borderRadius: "7px",
+  border: "1px solid #30363d",
+  backgroundColor: "#161b22",
+  color: "#93c5fd",
+  fontSize: "12px",
+  fontWeight: "600",
+  cursor: "pointer",
+  alignSelf: "flex-start",
+};
+
+const summaryDisclaimerStyle = {
+  padding: "10px 12px",
+  borderRadius: "10px",
+  border: "1px solid rgba(88, 166, 255, 0.2)",
+  backgroundColor: "rgba(31, 111, 235, 0.07)",
+  color: "#c9d1d9",
+  fontSize: "12px",
+  lineHeight: 1.5,
+};
+
+const historicalBacklogBannerStyle = {
+  padding: "10px 12px",
+  borderRadius: "10px",
+  border: "1px solid rgba(245, 212, 135, 0.3)",
+  backgroundColor: "rgba(245, 212, 135, 0.08)",
+  color: "#f5d487",
+  fontSize: "12px",
+  lineHeight: 1.5,
 };
 
 const operationalNoticeStyle = {
@@ -1303,7 +1809,7 @@ const viewButtonStyle = {
 };
 
 const selectedViewButtonStyle = {
-  borderColor: "rgba(147, 197, 253, 0.75)",
+  border: "1px solid rgba(147, 197, 253, 0.75)",
   backgroundColor: "rgba(31, 111, 235, 0.24)",
 };
 
@@ -1468,6 +1974,12 @@ const actionButtonRowStyle = {
   flexWrap: "wrap",
   gap: "8px",
   alignItems: "center",
+};
+
+const failureClassCellStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "6px",
 };
 
 const primaryActionButtonStyle = {

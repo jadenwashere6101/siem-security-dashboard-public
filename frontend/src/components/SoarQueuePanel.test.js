@@ -208,7 +208,7 @@ describe("SoarQueuePanel", () => {
     jest.clearAllMocks();
   });
 
-  test("shows loading state while initial queue requests are pending", () => {
+test("shows loading state while initial queue requests are pending", () => {
     const pendingStatus = deferred();
     const pendingRecent = deferred();
     loadSoarQueueStatus.mockReturnValue(pendingStatus.promise);
@@ -217,6 +217,21 @@ describe("SoarQueuePanel", () => {
     renderPanel();
 
     expect(screen.getByText("Loading SOAR queue...")).toBeInTheDocument();
+  });
+
+  test("shows frozen historical queue banner", async () => {
+    loadSoarQueueStatus.mockResolvedValue(statusFixture);
+    loadRecentSoarQueueItems.mockResolvedValue({ items: [queueRowFixture], limit: 50 });
+    loadSoarQueueItem.mockResolvedValue(queueDetailFixture);
+
+    renderPanel();
+
+    expect(
+      await screen.findByText(/legacy response queue is frozen\/historical for current alert automation/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/new unattended alert handling runs through playbook executions and approvals/i)
+    ).toBeInTheDocument();
   });
 
   test("shows error state when initial load fails", async () => {

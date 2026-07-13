@@ -132,6 +132,28 @@ test("renders executions after switching panel", async () => {
   expect(screen.getByRole("columnheader", { name: /status/i })).toBeInTheDocument();
 });
 
+test("deep-links into an execution request and formats not_actioned status", async () => {
+  listPlaybooks.mockResolvedValue({ items: [defRow], limit: 50, enabled: null });
+  listPlaybookExecutions.mockResolvedValue({ items: [{ ...execRow, status: "not_actioned" }], limit: 50 });
+  getPlaybookExecution.mockResolvedValue({
+    ...execRow,
+    id: 42,
+    status: "not_actioned",
+    mode: "real",
+    steps_log: [],
+  });
+
+  render(
+    <PlaybooksPanel
+      {...styleProps}
+      initialExecutionRequest={{ executionId: 42, nonce: 1 }}
+    />
+  );
+
+  expect(await screen.findByText(/approval resolved without action/i)).toBeInTheDocument();
+  expect(getPlaybookExecution).toHaveBeenCalledWith(42);
+});
+
 test("definition empty state when no items", async () => {
   listPlaybooks.mockResolvedValue({ items: [], limit: 50, enabled: null });
   listPlaybookExecutions.mockResolvedValue({ items: [], limit: 50 });

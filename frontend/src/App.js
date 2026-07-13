@@ -70,6 +70,7 @@ function AppInner() {
   const [registryInitialView, setRegistryInitialView] = useState("all");
   const [registryNavigationRequest, setRegistryNavigationRequest] = useState(null);
   const [approvalsInitialStatus, setApprovalsInitialStatus] = useState("all");
+  const [playbooksInitialExecutionRequest, setPlaybooksInitialExecutionRequest] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [loginUsername, setLoginUsername] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
@@ -304,6 +305,15 @@ function AppInner() {
       targetKey: WORKSPACE_TARGETS.approvals,
       context: target,
     } : undefined);
+  }, [navigateWorkspace]);
+
+  const handleOpenPlaybookExecution = useCallback((executionId) => {
+    if (executionId == null) return;
+    setPlaybooksInitialExecutionRequest({
+      executionId: Number(executionId),
+      nonce: Date.now(),
+    });
+    navigateWorkspace("soar-playbooks");
   }, [navigateWorkspace]);
 
   const handleViewRelatedAlerts = (sourceIp) => {
@@ -804,6 +814,7 @@ function AppInner() {
             selectStyle={selectStyle}
             userRole={userRole}
             onOpenResponseRegistry={handleOpenResponseRegistry}
+            initialExecutionRequest={playbooksInitialExecutionRequest}
           />
         )}
 
@@ -836,6 +847,10 @@ function AppInner() {
             filterLabelStyle={filterLabelStyle}
             selectStyle={selectStyle}
             userRole={userRole}
+            onOpenPlaybookExecution={handleOpenPlaybookExecution}
+            onOpenResponseRegistry={handleOpenResponseRegistry}
+            onOpenPendingApprovals={() => handleOpenAttentionTarget("Pending approvals")}
+            onOpenPlaybooks={() => handleNavigate("soar-playbooks")}
           />
         )}
     </SidebarLayout>
