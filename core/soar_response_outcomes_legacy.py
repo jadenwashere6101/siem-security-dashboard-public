@@ -894,8 +894,16 @@ def infer_playbook_execution_legacy_outcome(
             outcome_summary="Legacy playbook execution is awaiting approval.",
             reason_code="approval_required",
         )
-    if status in {"failed", "abandoned", "permanently_failed"}:
-        terminal_state = "failed" if status == "failed" else "skipped"
+    if status in {"failed", "abandoned", "permanently_failed", "not_actioned"}:
+        if status == "failed":
+            terminal_state = "failed"
+            reason_code = "provider_error"
+        elif status == "not_actioned":
+            terminal_state = "not_actioned"
+            reason_code = "policy_blocked"
+        else:
+            terminal_state = "skipped"
+            reason_code = "unsupported_action"
         return LegacyMappingResult(
             **base,
             execution_mode="simulation",
@@ -905,7 +913,7 @@ def infer_playbook_execution_legacy_outcome(
             simulated=simulated,
             execution_actor="playbook_worker",
             outcome_summary=failure_reason or f"Legacy playbook execution {status}.",
-            reason_code="provider_error" if status == "failed" else "unsupported_action",
+            reason_code=reason_code,
         )
     if status in {"success", "completed"}:
         if external_executed and real_notification_confirmed:

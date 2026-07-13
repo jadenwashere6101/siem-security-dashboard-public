@@ -421,5 +421,5 @@ def test_approval_denied_default_still_fails_execution(postgres_db):
 
     result = playbook_step_executor.process_playbook_execution(conn, eid)
 
-    assert result["outcome"] == "failed"
-    assert playbook_store.get_playbook_execution(conn, eid)["status"] == "failed"
+    assert result["outcome"] == "not_actioned"
+    assert playbook_store.get_playbook_execution(conn, eid)["status"] == "not_actioned"

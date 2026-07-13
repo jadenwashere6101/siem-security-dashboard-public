@@ -38,7 +38,7 @@ class _UnsetType:
 _UNSET = _UnsetType()
 
 _TERMINAL_EXECUTION_STATUSES = frozenset(
-    {"success", "failed", "abandoned", "permanently_failed"}
+    {"success", "failed", "abandoned", "permanently_failed", "not_actioned"}
 )
 _VALID_EXECUTION_STATUSES = frozenset(
     {
@@ -49,6 +49,7 @@ _VALID_EXECUTION_STATUSES = frozenset(
         "failed",
         "abandoned",
         "permanently_failed",
+        "not_actioned",
     }
 )
 
@@ -648,7 +649,7 @@ def mark_playbook_execution_permanently_failed(
     if not reason:
         raise ValueError("failure_reason is required")
 
-    if current["status"] in {"success", "abandoned"}:
+    if current["status"] in {"success", "abandoned", "not_actioned"}:
         raise ValueError(
             f"cannot mark execution as permanently_failed from terminal status "
             f"{current['status']!r}"
@@ -1203,7 +1204,7 @@ def abandon_playbook_execution(conn, execution_id: int) -> str:
         raise ValueError("execution not found")
     if current["status"] == "abandoned":
         return "no_op"
-    if current["status"] in {"success", "failed", "permanently_failed"}:
+    if current["status"] in {"success", "failed", "permanently_failed", "not_actioned"}:
         raise ValueError(
             f"cannot abandon terminal execution with status '{current['status']}'"
         )
@@ -1528,6 +1529,44 @@ def set_playbook_execution_failed(
             f"""
             UPDATE playbook_executions
             SET status = 'failed',
+                completed_at = %s,
+                steps_log = %s,
+                last_completed_step = %s
+            WHERE id = %s
+            {lease_sql}
+            RETURNING {_EXECUTION_COLUMNS_SQL}
+            """,
+            (now, Json(steps_log), last_completed_step, execution_id, *lease_params),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return _execution_row_to_dict(row)
+
+
+def set_playbook_execution_not_actioned(
+    conn,
+    execution_id: int,
+    steps_log: list[dict],
+    last_completed_step: int | None = None,
+    now: datetime | None = None,
+    *,
+    lease_owner: str | None = None,
+) -> dict[str, Any] | None:
+    """Terminalize an execution after approval denial/expiration with no branch fallback.
+
+    Mirrors set_playbook_execution_failed's lease-aware UPDATE shape, but writes
+    status='not_actioned'. Callers must not create a dead-letter for this path.
+    """
+    if now is None:
+        now = _utc_now()
+
+    lease_sql, lease_params = _lease_owner_sql(lease_owner)
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE playbook_executions
+            SET status = 'not_actioned',
                 completed_at = %s,
                 steps_log = %s,
                 last_completed_step = %s

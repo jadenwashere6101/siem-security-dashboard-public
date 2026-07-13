@@ -59,6 +59,7 @@ _VALID_EXECUTION_STATUSES = frozenset(
         "failed",
         "abandoned",
         "permanently_failed",
+        "not_actioned",
     }
 )
 

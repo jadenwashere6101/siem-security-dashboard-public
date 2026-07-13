@@ -606,7 +606,7 @@ def test_denied_playbook_approval_appends_blocked_approval_event(postgres_db):
 
     result = playbook_step_executor.process_playbook_execution(conn, eid)
 
-    assert result["outcome"] == "failed"
+    assert result["outcome"] == "not_actioned"
     events = _fetch_playbook_outcome_events(cur, eid)
     denied = [event for event in events if event[0] == "approval_denied"][0]
     assert denied[1:9] == (
@@ -647,7 +647,7 @@ def test_expired_playbook_approval_appends_blocked_approval_event(postgres_db):
         now=now + timedelta(minutes=10),
     )
 
-    assert result["outcome"] == "failed"
+    assert result["outcome"] == "not_actioned"
     events = _fetch_playbook_outcome_events(cur, eid)
     expired = [event for event in events if event[0] == "approval_expired"][0]
     assert expired[1:9] == (
@@ -1344,9 +1344,9 @@ def test_denied_approval_fails_and_skips_later_steps(postgres_db):
 
     result = playbook_step_executor.process_playbook_execution(conn, eid)
 
-    assert result["outcome"] == "failed"
+    assert result["outcome"] == "not_actioned"
     row = playbook_store.get_playbook_execution(conn, eid)
-    assert row["status"] == "failed"
+    assert row["status"] == "not_actioned"
     assert row["last_completed_step"] is None
     assert [entry.get("event") for entry in row["steps_log"]] == [
         "approval_requested",
@@ -1381,9 +1381,9 @@ def test_expired_approval_fails_and_skips_later_steps(postgres_db):
         now=now + timedelta(minutes=10),
     )
 
-    assert result["outcome"] == "failed"
+    assert result["outcome"] == "not_actioned"
     row = playbook_store.get_playbook_execution(conn, eid)
-    assert row["status"] == "failed"
+    assert row["status"] == "not_actioned"
     assert [entry.get("event") for entry in row["steps_log"]] == [
         "approval_requested",
         "approval_expired",
@@ -2835,7 +2835,9 @@ def test_finalize_failed_does_not_fallback_or_dead_letter_after_lease_loss(utc_d
     assert dead_letter_store.list_dead_letters(conn, execution_id=eid) == []
 
 
-@pytest.mark.parametrize("status", ["failed", "abandoned", "permanently_failed"])
+@pytest.mark.parametrize(
+    "status", ["failed", "abandoned", "permanently_failed", "not_actioned"]
+)
 def test_terminal_failed_or_aborted_executions_do_not_resume(utc_db, status):
     conn, cur = utc_db
     eid = _create_execution(

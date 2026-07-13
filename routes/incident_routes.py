@@ -414,7 +414,7 @@ def build_readonly_incident_timeline(conn, incident_id: int) -> dict[str, Any] |
             steps_log=steps_log,
         )
         comp_at = _parse_iso_datetime(completed_at)
-        term_statuses = {"success", "failed", "abandoned", "permanently_failed"}
+        term_statuses = {"success", "failed", "abandoned", "permanently_failed", "not_actioned"}
         st_lower = str(status or "").lower()
         if st_lower in term_statuses:
             sort_ts = comp_at or cr or _MISSING_SORT

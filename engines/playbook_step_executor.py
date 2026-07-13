@@ -52,8 +52,10 @@ logger = logging.getLogger(__name__)
 DEFAULT_PLAYBOOK_LEASE_SECONDS = 60
 MAX_CHAIN_DEPTH = 3
 
-# spec: SPEC-PLAYBOOK-003
-TERMINAL_STATUSES = frozenset({"success", "failed", "abandoned", "permanently_failed"})
+# spec: SPEC-PLAYBOOK-003; openspec/changes/improve-unattended-soar-reliability/
+TERMINAL_STATUSES = frozenset(
+    {"success", "failed", "abandoned", "permanently_failed", "not_actioned"}
+)
 _NOTIFICATION_ACTIONS = frozenset(
     {"notify_slack", "notify_teams", "notify_email", "notify_webhook"}
 )
@@ -818,7 +820,9 @@ def _process_awaiting_approval_execution(
                 )
             )
 
-        _finalize_failed(
+        # Expected lifecycle terminal: denied/expired with no branch fallback.
+        # Distinct from genuine failures — no dead-letter row is created.
+        _finalize_not_actioned(
             conn,
             execution["id"],
             owner,
@@ -829,8 +833,8 @@ def _process_awaiting_approval_execution(
         return _result(
             execution,
             "awaiting_approval",
-            "failed",
-            "failed",
+            "not_actioned",
+            "not_actioned",
             0,
             f"Approval {approval_request['status']}; simulated playbook stopped safely.",
         )
@@ -2391,6 +2395,70 @@ def _finalize_failed(
         steps_log,
         last_completed_step=last_completed_step,
         now=now,
+    )
+    playbook_store.release_execution_lease(conn, execution_id, worker_id)
+    return updated
+
+
+def _finalize_not_actioned(
+    conn,
+    execution_id: int,
+    worker_id: str,
+    steps_log: list[dict],
+    *,
+    last_completed_step: int | None,
+    now: datetime,
+) -> dict[str, Any] | None:
+    """Finalize denied/expired-with-no-branch as expected terminal `not_actioned`.
+
+    Mirrors _finalize_failed's lease-aware update and lease release, but does not
+    create a dead-letter row. Approval-decision outcome events are written by the
+    caller and left unchanged.
+    """
+    updated = playbook_store.set_playbook_execution_not_actioned(
+        conn,
+        execution_id,
+        steps_log,
+        last_completed_step=last_completed_step,
+        now=now,
+        lease_owner=worker_id,
+    )
+    if updated is None:
+        current = playbook_store.get_playbook_execution(conn, execution_id)
+        if (
+            current is not None
+            and current.get("status") == "awaiting_approval"
+            and not current.get("lease_owner")
+        ):
+            updated = playbook_store.set_playbook_execution_not_actioned(
+                conn,
+                execution_id,
+                steps_log,
+                last_completed_step=last_completed_step,
+                now=now,
+            )
+        else:
+            logger.info(
+                "[PLAYBOOK SIMULATION] not_actioned finalize skipped "
+                "execution_id=%s worker_id=%s reason=lease_not_owned",
+                execution_id,
+                worker_id,
+            )
+            return None
+    if updated is None:
+        logger.info(
+            "[PLAYBOOK SIMULATION] not_actioned finalize skipped "
+            "execution_id=%s worker_id=%s reason=update_race",
+            execution_id,
+            worker_id,
+        )
+        return None
+    _append_playbook_terminal_outcome_event(
+        conn,
+        updated,
+        execution_state="not_actioned",
+        event_type="not_actioned",
+        summary="Playbook execution ended without action after approval denial or expiration.",
     )
     playbook_store.release_execution_lease(conn, execution_id, worker_id)
     return updated

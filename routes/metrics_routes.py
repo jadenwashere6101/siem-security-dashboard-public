@@ -7,13 +7,17 @@ queue, adapter, or ingest paths.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from flask import Blueprint, current_app, jsonify
 from flask_login import login_required
 
+from core.approval_store import list_approval_requests
 from core.auth import analyst_or_super_admin_required
+from core import dead_letter_store
 from core.db import get_db_connection
+from core.playbook_store import list_playbook_executions
 from core.soar_response_outcomes import (
     get_canonical_outcome_retention_policy,
     get_outcome_count_groups,
@@ -28,6 +32,7 @@ KNOWN_EXECUTION_STATUSES: tuple[str, ...] = (
     "success",
     "failed",
     "abandoned",
+    "not_actioned",
 )
 
 KNOWN_NOTIFICATION_MODES: tuple[str, ...] = ("simulation", "real")
@@ -45,6 +50,9 @@ KNOWN_INCIDENT_STATUSES: tuple[str, ...] = ("open", "investigating", "resolved",
 KNOWN_INCIDENT_SEVERITIES: tuple[str, ...] = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 KNOWN_APPROVAL_STATUSES: tuple[str, ...] = ("pending", "approved", "denied", "expired")
 RECENT_WINDOW_HOURS = 24
+SOAR_OPERATIONS_WINDOW_HOURS = 24
+SOAR_OPERATIONS_PREVIEW_LIMIT = 5
+EXPECTED_APPROVAL_FAILURE_CLASSES = frozenset({"approval_expired", "approval_denied"})
 
 
 def _attach_canonical_outcome_metadata(payload: dict[str, Any]) -> dict[str, Any]:
@@ -113,6 +121,219 @@ def _iso_timestamp(value: Any) -> str | None:
     if hasattr(value, "isoformat"):
         return value.isoformat()
     return str(value)
+
+
+def _parse_datetime(value: Any):
+    if value is None:
+        return None
+    if hasattr(value, "timestamp"):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _list_all_approval_requests(conn, *, status: str) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    offset = 0
+    page_size = 100
+    while True:
+        batch = list_approval_requests(
+            conn,
+            status=status,
+            limit=page_size,
+            offset=offset,
+        )
+        items.extend(batch)
+        if len(batch) < page_size:
+            break
+        offset += len(batch)
+    return items
+
+
+def _list_all_dead_letters(conn, *, status: str | None = None) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    offset = 0
+    page_size = 500
+    while True:
+        batch = dead_letter_store.list_dead_letters(
+            conn,
+            status=status,
+            limit=page_size,
+            offset=offset,
+        )
+        items.extend(batch)
+        if len(batch) < page_size:
+            break
+        offset += len(batch)
+    return items
+
+
+def _approval_terminal_timestamp(approval: dict[str, Any]):
+    decided_at = _parse_datetime(approval.get("decided_at"))
+    if decided_at is not None:
+        return decided_at
+    expires_at = _parse_datetime(approval.get("expires_at"))
+    if expires_at is not None:
+        return expires_at
+    return _parse_datetime(approval.get("created_at"))
+
+
+def _format_execution_preview(execution: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "execution_id": execution["id"],
+        "playbook_id": execution.get("playbook_id"),
+        "status": execution.get("status"),
+        "alert_id": execution.get("alert_id"),
+        "incident_id": execution.get("incident_id"),
+        "created_at": _iso_timestamp(execution.get("created_at")),
+        "completed_at": _iso_timestamp(execution.get("completed_at")),
+        "failure_reason": execution.get("failure_reason"),
+    }
+
+
+def _classify_dead_letter_preview(item: dict[str, Any]) -> dict[str, Any]:
+    failure_class = str(item.get("failure_class") or "").strip()
+    if failure_class == "approval_expired":
+        return {"kind": "expected_expiration", "label": "Expected expiration"}
+    if failure_class == "approval_denied":
+        return {"kind": "expected_denial", "label": "Expected denial"}
+    return {"kind": "system_failure", "label": "System failure"}
+
+
+def _format_dead_letter_preview(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "dead_letter_id": item.get("id"),
+        "status": item.get("status"),
+        "source_type": item.get("source_type"),
+        "execution_id": item.get("execution_id"),
+        "incident_id": item.get("incident_id"),
+        "alert_id": item.get("alert_id"),
+        "failure_class": item.get("failure_class"),
+        "retryable": item.get("retryable"),
+        "created_at": _iso_timestamp(item.get("created_at")),
+        "classification": _classify_dead_letter_preview(item),
+    }
+
+
+def _format_approval_preview(
+    approval: dict[str, Any],
+    execution_map: dict[int, dict[str, Any]],
+) -> dict[str, Any]:
+    execution_id = approval.get("playbook_execution_id")
+    execution = execution_map.get(execution_id) if execution_id is not None else None
+    return {
+        "approval_id": approval.get("id"),
+        "status": approval.get("status"),
+        "action": approval.get("action"),
+        "risk_level": approval.get("risk_level"),
+        "incident_id": approval.get("incident_id"),
+        "queue_id": approval.get("queue_id"),
+        "playbook_execution_id": execution_id,
+        "playbook_step_index": approval.get("playbook_step_index"),
+        "execution_status": execution.get("status") if execution else None,
+        "alert_id": execution.get("alert_id") if execution else None,
+        "playbook_id": execution.get("playbook_id") if execution else None,
+        "request_reason": approval.get("request_reason"),
+        "decision_comment": approval.get("decision_comment"),
+        "created_at": _iso_timestamp(approval.get("created_at")),
+        "decided_at": _iso_timestamp(approval.get("decided_at")),
+        "expires_at": _iso_timestamp(approval.get("expires_at")),
+    }
+
+
+def _build_soar_operations_summary(conn) -> dict[str, Any]:
+    executions = list_playbook_executions(conn, limit=1000000)
+    execution_map = {int(row["id"]): row for row in executions if row.get("id") is not None}
+
+    running_executions = [row for row in executions if row.get("status") == "running"]
+    awaiting_approval_executions = [
+        row for row in executions if row.get("status") == "awaiting_approval"
+    ]
+    failed_executions = [row for row in executions if row.get("status") == "failed"]
+
+    pending_approvals = _list_all_approval_requests(conn, status="pending")
+    denied_approvals = _list_all_approval_requests(conn, status="denied")
+    expired_approvals = _list_all_approval_requests(conn, status="expired")
+
+    now = datetime.now(timezone.utc)
+    window_start = now - timedelta(hours=SOAR_OPERATIONS_WINDOW_HOURS)
+
+    recent_terminal_approvals = []
+    for approval in [*denied_approvals, *expired_approvals]:
+        terminal_at = _approval_terminal_timestamp(approval)
+        if terminal_at is None or terminal_at < window_start:
+            continue
+        recent_terminal_approvals.append((terminal_at, approval))
+    recent_terminal_approvals.sort(key=lambda item: item[0], reverse=True)
+
+    active_dead_letter_metrics = dead_letter_store.get_dead_letter_metrics(conn)
+    actionable_dead_letters = _list_all_dead_letters(conn, status="open")
+
+    expected_backlog_count = sum(
+        1
+        for item in actionable_dead_letters
+        if str(item.get("failure_class") or "").strip() in EXPECTED_APPROVAL_FAILURE_CLASSES
+    )
+
+    return {
+        "window_hours": SOAR_OPERATIONS_WINDOW_HOURS,
+        "counts": {
+            "running_playbooks": len(running_executions),
+            "awaiting_approval_playbooks": len(awaiting_approval_executions),
+            "active_playbooks": len(running_executions) + len(awaiting_approval_executions),
+            "pending_approvals": len(pending_approvals),
+            "recently_expired_denied": len(recent_terminal_approvals),
+            "failed_executions": len(failed_executions),
+            "actionable_dead_letters": len(actionable_dead_letters),
+        },
+        "running_playbooks": {
+            "count": len(running_executions) + len(awaiting_approval_executions),
+            "running_count": len(running_executions),
+            "awaiting_approval_count": len(awaiting_approval_executions),
+            "items": [
+                _format_execution_preview(row)
+                for row in [*running_executions, *awaiting_approval_executions][
+                    :SOAR_OPERATIONS_PREVIEW_LIMIT
+                ]
+            ],
+        },
+        "pending_approvals": {
+            "count": len(pending_approvals),
+            "items": [
+                _format_approval_preview(approval, execution_map)
+                for approval in pending_approvals[:SOAR_OPERATIONS_PREVIEW_LIMIT]
+            ],
+        },
+        "recently_expired_denied": {
+            "count": len(recent_terminal_approvals),
+            "window_hours": SOAR_OPERATIONS_WINDOW_HOURS,
+            "items": [
+                _format_approval_preview(approval, execution_map)
+                for _, approval in recent_terminal_approvals[:SOAR_OPERATIONS_PREVIEW_LIMIT]
+            ],
+        },
+        "failed_executions": {
+            "count": len(failed_executions),
+            "items": [
+                _format_execution_preview(row)
+                for row in failed_executions[:SOAR_OPERATIONS_PREVIEW_LIMIT]
+            ],
+        },
+        "actionable_dead_letters": {
+            "count": len(actionable_dead_letters),
+            "open_count": int(active_dead_letter_metrics.get("open") or 0),
+            "items": [
+                _format_dead_letter_preview(item)
+                for item in actionable_dead_letters[:SOAR_OPERATIONS_PREVIEW_LIMIT]
+            ],
+        },
+        "legacy_expected_backlog": {
+            "open_count": expected_backlog_count,
+            "review_mode": "individual_reason_logged_dismissal_only",
+        },
+    }
 
 
 def _build_playbook_worker_snapshot(cur) -> dict[str, Any]:
@@ -645,6 +866,22 @@ def approval_metrics_route():
         )
     except Exception as error:
         current_app.logger.error("Error in approval_metrics_route: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@metrics_bp.route("/metrics/soar-operations", methods=["GET"])
+@login_required
+@analyst_or_super_admin_required
+def soar_operations_summary_route():
+    conn = None
+    try:
+        conn = get_db_connection()
+        return jsonify(_build_soar_operations_summary(conn)), 200
+    except Exception as error:
+        current_app.logger.error("Error in soar_operations_summary_route: %s", error)
         return jsonify({"error": "Internal server error"}), 500
     finally:
         if conn:
