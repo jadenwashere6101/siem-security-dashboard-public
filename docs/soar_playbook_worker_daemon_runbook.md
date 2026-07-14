@@ -227,7 +227,10 @@ In the UI, open **SOAR Metrics** as `analyst` or `super_admin`.
 
 Verify the **Worker Operations** section:
 
-- Heartbeat is labeled `unknown` until heartbeat persistence is added.
+- Heartbeat reports one of `unknown`, `healthy`, `degraded`, or `offline`.
+- Idle-but-running workers can report `healthy`.
+- The section shows last heartbeat, process start time, uptime, and build version
+  when available.
 - Pending, running, awaiting approval, stale running, and missing lease counts
   match the database checks.
 - Recent failed execution and active dead-letter counts are visible.
@@ -246,7 +249,9 @@ curl -sS -b cookies.txt http://127.0.0.1:5051/metrics/playbook-worker
 Expected:
 
 - Aggregate counts only.
-- `daemon_health.status` may be `unknown`.
+- `daemon_health.status` is `unknown` only before the worker has ever reported.
+- `daemon_health.last_heartbeat_at` and `daemon_health.started_at` are present
+  after the worker reports successfully.
 - No DB URL, password, webhook URL, token, payload, or raw error secret fields.
 
 ## Stale Recovery Validation

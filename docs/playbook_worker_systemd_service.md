@@ -174,8 +174,18 @@ curl -sS -b cookies.txt http://127.0.0.1:5051/metrics/playbook-worker
 Expected:
 
 - Aggregate execution counts only.
-- `daemon_health.status` may be `unknown` until heartbeat persistence is added.
+- `daemon_health.status` reports `unknown`, `healthy`, `degraded`, or `offline`.
+- `daemon_health.started_at`, `daemon_health.last_heartbeat_at`,
+  `daemon_health.uptime_seconds`, and `daemon_health.build_version` appear when
+  the worker has reported successfully.
 - No DB URLs, passwords, webhook URLs, tokens, or raw error secrets.
+
+Cross-check Worker Operations in the SOAR Metrics UI for:
+
+- text-labeled worker status;
+- last heartbeat timestamp;
+- process start time and uptime;
+- build version when available.
 
 Cross-check Worker Operations in the SOAR Metrics UI against direct database counts.
 

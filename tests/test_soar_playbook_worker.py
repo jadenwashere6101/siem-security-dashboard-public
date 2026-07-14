@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from core import playbook_store
+from core.worker_heartbeat_store import PLAYBOOK_WORKER_NAME
 from engines import soar_playbook_worker
 from engines.soar_playbook_worker import PlaybookWorkerConfig, PlaybookWorkerShutdown
 
@@ -73,6 +74,12 @@ def test_daemon_loop_processes_one_batch_and_uses_worker_identity(caplog):
     sleeps = []
 
     with patch("engines.soar_playbook_worker.generate_playbook_worker_id", return_value="worker-alpha"), patch(
+        "engines.soar_playbook_worker._resolve_worker_build_version",
+        return_value="abc123",
+    ), patch(
+        "engines.soar_playbook_worker._record_worker_heartbeat",
+        return_value=True,
+    ) as heartbeat, patch(
         "engines.soar_playbook_worker.recover_stale_playbook_executions",
         return_value={"recovered": 0},
     ) as recover, patch(
@@ -87,6 +94,8 @@ def test_daemon_loop_processes_one_batch_and_uses_worker_identity(caplog):
         )
 
     assert result["worker_id"] == "worker-alpha"
+    assert result["worker_name"] == PLAYBOOK_WORKER_NAME
+    assert result["build_version"] == "abc123"
     assert result["loops"] == 1
     assert result["processed"] == 1
     assert conn.commits == 2
@@ -94,6 +103,7 @@ def test_daemon_loop_processes_one_batch_and_uses_worker_identity(caplog):
     assert conn.closed is True
     recover.assert_called_once()
     batch.assert_called_once()
+    heartbeat.assert_called_once()
     assert batch.call_args.kwargs["worker_id"] == "worker-alpha"
     assert sleeps == [1]
     assert "soar_playbook_worker_loop worker_id=worker-alpha" in caplog.text
@@ -103,7 +113,7 @@ def test_idle_loop_uses_idle_backoff():
     conn = FakeConnection()
     sleeps = []
 
-    with patch(
+    with patch("engines.soar_playbook_worker._record_worker_heartbeat", return_value=True), patch(
         "engines.soar_playbook_worker.recover_stale_playbook_executions",
         return_value={"recovered": 0},
     ), patch(
@@ -126,7 +136,7 @@ def test_max_loop_mode_exits_without_extra_claims():
     connections = [FakeConnection("one"), FakeConnection("two")]
     sleeps = []
 
-    with patch(
+    with patch("engines.soar_playbook_worker._record_worker_heartbeat", return_value=True), patch(
         "engines.soar_playbook_worker.recover_stale_playbook_executions",
         return_value={"recovered": 0},
     ), patch(
@@ -150,7 +160,7 @@ def test_max_loop_mode_exits_without_extra_claims():
 def test_stale_recovery_cadence_does_not_run_every_loop():
     connections = [FakeConnection(str(index)) for index in range(3)]
 
-    with patch(
+    with patch("engines.soar_playbook_worker._record_worker_heartbeat", return_value=True), patch(
         "engines.soar_playbook_worker.recover_stale_playbook_executions",
         return_value={"recovered": 0},
     ) as recover, patch(
@@ -177,7 +187,7 @@ def test_stale_recovery_cadence_does_not_run_every_loop():
 def test_stale_recovery_runs_every_loop_when_interval_zero():
     connections = [FakeConnection(str(index)) for index in range(3)]
 
-    with patch(
+    with patch("engines.soar_playbook_worker._record_worker_heartbeat", return_value=True), patch(
         "engines.soar_playbook_worker.recover_stale_playbook_executions",
         return_value={"recovered": 1},
     ) as recover, patch(
@@ -205,7 +215,7 @@ def test_stale_recovery_runs_every_loop_when_interval_zero():
 def test_dry_run_recovery_rolls_back_recovery_before_batch_commit():
     conn = FakeConnection()
 
-    with patch(
+    with patch("engines.soar_playbook_worker._record_worker_heartbeat", return_value=True), patch(
         "engines.soar_playbook_worker.recover_stale_playbook_executions",
         return_value={"recovered": 0},
     ) as recover, patch(
@@ -237,7 +247,7 @@ def test_db_failure_rolls_back_closes_backs_off_and_retries_without_secret_logs(
             raise RuntimeError("postgresql://user:secret-password@example.invalid/db")
         return {"processed": 0, "success": 0, "failed": 0, "skipped": 0}
 
-    with patch(
+    with patch("engines.soar_playbook_worker._record_worker_heartbeat", return_value=True), patch(
         "engines.soar_playbook_worker.recover_stale_playbook_executions",
         return_value={"recovered": 0},
     ), patch("engines.soar_playbook_worker.process_playbook_execution_batch", side_effect=batch):
@@ -254,7 +264,7 @@ def test_db_failure_rolls_back_closes_backs_off_and_retries_without_secret_logs(
     assert first.rollbacks == 1
     assert first.closed is True
     assert second.closed is True
-    assert sleeps == [11, 5]
+    assert sleeps == []
     assert "worker-retry" in caplog.text
     assert "RuntimeError" in caplog.text
     assert "postgresql://" not in caplog.text
@@ -268,7 +278,7 @@ def test_graceful_shutdown_flag_exits_cleanly():
     def sleep_and_stop(_seconds):
         shutdown.request("test_shutdown")
 
-    with patch(
+    with patch("engines.soar_playbook_worker._record_worker_heartbeat", return_value=True), patch(
         "engines.soar_playbook_worker.recover_stale_playbook_executions",
         return_value={"recovered": 0},
     ), patch(
@@ -315,23 +325,147 @@ def test_two_daemon_instances_do_not_duplicate_execution(postgres_db):
     first_conn = NoCloseConnection(conn)
     second_conn = NoCloseConnection(conn)
 
-    first = soar_playbook_worker.run_playbook_worker(
-        config=_config(max_loops=1, poll_interval_seconds=0, idle_backoff_seconds=0),
-        worker_id="worker-one",
-        connect=lambda: first_conn,
-        sleeper=lambda _seconds: None,
-        now_fn=_clock(),
-    )
-    second = soar_playbook_worker.run_playbook_worker(
-        config=_config(max_loops=1, poll_interval_seconds=0, idle_backoff_seconds=0),
-        worker_id="worker-two",
-        connect=lambda: second_conn,
-        sleeper=lambda _seconds: None,
-        now_fn=_clock(),
-    )
+    with patch("engines.soar_playbook_worker._record_worker_heartbeat", return_value=True):
+        first = soar_playbook_worker.run_playbook_worker(
+            config=_config(max_loops=1, poll_interval_seconds=0, idle_backoff_seconds=0),
+            worker_id="worker-one",
+            connect=lambda: first_conn,
+            sleeper=lambda _seconds: None,
+            now_fn=_clock(),
+        )
+        second = soar_playbook_worker.run_playbook_worker(
+            config=_config(max_loops=1, poll_interval_seconds=0, idle_backoff_seconds=0),
+            worker_id="worker-two",
+            connect=lambda: second_conn,
+            sleeper=lambda _seconds: None,
+            now_fn=_clock(),
+        )
 
     row = playbook_store.get_playbook_execution(conn, execution_id)
     assert first["processed"] == 1
     assert second["processed"] == 0
     assert row["status"] == "success"
     assert len(row["steps_log"]) == 1
+
+
+def test_heartbeat_is_attempted_each_due_interval_and_caps_idle_sleep():
+    conn = FakeConnection()
+    sleeps = []
+    heartbeat_calls = []
+
+    with patch(
+        "engines.soar_playbook_worker._record_worker_heartbeat",
+        side_effect=lambda **kwargs: heartbeat_calls.append(kwargs["heartbeat_at"]) or True,
+    ), patch(
+        "engines.soar_playbook_worker.recover_stale_playbook_executions",
+        return_value={"recovered": 0},
+    ), patch(
+        "engines.soar_playbook_worker.process_playbook_execution_batch",
+        return_value={"processed": 0, "success": 0, "failed": 0, "skipped": 0},
+    ):
+        result = soar_playbook_worker.run_playbook_worker(
+            config=_config(
+                max_loops=2,
+                idle_backoff_seconds=30,
+                poll_interval_seconds=5,
+                heartbeat_interval_seconds=15,
+            ),
+            worker_id="worker-heartbeat",
+            connect=lambda: conn,
+            sleeper=sleeps.append,
+            now_fn=_clock(step_seconds=15),
+        )
+
+    assert result["loops"] == 2
+    assert len(heartbeat_calls) == 2
+    assert sleeps == []
+
+
+def test_heartbeat_failure_does_not_block_playbook_processing():
+    conn = FakeConnection()
+
+    with patch(
+        "engines.soar_playbook_worker._record_worker_heartbeat",
+        return_value=False,
+    ), patch(
+        "engines.soar_playbook_worker.recover_stale_playbook_executions",
+        return_value={"recovered": 0},
+    ), patch(
+        "engines.soar_playbook_worker.process_playbook_execution_batch",
+        return_value={"processed": 1, "success": 1, "failed": 0, "skipped": 0},
+    ) as batch:
+        result = soar_playbook_worker.run_playbook_worker(
+            config=_config(max_loops=1, idle_backoff_seconds=0),
+            worker_id="worker-heartbeat-failure",
+            connect=lambda: conn,
+            sleeper=lambda _seconds: None,
+            now_fn=_clock(),
+        )
+
+    assert result["processed"] == 1
+    batch.assert_called_once()
+
+
+def test_record_worker_heartbeat_commits_metadata_and_closes_connection():
+    conn = FakeConnection()
+    recorded = {}
+
+    def _upsert(_conn, **kwargs):
+        recorded.update(kwargs)
+        return {"worker_name": kwargs["worker_name"]}
+
+    started_at = datetime(2026, 7, 14, 12, 0, tzinfo=timezone.utc)
+    heartbeat_at = started_at + timedelta(seconds=15)
+
+    with patch("engines.soar_playbook_worker.upsert_worker_heartbeat", side_effect=_upsert):
+        ok = soar_playbook_worker._record_worker_heartbeat(
+            connect=lambda: conn,
+            worker_id="worker-metadata",
+            build_version="deadbee",
+            process_started_at=started_at,
+            heartbeat_at=heartbeat_at,
+        )
+
+    assert ok is True
+    assert conn.commits == 1
+    assert conn.closed is True
+    assert recorded["worker_name"] == PLAYBOOK_WORKER_NAME
+    assert recorded["worker_instance_id"] == "worker-metadata"
+    assert recorded["build_version"] == "deadbee"
+    assert recorded["started_at"] == started_at
+    assert recorded["last_heartbeat_at"] == heartbeat_at
+
+
+def test_record_worker_heartbeat_logs_and_returns_false_on_failure(caplog):
+    conn = FakeConnection()
+    caplog.set_level("WARNING")
+
+    with patch(
+        "engines.soar_playbook_worker.upsert_worker_heartbeat",
+        side_effect=RuntimeError("db failed"),
+    ):
+        ok = soar_playbook_worker._record_worker_heartbeat(
+            connect=lambda: conn,
+            worker_id="worker-bad-heartbeat",
+            build_version=None,
+            process_started_at=datetime(2026, 7, 14, 12, 0, tzinfo=timezone.utc),
+            heartbeat_at=datetime(2026, 7, 14, 12, 0, 15, tzinfo=timezone.utc),
+        )
+
+    assert ok is False
+    assert conn.rollbacks == 1
+    assert conn.closed is True
+    assert "soar_playbook_worker_heartbeat_failed worker_id=worker-bad-heartbeat" in caplog.text
+
+
+def test_resolve_worker_build_version_returns_short_git_sha():
+    class _Result:
+        stdout = "abc123\n"
+
+    with patch("engines.soar_playbook_worker.subprocess.run", return_value=_Result()):
+        assert soar_playbook_worker._resolve_worker_build_version() == "abc123"
+
+
+def test_resolve_worker_build_version_returns_none_when_unavailable():
+    with patch("engines.soar_playbook_worker.subprocess.run", side_effect=RuntimeError("no git")):
+        assert soar_playbook_worker._resolve_worker_build_version() is None

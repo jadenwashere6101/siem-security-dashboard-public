@@ -17,6 +17,7 @@ import {
   getPlaybookWorkerMetrics,
 } from "../services/metricsService";
 import { loadSoarQueueStatus } from "../services/soarQueueService";
+import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
 import { CanonicalOutcomeBreakdown } from "./ResponseOutcome";
 
 // spec: SPEC-METRICS-001
@@ -94,6 +95,13 @@ const QUEUE_COLOR = {
   skipped: "#8b949e",
 };
 
+const WORKER_HEALTH_ACCENT = {
+  unknown: "#d29922",
+  healthy: "#3fb950",
+  degraded: "#d29922",
+  offline: "#f85149",
+};
+
 // --- Helpers ---
 
 function toCount(value) {
@@ -126,6 +134,28 @@ function formatRefreshTime(date) {
       hour12: false,
     }) + " UTC"
   );
+}
+
+function titleCaseValue(value, fallback = "Unknown") {
+  if (!value) return fallback;
+  return String(value)
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatUptimeSeconds(value) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds < 0) return "N/A";
+  if (seconds < 60) return `${Math.floor(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainderSeconds = Math.floor(seconds % 60);
+  if (minutes < 60) return `${minutes}m ${remainderSeconds}s`;
+  const hours = Math.floor(minutes / 60);
+  const remainderMinutes = minutes % 60;
+  if (hours < 24) return `${hours}h ${remainderMinutes}m`;
+  const days = Math.floor(hours / 24);
+  const remainderHours = hours % 24;
+  return `${days}d ${remainderHours}h`;
 }
 
 function toChartData(obj, keys) {
@@ -196,6 +226,7 @@ function SectionError({ message, onRetry }) {
 }
 
 function MetricCard({ label, value, accent }) {
+  const isLongValue = typeof value === "string" && value.length > 18;
   return (
     <div
       style={{
@@ -207,6 +238,13 @@ function MetricCard({ label, value, accent }) {
       <span
         style={{
           ...summaryValueStyle,
+          ...(isLongValue
+            ? {
+                fontSize: "14px",
+                lineHeight: 1.35,
+                wordBreak: "break-word",
+              }
+            : {}),
           ...(accent ? { color: accent } : {}),
         }}
       >
@@ -462,9 +500,17 @@ export default function SoarMetricsDashboard({
   const workerRecovery = worker.data?.recovery || {};
   const workerHealth = worker.data?.daemon_health || {};
   const workerHeartbeatStatus = workerHealth.status || "unknown";
+  const workerHeartbeatAccent = WORKER_HEALTH_ACCENT[workerHeartbeatStatus] || undefined;
   const workerHeartbeatMessage =
-    workerHealth.message ||
-    "Worker heartbeat is unknown because process heartbeat persistence is not available.";
+    workerHealth.message || "Worker heartbeat status is unavailable.";
+  const workerLastHeartbeat = workerHealth.last_heartbeat_at
+    ? formatAdminTimestamp(workerHealth.last_heartbeat_at, "Never seen")
+    : "Never seen";
+  const workerStartedAt = workerHealth.started_at
+    ? formatAdminTimestamp(workerHealth.started_at, "Not started")
+    : "Not started";
+  const workerUptime = formatUptimeSeconds(workerHealth.uptime_seconds);
+  const workerBuildVersion = workerHealth.build_version || "Unavailable";
   const workerHasMetrics =
     toCount(workerQueueDepth.active_total) > 0 ||
     toCount(workerRunning.total) > 0 ||
@@ -820,8 +866,25 @@ export default function SoarMetricsDashboard({
                 <div style={summaryGridStyle}>
                   <MetricCard
                     label="Heartbeat"
-                    value={workerHeartbeatStatus}
-                    accent={workerHeartbeatStatus === "unknown" ? "#d29922" : undefined}
+                    value={titleCaseValue(workerHeartbeatStatus)}
+                    accent={workerHeartbeatAccent}
+                  />
+                  <MetricCard
+                    label="Last Heartbeat"
+                    value={workerLastHeartbeat}
+                    accent={workerHeartbeatAccent}
+                  />
+                  <MetricCard
+                    label="Started"
+                    value={workerStartedAt}
+                  />
+                  <MetricCard
+                    label="Uptime"
+                    value={workerUptime}
+                  />
+                  <MetricCard
+                    label="Build"
+                    value={workerBuildVersion}
                   />
                   <MetricCard
                     label="Pending"

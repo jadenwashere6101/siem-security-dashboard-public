@@ -3,17 +3,25 @@ from __future__ import annotations
 import logging
 import random
 import signal
+import subprocess
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Callable
 
 from core.db import get_db_connection
 from core.playbook_worker_identity import generate_playbook_worker_id
+from core.worker_heartbeat_store import (
+    PLAYBOOK_WORKER_NAME,
+    WORKER_HEARTBEAT_INTERVAL_SECONDS,
+    upsert_worker_heartbeat,
+)
 from engines.playbook_step_executor import process_playbook_execution_batch
 from scripts.run_playbook_executor_once import recover_stale_playbook_executions
 
 logger = logging.getLogger(__name__)
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # spec: SPEC-WORKER-001 / SPEC-UI-004 - daemon loop is real orchestration; adapter effects stay guarded.
 DEFAULT_POLL_INTERVAL_SECONDS = 5.0
@@ -38,6 +46,7 @@ class PlaybookWorkerConfig:
     stale_limit: int = DEFAULT_STALE_LIMIT
     dry_run_recovery: bool = False
     max_loops: int | None = None
+    heartbeat_interval_seconds: float = WORKER_HEARTBEAT_INTERVAL_SECONDS
 
 
 class PlaybookWorkerShutdown:
@@ -65,6 +74,10 @@ def normalize_config(config: PlaybookWorkerConfig | None = None) -> PlaybookWork
         stale_limit=_clamp_int(raw.stale_limit, 1, MAX_STALE_LIMIT, DEFAULT_STALE_LIMIT),
         dry_run_recovery=bool(raw.dry_run_recovery),
         max_loops=raw.max_loops if raw.max_loops is None else max(0, int(raw.max_loops)),
+        heartbeat_interval_seconds=_nonnegative_float(
+            raw.heartbeat_interval_seconds,
+            WORKER_HEARTBEAT_INTERVAL_SECONDS,
+        ),
     )
 
 
@@ -99,7 +112,9 @@ def run_playbook_worker(
     clock = now_fn or _utc_now
     jitter = jitter_fn or _default_jitter
     stats = {
+        "worker_name": PLAYBOOK_WORKER_NAME,
         "worker_id": owner,
+        "build_version": _resolve_worker_build_version(),
         "loops": 0,
         "processed": 0,
         "success": 0,
@@ -109,7 +124,10 @@ def run_playbook_worker(
         "errors": 0,
         "shutdown_reason": None,
     }
+    process_started_at = clock()
     last_recovery_at: datetime | None = None
+    last_heartbeat_at: datetime | None = None
+    last_heartbeat_attempt_at: datetime | None = None
 
     logger.info(
         "soar_playbook_worker_start worker_id=%s batch_size=%s poll_interval=%s idle_backoff=%s stale_recovery_interval=%s dry_run_recovery=%s",
@@ -132,6 +150,20 @@ def run_playbook_worker(
         recovery_result = None
         batch_result = None
         try:
+            if _heartbeat_due(
+                last_heartbeat_attempt_at,
+                loop_started_at,
+                cfg.heartbeat_interval_seconds,
+            ):
+                last_heartbeat_attempt_at = loop_started_at
+                if _record_worker_heartbeat(
+                    connect=connect,
+                    worker_id=owner,
+                    build_version=stats["build_version"],
+                    process_started_at=process_started_at,
+                    heartbeat_at=loop_started_at,
+                ):
+                    last_heartbeat_at = loop_started_at
             conn = connect()
             if _should_run_recovery(
                 last_recovery_at,
@@ -179,6 +211,8 @@ def run_playbook_worker(
                 cfg,
                 idle=_loop_was_idle(batch_result, recovery_result),
                 jitter_fn=jitter,
+                last_heartbeat_at=last_heartbeat_attempt_at,
+                now=clock(),
             )
         except Exception as error:
             stats["errors"] += 1
@@ -189,7 +223,12 @@ def run_playbook_worker(
                 stats["loops"] + 1,
                 type(error).__name__,
             )
-            sleep_for = _sleep_seconds_for_error(cfg, jitter)
+            sleep_for = _sleep_seconds_for_error(
+                cfg,
+                jitter,
+                last_heartbeat_at=last_heartbeat_attempt_at,
+                now=clock(),
+            )
         finally:
             _close_safely(conn, owner)
 
@@ -257,16 +296,102 @@ def _sleep_seconds(
     *,
     idle: bool,
     jitter_fn: Callable[[float], float],
+    last_heartbeat_at: datetime | None,
+    now: datetime,
 ) -> float:
     base = config.idle_backoff_seconds if idle else config.poll_interval_seconds
-    return base + jitter_fn(config.jitter_seconds)
+    sleep_for = base + jitter_fn(config.jitter_seconds)
+    return min(sleep_for, _seconds_until_heartbeat_due(last_heartbeat_at, now, config.heartbeat_interval_seconds))
 
 
 def _sleep_seconds_for_error(
     config: PlaybookWorkerConfig,
     jitter_fn: Callable[[float], float],
+    last_heartbeat_at: datetime | None,
+    now: datetime,
 ) -> float:
-    return config.error_backoff_seconds + jitter_fn(config.jitter_seconds)
+    sleep_for = config.error_backoff_seconds + jitter_fn(config.jitter_seconds)
+    return min(sleep_for, _seconds_until_heartbeat_due(last_heartbeat_at, now, config.heartbeat_interval_seconds))
+
+
+def _seconds_until_heartbeat_due(
+    last_heartbeat_at: datetime | None,
+    now: datetime,
+    interval_seconds: float,
+) -> float:
+    interval = max(0.0, float(interval_seconds))
+    if interval == 0:
+        return 0.0
+    if last_heartbeat_at is None:
+        return 0.0
+    elapsed = max(0.0, (now - last_heartbeat_at).total_seconds())
+    return max(0.0, interval - elapsed)
+
+
+def _heartbeat_due(
+    last_heartbeat_at: datetime | None,
+    now: datetime,
+    interval_seconds: float,
+) -> bool:
+    return _seconds_until_heartbeat_due(last_heartbeat_at, now, interval_seconds) <= 0
+
+
+def _record_worker_heartbeat(
+    *,
+    connect: Callable[[], object],
+    worker_id: str,
+    build_version: str | None,
+    process_started_at: datetime,
+    heartbeat_at: datetime,
+) -> bool:
+    conn = None
+    try:
+        conn = connect()
+        upsert_worker_heartbeat(
+            conn,
+            worker_name=PLAYBOOK_WORKER_NAME,
+            worker_instance_id=worker_id,
+            build_version=build_version,
+            started_at=process_started_at,
+            last_heartbeat_at=heartbeat_at,
+        )
+        conn.commit()
+        return True
+    except Exception:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                logger.warning(
+                    "soar_playbook_worker_heartbeat_rollback_failed worker_id=%s",
+                    worker_id,
+                    exc_info=True,
+                )
+        logger.warning(
+            "soar_playbook_worker_heartbeat_failed worker_id=%s",
+            worker_id,
+            exc_info=True,
+        )
+        return False
+    finally:
+        if conn is not None:
+            _close_safely(conn, worker_id)
+
+
+def _resolve_worker_build_version() -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception:
+        return None
+    value = (result.stdout or "").strip()
+    return value or None
 
 
 def _sleep_if_needed(

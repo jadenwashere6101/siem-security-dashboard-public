@@ -156,9 +156,13 @@ const queueFixture = {
 
 const workerFixture = {
   daemon_health: {
-    status: "unknown",
-    worker_heartbeat_available: false,
-    message: "Worker process heartbeat is not persisted yet; DB queue health is available.",
+    status: "healthy",
+    worker_heartbeat_available: true,
+    started_at: "2026-05-17T11:45:00Z",
+    last_heartbeat_at: "2026-05-17T12:00:00Z",
+    uptime_seconds: 900,
+    build_version: "deadbee",
+    message: "Worker heartbeat is recent.",
   },
   queue_depth: {
     pending: 6,
@@ -897,7 +901,12 @@ describe("SoarMetricsDashboard", () => {
       render(<SoarMetricsDashboard {...analystProps} />);
       const section = await screen.findByRole("region", { name: "Worker Operations" });
       expect(within(section).getByText("Heartbeat")).toBeInTheDocument();
-      expect(within(section).getByText("unknown")).toBeInTheDocument();
+      expect(within(section).getByText("Healthy")).toBeInTheDocument();
+      expect(within(section).getByText("Last Heartbeat")).toBeInTheDocument();
+      expect(within(section).getByText("Started")).toBeInTheDocument();
+      expect(within(section).getByText("Uptime")).toBeInTheDocument();
+      expect(within(section).getByText("Build")).toBeInTheDocument();
+      expect(within(section).getByText("deadbee")).toBeInTheDocument();
       expect(within(section).getByText("Pending")).toBeInTheDocument();
       expect(within(section).getByText("Running")).toBeInTheDocument();
       expect(within(section).getByText("Awaiting Approval")).toBeInTheDocument();
@@ -921,12 +930,12 @@ describe("SoarMetricsDashboard", () => {
       expect(within(section).getByRole("note")).not.toHaveTextContent(/simulation only/i);
     });
 
-    test("renders unknown heartbeat copy from backend", async () => {
+    test("renders backend heartbeat reason copy", async () => {
       mockAllFixtures();
       render(<SoarMetricsDashboard {...analystProps} />);
       const section = await screen.findByRole("region", { name: "Worker Operations" });
       expect(
-        within(section).getByText(/Worker process heartbeat is not persisted yet/)
+        within(section).getByText(/Worker heartbeat is recent/)
       ).toBeInTheDocument();
     });
 
@@ -958,6 +967,10 @@ describe("SoarMetricsDashboard", () => {
 
       render(<SoarMetricsDashboard {...analystProps} />);
       const section = await screen.findByRole("region", { name: "Worker Operations" });
+      expect(within(section).getByText("Unknown")).toBeInTheDocument();
+      expect(within(section).getByText("Never seen")).toBeInTheDocument();
+      expect(within(section).getByText("Not started")).toBeInTheDocument();
+      expect(within(section).getByText("Unavailable")).toBeInTheDocument();
       expect(
         within(section).getByText("No worker queue activity recorded.")
       ).toBeInTheDocument();
@@ -973,10 +986,50 @@ describe("SoarMetricsDashboard", () => {
 
       render(<SoarMetricsDashboard {...analystProps} />);
       const section = await screen.findByRole("region", { name: "Worker Operations" });
-      expect(within(section).getByText("unknown")).toBeInTheDocument();
+      expect(within(section).getByText("Unknown")).toBeInTheDocument();
       expect(
-        within(section).getByText(/Worker heartbeat is unknown/)
+        within(section).getByText(/Worker heartbeat status is unavailable/)
       ).toBeInTheDocument();
+    });
+
+    test("renders degraded worker state and metadata fallbacks", async () => {
+      getPlaybookMetrics.mockResolvedValue(emptyData);
+      getDeadLetterMetrics.mockResolvedValue(emptyData);
+      getNotificationDeliveryMetrics.mockResolvedValue(emptyData);
+      getIncidentMetrics.mockResolvedValue(emptyData);
+      getApprovalMetrics.mockResolvedValue(emptyData);
+      getPlaybookWorkerMetrics.mockResolvedValue({
+        daemon_health: {
+          status: "degraded",
+          worker_heartbeat_available: true,
+          last_heartbeat_at: "2026-05-17T11:58:00Z",
+          started_at: "2026-05-17T10:00:00Z",
+          uptime_seconds: 7200,
+          message: "Worker heartbeat is late but still within the stale window.",
+        },
+      });
+
+      render(<SoarMetricsDashboard {...analystProps} />);
+      const section = await screen.findByRole("region", { name: "Worker Operations" });
+      expect(within(section).getByText("Degraded")).toBeInTheDocument();
+      expect(within(section).getByText("2h 0m")).toBeInTheDocument();
+      expect(within(section).getByText("Unavailable")).toBeInTheDocument();
+      expect(within(section).getByText(/late but still within the stale window/i)).toBeInTheDocument();
+    });
+
+    test("renders worker health metadata inside a narrow container", async () => {
+      mockAllFixtures();
+      render(
+        <div style={{ width: 320 }}>
+          <SoarMetricsDashboard {...analystProps} />
+        </div>
+      );
+      const section = await screen.findByRole("region", { name: "Worker Operations" });
+      expect(within(section).getByText("Healthy")).toBeInTheDocument();
+      expect(within(section).getByText("Last Heartbeat")).toBeInTheDocument();
+      expect(within(section).getByText("Started")).toBeInTheDocument();
+      expect(within(section).getByText("Uptime")).toBeInTheDocument();
+      expect(within(section).getByText("Build")).toBeInTheDocument();
     });
 
     test("isolates worker metrics failure from other sections", async () => {

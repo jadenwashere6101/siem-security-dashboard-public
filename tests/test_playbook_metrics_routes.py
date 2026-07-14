@@ -2,6 +2,7 @@
 Read-only playbook execution metrics API (GET /metrics/playbooks).
 """
 
+from datetime import datetime, timedelta, timezone
 import hashlib
 from contextlib import contextmanager
 from unittest.mock import patch
@@ -100,6 +101,38 @@ def _insert_alert(cur, source_ip="10.0.0.99"):
     return cur.fetchone()[0]
 
 
+def _upsert_worker_heartbeat(
+    cur,
+    *,
+    worker_instance_id="worker-alpha",
+    build_version="abc123",
+    started_at=None,
+    last_heartbeat_at=None,
+):
+    started = started_at or datetime.now(timezone.utc)
+    heartbeat = last_heartbeat_at or started
+    cur.execute(
+        """
+        INSERT INTO soar_worker_heartbeats (
+            worker_name,
+            worker_instance_id,
+            build_version,
+            started_at,
+            last_heartbeat_at,
+            updated_at
+        )
+        VALUES ('playbook_worker', %s, %s, %s, %s, %s)
+        ON CONFLICT (worker_name) DO UPDATE
+        SET worker_instance_id = EXCLUDED.worker_instance_id,
+            build_version = EXCLUDED.build_version,
+            started_at = EXCLUDED.started_at,
+            last_heartbeat_at = EXCLUDED.last_heartbeat_at,
+            updated_at = EXCLUDED.updated_at
+        """,
+        (worker_instance_id, build_version, started, heartbeat, heartbeat),
+    )
+
+
 # --- Auth ---
 
 
@@ -169,6 +202,10 @@ def test_metrics_playbook_worker_analyst_allowed_empty(client, postgres_db):
     body = resp.get_json()
     assert body["daemon_health"]["status"] == "unknown"
     assert body["daemon_health"]["worker_heartbeat_available"] is False
+    assert body["daemon_health"]["started_at"] is None
+    assert body["daemon_health"]["last_heartbeat_at"] is None
+    assert body["daemon_health"]["uptime_seconds"] is None
+    assert body["daemon_health"]["build_version"] is None
     assert body["queue_depth"] == {
         "pending": 0,
         "running": 0,
@@ -183,6 +220,7 @@ def test_metrics_playbook_worker_analyst_allowed_empty(client, postgres_db):
     }
     assert body["recent"]["active_dead_letters"] == 0
     assert body["recovery"]["last_recovery_summary_available"] is False
+    assert body["daemon_health"]["message"] == "Worker heartbeat has never been recorded."
 
 
 @pytest.mark.usefixtures("postgres_db")
@@ -364,6 +402,106 @@ def test_worker_metrics_counts_queue_running_stale_recovery_and_dead_letters(cli
 
 
 @pytest.mark.usefixtures("postgres_db")
+def test_worker_metrics_reports_healthy_with_recent_heartbeat(client, postgres_db):
+    conn, cur = postgres_db
+    started_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+    _upsert_worker_heartbeat(
+        cur,
+        worker_instance_id="worker-healthy",
+        build_version="deadbee",
+        started_at=started_at,
+        last_heartbeat_at=datetime.now(timezone.utc) - timedelta(seconds=10),
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_metrics_db(conn):
+        resp = client.get("/metrics/playbook-worker")
+    assert resp.status_code == 200
+    health = resp.get_json()["daemon_health"]
+    assert health["status"] == "healthy"
+    assert health["worker_heartbeat_available"] is True
+    assert health["build_version"] == "deadbee"
+    assert health["started_at"] is not None
+    assert health["last_heartbeat_at"] is not None
+    assert health["uptime_seconds"] >= 300
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_worker_metrics_reports_degraded_when_heartbeat_is_late(client, postgres_db):
+    conn, cur = postgres_db
+    started_at = datetime.now(timezone.utc) - timedelta(minutes=10)
+    _upsert_worker_heartbeat(
+        cur,
+        worker_instance_id="worker-degraded",
+        started_at=started_at,
+        last_heartbeat_at=datetime.now(timezone.utc) - timedelta(seconds=90),
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_metrics_db(conn):
+        resp = client.get("/metrics/playbook-worker")
+    assert resp.status_code == 200
+    health = resp.get_json()["daemon_health"]
+    assert health["status"] == "degraded"
+    assert "late" in health["message"]
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_worker_metrics_reports_offline_when_heartbeat_expires(client, postgres_db):
+    conn, cur = postgres_db
+    started_at = datetime.now(timezone.utc) - timedelta(minutes=20)
+    _upsert_worker_heartbeat(
+        cur,
+        worker_instance_id="worker-offline",
+        started_at=started_at,
+        last_heartbeat_at=datetime.now(timezone.utc) - timedelta(seconds=180),
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_metrics_db(conn):
+        resp = client.get("/metrics/playbook-worker")
+    assert resp.status_code == 200
+    health = resp.get_json()["daemon_health"]
+    assert health["status"] == "offline"
+    assert "offline timeout" in health["message"]
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_worker_metrics_restart_recovery_overwrites_worker_identity(client, postgres_db):
+    conn, cur = postgres_db
+    first_started = datetime.now(timezone.utc) - timedelta(minutes=30)
+    second_started = datetime.now(timezone.utc) - timedelta(minutes=1)
+    _upsert_worker_heartbeat(
+        cur,
+        worker_instance_id="worker-old",
+        build_version="abc123",
+        started_at=first_started,
+        last_heartbeat_at=datetime.now(timezone.utc) - timedelta(seconds=181),
+    )
+    _upsert_worker_heartbeat(
+        cur,
+        worker_instance_id="worker-new",
+        build_version="def456",
+        started_at=second_started,
+        last_heartbeat_at=datetime.now(timezone.utc) - timedelta(seconds=5),
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_metrics_db(conn):
+        resp = client.get("/metrics/playbook-worker")
+    assert resp.status_code == 200
+    health = resp.get_json()["daemon_health"]
+    assert health["status"] == "healthy"
+    assert health["worker_instance_id"] == "worker-new"
+    assert health["build_version"] == "def456"
+    assert health["uptime_seconds"] < 120
+
+
+@pytest.mark.usefixtures("postgres_db")
 def test_worker_metrics_response_does_not_include_worker_owner_or_secrets(client, postgres_db):
     conn, cur = postgres_db
     playbook_store.create_playbook_definition(conn, "pb_worker_secret", "Worker", steps=_valid_steps())
@@ -389,6 +527,19 @@ def test_worker_metrics_response_does_not_include_worker_owner_or_secrets(client
     assert "postgresql://" not in body_text
     assert "secret-token" not in body_text
     assert "worker-postgresql" not in body_text
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_worker_metrics_returns_500_when_heartbeat_lookup_fails(client, postgres_db):
+    conn, _cur = postgres_db
+    _login_super_admin(client)
+    with _patched_metrics_db(conn), patch(
+        "routes.metrics_routes.get_worker_heartbeat",
+        side_effect=RuntimeError("heartbeat read failed"),
+    ):
+        resp = client.get("/metrics/playbook-worker")
+    assert resp.status_code == 500
+    assert resp.get_json()["error"] == "Internal server error"
 
 
 @pytest.mark.usefixtures("postgres_db")

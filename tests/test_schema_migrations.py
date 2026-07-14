@@ -156,7 +156,7 @@ def test_schema_snapshot_marker_matches_latest_migration():
         migrations_dir=repo_root / "migrations",
     )
 
-    assert version == 18
+    assert version == 19
 
 
 def test_pfsense_ingest_config_migration_scope_and_defaults():
@@ -176,6 +176,23 @@ def test_pfsense_ingest_config_migration_scope_and_defaults():
         "icmp_traffic",
     ):
         assert category in sql
+    for destructive in ("DROP ", "TRUNCATE ", "DELETE FROM ", "ALTER TABLE "):
+        assert destructive not in sql.upper()
+
+
+def test_playbook_worker_daemon_health_migration_scope_and_defaults():
+    migration_path = (
+        Path(__file__).resolve().parent.parent / "migrations" / "0019_playbook_worker_daemon_health.sql"
+    )
+    sql = migration_path.read_text(encoding="utf-8")
+
+    assert "CREATE TABLE IF NOT EXISTS soar_worker_heartbeats" in sql
+    assert "worker_name VARCHAR(64) PRIMARY KEY" in sql
+    assert "worker_instance_id VARCHAR(128) NOT NULL" in sql
+    assert "build_version VARCHAR(64)" in sql
+    assert "started_at TIMESTAMPTZ NOT NULL" in sql
+    assert "last_heartbeat_at TIMESTAMPTZ NOT NULL" in sql
+    assert "idx_soar_worker_heartbeats_last_heartbeat_at" in sql
     for destructive in ("DROP ", "TRUNCATE ", "DELETE FROM ", "ALTER TABLE "):
         assert destructive not in sql.upper()
 
