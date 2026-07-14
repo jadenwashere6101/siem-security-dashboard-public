@@ -12,6 +12,7 @@ from core import (
     approval_store,
     dead_letter_store,
     notification_delivery_store,
+    notification_policy_service,
     playbook_store,
     soar_response_outcomes as outcomes,
 )
@@ -40,8 +41,8 @@ def _valid_steps():
 def _insert_alert(cur, source_ip="10.0.0.1"):
     cur.execute(
         """
-        INSERT INTO alerts (alert_type, severity, source_ip, message)
-        VALUES ('test_alert', 'LOW', %s::inet, 'msg')
+        INSERT INTO alerts (alert_type, severity, source_ip, source, source_type, message)
+        VALUES ('test_alert', 'HIGH', %s::inet, 'honeypot', 'honeypot', 'msg')
         RETURNING id
         """,
         (source_ip,),
@@ -196,6 +197,42 @@ def _reset_playbook_integration_circuits():
     yield
     reset_adapter_rate_limiters()
     reset_simulated_circuit_breakers()
+
+
+def _eligible_notification_policy():
+    return {
+        "status": "applied",
+        "slack_enabled": True,
+        "minimum_severity": "low",
+        "notify_on_alerts": True,
+        "notify_on_incidents": True,
+        "slack_format": "compact",
+        "pfsense_destination": "#pf",
+        "honeypot_destination": "#hp",
+        "critical_cross_source_destination": "#critical",
+    }
+
+
+@pytest.fixture(autouse=True)
+def _route_playbook_slack_through_policy(monkeypatch):
+    monkeypatch.setattr(
+        "core.notification_policy_service.get_effective_notification_policy",
+        _eligible_notification_policy,
+    )
+
+    class _DelegatingSlackAdapter:
+        def execute(self, action, params, context):
+            return playbook_step_executor.execute_playbook_simulated_adapter(
+                "slack",
+                action,
+                params=params,
+                context=context,
+            )
+
+    monkeypatch.setattr(
+        "core.notification_policy_service.get_integration_adapter",
+        lambda *_args, **_kwargs: _DelegatingSlackAdapter(),
+    )
 
 
 @pytest.fixture
@@ -773,7 +810,7 @@ def test_adapter_backed_steps_are_simulated_through_registry(postgres_db, no_net
         assert adapter_result["context"]["playbook_id"] == "pb_adapter_steps"
         assert entry["output"]["circuit_breaker"]["state"] == CIRCUIT_STATE_CLOSED
 
-    assert row["steps_log"][0]["output"]["adapter_result"]["params"]["token"] == "[redacted]"
+    assert row["steps_log"][0]["output"]["resolved_params"]["message"] == "hello"
     assert row["steps_log"][1]["output"]["adapter_result"]["params"]["password"] == "[redacted]"
     assert _count(cur, "blocked_ips") == before["blocked_ips"]
     assert _count(cur, "response_actions_queue") == before["response_actions_queue"]
@@ -1940,8 +1977,7 @@ def test_delivery_tracking_failure_does_not_crash_step(postgres_db, no_network):
     _set_playbook_steps(cur, "pb_delivery_crash", [{"action": "notify_slack", "params": {}}])
 
     with patch(
-        "engines.playbook_step_executor.notification_delivery_store"
-        ".create_notification_delivery_attempt",
+        "core.notification_policy_service.notification_delivery_store.create_notification_delivery_attempt",
         side_effect=RuntimeError("simulated delivery store crash"),
     ):
         result = playbook_step_executor.process_playbook_execution(conn, eid)
@@ -2083,7 +2119,15 @@ def test_delivery_record_idempotency_key_is_deterministic(postgres_db, no_networ
         (eid,),
     )
     key = cur.fetchone()[0]
-    expected = playbook_step_executor._make_delivery_idempotency_key("slack", "notify_slack", eid, 0)
+    cur.execute("SELECT alert_id FROM playbook_executions WHERE id = %s", (eid,))
+    alert_id = cur.fetchone()[0]
+    expected = notification_policy_service._notification_idempotency_key(
+        "alert",
+        alert_id,
+        notification_policy_service.ROUTE_KEY_HONEYPOT,
+        notification_policy_service.PURPOSE_INVESTIGATION_UPDATE,
+        notification_policy_service.DELIVERY_STAGE_PLAYBOOK,
+    )
     assert key == expected
 
 
@@ -2180,14 +2224,17 @@ def test_rate_limited_notify_slack_creates_blocked_delivery_record(
         cur,
         "pb_slack_rate_limited_delivery",
         steps=[
-            {"action": "notify_slack", "params": {"message": "first"}},
-            {"action": "notify_slack", "params": {"message": "second"}},
+            {"action": "notify_slack", "params": {"message": "first", "purpose": "investigation_update"}},
+            {"action": "notify_slack", "params": {"message": "second", "purpose": "containment_outcome"}},
         ],
     )
     monkeypatch.setenv("INTEGRATION_MODE", "real")
     monkeypatch.setenv("SOAR_ENV", "staging")
     monkeypatch.setenv("SOAR_REAL_SLACK_ENABLED", "true")
-    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T000/B000/SECRET")
+    monkeypatch.setenv(
+        "SLACK_HONEYPOT_WEBHOOK_URL",
+        "https://hooks.slack.com/services/T000/B000/SECRET",
+    )
     monkeypatch.setenv("SLACK_MAX_SENDS_PER_MINUTE", "1")
 
     with patch(
@@ -2212,7 +2259,7 @@ def test_rate_limited_notify_slack_creates_blocked_delivery_record(
     assert rows[0][0] == "success"
     blocked_status, failure_code, failure_message, metadata = rows[1]
     assert blocked_status == "blocked"
-    assert failure_code == "adapter_simulation_failed"
+    assert failure_code == FAILURE_CLASSIFICATION_PROVIDER_RATE_LIMITED
     assert metadata["failure_classification"] == FAILURE_CLASSIFICATION_PROVIDER_RATE_LIMITED
     assert metadata["rate_limited"] is True
     assert "hooks.slack.com/services" not in str(metadata)

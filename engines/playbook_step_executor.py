@@ -20,6 +20,7 @@ from typing import Any
 from core import approval_store
 from core import dead_letter_store
 from core import notification_delivery_store
+from core.notification_policy_service import send_playbook_notification
 from core import playbook_store
 from core.playbook_worker_identity import generate_playbook_worker_id
 from core.response_command_contracts import ORIGIN_PLAYBOOK, ResponseCommandRequest
@@ -1127,6 +1128,7 @@ def _process_steps(
         if (
             isinstance(step, dict)
             and step.get("action") in _NOTIFICATION_ACTIONS
+            and step.get("action") != "notify_slack"
             and entry.get("skipped") is not True
         ):
             delivery_attempt = _record_notification_delivery_attempt(
@@ -1254,6 +1256,15 @@ def _simulate_step(
             now=now,
         )
 
+    if action == "notify_slack":
+        return _simulate_notification_policy_slack_step(
+            conn,
+            step,
+            step_index,
+            now,
+            execution,
+        )
+
     if action in ADAPTER_ACTIONS:
         return _simulate_adapter_step(conn, step, step_index, now, execution)
 
@@ -1290,6 +1301,190 @@ def _simulate_step(
         },
         "error": None,
     }
+    if isinstance(step.get("label"), str) and step.get("label"):
+        entry["label"] = step["label"]
+    return entry
+
+
+def _simulate_notification_policy_slack_step(
+    conn,
+    step: dict[str, Any],
+    step_index: int,
+    now: datetime,
+    execution: dict[str, Any],
+) -> dict[str, Any]:
+    existing_delivery = _existing_active_delivery(
+        conn,
+        "slack",
+        "notify_slack",
+        execution["id"],
+        step_index,
+    )
+    if existing_delivery is not None:
+        entry = {
+            "step_index": step_index,
+            "action": "notify_slack",
+            "status": "success",
+            "event": "notification_delivery_already_delivered",
+            "mode": "simulation",
+            "simulated": True,
+            "executed": False,
+            "skipped": True,
+            "started_at": _iso(now),
+            "completed_at": _iso(now),
+            "message": "Notification delivery already succeeded; adapter call skipped.",
+            "output": {
+                "simulated": True,
+                "executed": False,
+                "skipped": True,
+                "skip_reason": f"delivery_{existing_delivery.get('status')}",
+                "failure_classification": "duplicate_delivery",
+                "existing_delivery_id": existing_delivery.get("id"),
+                "existing_delivery_status": existing_delivery.get("status"),
+                "idempotency_key": existing_delivery.get("idempotency_key"),
+            },
+            "error": None,
+        }
+        if isinstance(step.get("label"), str) and step.get("label"):
+            entry["label"] = step["label"]
+        return entry
+
+    try:
+        params = resolve_step_params(
+            conn,
+            step.get("params") if isinstance(step.get("params"), dict) else {},
+            execution=execution,
+        )
+    except PlaybookParamBindingError as error:
+        return _failure_entry(
+            step_index=step_index,
+            action="notify_slack",
+            message=error.message,
+            code=error.code,
+            now=now,
+        )
+
+    result = send_playbook_notification(
+        conn,
+        execution=execution,
+        message=params.get("message"),
+        purpose=params.get("purpose"),
+        playbook_step_index=step_index,
+    )
+    attempt = result.get("attempt")
+    if attempt is not None and attempt.get("id") is not None:
+        _append_notification_delivery_outcome_event(conn, execution, attempt)
+
+    metadata = attempt.get("metadata") if isinstance(attempt, dict) else {}
+    mode = str((attempt or {}).get("mode") or "simulation").strip().lower()
+    if mode not in {"simulation", "real"}:
+        mode = "simulation"
+    simulated = (
+        bool(metadata.get("simulated"))
+        if isinstance(metadata.get("simulated"), bool)
+        else mode != "real"
+    )
+    executed = bool(metadata.get("executed")) if isinstance(metadata, dict) else False
+    output: dict[str, Any] = {
+        "simulated": simulated,
+        "executed": executed,
+        "adapter_mode": mode,
+        "resolved_params": params,
+        "circuit_breaker": get_simulated_circuit_breaker_dict("slack", now=now),
+        "notification_policy": {
+            "purpose": result.get("purpose"),
+            "delivery_stage": result.get("delivery_stage"),
+            "route_key": result.get("route_key"),
+            "suppressed": result.get("suppressed") is True,
+            "duplicate": result.get("duplicate") is True,
+        },
+        "notification_delivery": (
+            {
+                "id": attempt.get("id"),
+                "provider": attempt.get("provider"),
+                "mode": attempt.get("mode"),
+                "status": attempt.get("status"),
+                "adapter_name": attempt.get("adapter_name"),
+                "action": attempt.get("action"),
+                "playbook_step_index": attempt.get("playbook_step_index"),
+                "failure_code": attempt.get("failure_code"),
+                "failure_message": attempt.get("failure_message"),
+                "circuit_breaker_state": attempt.get("circuit_breaker_state"),
+            }
+            if attempt is not None
+            else None
+        ),
+    }
+    adapter_result = result.get("adapter_result")
+    if isinstance(adapter_result, dict):
+        output["adapter_result"] = adapter_result
+
+    if result.get("suppressed") is True:
+        existing_status = metadata.get("duplicate_of_status") if isinstance(metadata, dict) else None
+        skip_reason = (
+            f"delivery_{existing_status}"
+            if result.get("duplicate") is True and existing_status in {"success", "pending"}
+            else attempt.get("failure_code") if attempt is not None else "policy_suppressed"
+        )
+        output.update(
+            {
+                "skipped": True,
+                "skip_reason": skip_reason,
+                "failure_classification": attempt.get("failure_code") if attempt is not None else None,
+                "idempotency_key": attempt.get("idempotency_key") if attempt is not None else None,
+            }
+        )
+        entry = {
+            "step_index": step_index,
+            "action": "notify_slack",
+            "status": "success",
+            "event": (
+                "notification_delivery_already_delivered"
+                if result.get("duplicate") is True
+                else "notification_policy_suppressed"
+            ),
+            "mode": "simulation",
+            "simulated": True,
+            "executed": False,
+            "skipped": True,
+            "started_at": _iso(now),
+            "completed_at": _iso(now),
+            "message": result.get("message") or "Notification policy suppressed Slack delivery.",
+            "output": output,
+            "error": None,
+        }
+    else:
+        success = bool(result.get("success")) or (
+            attempt is not None and attempt.get("status") == "success"
+        )
+        status = "success" if success else "failed"
+        error = None
+        if not success:
+            failure_code = (attempt or {}).get("failure_code")
+            if failure_code == FAILURE_CLASSIFICATION_CIRCUIT_OPEN:
+                error_code = "circuit_breaker_open"
+            elif failure_code == FAILURE_CLASSIFICATION_CIRCUIT_STATE_INVALID:
+                error_code = "circuit_breaker_invalid"
+            else:
+                error_code = "adapter_simulation_failed"
+            error = {
+                "code": error_code,
+                "message": result.get("message") or (attempt or {}).get("failure_message") or "Slack delivery failed safely.",
+            }
+        entry = {
+            "step_index": step_index,
+            "action": "notify_slack",
+            "status": status,
+            "mode": mode,
+            "simulated": simulated,
+            "executed": executed,
+            "started_at": _iso(now),
+            "completed_at": _iso(now),
+            "message": result.get("message") or (attempt or {}).get("failure_message") or "Slack delivery processed.",
+            "output": output,
+            "error": error,
+        }
+
     if isinstance(step.get("label"), str) and step.get("label"):
         entry["label"] = step["label"]
     return entry

@@ -36,5 +36,4 @@ def test_reconcile_core_playbook_pack_v1_updates_drift_and_is_idempotent(postgre
     assert [step["action"] for step in reconciled["steps"]] == [
         "enrich_context",
         "monitor",
-        "notify_slack",
     ]

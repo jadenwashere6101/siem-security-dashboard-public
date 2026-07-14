@@ -56,7 +56,6 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
                 "reason": "Sustained failed-login pattern — approve IP block",
             },
             {"action": "block_ip", "params": {"source_ip": "{{alert.source_ip}}"}},
-            {"action": "notify_slack", "params": {"message": "{{alert.message}}"}},
         ],
     },
     {
@@ -70,10 +69,6 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
         "steps": [
             {"action": "enrich_context"},
             {"action": "monitor"},
-            {
-                "action": "notify_slack",
-                "params": {"message": "{{alert.reputation_summary}}"},
-            },
         ],
     },
     {
@@ -103,6 +98,7 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
             {
                 "action": "notify_slack",
                 "params": {
+                    "purpose": "containment_outcome",
                     "message": "Containment outcome: approval completed and IP block requested."
                 },
             },
@@ -140,7 +136,6 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
                 "reason": "Known-malicious source IP — approve block",
             },
             {"action": "block_ip", "params": {"source_ip": "{{alert.source_ip}}"}},
-            {"action": "notify_slack", "params": {"message": "{{alert.message}}"}},
         ],
     },
     {
@@ -162,10 +157,6 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
         "steps": [
             {"action": "enrich_context"},
             {"action": "monitor"},
-            {
-                "action": "notify_slack",
-                "params": {"message": "{{alert.reputation_summary}}"},
-            },
         ],
     },
     {
@@ -182,7 +173,6 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
         "steps": [
             {"action": "enrich_context"},
             {"action": "monitor"},
-            {"action": "notify_slack", "params": {"message": "{{alert.message}}"}},
         ],
     },
     {
@@ -199,7 +189,6 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
         "steps": [
             {"action": "enrich_context"},
             {"action": "monitor"},
-            {"action": "notify_slack", "params": {"message": "{{alert.message}}"}},
         ],
     },
     {
@@ -216,7 +205,6 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
         "steps": [
             {"action": "enrich_context"},
             {"action": "monitor"},
-            {"action": "notify_slack", "params": {"message": "{{alert.message}}"}},
         ],
     },
     {
@@ -233,7 +221,6 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
         "steps": [
             {"action": "enrich_context"},
             {"action": "monitor"},
-            {"action": "notify_slack", "params": {"message": "{{alert.message}}"}},
         ],
     },
     {
@@ -257,7 +244,6 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
                 "reason": "Honeypot credential stuffing detected — approve IP block",
             },
             {"action": "block_ip", "params": {"source_ip": "{{alert.source_ip}}"}},
-            {"action": "notify_slack", "params": {"message": "{{alert.message}}"}},
         ],
     },
     {
@@ -317,7 +303,6 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
                 "reason": "High-confidence pfSense port scan detected — approve IP block",
             },
             {"action": "block_ip", "params": {"source_ip": "{{alert.source_ip}}"}},
-            {"action": "notify_slack", "params": {"message": "{{alert.message}}"}},
         ],
     },
     {
@@ -341,7 +326,6 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
                 "reason": "pfSense allowed inbound traffic to a sensitive port — approve IP block",
             },
             {"action": "block_ip", "params": {"source_ip": "{{alert.source_ip}}"}},
-            {"action": "notify_slack", "params": {"message": "{{alert.message}}"}},
         ],
     },
 )

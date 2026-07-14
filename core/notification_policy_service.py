@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -15,6 +16,27 @@ SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
 ROUTE_KEY_PFSENSE = "pfsense"
 ROUTE_KEY_HONEYPOT = "honeypot"
 ROUTE_KEY_CRITICAL_CROSS_SOURCE = "critical_cross_source"
+logger = logging.getLogger(__name__)
+
+PURPOSE_IMMEDIATE_ALERT = "immediate_alert"
+PURPOSE_INCIDENT_CREATED = "incident_created"
+PURPOSE_INVESTIGATION_UPDATE = "investigation_update"
+PURPOSE_CONTAINMENT_OUTCOME = "containment_outcome"
+PURPOSE_ROUTE_TEST = "route_test"
+
+NOTIFICATION_PURPOSES = frozenset(
+    {
+        PURPOSE_IMMEDIATE_ALERT,
+        PURPOSE_INCIDENT_CREATED,
+        PURPOSE_INVESTIGATION_UPDATE,
+        PURPOSE_CONTAINMENT_OUTCOME,
+        PURPOSE_ROUTE_TEST,
+    }
+)
+
+DELIVERY_STAGE_INITIAL = "initial"
+DELIVERY_STAGE_PLAYBOOK = "playbook"
+DELIVERY_STAGE_TEST = "test"
 
 
 def normalize_notification_source(source: Any, source_type: Any = None) -> str | None:
@@ -47,7 +69,30 @@ def _delivery_status_from_adapter_result(adapter_result: dict[str, Any]) -> str:
     classification = str(metadata.get("failure_classification") or "").strip().lower()
     if classification == "timeout" or metadata.get("timed_out") is True:
         return "timeout"
-    return "blocked" if adapter_result.get("executed") is not True else "failed"
+    if classification in {
+        "circuit_open",
+        "circuit_state_invalid",
+        "provider_rate_limited",
+        "guard_failed",
+        "credential_missing",
+    }:
+        return "blocked"
+    return "failed"
+
+
+def _normalize_notification_purpose(value: Any, *, default: str) -> str:
+    purpose = str(value or "").strip().lower()
+    if purpose in NOTIFICATION_PURPOSES:
+        return purpose
+    return default
+
+
+def _delivery_stage_for_purpose(purpose: str) -> str:
+    if purpose == PURPOSE_ROUTE_TEST:
+        return DELIVERY_STAGE_TEST
+    if purpose in {PURPOSE_INVESTIGATION_UPDATE, PURPOSE_CONTAINMENT_OUTCOME}:
+        return DELIVERY_STAGE_PLAYBOOK
+    return DELIVERY_STAGE_INITIAL
 
 
 def evaluate_notification_policy(
@@ -163,13 +208,137 @@ def format_incident_notification(incident: dict[str, Any], *, slack_format: str,
     return _compact_incident_text(incident, destination)
 
 
+def _playbook_purpose_label(purpose: str) -> str:
+    if purpose == PURPOSE_CONTAINMENT_OUTCOME:
+        return "Containment outcome"
+    if purpose == PURPOSE_INVESTIGATION_UPDATE:
+        return "Investigation update"
+    return "Notification update"
+
+
+def _default_playbook_message(purpose: str, event_kind: str) -> str:
+    if purpose == PURPOSE_CONTAINMENT_OUTCOME:
+        return "Containment outcome update."
+    if event_kind == "incident":
+        return "Incident investigation update."
+    return "Alert investigation update."
+
+
+def _compact_playbook_text(
+    subject: dict[str, Any],
+    *,
+    destination: str,
+    event_kind: str,
+    purpose: str,
+    message: str,
+) -> str:
+    object_id = subject.get("id")
+    severity = str(subject.get("severity") or "").upper() or "UNKNOWN"
+    if event_kind == "incident":
+        title = subject.get("title") or "Incident update"
+        return f"[{destination}] {purpose.upper()} {severity} #{object_id} {title} {message}".strip()[:3000]
+    source = subject.get("source") or "unknown"
+    return f"[{destination}] {purpose.upper()} {severity} {source} #{object_id} {message}".strip()[:3000]
+
+
+def _detailed_playbook_text(
+    subject: dict[str, Any],
+    *,
+    destination: str,
+    event_kind: str,
+    purpose: str,
+    message: str,
+) -> str:
+    lines = [
+        f"[{destination}] {_playbook_purpose_label(purpose)}",
+        f"Severity: {str(subject.get('severity') or '').upper() or 'UNKNOWN'}",
+        f"Purpose: {purpose}",
+    ]
+    if event_kind == "incident":
+        lines.extend(
+            [
+                f"Title: {subject.get('title') or 'Untitled incident'}",
+                f"Status: {subject.get('status') or 'unknown'}",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                f"Rule: {subject.get('alert_type') or 'unknown'}",
+                f"Source: {subject.get('source') or 'unknown'}",
+            ]
+        )
+    if subject.get("source_ip"):
+        lines.append(f"Source IP: {subject['source_ip']}")
+    if subject.get("alert_type") and event_kind == "incident":
+        lines.append(f"Rule: {subject['alert_type']}")
+    if subject.get("source") and event_kind == "incident":
+        lines.append(f"Source: {subject['source']}")
+    if subject.get("response_action"):
+        lines.append(f"Response action: {subject['response_action']}")
+    if subject.get("response_status"):
+        lines.append(f"Response status: {subject['response_status']}")
+    target_context = subject.get("target_context") if isinstance(subject.get("target_context"), str) else None
+    if target_context:
+        lines.append(f"Target context: {target_context}")
+    lines.append(f"Summary: {message}")
+    return "\n".join(lines)[:3000]
+
+
+def format_playbook_notification(
+    subject: dict[str, Any],
+    *,
+    slack_format: str,
+    destination: str,
+    event_kind: str,
+    purpose: str,
+    message: str | None,
+) -> str:
+    text = (str(message).strip() if message is not None else "") or _default_playbook_message(
+        purpose, event_kind
+    )
+    if slack_format == "detailed":
+        return _detailed_playbook_text(
+            subject,
+            destination=destination,
+            event_kind=event_kind,
+            purpose=purpose,
+            message=text,
+        )
+    return _compact_playbook_text(
+        subject,
+        destination=destination,
+        event_kind=event_kind,
+        purpose=purpose,
+        message=text,
+    )
+
+
 def _notification_correlation_id(kind: str, object_id: int, route_key: str) -> str:
     return f"policy-{kind}-{route_key}-{object_id}-{uuid4().hex[:10]}"
 
 
-def _notification_idempotency_key(kind: str, object_id: int, route_key: str, slack_format: str) -> str:
-    raw = f"policy:{kind}:{object_id}:{route_key}:{slack_format}"
+def _notification_idempotency_key(
+    kind: str,
+    object_id: int,
+    route_key: str,
+    purpose: str,
+    delivery_stage: str,
+) -> str:
+    raw = f"policy:{kind}:{object_id}:{route_key}:{purpose}:{delivery_stage}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:64]
+
+
+def _existing_policy_delivery(conn, *, idempotency_key: str) -> dict[str, Any] | None:
+    rows = notification_delivery_store.list_notification_delivery_attempts(
+        conn,
+        idempotency_key=idempotency_key,
+        limit=10,
+    )
+    for row in rows:
+        if row.get("status") in {"success", "pending"}:
+            return row
+    return None
 
 
 def _record_attempt(
@@ -183,21 +352,29 @@ def _record_attempt(
     metadata: dict[str, Any],
     alert_id: int | None = None,
     incident_id: int | None = None,
+    playbook_execution_id: int | None = None,
+    playbook_step_index: int | None = None,
+    mode_override: str | None = None,
     timeout_seconds: int | None = None,
     circuit_breaker_state: str | None = None,
 ) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
+    record_mode = str(mode_override or "").strip().lower()
+    if record_mode not in {"simulation", "real"}:
+        record_mode = "real" if status in {"success", "failed", "timeout"} else "simulation"
     return notification_delivery_store.create_notification_delivery_attempt(
         conn,
         correlation_id=correlation_id,
         idempotency_key=idempotency_key,
         provider="slack",
-        mode="real" if status in {"success", "failed", "timeout"} else "simulation",
+        mode=record_mode,
         status=status,
         adapter_name="slack",
         action="send_message",
         alert_id=alert_id,
         incident_id=incident_id,
+        playbook_execution_id=playbook_execution_id,
+        playbook_step_index=playbook_step_index,
         requested_at=now,
         started_at=now,
         completed_at=now,
@@ -207,6 +384,249 @@ def _record_attempt(
         circuit_breaker_state=circuit_breaker_state,
         metadata=metadata,
     )
+
+
+def _record_attempt_safe(conn, **kwargs) -> dict[str, Any] | None:
+    try:
+        return _record_attempt(conn, **kwargs)
+    except Exception:
+        logger.warning(
+            "notification policy delivery attempt tracking failed safely",
+            exc_info=True,
+        )
+        return None
+
+
+def _deliver_notification(
+    conn,
+    *,
+    event_kind: str,
+    object_id: int,
+    subject: dict[str, Any],
+    policy: dict[str, Any],
+    purpose: str,
+    custom_text: str | None = None,
+    requested_by: str | None = None,
+    bypass_slack_disabled: bool = False,
+    allow_dedup: bool = True,
+    playbook_execution_id: int | None = None,
+    playbook_step_index: int | None = None,
+    correlation_kind: str | None = None,
+    destination_label_override: str | None = None,
+) -> dict[str, Any]:
+    normalized_purpose = _normalize_notification_purpose(
+        purpose,
+        default=PURPOSE_IMMEDIATE_ALERT if event_kind == "alert" else PURPOSE_INCIDENT_CREATED,
+    )
+    delivery_stage = _delivery_stage_for_purpose(normalized_purpose)
+    decision = evaluate_notification_policy(
+        policy,
+        event_kind=event_kind,
+        severity=subject.get("severity"),
+        source=subject.get("source"),
+        source_type=subject.get("source_type"),
+        bypass_slack_disabled=bypass_slack_disabled,
+    )
+    route_key = decision.get("route_key") or "unrouted"
+    correlation_id = _notification_correlation_id(
+        correlation_kind or event_kind,
+        object_id,
+        route_key,
+    )
+    idempotency_key = _notification_idempotency_key(
+        event_kind,
+        object_id,
+        route_key,
+        normalized_purpose,
+        delivery_stage,
+    )
+    common_metadata = {
+        "notification_policy": True,
+        "event_kind": event_kind,
+        "purpose": normalized_purpose,
+        "delivery_stage": delivery_stage,
+        "source": subject.get("source"),
+        "source_type": subject.get("source_type"),
+        "severity": subject.get("severity"),
+        "requested_by": requested_by,
+        "playbook_execution_id": playbook_execution_id,
+        "playbook_step_index": playbook_step_index,
+    }
+    alert_ref = object_id if event_kind == "alert" and object_id > 0 else None
+    incident_ref = object_id if event_kind == "incident" and object_id > 0 else None
+
+    if not decision["should_notify"]:
+        attempt = _record_attempt_safe(
+            conn,
+            correlation_id=correlation_id,
+            idempotency_key=idempotency_key,
+            status="blocked",
+            failure_code=decision["reason"],
+            failure_message=f"Notification policy suppressed Slack delivery: {decision['reason']}.",
+            metadata={
+                **common_metadata,
+                "policy_status": policy.get("status"),
+                "policy_reason": decision["reason"],
+                "executed": False,
+                "simulated": True,
+            },
+            alert_id=alert_ref,
+            incident_id=incident_ref,
+            playbook_execution_id=playbook_execution_id,
+            playbook_step_index=playbook_step_index,
+        )
+        return {
+            "success": False,
+            "suppressed": True,
+            "duplicate": False,
+            "purpose": normalized_purpose,
+            "delivery_stage": delivery_stage,
+            "route_key": route_key,
+            "message": (
+                attempt["failure_message"]
+                if attempt is not None
+                else f"Notification policy suppressed Slack delivery: {decision['reason']}."
+            ),
+            "attempt": attempt,
+            "adapter_result": None,
+            "policy_decision": decision,
+        }
+
+    if allow_dedup:
+        existing = _existing_policy_delivery(conn, idempotency_key=idempotency_key)
+        if existing is not None:
+            attempt = _record_attempt_safe(
+                conn,
+                correlation_id=correlation_id,
+                idempotency_key=idempotency_key,
+                status="blocked",
+                failure_code="duplicate_delivery",
+                failure_message="Equivalent Slack notification already delivered; duplicate send suppressed.",
+                metadata={
+                    **common_metadata,
+                    "route_key": decision["route_key"],
+                    "destination_label": decision["destination"],
+                    "duplicate_of_attempt_id": existing.get("id"),
+                    "duplicate_of_status": existing.get("status"),
+                    "executed": False,
+                    "simulated": True,
+                },
+                alert_id=alert_ref,
+                incident_id=incident_ref,
+                playbook_execution_id=playbook_execution_id,
+                playbook_step_index=playbook_step_index,
+            )
+            return {
+                "success": False,
+                "suppressed": True,
+                "duplicate": True,
+                "purpose": normalized_purpose,
+                "delivery_stage": delivery_stage,
+                "route_key": route_key,
+                "message": (
+                    attempt["failure_message"]
+                    if attempt is not None
+                    else "Equivalent Slack notification already delivered; duplicate send suppressed."
+                ),
+                "attempt": attempt,
+                "adapter_result": None,
+                "policy_decision": decision,
+            }
+
+    destination = destination_label_override or decision["destination"]
+    if normalized_purpose == PURPOSE_ROUTE_TEST:
+        text = _format_route_test_text(
+            decision["route_key"],
+            destination,
+            str(decision["slack_format"] or "compact"),
+        )
+    elif normalized_purpose == PURPOSE_IMMEDIATE_ALERT and event_kind == "alert":
+        text = format_alert_notification(
+            subject,
+            slack_format=decision["slack_format"],
+            destination=destination,
+        )
+    elif normalized_purpose == PURPOSE_INCIDENT_CREATED and event_kind == "incident":
+        text = format_incident_notification(
+            subject,
+            slack_format=decision["slack_format"],
+            destination=destination,
+        )
+    else:
+        text = format_playbook_notification(
+            subject,
+            slack_format=decision["slack_format"],
+            destination=destination,
+            event_kind=event_kind,
+            purpose=normalized_purpose,
+            message=custom_text,
+        )
+
+    adapter = get_integration_adapter("slack", mode=REAL_MODE)
+    result = adapter.execute(
+        "send_message",
+        params={
+            "text": text,
+            "message": custom_text or subject.get("message") or subject.get("title"),
+            "destination_label": destination,
+        },
+        context={
+            "alert_id": alert_ref,
+            "incident_id": incident_ref,
+            "playbook_id": "notification_policy" if playbook_execution_id is None else subject.get("playbook_id"),
+            "execution_id": correlation_id if playbook_execution_id is None else playbook_execution_id,
+            "notification_policy": True,
+            "route_key": decision["route_key"],
+            "purpose": normalized_purpose,
+            "delivery_stage": delivery_stage,
+            "playbook_execution_id": playbook_execution_id,
+            "playbook_step_index": playbook_step_index,
+        },
+    )
+    metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+    attempt = _record_attempt_safe(
+        conn,
+        correlation_id=correlation_id,
+        idempotency_key=idempotency_key,
+        status=_delivery_status_from_adapter_result(result),
+        failure_code=metadata.get("failure_classification"),
+        failure_message=None if result.get("success") else result.get("message"),
+        metadata={
+            **common_metadata,
+            "route_key": decision["route_key"],
+            "destination_label": destination,
+            "slack_format": decision["slack_format"],
+            "adapter_mode": result.get("mode"),
+            "executed": result.get("executed"),
+            "simulated": result.get("simulated"),
+            "provider_success": metadata.get("provider_success"),
+            "failure_classification": metadata.get("failure_classification"),
+            "rate_limited": metadata.get("rate_limited"),
+            "adapter_result": {
+                "success": result.get("success"),
+                "failure_classification": metadata.get("failure_classification"),
+            },
+        },
+        alert_id=alert_ref,
+        incident_id=incident_ref,
+        playbook_execution_id=playbook_execution_id,
+        playbook_step_index=playbook_step_index,
+        timeout_seconds=metadata.get("timeout_seconds"),
+        circuit_breaker_state=metadata.get("circuit_state"),
+        mode_override=str(result.get("mode") or "simulation"),
+    )
+    return {
+        "success": attempt["status"] == "success" if attempt is not None else bool(result.get("success")),
+        "suppressed": False,
+        "duplicate": False,
+        "purpose": normalized_purpose,
+        "delivery_stage": delivery_stage,
+        "route_key": decision["route_key"],
+        "message": result.get("message"),
+        "attempt": attempt,
+        "adapter_result": result,
+        "policy_decision": decision,
+    }
 
 
 def _attempt_summary(attempt: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -337,92 +757,15 @@ def notify_for_alert(conn, alert_id: int) -> dict[str, Any] | None:
     if alert is None:
         return None
     policy = get_effective_notification_policy()
-    decision = evaluate_notification_policy(
-        policy,
-        event_kind="alert",
-        severity=alert.get("severity"),
-        source=alert.get("source"),
-        source_type=alert.get("source_type"),
-    )
-    route_key = decision.get("route_key") or "unrouted"
-    correlation_id = _notification_correlation_id("alert", alert_id, route_key)
-    idempotency_key = _notification_idempotency_key(
-        "alert",
-        alert_id,
-        route_key,
-        str(policy.get("slack_format") or "compact"),
-    )
-    if not decision["should_notify"]:
-        return _record_attempt(
-            conn,
-            correlation_id=correlation_id,
-            idempotency_key=idempotency_key,
-            status="blocked",
-            failure_code=decision["reason"],
-            failure_message=f"Notification policy suppressed Slack delivery: {decision['reason']}.",
-            metadata={
-                "notification_policy": True,
-                "event_kind": "alert",
-                "policy_status": policy.get("status"),
-                "policy_reason": decision["reason"],
-                "source": alert.get("source"),
-                "source_type": alert.get("source_type"),
-                "severity": alert.get("severity"),
-                "executed": False,
-                "simulated": True,
-            },
-            alert_id=alert_id,
-        )
-
-    text = format_alert_notification(
-        alert,
-        slack_format=decision["slack_format"],
-        destination=decision["destination"],
-    )
-    adapter = get_integration_adapter("slack", mode=REAL_MODE)
-    result = adapter.execute(
-        "send_message",
-        params={
-            "text": text,
-            "message": alert.get("message"),
-            "destination_label": decision["destination"],
-        },
-        context={
-            "alert_id": alert_id,
-            "playbook_id": "notification_policy",
-            "execution_id": correlation_id,
-            "notification_policy": True,
-            "route_key": decision["route_key"],
-        },
-    )
-    metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
-    return _record_attempt(
+    result = _deliver_notification(
         conn,
-        correlation_id=correlation_id,
-        idempotency_key=idempotency_key,
-        status=_delivery_status_from_adapter_result(result),
-        failure_code=metadata.get("failure_classification"),
-        failure_message=None if result.get("success") else result.get("message"),
-        metadata={
-            "notification_policy": True,
-            "event_kind": "alert",
-            "route_key": decision["route_key"],
-            "destination_label": decision["destination"],
-            "slack_format": decision["slack_format"],
-            "source": alert.get("source"),
-            "source_type": alert.get("source_type"),
-            "severity": alert.get("severity"),
-            "executed": result.get("executed"),
-            "simulated": result.get("simulated"),
-            "adapter_result": {
-                "success": result.get("success"),
-                "failure_classification": metadata.get("failure_classification"),
-            },
-        },
-        alert_id=alert_id,
-        timeout_seconds=metadata.get("timeout_seconds"),
-        circuit_breaker_state=metadata.get("circuit_state"),
+        event_kind="alert",
+        object_id=alert_id,
+        subject=alert,
+        policy=policy,
+        purpose=PURPOSE_IMMEDIATE_ALERT,
     )
+    return result["attempt"]
 
 
 def notify_for_incident(conn, incident_id: int) -> dict[str, Any] | None:
@@ -430,91 +773,109 @@ def notify_for_incident(conn, incident_id: int) -> dict[str, Any] | None:
     if incident is None:
         return None
     policy = get_effective_notification_policy()
-    decision = evaluate_notification_policy(
-        policy,
+    result = _deliver_notification(
+        conn,
         event_kind="incident",
-        severity=incident.get("severity"),
-        source=incident.get("source"),
-        source_type=incident.get("source_type"),
+        object_id=incident_id,
+        subject=incident,
+        policy=policy,
+        purpose=PURPOSE_INCIDENT_CREATED,
     )
-    route_key = decision.get("route_key") or "unrouted"
-    correlation_id = _notification_correlation_id("incident", incident_id, route_key)
-    idempotency_key = _notification_idempotency_key(
-        "incident",
-        incident_id,
-        route_key,
-        str(policy.get("slack_format") or "compact"),
-    )
-    if not decision["should_notify"]:
-        return _record_attempt(
+    return result["attempt"]
+
+
+def send_playbook_notification(
+    conn,
+    *,
+    execution: dict[str, Any],
+    message: str | None = None,
+    purpose: str | None = None,
+    playbook_step_index: int | None = None,
+) -> dict[str, Any]:
+    alert_id = execution.get("alert_id")
+    incident_id = execution.get("incident_id")
+    event_kind = "alert" if alert_id is not None else "incident" if incident_id is not None else None
+    if event_kind is None:
+        attempt = _record_attempt(
             conn,
-            correlation_id=correlation_id,
-            idempotency_key=idempotency_key,
+            correlation_id=_notification_correlation_id("playbook", int(execution.get("id") or 0), "unrouted"),
+            idempotency_key=_notification_idempotency_key(
+                "playbook",
+                int(execution.get("id") or 0),
+                "unrouted",
+                _normalize_notification_purpose(purpose, default=PURPOSE_INVESTIGATION_UPDATE),
+                DELIVERY_STAGE_PLAYBOOK,
+            ),
             status="blocked",
-            failure_code=decision["reason"],
-            failure_message=f"Notification policy suppressed Slack delivery: {decision['reason']}.",
+            failure_code="missing_notification_subject",
+            failure_message="Playbook Slack notification has no linked alert or incident context.",
             metadata={
                 "notification_policy": True,
-                "event_kind": "incident",
-                "policy_status": policy.get("status"),
-                "policy_reason": decision["reason"],
-                "source": incident.get("source"),
-                "source_type": incident.get("source_type"),
-                "severity": incident.get("severity"),
+                "event_kind": "playbook",
+                "purpose": _normalize_notification_purpose(
+                    purpose, default=PURPOSE_INVESTIGATION_UPDATE
+                ),
+                "delivery_stage": DELIVERY_STAGE_PLAYBOOK,
                 "executed": False,
                 "simulated": True,
+                "playbook_execution_id": execution.get("id"),
+                "playbook_step_index": playbook_step_index,
             },
-            incident_id=incident_id,
+            playbook_execution_id=execution.get("id"),
+            playbook_step_index=playbook_step_index,
         )
+        return {
+            "success": False,
+            "suppressed": True,
+            "duplicate": False,
+            "purpose": _normalize_notification_purpose(
+                purpose, default=PURPOSE_INVESTIGATION_UPDATE
+            ),
+            "delivery_stage": DELIVERY_STAGE_PLAYBOOK,
+            "route_key": "unrouted",
+            "message": attempt["failure_message"],
+            "attempt": attempt,
+            "adapter_result": None,
+            "policy_decision": {"should_notify": False, "reason": "missing_notification_subject"},
+        }
 
-    text = format_incident_notification(
-        incident,
-        slack_format=decision["slack_format"],
-        destination=decision["destination"],
-    )
-    adapter = get_integration_adapter("slack", mode=REAL_MODE)
-    result = adapter.execute(
-        "send_message",
-        params={
-            "text": text,
-            "message": incident.get("title"),
-            "destination_label": decision["destination"],
-        },
-        context={
-            "incident_id": incident_id,
-            "playbook_id": "notification_policy",
-            "execution_id": correlation_id,
-            "notification_policy": True,
-            "route_key": decision["route_key"],
-        },
-    )
-    metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
-    return _record_attempt(
+    if event_kind == "alert":
+        subject = fetch_alert_notification_context(conn, int(alert_id))
+        object_id = int(alert_id)
+    else:
+        subject = fetch_incident_notification_context(conn, int(incident_id))
+        object_id = int(incident_id)
+    if subject is None:
+        return {
+            "success": False,
+            "suppressed": True,
+            "duplicate": False,
+            "purpose": _normalize_notification_purpose(
+                purpose, default=PURPOSE_INVESTIGATION_UPDATE
+            ),
+            "delivery_stage": DELIVERY_STAGE_PLAYBOOK,
+            "route_key": "unrouted",
+            "message": "Linked notification context was not found.",
+            "attempt": None,
+            "adapter_result": None,
+            "policy_decision": {"should_notify": False, "reason": "missing_notification_subject"},
+        }
+    subject["playbook_id"] = execution.get("playbook_id")
+    policy = get_effective_notification_policy()
+    return _deliver_notification(
         conn,
-        correlation_id=correlation_id,
-        idempotency_key=idempotency_key,
-        status=_delivery_status_from_adapter_result(result),
-        failure_code=metadata.get("failure_classification"),
-        failure_message=None if result.get("success") else result.get("message"),
-        metadata={
-            "notification_policy": True,
-            "event_kind": "incident",
-            "route_key": decision["route_key"],
-            "destination_label": decision["destination"],
-            "slack_format": decision["slack_format"],
-            "source": incident.get("source"),
-            "source_type": incident.get("source_type"),
-            "severity": incident.get("severity"),
-            "executed": result.get("executed"),
-            "simulated": result.get("simulated"),
-            "adapter_result": {
-                "success": result.get("success"),
-                "failure_classification": metadata.get("failure_classification"),
-            },
-        },
-        incident_id=incident_id,
-        timeout_seconds=metadata.get("timeout_seconds"),
-        circuit_breaker_state=metadata.get("circuit_state"),
+        event_kind=event_kind,
+        object_id=object_id,
+        subject=subject,
+        policy=policy,
+        purpose=_normalize_notification_purpose(
+            purpose,
+            default=PURPOSE_INVESTIGATION_UPDATE,
+        ),
+        custom_text=message,
+        playbook_execution_id=execution.get("id"),
+        playbook_step_index=playbook_step_index,
+        correlation_kind="playbook",
     )
 
 
@@ -529,111 +890,33 @@ def send_notification_policy_route_test(
     with conn.cursor() as cur:
         policy = load_notification_policy(cur)
 
-    decision = evaluate_notification_policy(
-        policy,
-        event_kind="alert",
-        severity="critical",
-        source=source,
-        source_type=source_type,
-        bypass_slack_disabled=bypass_slack_disabled,
-    )
-    resolved_route_key = decision.get("route_key") or source
-    correlation_id = _notification_correlation_id("route_test", 0, resolved_route_key)
-    idempotency_key = _notification_idempotency_key(
-        "route_test",
-        0,
-        resolved_route_key,
-        str(policy.get("slack_format") or "compact"),
-    )
-
-    if not decision["should_notify"]:
-        attempt = _record_attempt(
-            conn,
-            correlation_id=correlation_id,
-            idempotency_key=idempotency_key,
-            status="blocked",
-            failure_code=decision["reason"],
-            failure_message=f"Notification policy route test was blocked: {decision['reason']}.",
-            metadata={
-                "notification_policy": True,
-                "event_kind": "route_test",
-                "route_test": True,
-                "route_key": resolved_route_key,
-                "policy_status": policy.get("status"),
-                "policy_reason": decision["reason"],
-                "source": source,
-                "source_type": source_type,
-                "severity": "critical",
-                "bypassed_slack_disabled": bool(bypass_slack_disabled),
-                "executed": False,
-                "simulated": True,
-            },
-        )
-        return {
-            "route_key": resolved_route_key,
-            "success": False,
-            "status": attempt["status"],
-            "message": attempt["failure_message"],
-            "attempt": _attempt_summary(attempt),
-        }
-
-    text = _format_route_test_text(
-        resolved_route_key,
-        decision["destination"],
-        str(decision["slack_format"] or "compact"),
-    )
-    adapter = get_integration_adapter("slack", mode=REAL_MODE)
-    result = adapter.execute(
-        "send_message",
-        params={
-            "text": text,
-            "message": f"Notification policy route test for {resolved_route_key}",
-            "destination_label": decision["destination"],
-        },
-        context={
-            "playbook_id": "notification_policy_route_test",
-            "execution_id": correlation_id,
-            "notification_policy": True,
-            "route_key": resolved_route_key,
-            "notification_policy_route_test": True,
-        },
-    )
-    metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
-    attempt = _record_attempt(
+    subject = {
+        "id": 0,
+        "severity": "critical",
+        "source": source,
+        "source_type": source_type,
+        "message": _format_route_test_text(route_key, "test", str(policy.get("slack_format") or "compact")),
+    }
+    result = _deliver_notification(
         conn,
-        correlation_id=correlation_id,
-        idempotency_key=idempotency_key,
-        status=_delivery_status_from_adapter_result(result),
-        failure_code=metadata.get("failure_classification"),
-        failure_message=None if result.get("success") else result.get("message"),
-        metadata={
-            "notification_policy": True,
-            "event_kind": "route_test",
-            "route_test": True,
-            "route_key": resolved_route_key,
-            "destination_label": decision["destination"],
-            "slack_format": decision["slack_format"],
-            "source": source,
-            "source_type": source_type,
-            "severity": "critical",
-            "bypassed_slack_disabled": bool(bypass_slack_disabled),
-            "requested_by": requested_by,
-            "executed": result.get("executed"),
-            "simulated": result.get("simulated"),
-            "adapter_result": {
-                "success": result.get("success"),
-                "failure_classification": metadata.get("failure_classification"),
-            },
-        },
-        timeout_seconds=metadata.get("timeout_seconds"),
-        circuit_breaker_state=metadata.get("circuit_state"),
+        event_kind="alert",
+        object_id=0,
+        subject=subject,
+        policy=policy,
+        purpose=PURPOSE_ROUTE_TEST,
+        custom_text=f"Notification policy route test for {route_key}",
+        requested_by=requested_by,
+        bypass_slack_disabled=bypass_slack_disabled,
+        allow_dedup=False,
+        correlation_kind="route_test",
     )
+    attempt = result["attempt"]
     return {
-        "route_key": resolved_route_key,
+        "route_key": result["route_key"],
         "success": attempt["status"] == "success",
         "status": attempt["status"],
         "message": (
-            f"Notification policy route test sent for {resolved_route_key}."
+            f"Notification policy route test sent for {result['route_key']}."
             if attempt["status"] == "success"
             else attempt["failure_message"]
         ),

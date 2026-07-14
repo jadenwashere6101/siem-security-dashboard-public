@@ -321,43 +321,14 @@ def test_core_pack_malicious_ip_playbook_still_matches_pfsense_noisy_source(post
     assert CORE_V1_MALICIOUS_IP_CONTAINMENT_ID in matched_ids
 
 
-def test_password_spray_investigation_executes_with_dynamic_notification(postgres_db):
+def test_password_spray_investigation_is_now_enrichment_and_monitor_only(postgres_db):
     conn, cur = postgres_db
     seed_core_playbook_pack_v1(conn)
-    aid = _insert_alert(
-        cur,
-        alert_type="password_spraying_threshold",
-        reputation_summary="Spray source reputation context",
+    playbook = playbook_store.get_playbook_definition(
+        conn,
+        CORE_V1_PASSWORD_SPRAY_INVESTIGATION_ID,
     )
-    eid = playbook_store.create_pending_playbook_execution_once(
-        conn, CORE_V1_PASSWORD_SPRAY_INVESTIGATION_ID, aid
-    )
-
-    captured = {}
-
-    def capture_adapter(*_args, **kwargs):
-        captured["params"] = kwargs.get("params")
-        return {
-            "adapter": "slack",
-            "action": "send_message",
-            "mode": "simulation",
-            "simulated": True,
-            "executed": False,
-            "success": True,
-            "message": "ok",
-            "params": kwargs.get("params") or {},
-            "context": kwargs.get("context") or {},
-            "metadata": {},
-        }
-
-    with patch(
-        "engines.playbook_step_executor.execute_playbook_simulated_adapter",
-        side_effect=capture_adapter,
-    ):
-        result = playbook_step_executor.process_playbook_execution(conn, eid)
-
-    assert result["outcome"] == "success"
-    assert captured["params"]["message"] == "Spray source reputation context"
+    assert [step["action"] for step in playbook["steps"]] == ["enrich_context", "monitor"]
 
 
 def test_password_spray_investigation_enriches_context_before_notification(postgres_db):
@@ -500,11 +471,9 @@ def test_web_to_app_and_spray_then_success_playbooks_are_investigation_only(post
     assert [step["action"] for step in web_to_app["steps"]] == [
         "enrich_context",
         "monitor",
-        "notify_slack",
     ]
     assert spray_then_success["trigger_config"]["min_severity"] == "high"
     assert [step["action"] for step in spray_then_success["steps"]] == [
         "enrich_context",
         "monitor",
-        "notify_slack",
     ]
