@@ -5,8 +5,9 @@ from unittest.mock import patch
 from psycopg2.extras import Json
 from werkzeug.security import generate_password_hash
 
+import siem_backend
 from core import soar_response_outcomes as outcomes
-from core.incident_store import create_incident, link_alert_to_incident
+from core.incident_store import create_incident, link_alert_to_incident, maybe_create_or_link_incident
 from routes.incident_routes import _map_step_event_type
 
 
@@ -275,6 +276,43 @@ def test_get_incident_detail_super_admin_can_view(client, postgres_db):
 
     assert resp.status_code == 200
     assert resp.get_json()["incident"]["id"] == incident["id"]
+
+
+def test_incident_timeline_exposes_severity_escalation_audit_event(client, postgres_db):
+    conn, cur = postgres_db
+    audit_wrapper = _RouteSafeConnection(conn)
+    first_alert_id = _insert_alert(cur, source_ip="203.0.113.160", severity="HIGH")
+    with siem_backend.app.app_context(), patch(
+        "core.audit_helpers.get_db_connection",
+        return_value=audit_wrapper,
+    ):
+        incident = maybe_create_or_link_incident(conn, first_alert_id, "HIGH", "203.0.113.160")
+    conn.commit()
+    second_alert_id = _insert_alert(cur, source_ip="203.0.113.160", severity="CRITICAL")
+    with siem_backend.app.app_context(), patch(
+        "core.audit_helpers.get_db_connection",
+        return_value=audit_wrapper,
+    ):
+        maybe_create_or_link_incident(conn, second_alert_id, "CRITICAL", "203.0.113.160")
+    conn.commit()
+
+    patchers = _login_role(
+        client,
+        username="timelineaudit",
+        password="analystpass",
+        role="analyst",
+    )
+    try:
+        with _patched_app_db(conn):
+            resp = client.get(f"/incidents/{incident['id']}/timeline")
+    finally:
+        _stop_patchers(patchers)
+
+    assert resp.status_code == 200
+    audit_entries = [
+        entry for entry in resp.get_json()["timeline"] if entry.get("event_type") == "audit_event"
+    ]
+    assert any(entry.get("title") == "incident_severity_escalated" for entry in audit_entries)
 
 
 def test_map_step_event_type_classifies_simulated_adapter_step():

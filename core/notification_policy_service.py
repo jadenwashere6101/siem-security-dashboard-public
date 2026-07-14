@@ -14,6 +14,7 @@ SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
 
 ROUTE_KEY_PFSENSE = "pfsense"
 ROUTE_KEY_HONEYPOT = "honeypot"
+ROUTE_KEY_CRITICAL_CROSS_SOURCE = "critical_cross_source"
 
 
 def normalize_notification_source(source: Any, source_type: Any = None) -> str | None:
@@ -28,9 +29,14 @@ def normalize_notification_source(source: Any, source_type: Any = None) -> str |
 
 def _policy_destination(policy: dict[str, Any], route_key: str) -> str | None:
     if route_key == ROUTE_KEY_PFSENSE:
-        return policy.get("pfsense_destination")
+        value = policy.get("pfsense_destination")
+        return (str(value).strip() or None) if value is not None else None
     if route_key == ROUTE_KEY_HONEYPOT:
-        return policy.get("honeypot_destination")
+        value = policy.get("honeypot_destination")
+        return (str(value).strip() or None) if value is not None else None
+    if route_key == ROUTE_KEY_CRITICAL_CROSS_SOURCE:
+        value = policy.get("critical_cross_source_destination")
+        return (str(value).strip() or None) if value is not None else None
     return None
 
 
@@ -72,6 +78,8 @@ def evaluate_notification_policy(
         return {"should_notify": False, "reason": "below_minimum_severity", "route_key": None, "destination": None}
 
     route_key = normalize_notification_source(source, source_type)
+    if route_key is None and normalized_severity == "critical":
+        route_key = ROUTE_KEY_CRITICAL_CROSS_SOURCE
     destination = _policy_destination(policy, route_key) if route_key else None
     if route_key is None or not destination:
         return {"should_notify": False, "reason": "source_not_routed", "route_key": route_key, "destination": None}
@@ -221,11 +229,18 @@ def _route_test_source(route_key: str) -> tuple[str, str]:
         return ("pfsense", "firewall")
     if route_key == ROUTE_KEY_HONEYPOT:
         return ("honeypot", "honeypot")
+    if route_key == ROUTE_KEY_CRITICAL_CROSS_SOURCE:
+        return ("bank_app", "custom")
     raise ValueError("Notification policy test route is not supported")
 
 
 def _format_route_test_text(route_key: str, destination: str, slack_format: str) -> str:
-    route_label = "pfSense" if route_key == ROUTE_KEY_PFSENSE else "Honeypot"
+    if route_key == ROUTE_KEY_PFSENSE:
+        route_label = "pfSense"
+    elif route_key == ROUTE_KEY_HONEYPOT:
+        route_label = "Honeypot"
+    else:
+        route_label = "Critical / Cross-Source"
     header = f"[{destination}] NOTIFICATION POLICY ROUTE TEST"
     compact = f"{header} {route_label} synthetic verification message. No alert or incident was created."
     if slack_format == "detailed":

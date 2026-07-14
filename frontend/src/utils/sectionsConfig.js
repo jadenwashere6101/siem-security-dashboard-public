@@ -20,6 +20,12 @@ export const sectionsConfig = [
     visibleWhen: ({ canTakeAlertActions }) => canTakeAlertActions,
   },
   {
+    id: "severity-response-matrix",
+    label: "Severity & Response Matrix",
+    group: "soc",
+    visibleWhen: ({ canTakeAlertActions }) => canTakeAlertActions,
+  },
+  {
     id: "response-registry",
     label: "Response Registry",
     group: "soc",

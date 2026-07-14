@@ -100,7 +100,12 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
                 ),
             },
             {"action": "block_ip", "params": {"source_ip": "{{alert.source_ip}}"}},
-            {"action": "notify_slack", "params": {"message": "{{alert.message}}"}},
+            {
+                "action": "notify_slack",
+                "params": {
+                    "message": "Containment outcome: approval completed and IP block requested."
+                },
+            },
             {
                 "action": "notify_email",
                 "params": {
@@ -172,7 +177,7 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
         ),
         "trigger_config": {
             "alert_type": "web_to_app_attack_pattern",
-            "min_severity": "critical",
+            "min_severity": "high",
         },
         "steps": [
             {"action": "enrich_context"},
@@ -201,23 +206,16 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
         "id": CORE_V1_SPRAY_THEN_SUCCESS_CORRELATION_INVESTIGATION_ID,
         "name": "Spray-Then-Success Correlation Investigation",
         "description": (
-            "Contain high-confidence spray-then-success correlation alerts with "
-            "enriched context and approval-gated IP blocking."
+            "Investigate corroborating spray-then-success correlation alerts "
+            "with enriched context and analyst notification."
         ),
         "trigger_config": {
             "alert_type": "spray_then_success_pattern",
-            "min_severity": "critical",
+            "min_severity": "high",
         },
         "steps": [
-            {"action": "flag_high_priority"},
             {"action": "enrich_context"},
-            {
-                "action": "require_approval",
-                "risk_level": "critical",
-                "expires_in_minutes": 15,
-                "reason": "Spray-then-success correlation detected — approve IP block",
-            },
-            {"action": "block_ip", "params": {"source_ip": "{{alert.source_ip}}"}},
+            {"action": "monitor"},
             {"action": "notify_slack", "params": {"message": "{{alert.message}}"}},
         ],
     },

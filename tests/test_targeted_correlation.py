@@ -171,14 +171,14 @@ def test_targeted_correlation_web_to_app_attack_pattern(postgres_db):
             "alert_id": alert[0],
             "source_ip": source_ip,
             "response_action": "flag_high_priority",
-            "severity": "critical",
+            "severity": "high",
             "alert_type": "web_to_app_attack_pattern",
             "source": "nginx",
             "source_type": "web_log",
         }
     ]
     assert alert[1] == "web_to_app_attack_pattern"
-    assert alert[2] == "critical"
+    assert alert[2] == "high"
     assert alert[3] == source_ip
     assert alert[4] == "nginx"
     assert alert[5] == "web_log"
@@ -234,14 +234,14 @@ def test_targeted_correlation_spray_then_success_pattern(postgres_db):
             "alert_id": alert[0],
             "source_ip": source_ip,
             "response_action": "flag_high_priority",
-            "severity": "critical",
+            "severity": "high",
             "alert_type": "spray_then_success_pattern",
             "source": "bank_app",
             "source_type": "custom",
         }
     ]
     assert alert[1] == "spray_then_success_pattern"
-    assert alert[2] == "critical"
+    assert alert[2] == "high"
     assert alert[3] == source_ip
     assert alert[4] == "bank_app"
     assert alert[5] == "custom"

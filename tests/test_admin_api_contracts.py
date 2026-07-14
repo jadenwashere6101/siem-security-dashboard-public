@@ -684,6 +684,7 @@ def test_get_and_patch_notification_policy_apply_immediately_and_audit(client, p
                 "slack_format": "detailed",
                 "pfsense_destination": "#soc-pfsense",
                 "honeypot_destination": "#soc-honeypot",
+                "critical_cross_source_destination": "#soc-critical",
             },
         )
         assert updated.status_code == 200
@@ -696,16 +697,39 @@ def test_get_and_patch_notification_policy_apply_immediately_and_audit(client, p
         assert immediate.get_json()["pfsense_destination"] == "#soc-pfsense"
 
     cur.execute(
-        "SELECT slack_enabled, minimum_severity, pfsense_destination, honeypot_destination FROM notification_policy WHERE id = 1"
+        """
+        SELECT
+            slack_enabled,
+            minimum_severity,
+            pfsense_destination,
+            honeypot_destination,
+            critical_cross_source_destination
+        FROM notification_policy
+        WHERE id = 1
+        """
     )
-    assert cur.fetchone() == (True, "critical", "#soc-pfsense", "#soc-honeypot")
+    assert cur.fetchone() == (
+        True,
+        "critical",
+        "#soc-pfsense",
+        "#soc-honeypot",
+        "#soc-critical",
+    )
 
     cur.execute(
         "SELECT details FROM audit_log WHERE event_type = 'notification_policy_updated' ORDER BY id DESC LIMIT 1"
     )
     audit = cur.fetchone()[0]
     changed_fields = {item["field"] for item in audit["changes"]}
-    assert {"slack_enabled", "minimum_severity", "notify_on_alerts", "slack_format", "pfsense_destination", "honeypot_destination"} <= changed_fields
+    assert {
+        "slack_enabled",
+        "minimum_severity",
+        "notify_on_alerts",
+        "slack_format",
+        "pfsense_destination",
+        "honeypot_destination",
+        "critical_cross_source_destination",
+    } <= changed_fields
 
 
 @pytest.mark.parametrize(

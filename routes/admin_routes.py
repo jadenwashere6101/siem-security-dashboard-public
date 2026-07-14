@@ -190,6 +190,7 @@ def update_notification_policy_route():
             "slack_format",
             "pfsense_destination",
             "honeypot_destination",
+            "critical_cross_source_destination",
         ):
             if old_policy.get(key) != updated_policy.get(key):
                 changes.append({"field": key, "old": old_policy.get(key), "new": updated_policy.get(key)})
@@ -213,6 +214,7 @@ def update_notification_policy_route():
                         "slack_format",
                         "pfsense_destination",
                         "honeypot_destination",
+                        "critical_cross_source_destination",
                     )
                 },
                 "new_policy": {
@@ -225,6 +227,7 @@ def update_notification_policy_route():
                         "slack_format",
                         "pfsense_destination",
                         "honeypot_destination",
+                        "critical_cross_source_destination",
                     )
                 },
             },
@@ -254,7 +257,7 @@ def test_notification_policy_route(route_key):
     cur = None
     try:
         normalized_route = str(route_key or "").strip().lower()
-        if normalized_route not in {"pfsense", "honeypot"}:
+        if normalized_route not in {"pfsense", "honeypot", "critical_cross_source"}:
             return jsonify({"error": "Notification policy test route is not supported"}), 404
 
         conn = get_db_connection()

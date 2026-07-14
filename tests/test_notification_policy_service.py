@@ -49,6 +49,22 @@ def _insert_incident(cur, *, severity="high", source_ip="198.51.100.11", alert_i
     return incident_id
 
 
+def _policy(**overrides):
+    policy = {
+        "status": "applied",
+        "slack_enabled": True,
+        "minimum_severity": "high",
+        "notify_on_alerts": True,
+        "notify_on_incidents": True,
+        "slack_format": "compact",
+        "pfsense_destination": "#pf",
+        "honeypot_destination": "#hp",
+        "critical_cross_source_destination": "#critical",
+    }
+    policy.update(overrides)
+    return policy
+
+
 def test_evaluate_notification_policy_respects_global_disable():
     decision = evaluate_notification_policy(
         {
@@ -68,16 +84,7 @@ def test_evaluate_notification_policy_respects_global_disable():
 
 
 def test_evaluate_notification_policy_routes_pfsense_and_honeypot_independently():
-    policy = {
-        "status": "applied",
-        "slack_enabled": True,
-        "minimum_severity": "medium",
-        "notify_on_alerts": True,
-        "notify_on_incidents": True,
-        "slack_format": "compact",
-        "pfsense_destination": "#pf",
-        "honeypot_destination": "#hp",
-    }
+    policy = _policy(minimum_severity="medium")
     pfsense = evaluate_notification_policy(
         policy,
         event_kind="alert",
@@ -97,16 +104,7 @@ def test_evaluate_notification_policy_routes_pfsense_and_honeypot_independently(
 
 
 def test_evaluate_notification_policy_distinguishes_alerts_and_incidents():
-    policy = {
-        "status": "applied",
-        "slack_enabled": True,
-        "minimum_severity": "low",
-        "notify_on_alerts": False,
-        "notify_on_incidents": True,
-        "slack_format": "compact",
-        "pfsense_destination": "#pf",
-        "honeypot_destination": "#hp",
-    }
+    policy = _policy(minimum_severity="low", notify_on_alerts=False)
     alert_decision = evaluate_notification_policy(
         policy,
         event_kind="alert",
@@ -126,7 +124,7 @@ def test_evaluate_notification_policy_distinguishes_alerts_and_incidents():
     assert incident_decision["should_notify"] is True
 
 
-def test_evaluate_notification_policy_fails_safe_when_policy_unavailable_or_source_unrouted():
+def test_evaluate_notification_policy_fails_safe_when_policy_unavailable():
     unavailable = evaluate_notification_policy(
         {"status": "unavailable"},
         event_kind="alert",
@@ -134,26 +132,42 @@ def test_evaluate_notification_policy_fails_safe_when_policy_unavailable_or_sour
         source="pfsense",
         source_type="firewall",
     )
-    unrouted = evaluate_notification_policy(
-        {
-            "status": "applied",
-            "slack_enabled": True,
-            "minimum_severity": "low",
-            "notify_on_alerts": True,
-            "notify_on_incidents": True,
-            "slack_format": "compact",
-            "pfsense_destination": "#pf",
-            "honeypot_destination": "#hp",
-        },
+    assert unavailable["should_notify"] is False
+    assert unavailable["reason"] == "policy_unavailable"
+
+
+def test_evaluate_notification_policy_routes_critical_cross_source_only_for_critical():
+    critical = evaluate_notification_policy(
+        _policy(minimum_severity="low"),
+        event_kind="alert",
+        severity="critical",
+        source="bank_app",
+        source_type="custom",
+    )
+    non_critical = evaluate_notification_policy(
+        _policy(minimum_severity="low"),
+        event_kind="alert",
+        severity="high",
+        source="bank_app",
+        source_type="custom",
+    )
+    assert critical["should_notify"] is True
+    assert critical["route_key"] == "critical_cross_source"
+    assert critical["destination"] == "#critical"
+    assert non_critical["should_notify"] is False
+    assert non_critical["reason"] == "source_not_routed"
+
+
+def test_evaluate_notification_policy_missing_critical_cross_source_destination_fails_safe():
+    decision = evaluate_notification_policy(
+        _policy(minimum_severity="low", critical_cross_source_destination=""),
         event_kind="alert",
         severity="critical",
         source="nginx",
-        source_type="proxy",
+        source_type="web_log",
     )
-    assert unavailable["should_notify"] is False
-    assert unavailable["reason"] == "policy_unavailable"
-    assert unrouted["should_notify"] is False
-    assert unrouted["reason"] == "source_not_routed"
+    assert decision["should_notify"] is False
+    assert decision["reason"] == "source_not_routed"
 
 
 def test_formatters_bound_compact_and_detailed_content():
@@ -196,16 +210,7 @@ def test_notify_for_alert_records_blocked_attempt_when_below_threshold(postgres_
 
     with patch(
         "core.notification_policy_service.get_effective_notification_policy",
-        return_value={
-            "status": "applied",
-            "slack_enabled": True,
-            "minimum_severity": "high",
-            "notify_on_alerts": True,
-            "notify_on_incidents": True,
-            "slack_format": "compact",
-            "pfsense_destination": "#pf",
-            "honeypot_destination": "#hp",
-        },
+        return_value=_policy(),
     ), patch("core.notification_policy_service.get_integration_adapter") as adapter_factory:
         attempt = notify_for_alert(conn, alert_id)
         conn.commit()
@@ -222,16 +227,7 @@ def test_notify_for_alert_short_circuits_when_slack_disabled(postgres_db):
 
     with patch(
         "core.notification_policy_service.get_effective_notification_policy",
-        return_value={
-            "status": "applied",
-            "slack_enabled": False,
-            "minimum_severity": "low",
-            "notify_on_alerts": True,
-            "notify_on_incidents": True,
-            "slack_format": "compact",
-            "pfsense_destination": "#pf",
-            "honeypot_destination": "#hp",
-        },
+        return_value=_policy(slack_enabled=False, minimum_severity="low"),
     ), patch("core.notification_policy_service.get_integration_adapter") as adapter_factory:
         attempt = notify_for_alert(conn, alert_id)
         conn.commit()
@@ -265,16 +261,7 @@ def test_notification_policy_route_test_bypasses_only_global_slack_disable_witho
 
     with patch(
         "core.notification_policy_service.load_notification_policy",
-        return_value={
-            "status": "applied",
-            "slack_enabled": False,
-            "minimum_severity": "critical",
-            "notify_on_alerts": True,
-            "notify_on_incidents": True,
-            "slack_format": "compact",
-            "pfsense_destination": "#pf",
-            "honeypot_destination": "#hp",
-        },
+        return_value=_policy(slack_enabled=False, minimum_severity="critical"),
     ), patch("core.notification_policy_service.get_integration_adapter", return_value=adapter):
         result = send_notification_policy_route_test(
             conn,
@@ -318,16 +305,7 @@ def test_notify_for_alert_and_incident_use_existing_slack_adapter_contract(postg
 
     with patch(
         "core.notification_policy_service.get_effective_notification_policy",
-        return_value={
-            "status": "applied",
-            "slack_enabled": True,
-            "minimum_severity": "high",
-            "notify_on_alerts": True,
-            "notify_on_incidents": True,
-            "slack_format": "detailed",
-            "pfsense_destination": "#pf",
-            "honeypot_destination": "#hp",
-        },
+        return_value=_policy(slack_format="detailed"),
     ), patch("core.notification_policy_service.get_integration_adapter", return_value=adapter):
         alert_attempt = notify_for_alert(conn, alert_id)
         incident_attempt = notify_for_incident(conn, incident_id)

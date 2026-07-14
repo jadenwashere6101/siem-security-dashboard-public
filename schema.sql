@@ -1,4 +1,4 @@
--- Schema snapshot version: 0020
+-- Schema snapshot version: 0021
 
 CREATE TABLE IF NOT EXISTS events (
     id SERIAL PRIMARY KEY,
@@ -159,6 +159,9 @@ CREATE TABLE IF NOT EXISTS notification_policy (
         CHECK (btrim(pfsense_destination) <> ''),
     honeypot_destination TEXT NOT NULL DEFAULT 'Honeypot destination'
         CHECK (btrim(honeypot_destination) <> ''),
+    critical_cross_source_destination TEXT NOT NULL
+        DEFAULT 'Critical / Cross-Source Security destination'
+        CHECK (btrim(critical_cross_source_destination) <> ''),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_by TEXT
 );
@@ -172,6 +175,7 @@ INSERT INTO notification_policy (
     slack_format,
     pfsense_destination,
     honeypot_destination,
+    critical_cross_source_destination,
     updated_by
 )
 VALUES (
@@ -183,6 +187,7 @@ VALUES (
     'compact',
     'pfSense destination',
     'Honeypot destination',
+    'Critical / Cross-Source Security destination',
     NULL
 )
 ON CONFLICT (id) DO NOTHING;

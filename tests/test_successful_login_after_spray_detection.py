@@ -13,6 +13,13 @@ REPUTATION = {
     "reputation_summary": "Deterministic test reputation",
 }
 
+LOW_REPUTATION = {
+    "reputation_score": 0,
+    "reputation_label": "normal",
+    "reputation_source": "test-reputation",
+    "reputation_summary": "No elevated history",
+}
+
 
 def insert_auth_event(
     cur,
@@ -268,6 +275,32 @@ def test_success_after_spray_duplicate_suppression_keeps_single_open_alert(postg
         (source_ip,),
     )
     assert cur.fetchone()[0] == 1
+
+
+def test_success_after_spray_critical_alert_floor_prevents_monitor_response_action(postgres_db):
+    conn, cur = postgres_db
+    source_ip = "198.51.100.79"
+
+    insert_password_spraying_alert(cur, source_ip=source_ip)
+    insert_failed_login_spray_events(cur, source_ip=source_ip)
+    insert_auth_event(cur, event_type="successful_login", source_ip=source_ip, seconds_ago=1)
+
+    with siem_backend.app.app_context(), patch(
+        "engines.detection_engine.lookup_ip_reputation",
+        return_value=LOW_REPUTATION,
+    ):
+        alerts_created = backend_detection_engine._generate_successful_login_after_spray_alerts_core(
+            cur,
+            conn,
+            source="bank_app",
+            source_type="custom",
+        )
+
+    assert len(alerts_created) == 1
+    alert = fetch_one_success_after_spray_alert(cur)
+    assert alert is not None
+    assert alert[2] == "critical"
+    assert alert[8] == "flag_high_priority"
 
 
 def test_success_after_spray_currval_sets_alert_metadata_without_sync_response_log(postgres_db):

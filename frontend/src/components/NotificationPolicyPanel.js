@@ -16,6 +16,7 @@ function NotificationPolicyPanel({
   cardTitleStyle,
   cardSubtitleStyle,
   displaySettings,
+  onNavigate,
 }) {
   const [policy, setPolicy] = useState(null);
   const [draft, setDraft] = useState(null);
@@ -63,6 +64,7 @@ function NotificationPolicyPanel({
         slack_format: draft.slack_format,
         pfsense_destination: draft.pfsense_destination,
         honeypot_destination: draft.honeypot_destination,
+        critical_cross_source_destination: draft.critical_cross_source_destination,
       });
       setPolicy(updated);
       setDraft(updated);
@@ -187,11 +189,32 @@ function NotificationPolicyPanel({
                 style={inputStyle}
               />
             </label>
+
+            <label style={fieldStyle}>
+              <span style={labelStyle}>Critical cross-source destination label</span>
+              <input
+                type="text"
+                value={draft.critical_cross_source_destination}
+                onChange={(event) =>
+                  updateDraft("critical_cross_source_destination", event.target.value)
+                }
+                style={inputStyle}
+              />
+            </label>
           </div>
 
           <div style={noteStyle}>
             Policy suppression affects Slack delivery only. Alerts, incidents, playbooks, audit
             evidence, and UI visibility remain unchanged.
+          </div>
+
+          <div style={linkRowStyle}>
+            <button type="button" onClick={() => onNavigate?.("severity-response-matrix")} style={secondaryButtonStyle}>
+              Open Severity &amp; Response Matrix
+            </button>
+            <button type="button" onClick={() => onNavigate?.("detection-rules")} style={secondaryButtonStyle}>
+              Open Detection Rules
+            </button>
           </div>
 
           <div style={testPanelStyle}>
@@ -251,6 +274,7 @@ const buttonStyle = { padding: "10px 15px", border: 0, borderRadius: 8, backgrou
 const testPanelStyle = { display: "grid", gap: 12, padding: 14, borderRadius: 10, background: "#172554", color: "#dbeafe" };
 const testTextStyle = { lineHeight: 1.6 };
 const testActionsStyle = { display: "flex", gap: 10, flexWrap: "wrap" };
+const linkRowStyle = { display: "flex", gap: 10, flexWrap: "wrap" };
 const secondaryButtonStyle = { padding: "10px 15px", border: "1px solid #38bdf8", borderRadius: 8, background: "#0f172a", color: "#e0f2fe", fontWeight: 700, cursor: "pointer" };
 
 export default NotificationPolicyPanel;

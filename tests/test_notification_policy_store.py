@@ -18,6 +18,7 @@ def test_notification_policy_store_loads_seeded_defaults(postgres_db):
     assert policy["slack_format"] == "compact"
     assert policy["pfsense_destination"] == "pfSense destination"
     assert policy["honeypot_destination"] == "Honeypot destination"
+    assert policy["critical_cross_source_destination"] == "Critical / Cross-Source Security destination"
     assert policy["status"] == "applied"
 
 
@@ -32,6 +33,7 @@ def test_notification_policy_store_upsert_updates_current_row(postgres_db):
             "slack_format": "detailed",
             "pfsense_destination": "#soc-pfsense",
             "honeypot_destination": "#soc-honeypot",
+            "critical_cross_source_destination": "#soc-critical",
         },
         "testadmin",
     )
@@ -43,6 +45,7 @@ def test_notification_policy_store_upsert_updates_current_row(postgres_db):
     assert policy["slack_format"] == "detailed"
     assert policy["pfsense_destination"] == "#soc-pfsense"
     assert policy["honeypot_destination"] == "#soc-honeypot"
+    assert policy["critical_cross_source_destination"] == "#soc-critical"
     assert policy["updated_by"] == "testadmin"
 
 

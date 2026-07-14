@@ -12,7 +12,11 @@ from engines.detection_config import (
 )
 from engines.detection_applicability import rule_applies_to_source
 from engines.pfsense_ingest_filter import get_effective_sensitive_ports
-from core.ip_helpers import determine_response_action, lookup_ip_reputation
+from core.ip_helpers import (
+    determine_response_action,
+    floor_response_action_for_severity,
+    lookup_ip_reputation,
+)
 
 
 PFSENSE_ESCALATION_ALERT_TYPES = (
@@ -173,6 +177,7 @@ def _generate_failed_login_alerts_core(cur, conn, source=None, source_type=None,
         reputation = lookup_ip_reputation(str(source_ip))
         reputation_score = reputation["reputation_score"]
         response_action = determine_response_action(reputation_score)
+        response_action = floor_response_action_for_severity(response_action, "critical")
         response_status = "pending"
         reputation_label = reputation["reputation_label"]
         reputation_source = reputation["reputation_source"]
@@ -320,6 +325,7 @@ def _generate_http_error_alerts_core(cur, conn, source=None, source_type=None, s
         reputation = lookup_ip_reputation(str(source_ip))
         reputation_score = reputation["reputation_score"]
         response_action = determine_response_action(reputation_score)
+        response_action = floor_response_action_for_severity(response_action, "critical")
         response_status = "pending"
         reputation_label = reputation["reputation_label"]
         reputation_source = reputation["reputation_source"]
@@ -828,6 +834,7 @@ def _generate_successful_login_after_spray_alerts_core(cur, conn, source=None, s
         reputation = lookup_ip_reputation(str(source_ip))
         reputation_score = reputation["reputation_score"]
         response_action = determine_response_action(reputation_score)
+        response_action = floor_response_action_for_severity(response_action, "critical")
         response_status = "pending"
         reputation_label = reputation["reputation_label"]
         reputation_source = reputation["reputation_source"]

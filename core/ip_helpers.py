@@ -380,6 +380,14 @@ def determine_response_action(reputation_score):
         return "monitor"
 
 
+def floor_response_action_for_severity(response_action, severity):
+    normalized_action = str(response_action or "").strip() or "monitor"
+    normalized_severity = str(severity or "").strip().lower()
+    if normalized_severity == "critical" and normalized_action == "monitor":
+        return "flag_high_priority"
+    return normalized_action
+
+
 def execute_response_action(
     cur,
     alert_id,

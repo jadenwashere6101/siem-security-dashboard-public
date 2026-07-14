@@ -27,6 +27,7 @@ test("patches notification policy with typed fields", async () => {
     slack_format: "detailed",
     pfsense_destination: "#soc-pfsense",
     honeypot_destination: "#soc-honeypot",
+    critical_cross_source_destination: "#soc-critical",
   };
   await updateNotificationPolicy(payload);
   expect(fetch).toHaveBeenCalledWith(

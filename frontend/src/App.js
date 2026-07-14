@@ -14,6 +14,7 @@ import IntegrationStatusPanel from "./components/IntegrationStatusPanel";
 import SoarMetricsDashboard from "./components/SoarMetricsDashboard";
 import DeadLettersPanel from "./components/DeadLettersPanel";
 import SocCommandCenter from "./components/SocCommandCenter";
+import SeverityResponseMatrixPanel from "./components/SeverityResponseMatrixPanel";
 import ThreatHuntPanel from "./components/ThreatHuntPanel";
 import ResponseRegistryPanel from "./components/ResponseRegistryPanel";
 import LiveLogsPanel from "./components/LiveLogsPanel";
@@ -801,6 +802,17 @@ function AppInner() {
           />
         )}
 
+        {activeSection === "severity-response-matrix" &&
+          isSectionVisible("severity-response-matrix", roleFlags) && (
+          <SeverityResponseMatrixPanel
+            cardStyle={cardStyle}
+            cardHeaderStyle={cardHeaderStyle}
+            cardTitleStyle={cardTitleStyle}
+            cardSubtitleStyle={cardSubtitleStyle}
+            onNavigate={handleNavigate}
+          />
+        )}
+
         {activeSection === "response-registry" &&
           isSectionVisible("response-registry", roleFlags) && (
           <div
@@ -899,6 +911,7 @@ function AppInner() {
             cardHeaderStyle={cardHeaderStyle}
             cardTitleStyle={cardTitleStyle}
             cardSubtitleStyle={cardSubtitleStyle}
+            onNavigate={handleNavigate}
           />
         )}
 

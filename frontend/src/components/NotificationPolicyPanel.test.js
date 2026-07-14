@@ -14,6 +14,7 @@ const basePolicy = {
   slack_format: "compact",
   pfsense_destination: "pfSense destination",
   honeypot_destination: "Honeypot destination",
+  critical_cross_source_destination: "Critical / Cross-Source Security destination",
   updated_at: "2026-07-14T12:00:00Z",
   updated_by: "testadmin",
 };
@@ -33,6 +34,7 @@ beforeEach(() => {
     slack_format: "detailed",
     pfsense_destination: "#soc-pfsense",
     honeypot_destination: "#soc-honeypot",
+    critical_cross_source_destination: "#soc-critical",
   });
   service.testNotificationPolicyRoute.mockResolvedValue({
     success: true,
@@ -62,6 +64,9 @@ test("saves the edited policy and reloads the rendered values", async () => {
   fireEvent.change(screen.getByLabelText("Honeypot destination label"), {
     target: { value: "#soc-honeypot" },
   });
+  fireEvent.change(screen.getByLabelText("Critical cross-source destination label"), {
+    target: { value: "#soc-critical" },
+  });
   fireEvent.click(screen.getByRole("button", { name: "Save notification policy" }));
 
   await waitFor(() =>
@@ -73,10 +78,22 @@ test("saves the edited policy and reloads the rendered values", async () => {
       slack_format: "detailed",
       pfsense_destination: "#soc-pfsense",
       honeypot_destination: "#soc-honeypot",
+      critical_cross_source_destination: "#soc-critical",
     })
   );
   expect(await screen.findByRole("status")).toHaveTextContent("Notification policy updated.");
   expect(screen.getByLabelText("Slack notifications enabled")).toBeChecked();
+});
+
+test("exposes navigation links to the matrix and detection rules", async () => {
+  const onNavigate = jest.fn();
+  render(<NotificationPolicyPanel {...props} onNavigate={onNavigate} />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Open Severity & Response Matrix" }));
+  fireEvent.click(screen.getByRole("button", { name: "Open Detection Rules" }));
+
+  expect(onNavigate).toHaveBeenNthCalledWith(1, "severity-response-matrix");
+  expect(onNavigate).toHaveBeenNthCalledWith(2, "detection-rules");
 });
 
 test("announces backend failures accessibly", async () => {

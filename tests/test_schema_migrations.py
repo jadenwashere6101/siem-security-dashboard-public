@@ -156,7 +156,7 @@ def test_schema_snapshot_marker_matches_latest_migration():
         migrations_dir=repo_root / "migrations",
     )
 
-    assert version == 20
+    assert version == 21
 
 
 def test_pfsense_ingest_config_migration_scope_and_defaults():
@@ -216,6 +216,22 @@ def test_notification_policy_migration_scope_and_defaults():
     assert "ON CONFLICT (id) DO NOTHING" in sql
     assert "idx_notification_policy_updated_at" in sql
     for destructive in ("DROP ", "TRUNCATE ", "DELETE FROM ", "ALTER TABLE "):
+        assert destructive not in sql.upper()
+
+
+def test_notification_policy_critical_cross_source_migration_scope_and_defaults():
+    migration_path = (
+        Path(__file__).resolve().parent.parent
+        / "migrations"
+        / "0021_notification_policy_critical_cross_source.sql"
+    )
+    sql = migration_path.read_text(encoding="utf-8")
+
+    assert "ALTER TABLE notification_policy" in sql
+    assert "ADD COLUMN IF NOT EXISTS critical_cross_source_destination TEXT NOT NULL" in sql
+    assert "DEFAULT 'Critical / Cross-Source Security destination'" in sql
+    assert "CHECK (btrim(critical_cross_source_destination) <> '')" in sql
+    for destructive in ("DROP ", "TRUNCATE ", "DELETE FROM "):
         assert destructive not in sql.upper()
 
 

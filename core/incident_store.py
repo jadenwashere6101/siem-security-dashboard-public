@@ -9,6 +9,7 @@ from core.pfsense_operational_baseline import (
     build_incident_operational_history,
     build_pfsense_incident_scope_filter,
 )
+from core.audit_helpers import log_audit_event
 
 logger = logging.getLogger(__name__)
 
@@ -135,12 +136,13 @@ def maybe_create_or_link_incident(
     if existing is not None:
         iid = existing["id"]
         link_alert_to_incident(conn, iid, alert_id)
+        upgraded = _maybe_upgrade_incident_severity(conn, existing, sev_upper, alert_id)
         logger.info(
             "[INCIDENT LINKED] alert_id=%s to existing incident_id=%s",
             alert_id,
             iid,
         )
-        return {**existing, "created": False}
+        return {**(upgraded or existing), "created": False}
 
     title = f"[AUTO] {sev_upper} alert from {source_ip}"
     new_inc = create_incident(conn, title, severity, source_ip)
@@ -151,6 +153,60 @@ def maybe_create_or_link_incident(
         alert_id,
     )
     return {**new_inc, "created": True}
+
+
+def _maybe_upgrade_incident_severity(
+    conn,
+    incident: dict[str, Any],
+    new_alert_severity: str,
+    alert_id: int,
+) -> dict[str, Any] | None:
+    if str(new_alert_severity or "").upper() != "CRITICAL":
+        return None
+
+    current_severity = str(incident.get("severity") or "").upper()
+    if current_severity == "CRITICAL":
+        return None
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE incidents
+            SET severity = 'CRITICAL',
+                priority = 'P1'
+            WHERE id = %s
+              AND UPPER(severity) <> 'CRITICAL'
+            RETURNING id, title, severity, priority, status, host(source_ip),
+                      assigned_to, created_at, resolved_at
+            """,
+            (incident["id"],),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        upgraded = _incident_row_to_dict(row)
+
+    log_audit_event(
+        "incident_severity_escalated",
+        target_alert_id=alert_id,
+        details={
+            "incident_id": incident["id"],
+            "from_severity": incident.get("severity"),
+            "to_severity": upgraded.get("severity"),
+            "from_priority": incident.get("priority"),
+            "to_priority": upgraded.get("priority"),
+        },
+    )
+    logger.info(
+        "[INCIDENT ESCALATED] incident_id=%s alert_id=%s from=%s/%s to=%s/%s",
+        incident["id"],
+        alert_id,
+        incident.get("severity"),
+        incident.get("priority"),
+        upgraded.get("severity"),
+        upgraded.get("priority"),
+    )
+    return upgraded
 
 
 def list_incidents(

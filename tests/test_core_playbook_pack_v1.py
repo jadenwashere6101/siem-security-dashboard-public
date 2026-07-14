@@ -127,7 +127,7 @@ def _insert_alert(cur, **kwargs):
             CORE_V1_WEB_TO_APP_ATTACK_INVESTIGATION_ID,
             {
                 "alert_type": "web_to_app_attack_pattern",
-                "severity": "CRITICAL",
+                "severity": "HIGH",
             },
         ),
         (
@@ -141,7 +141,7 @@ def _insert_alert(cur, **kwargs):
             CORE_V1_SPRAY_THEN_SUCCESS_CORRELATION_INVESTIGATION_ID,
             {
                 "alert_type": "spray_then_success_pattern",
-                "severity": "CRITICAL",
+                "severity": "HIGH",
             },
         ),
         (
@@ -484,3 +484,27 @@ def test_honeypot_credential_stuffing_containment_pauses_for_approval(postgres_d
     row = playbook_store.get_playbook_execution(conn, eid)
     actions = [entry["action"] for entry in row["steps_log"]]
     assert actions[:3] == ["flag_high_priority", "enrich_context", "require_approval"]
+
+
+def test_web_to_app_and_spray_then_success_playbooks_are_investigation_only(postgres_db):
+    conn, _cur = postgres_db
+    seed_core_playbook_pack_v1(conn)
+
+    web_to_app = playbook_store.get_playbook_definition(conn, CORE_V1_WEB_TO_APP_ATTACK_INVESTIGATION_ID)
+    spray_then_success = playbook_store.get_playbook_definition(
+        conn,
+        CORE_V1_SPRAY_THEN_SUCCESS_CORRELATION_INVESTIGATION_ID,
+    )
+
+    assert web_to_app["trigger_config"]["min_severity"] == "high"
+    assert [step["action"] for step in web_to_app["steps"]] == [
+        "enrich_context",
+        "monitor",
+        "notify_slack",
+    ]
+    assert spray_then_success["trigger_config"]["min_severity"] == "high"
+    assert [step["action"] for step in spray_then_success["steps"]] == [
+        "enrich_context",
+        "monitor",
+        "notify_slack",
+    ]

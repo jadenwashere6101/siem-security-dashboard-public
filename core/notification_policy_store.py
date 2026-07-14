@@ -16,6 +16,7 @@ DEFAULT_NOTIFICATION_POLICY = {
     "slack_format": "compact",
     "pfsense_destination": "pfSense destination",
     "honeypot_destination": "Honeypot destination",
+    "critical_cross_source_destination": "Critical / Cross-Source Security destination",
 }
 
 _DESTINATION_LABEL_RE = re.compile(r"^[A-Za-z0-9#][A-Za-z0-9 #._/\-]{0,79}$")
@@ -53,6 +54,7 @@ def validate_notification_policy_updates(payload: dict[str, Any]) -> dict[str, A
         "slack_format",
         "pfsense_destination",
         "honeypot_destination",
+        "critical_cross_source_destination",
     }
     unknown = set(payload) - allowed_fields
     if unknown:
@@ -78,7 +80,11 @@ def validate_notification_policy_updates(payload: dict[str, Any]) -> dict[str, A
             if candidate not in ALLOWED_SLACK_FORMATS:
                 raise ValueError(f"slack_format must be one of {', '.join(ALLOWED_SLACK_FORMATS)}")
             normalized[key] = candidate
-        elif key in {"pfsense_destination", "honeypot_destination"}:
+        elif key in {
+            "pfsense_destination",
+            "honeypot_destination",
+            "critical_cross_source_destination",
+        }:
             normalized[key] = _normalize_destination(value, key)
     return normalized
 
@@ -103,8 +109,9 @@ def _row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
         "slack_format": row[5],
         "pfsense_destination": row[6],
         "honeypot_destination": row[7],
-        "updated_at": str(row[8]) if row[8] is not None else None,
-        "updated_by": row[9],
+        "critical_cross_source_destination": row[8],
+        "updated_at": str(row[9]) if row[9] is not None else None,
+        "updated_by": row[10],
         "status": "applied",
     }
 
@@ -123,6 +130,7 @@ def load_notification_policy(cur) -> dict[str, Any]:
                 slack_format,
                 pfsense_destination,
                 honeypot_destination,
+                critical_cross_source_destination,
                 updated_at,
                 updated_by
             FROM notification_policy
@@ -144,6 +152,7 @@ def load_notification_policy(cur) -> dict[str, Any]:
                 "slack_format": policy["slack_format"],
                 "pfsense_destination": policy["pfsense_destination"],
                 "honeypot_destination": policy["honeypot_destination"],
+                "critical_cross_source_destination": policy["critical_cross_source_destination"],
             }
         )
         return policy
@@ -183,6 +192,10 @@ def upsert_notification_policy(cur, updates: dict[str, Any], updated_by: str | N
         "slack_format": normalized.get("slack_format", current["slack_format"]),
         "pfsense_destination": normalized.get("pfsense_destination", current["pfsense_destination"]),
         "honeypot_destination": normalized.get("honeypot_destination", current["honeypot_destination"]),
+        "critical_cross_source_destination": normalized.get(
+            "critical_cross_source_destination",
+            current["critical_cross_source_destination"],
+        ),
     }
     cur.execute(
         """
@@ -195,10 +208,11 @@ def upsert_notification_policy(cur, updates: dict[str, Any], updated_by: str | N
             slack_format,
             pfsense_destination,
             honeypot_destination,
+            critical_cross_source_destination,
             updated_at,
             updated_by
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s)
         ON CONFLICT (id) DO UPDATE
         SET
             slack_enabled = EXCLUDED.slack_enabled,
@@ -208,6 +222,7 @@ def upsert_notification_policy(cur, updates: dict[str, Any], updated_by: str | N
             slack_format = EXCLUDED.slack_format,
             pfsense_destination = EXCLUDED.pfsense_destination,
             honeypot_destination = EXCLUDED.honeypot_destination,
+            critical_cross_source_destination = EXCLUDED.critical_cross_source_destination,
             updated_at = NOW(),
             updated_by = EXCLUDED.updated_by
         """,
@@ -220,6 +235,7 @@ def upsert_notification_policy(cur, updates: dict[str, Any], updated_by: str | N
             merged["slack_format"],
             merged["pfsense_destination"],
             merged["honeypot_destination"],
+            merged["critical_cross_source_destination"],
             updated_by,
         ),
     )

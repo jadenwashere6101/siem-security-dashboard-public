@@ -383,15 +383,6 @@ def add_honeypot_event():
 
         conn.commit()
 
-        try:
-            _send_alert_notifications_for_alerts(alerts_created, conn)
-            conn.commit()
-        except Exception as notification_error:
-            current_app.logger.error(
-                "[NOTIFICATION POLICY ALERT FAILED] Post-commit alert notification failed — ingest was committed: %s",
-                notification_error,
-            )
-
         playbook_result = _create_playbook_executions_for_alerts(alerts_created, conn)
         playbook_claimed_alert_ids = _playbook_claimed_alert_ids(playbook_result)
 
@@ -510,15 +501,6 @@ def add_web_log_event():
 
         conn.commit()
 
-        try:
-            _send_alert_notifications_for_alerts(alerts_created, conn)
-            conn.commit()
-        except Exception as notification_error:
-            current_app.logger.error(
-                "[NOTIFICATION POLICY ALERT FAILED] Post-commit alert notification failed — ingest was committed: %s",
-                notification_error,
-            )
-
         playbook_result = _create_playbook_executions_for_alerts(alerts_created, conn)
         playbook_claimed_alert_ids = _playbook_claimed_alert_ids(playbook_result)
 
@@ -633,15 +615,6 @@ def add_azure_event():
 
         conn.commit()
 
-        try:
-            _send_alert_notifications_for_alerts(alerts_created, conn)
-            conn.commit()
-        except Exception as notification_error:
-            current_app.logger.error(
-                "[NOTIFICATION POLICY ALERT FAILED] Post-commit alert notification failed — ingest was committed: %s",
-                notification_error,
-            )
-
         playbook_result = _create_playbook_executions_for_alerts(alerts_created, conn)
         playbook_claimed_alert_ids = _playbook_claimed_alert_ids(playbook_result)
 
@@ -743,15 +716,6 @@ def add_otel_event():
 
         conn.commit()
 
-        try:
-            _send_alert_notifications_for_alerts(alerts_created, conn)
-            conn.commit()
-        except Exception as notification_error:
-            current_app.logger.error(
-                "[NOTIFICATION POLICY ALERT FAILED] Post-commit alert notification failed — ingest was committed: %s",
-                notification_error,
-            )
-
         playbook_result = _create_playbook_executions_for_alerts(alerts_created, conn)
         playbook_claimed_alert_ids = _playbook_claimed_alert_ids(playbook_result)
 
@@ -849,15 +813,6 @@ def add_pfsense_event():
         alerts_created = ingest_normalized_event(normalized_event, conn, cur)
 
         conn.commit()
-
-        try:
-            _send_alert_notifications_for_alerts(alerts_created, conn)
-            conn.commit()
-        except Exception as notification_error:
-            current_app.logger.error(
-                "[NOTIFICATION POLICY ALERT FAILED] Post-commit alert notification failed — ingest was committed: %s",
-                notification_error,
-            )
 
         playbook_result = _create_playbook_executions_for_alerts(alerts_created, conn)
         playbook_claimed_alert_ids = _playbook_claimed_alert_ids(playbook_result)

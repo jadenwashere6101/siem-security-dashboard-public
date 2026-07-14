@@ -168,3 +168,34 @@ def test_ingest_playbook_scheduling_failure_does_not_fail_response(client, monke
     assert resp.status_code == 201
     assert resp.get_json()["alerts_created"] == alerts_created
     conn.rollback.assert_called_once()
+
+
+def test_honeypot_ingest_invokes_alert_notification_once_per_alert(client, monkeypatch):
+    monkeypatch.setenv("SIEM_INGEST_API_KEY", VALID_API_KEY)
+    import routes.ingest_routes as ingest_routes
+
+    conn = MagicMock()
+    cur = MagicMock()
+    conn.cursor.return_value = cur
+    alerts_created = [{"alert_id": 321, "source_ip": "203.0.113.44", "severity": "HIGH"}]
+    notified = []
+
+    monkeypatch.setattr(ingest_routes, "get_db_connection", lambda: conn)
+    monkeypatch.setattr(ingest_routes, "ingest_normalized_event", lambda *_args, **_kwargs: alerts_created)
+    monkeypatch.setattr(ingest_routes, "create_pending_executions_for_committed_alerts", lambda *_args, **_kwargs: {"summary": {"created": 0}, "results": []})
+    monkeypatch.setattr(ingest_routes, "enqueue_committed_alerts", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(ingest_routes, "_create_incidents_for_alerts", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        ingest_routes,
+        "notify_for_alert",
+        lambda _conn, alert_id: notified.append(alert_id),
+    )
+
+    resp = client.post(
+        "/ingest/honeypot",
+        json={"event_type": "scanner_detected", "source_ip": "203.0.113.44"},
+        headers={"X-API-Key": VALID_API_KEY},
+    )
+
+    assert resp.status_code == 201
+    assert notified == [321]

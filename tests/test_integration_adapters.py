@@ -735,6 +735,11 @@ def test_slack_real_mode_prefers_preformatted_text_and_destination_label(monkeyp
     [
         ("pfsense", "SLACK_PFSENSE_WEBHOOK_URL", "https://hooks.slack.com/services/T000/B000/PFSENSE"),
         ("honeypot", "SLACK_HONEYPOT_WEBHOOK_URL", "https://hooks.slack.com/services/T000/B000/HONEYPOT"),
+        (
+            "critical_cross_source",
+            "SLACK_CRITICAL_CROSS_SOURCE_WEBHOOK_URL",
+            "https://hooks.slack.com/services/T000/B000/CRITICAL",
+        ),
     ],
 )
 def test_slack_notification_policy_route_uses_only_route_specific_webhook(
@@ -746,6 +751,10 @@ def test_slack_notification_policy_route_uses_only_route_specific_webhook(
     monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T000/B000/GENERIC")
     monkeypatch.setenv("SLACK_PFSENSE_WEBHOOK_URL", "https://hooks.slack.com/services/T000/B000/PFSENSE")
     monkeypatch.setenv("SLACK_HONEYPOT_WEBHOOK_URL", "https://hooks.slack.com/services/T000/B000/HONEYPOT")
+    monkeypatch.setenv(
+        "SLACK_CRITICAL_CROSS_SOURCE_WEBHOOK_URL",
+        "https://hooks.slack.com/services/T000/B000/CRITICAL",
+    )
 
     captured = {}
 

@@ -2,7 +2,11 @@ from flask import current_app
 from psycopg2.extras import Json
 
 from engines.detection_config import CORRELATION_WINDOW_MINUTES
-from core.ip_helpers import determine_response_action, lookup_ip_reputation
+from core.ip_helpers import (
+    determine_response_action,
+    floor_response_action_for_severity,
+    lookup_ip_reputation,
+)
 
 
 def _dedupe_preserve_order(values):
@@ -250,7 +254,7 @@ def generate_targeted_correlation_alerts(cur, conn, source_ip):
         {
             "alert_type": "web_to_app_attack_pattern",
             "window_minutes": 10,
-            "severity": "critical",
+            "severity": "high",
             "message": f"Web-to-app attack pattern detected from {source_ip}",
             "matches": lambda row: (
                 (row[2], row[3]) == ("nginx", "web_log")
@@ -273,7 +277,7 @@ def generate_targeted_correlation_alerts(cur, conn, source_ip):
         {
             "alert_type": "spray_then_success_pattern",
             "window_minutes": 15,
-            "severity": "critical",
+            "severity": "high",
             "message": f"Password spray followed by successful login from {source_ip}",
             "matches": lambda row: row[1] in {"password_spraying_threshold", "successful_login_after_spray"},
             "required_groups": ("password_spraying_threshold", "successful_login_after_spray"),
@@ -371,6 +375,7 @@ def generate_targeted_correlation_alerts(cur, conn, source_ip):
         reputation = lookup_ip_reputation(str(source_ip))
         reputation_score = reputation["reputation_score"]
         response_action = determine_response_action(reputation_score)
+        response_action = floor_response_action_for_severity(response_action, rule["severity"])
         response_status = "pending"
         reputation_label = reputation["reputation_label"]
         reputation_source = reputation["reputation_source"]

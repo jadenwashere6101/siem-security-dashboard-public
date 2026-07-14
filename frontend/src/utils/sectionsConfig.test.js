@@ -4,6 +4,7 @@ const EXPECTED_SECTION_IDS = [
   "dashboard",
   "source-health",
   "soc-command-center",
+  "severity-response-matrix",
   "response-registry",
   "threat-hunt",
   "detection-simulator",
@@ -65,6 +66,12 @@ const expectedVisibility = {
     unauthenticated: false,
   },
   "soc-command-center": {
+    super_admin: true,
+    analyst: true,
+    viewer: false,
+    unauthenticated: false,
+  },
+  "severity-response-matrix": {
     super_admin: true,
     analyst: true,
     viewer: false,
@@ -206,7 +213,7 @@ const expectedVisibility = {
 
 describe("sectionsConfig", () => {
   test("contains exactly the expected section ids", () => {
-    expect(sectionsConfig).toHaveLength(25);
+    expect(sectionsConfig).toHaveLength(26);
     expect(sectionsConfig.map((section) => section.id)).toEqual(EXPECTED_SECTION_IDS);
   });
 

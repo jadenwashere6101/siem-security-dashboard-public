@@ -1,6 +1,7 @@
 import pytest
 from psycopg2 import IntegrityError
 
+import siem_backend
 from core.incident_store import (
     create_incident,
     find_open_incident_by_source_ip,
@@ -34,6 +35,30 @@ def _count_incidents(cur):
 def _count_links(cur):
     cur.execute("SELECT COUNT(*) FROM incident_alerts")
     return cur.fetchone()[0]
+
+
+def _count_escalation_audits(cur):
+    cur.execute(
+        "SELECT COUNT(*) FROM audit_log WHERE event_type = 'incident_severity_escalated'"
+    )
+    return cur.fetchone()[0]
+
+
+class _AuditSafeConnection:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def cursor(self):
+        return self._conn.cursor()
+
+    def commit(self):
+        return self._conn.commit()
+
+    def rollback(self):
+        return self._conn.rollback()
+
+    def close(self):
+        return None
 
 
 def test_schema_tables_exist(postgres_db):
@@ -294,6 +319,84 @@ def test_maybe_create_critical_dedup_same_as_high(postgres_db):
     two = maybe_create_or_link_incident(conn, aid2, "CRITICAL", "203.0.113.36")
     conn.commit()
     assert two["id"] == one["id"]
+
+
+def test_critical_alert_upgrades_existing_high_incident_and_audits(postgres_db):
+    conn, cur = postgres_db
+    audit_conn = _AuditSafeConnection(conn)
+    first_alert_id = _insert_alert(conn, cur, "203.0.113.37")
+    with siem_backend.app.app_context(), pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr("core.audit_helpers.get_db_connection", lambda: audit_conn)
+        incident = maybe_create_or_link_incident(conn, first_alert_id, "HIGH", "203.0.113.37")
+    conn.commit()
+
+    second_alert_id = _insert_alert(conn, cur, "203.0.113.37")
+    with siem_backend.app.app_context(), pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr("core.audit_helpers.get_db_connection", lambda: audit_conn)
+        linked = maybe_create_or_link_incident(conn, second_alert_id, "CRITICAL", "203.0.113.37")
+    conn.commit()
+
+    assert linked["id"] == incident["id"]
+    cur.execute("SELECT severity, priority FROM incidents WHERE id = %s", (incident["id"],))
+    assert cur.fetchone() == ("CRITICAL", "P1")
+    assert _count_incidents(cur) == 1
+    assert _count_escalation_audits(cur) == 1
+    cur.execute(
+        """
+        SELECT details
+        FROM audit_log
+        WHERE event_type = 'incident_severity_escalated'
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    )
+    audit = cur.fetchone()[0]
+    assert audit["incident_id"] == incident["id"]
+    assert audit["from_severity"] == "HIGH"
+    assert audit["to_severity"] == "CRITICAL"
+    assert audit["from_priority"] == "P2"
+    assert audit["to_priority"] == "P1"
+
+
+def test_critical_alert_link_to_existing_critical_incident_is_noop(postgres_db):
+    conn, cur = postgres_db
+    audit_conn = _AuditSafeConnection(conn)
+    first_alert_id = _insert_alert(conn, cur, "203.0.113.38")
+    with siem_backend.app.app_context(), pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr("core.audit_helpers.get_db_connection", lambda: audit_conn)
+        incident = maybe_create_or_link_incident(conn, first_alert_id, "CRITICAL", "203.0.113.38")
+    conn.commit()
+
+    second_alert_id = _insert_alert(conn, cur, "203.0.113.38")
+    with siem_backend.app.app_context(), pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr("core.audit_helpers.get_db_connection", lambda: audit_conn)
+        linked = maybe_create_or_link_incident(conn, second_alert_id, "CRITICAL", "203.0.113.38")
+    conn.commit()
+
+    assert linked["id"] == incident["id"]
+    assert _count_incidents(cur) == 1
+    assert _count_escalation_audits(cur) == 0
+
+
+def test_high_alert_never_downgrades_existing_critical_incident(postgres_db):
+    conn, cur = postgres_db
+    audit_conn = _AuditSafeConnection(conn)
+    first_alert_id = _insert_alert(conn, cur, "203.0.113.39")
+    with siem_backend.app.app_context(), pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr("core.audit_helpers.get_db_connection", lambda: audit_conn)
+        incident = maybe_create_or_link_incident(conn, first_alert_id, "CRITICAL", "203.0.113.39")
+    conn.commit()
+
+    second_alert_id = _insert_alert(conn, cur, "203.0.113.39")
+    with siem_backend.app.app_context(), pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr("core.audit_helpers.get_db_connection", lambda: audit_conn)
+        linked = maybe_create_or_link_incident(conn, second_alert_id, "HIGH", "203.0.113.39")
+    conn.commit()
+
+    assert linked["id"] == incident["id"]
+    cur.execute("SELECT severity, priority FROM incidents WHERE id = %s", (incident["id"],))
+    assert cur.fetchone() == ("CRITICAL", "P1")
+    assert _count_escalation_audits(cur) == 0
 
 
 def test_list_incidents_ordered_and_filters(postgres_db):
