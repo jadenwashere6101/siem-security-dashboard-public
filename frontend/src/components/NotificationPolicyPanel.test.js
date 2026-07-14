@@ -1,0 +1,83 @@
+import React from "react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+
+import NotificationPolicyPanel from "./NotificationPolicyPanel";
+import * as service from "../services/notificationPolicyService";
+
+jest.mock("../services/notificationPolicyService");
+
+const basePolicy = {
+  slack_enabled: false,
+  minimum_severity: "high",
+  notify_on_alerts: true,
+  notify_on_incidents: true,
+  slack_format: "compact",
+  pfsense_destination: "pfSense destination",
+  honeypot_destination: "Honeypot destination",
+  updated_at: "2026-07-14T12:00:00Z",
+  updated_by: "testadmin",
+};
+
+const props = {
+  cardStyle: {},
+  cardHeaderStyle: {},
+  cardTitleStyle: {},
+  cardSubtitleStyle: {},
+};
+
+beforeEach(() => {
+  service.loadNotificationPolicy.mockResolvedValue(basePolicy);
+  service.updateNotificationPolicy.mockResolvedValue({
+    ...basePolicy,
+    slack_enabled: true,
+    slack_format: "detailed",
+    pfsense_destination: "#soc-pfsense",
+    honeypot_destination: "#soc-honeypot",
+  });
+});
+
+test("renders policy controls and suppression note", async () => {
+  render(<NotificationPolicyPanel {...props} />);
+
+  expect(await screen.findByRole("heading", { name: "Notification Policy" })).toBeInTheDocument();
+  expect(await screen.findByLabelText("Slack notifications enabled")).not.toBeChecked();
+  expect(screen.getByLabelText("Minimum severity")).toHaveValue("high");
+  expect(screen.getByText(/Slack credentials remain in the existing runtime secret mechanism/i)).toBeInTheDocument();
+  expect(screen.getByText(/Policy suppression affects Slack delivery only/i)).toBeInTheDocument();
+});
+
+test("saves the edited policy and reloads the rendered values", async () => {
+  render(<NotificationPolicyPanel {...props} />);
+
+  fireEvent.click(await screen.findByLabelText("Slack notifications enabled"));
+  fireEvent.change(screen.getByLabelText("Slack format"), { target: { value: "detailed" } });
+  fireEvent.change(screen.getByLabelText("pfSense destination label"), {
+    target: { value: "#soc-pfsense" },
+  });
+  fireEvent.change(screen.getByLabelText("Honeypot destination label"), {
+    target: { value: "#soc-honeypot" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save notification policy" }));
+
+  await waitFor(() =>
+    expect(service.updateNotificationPolicy).toHaveBeenCalledWith({
+      slack_enabled: true,
+      minimum_severity: "high",
+      notify_on_alerts: true,
+      notify_on_incidents: true,
+      slack_format: "detailed",
+      pfsense_destination: "#soc-pfsense",
+      honeypot_destination: "#soc-honeypot",
+    })
+  );
+  expect(await screen.findByRole("status")).toHaveTextContent("Notification policy updated.");
+  expect(screen.getByLabelText("Slack notifications enabled")).toBeChecked();
+});
+
+test("announces backend failures accessibly", async () => {
+  service.loadNotificationPolicy.mockRejectedValue(new Error("Forbidden"));
+
+  render(<NotificationPolicyPanel {...props} />);
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("Forbidden");
+});

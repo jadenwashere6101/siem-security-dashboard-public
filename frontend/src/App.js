@@ -5,6 +5,7 @@ import AdminUsersPanel from "./components/AdminUsersPanel";
 import AuditLogPanel from "./components/AuditLogPanel";
 import DetectionRulesPanel from "./components/DetectionRulesPanel";
 import PfsenseIngestFiltersPanel from "./components/PfsenseIngestFiltersPanel";
+import NotificationPolicyPanel from "./components/NotificationPolicyPanel";
 import IncidentsPanel from "./components/IncidentsPanel";
 import ApprovalsPanel from "./components/ApprovalsPanel";
 import SoarQueuePanel from "./components/SoarQueuePanel";
@@ -883,6 +884,16 @@ function AppInner() {
 
         {activeSection === "pfsense-ingest-filters" && isSectionVisible("pfsense-ingest-filters", roleFlags) && (
           <PfsenseIngestFiltersPanel
+            displaySettings={settings.display}
+            cardStyle={cardStyle}
+            cardHeaderStyle={cardHeaderStyle}
+            cardTitleStyle={cardTitleStyle}
+            cardSubtitleStyle={cardSubtitleStyle}
+          />
+        )}
+
+        {activeSection === "notification-policy" && isSectionVisible("notification-policy", roleFlags) && (
+          <NotificationPolicyPanel
             displaySettings={settings.display}
             cardStyle={cardStyle}
             cardHeaderStyle={cardHeaderStyle}

@@ -68,6 +68,7 @@ def _fake_analyst():
     "/admin/audit-log",
     "/admin/pfsense-ingest-filters",
     "/admin/pfsense-ingest-filters/metrics",
+    "/admin/notification-policy",
     "/admin/detection-rules/pfsense-health",
 ])
 def test_admin_list_routes_without_session_return_401(client, path):
@@ -87,6 +88,8 @@ def test_admin_list_routes_without_session_return_401(client, path):
         ("/admin/pfsense-ingest-filters", _fake_analyst(), "analystpass"),
         ("/admin/pfsense-ingest-filters/metrics", _fake_viewer(), "viewerpass"),
         ("/admin/pfsense-ingest-filters/metrics", _fake_analyst(), "analystpass"),
+        ("/admin/notification-policy", _fake_viewer(), "viewerpass"),
+        ("/admin/notification-policy", _fake_analyst(), "analystpass"),
         ("/admin/detection-rules/pfsense-health", _fake_viewer(), "viewerpass"),
         ("/admin/detection-rules/pfsense-health", _fake_analyst(), "analystpass"),
     ],
@@ -637,6 +640,66 @@ def test_pfsense_filter_metrics_are_bounded_process_aggregates(client):
         "rejected",
         "backend_failed",
     ]
+
+
+def test_get_and_patch_notification_policy_apply_immediately_and_audit(client, postgres_db):
+    conn, cur = postgres_db
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        response = client.get("/admin/notification-policy")
+        assert response.status_code == 200
+        assert response.get_json()["slack_enabled"] is False
+
+        updated = client.patch(
+            "/admin/notification-policy",
+            json={
+                "slack_enabled": True,
+                "minimum_severity": "critical",
+                "notify_on_alerts": False,
+                "notify_on_incidents": True,
+                "slack_format": "detailed",
+                "pfsense_destination": "#soc-pfsense",
+                "honeypot_destination": "#soc-honeypot",
+            },
+        )
+        assert updated.status_code == 200
+        assert updated.get_json()["slack_enabled"] is True
+        assert updated.get_json()["minimum_severity"] == "critical"
+        assert updated.get_json()["slack_format"] == "detailed"
+
+        immediate = client.get("/admin/notification-policy")
+        assert immediate.status_code == 200
+        assert immediate.get_json()["pfsense_destination"] == "#soc-pfsense"
+
+    cur.execute(
+        "SELECT slack_enabled, minimum_severity, pfsense_destination, honeypot_destination FROM notification_policy WHERE id = 1"
+    )
+    assert cur.fetchone() == (True, "critical", "#soc-pfsense", "#soc-honeypot")
+
+    cur.execute(
+        "SELECT details FROM audit_log WHERE event_type = 'notification_policy_updated' ORDER BY id DESC LIMIT 1"
+    )
+    audit = cur.fetchone()[0]
+    changed_fields = {item["field"] for item in audit["changes"]}
+    assert {"slack_enabled", "minimum_severity", "notify_on_alerts", "slack_format", "pfsense_destination", "honeypot_destination"} <= changed_fields
+
+
+@pytest.mark.parametrize(
+    "payload,error_text",
+    [
+        ({}, "Notification policy payload must be a non-empty object"),
+        ({"minimum_severity": "urgent"}, "minimum_severity must be one of"),
+        ({"slack_format": "rich"}, "slack_format must be one of"),
+        ({"pfsense_destination": "https://hooks.slack.com/services/x"}, "routing label"),
+    ],
+)
+def test_notification_policy_update_validation_errors_return_400(client, postgres_db, payload, error_text):
+    conn, _ = postgres_db
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        response = client.patch("/admin/notification-policy", json=payload)
+    assert response.status_code == 400
+    assert error_text in response.get_json()["error"]
 
 
 def test_get_and_patch_pfsense_ingest_filters_apply_immediately_and_audit(client, postgres_db):

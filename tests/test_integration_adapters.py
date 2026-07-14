@@ -703,6 +703,33 @@ def test_slack_real_mode_staging_uses_mocked_outbound_call(monkeypatch):
     assert "SECRET" not in rendered_details
 
 
+def test_slack_real_mode_prefers_preformatted_text_and_destination_label(monkeypatch):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_SLACK_ENABLED", "true")
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T000/B000/SECRET")
+
+    captured = {}
+
+    def _capture(_webhook_url, payload, _timeout_seconds):
+        captured["payload"] = payload
+        return {"status_code": 200}
+
+    with patch("integrations.slack_adapter._post_slack_webhook", side_effect=_capture):
+        result = get_integration_adapter("slack").execute(
+            "send_message",
+            params={
+                "text": "[#soc-pfsense] ALERT HIGH pfsense #17 Deterministic notification",
+                "message": "fallback message",
+                "destination_label": "#soc-pfsense",
+            },
+        )
+
+    assert result["success"] is True
+    assert result["executed"] is True
+    assert captured["payload"]["text"].startswith("[#soc-pfsense] ALERT HIGH pfsense #17")
+
+
 def test_slack_real_mode_failure_audit_redacts_webhook(monkeypatch):
     monkeypatch.setenv("INTEGRATION_MODE", "real")
     monkeypatch.setenv("SOAR_ENV", "staging")

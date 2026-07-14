@@ -51,6 +51,12 @@ export const sectionsConfig = [
     visibleWhen: ({ isSuperAdmin }) => isSuperAdmin,
   },
   {
+    id: "notification-policy",
+    label: "Notification Policy",
+    group: "administration",
+    visibleWhen: ({ isSuperAdmin }) => isSuperAdmin,
+  },
+  {
     id: "admin-users",
     label: "User Management",
     group: "administration",

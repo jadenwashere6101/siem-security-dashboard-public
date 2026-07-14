@@ -156,7 +156,7 @@ def test_schema_snapshot_marker_matches_latest_migration():
         migrations_dir=repo_root / "migrations",
     )
 
-    assert version == 19
+    assert version == 20
 
 
 def test_pfsense_ingest_config_migration_scope_and_defaults():
@@ -193,6 +193,28 @@ def test_playbook_worker_daemon_health_migration_scope_and_defaults():
     assert "started_at TIMESTAMPTZ NOT NULL" in sql
     assert "last_heartbeat_at TIMESTAMPTZ NOT NULL" in sql
     assert "idx_soar_worker_heartbeats_last_heartbeat_at" in sql
+    for destructive in ("DROP ", "TRUNCATE ", "DELETE FROM ", "ALTER TABLE "):
+        assert destructive not in sql.upper()
+
+
+def test_notification_policy_migration_scope_and_defaults():
+    migration_path = Path(__file__).resolve().parent.parent / "migrations" / "0020_notification_policy.sql"
+    sql = migration_path.read_text(encoding="utf-8")
+
+    assert "CREATE TABLE IF NOT EXISTS notification_policy" in sql
+    assert "id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1)" in sql
+    assert "slack_enabled BOOLEAN NOT NULL DEFAULT FALSE" in sql
+    assert "minimum_severity TEXT NOT NULL DEFAULT 'high'" in sql
+    assert "notify_on_alerts BOOLEAN NOT NULL DEFAULT TRUE" in sql
+    assert "notify_on_incidents BOOLEAN NOT NULL DEFAULT TRUE" in sql
+    assert "slack_format TEXT NOT NULL DEFAULT 'compact'" in sql
+    assert "pfsense_destination TEXT NOT NULL DEFAULT 'pfSense destination'" in sql
+    assert "honeypot_destination TEXT NOT NULL DEFAULT 'Honeypot destination'" in sql
+    assert "updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()" in sql
+    assert "updated_by TEXT" in sql
+    assert "INSERT INTO notification_policy" in sql
+    assert "ON CONFLICT (id) DO NOTHING" in sql
+    assert "idx_notification_policy_updated_at" in sql
     for destructive in ("DROP ", "TRUNCATE ", "DELETE FROM ", "ALTER TABLE "):
         assert destructive not in sql.upper()
 

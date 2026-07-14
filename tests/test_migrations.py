@@ -89,7 +89,9 @@ def test_migration_0012_is_pending_when_db_at_0011(capsys):
     assert "Would apply migration 0016 0016_pfsense_ingest_config" in output
     assert "Would apply migration 0017 0017_approval_expired_reason_code" in output
     assert "Would apply migration 0018 0018_internal_read_only_execution_modes" in output
-    assert "Dry run complete. 7 pending migration(s)." in output
+    assert "Would apply migration 0019 0019_playbook_worker_daemon_health" in output
+    assert "Would apply migration 0020 0020_notification_policy" in output
+    assert "Dry run complete. 9 pending migration(s)." in output
 
 
 def test_migration_0013_is_pending_when_db_at_0012(capsys):
@@ -108,7 +110,9 @@ def test_migration_0013_is_pending_when_db_at_0012(capsys):
     assert "Would apply migration 0016 0016_pfsense_ingest_config" in output
     assert "Would apply migration 0017 0017_approval_expired_reason_code" in output
     assert "Would apply migration 0018 0018_internal_read_only_execution_modes" in output
-    assert "Dry run complete. 6 pending migration(s)." in output
+    assert "Would apply migration 0019 0019_playbook_worker_daemon_health" in output
+    assert "Would apply migration 0020 0020_notification_policy" in output
+    assert "Dry run complete. 8 pending migration(s)." in output
 
 
 def test_migration_0018_is_noop_when_already_applied(capsys):
@@ -120,7 +124,10 @@ def test_migration_0018_is_noop_when_already_applied(capsys):
     code = migrate.run(conn, migrations_dir=REPO_ROOT / "migrations", dry_run=True)
 
     assert code == 0
-    assert "Nothing to apply. DB at version 0018." in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "Would apply migration 0019 0019_playbook_worker_daemon_health" in output
+    assert "Would apply migration 0020 0020_notification_policy" in output
+    assert "Dry run complete. 2 pending migration(s)." in output
 
 
 def test_migration_0014_is_pending_when_db_at_0013(capsys):
@@ -138,7 +145,9 @@ def test_migration_0014_is_pending_when_db_at_0013(capsys):
     assert "Would apply migration 0016 0016_pfsense_ingest_config" in output
     assert "Would apply migration 0017 0017_approval_expired_reason_code" in output
     assert "Would apply migration 0018 0018_internal_read_only_execution_modes" in output
-    assert "Dry run complete. 5 pending migration(s)." in output
+    assert "Would apply migration 0019 0019_playbook_worker_daemon_health" in output
+    assert "Would apply migration 0020 0020_notification_policy" in output
+    assert "Dry run complete. 7 pending migration(s)." in output
 
 
 def test_migration_0015_is_pending_when_db_at_0014(capsys):
@@ -155,7 +164,9 @@ def test_migration_0015_is_pending_when_db_at_0014(capsys):
     assert "Would apply migration 0016 0016_pfsense_ingest_config" in output
     assert "Would apply migration 0017 0017_approval_expired_reason_code" in output
     assert "Would apply migration 0018 0018_internal_read_only_execution_modes" in output
-    assert "Dry run complete. 4 pending migration(s)." in output
+    assert "Would apply migration 0019 0019_playbook_worker_daemon_health" in output
+    assert "Would apply migration 0020 0020_notification_policy" in output
+    assert "Dry run complete. 6 pending migration(s)." in output
 
 
 def test_migration_0016_is_pending_when_db_at_0015(capsys):
@@ -171,7 +182,9 @@ def test_migration_0016_is_pending_when_db_at_0015(capsys):
     assert "Would apply migration 0016 0016_pfsense_ingest_config" in output
     assert "Would apply migration 0017 0017_approval_expired_reason_code" in output
     assert "Would apply migration 0018 0018_internal_read_only_execution_modes" in output
-    assert "Dry run complete. 3 pending migration(s)." in output
+    assert "Would apply migration 0019 0019_playbook_worker_daemon_health" in output
+    assert "Would apply migration 0020 0020_notification_policy" in output
+    assert "Dry run complete. 5 pending migration(s)." in output
 
 
 def test_migration_0018_is_pending_when_db_at_0017(capsys):
@@ -185,6 +198,22 @@ def test_migration_0018_is_pending_when_db_at_0017(capsys):
     assert code == 0
     output = capsys.readouterr().out
     assert "Would apply migration 0018 0018_internal_read_only_execution_modes" in output
+    assert "Would apply migration 0019 0019_playbook_worker_daemon_health" in output
+    assert "Would apply migration 0020 0020_notification_policy" in output
+    assert "Dry run complete. 3 pending migration(s)." in output
+
+
+def test_migration_0020_is_pending_when_db_at_0019(capsys):
+    conn = MagicMock()
+    cur = MagicMock()
+    conn.cursor.return_value.__enter__.return_value = cur
+    cur.fetchall.return_value = [(version,) for version in range(1, 20)]
+
+    code = migrate.run(conn, migrations_dir=REPO_ROOT / "migrations", dry_run=True)
+
+    assert code == 0
+    output = capsys.readouterr().out
+    assert "Would apply migration 0020 0020_notification_policy" in output
     assert "Dry run complete. 1 pending migration(s)." in output
 
 

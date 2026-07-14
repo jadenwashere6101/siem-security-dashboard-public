@@ -24,6 +24,10 @@ from core.response_action_queue_store import (
     list_recent_queue_actions,
     sweep_terminal_approval_queue_rows,
 )
+from core.notification_policy_store import (
+    load_notification_policy,
+    upsert_notification_policy,
+)
 from core.soar_response_outcomes import get_latest_outcomes_for_queues_bulk
 from engines.soar_action_worker import classify_queue_action_mode, process_batch
 from engines.detection_config import (
@@ -131,6 +135,109 @@ def update_pfsense_ingest_filter(category):
             conn.rollback()
         current_app.logger.error("Unable to update pfSense ingest filter category=%s: %s", category, error)
         return jsonify({"error": "Unable to update pfSense ingest filter"}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+
+@admin_bp.route("/admin/notification-policy", methods=["GET"])
+@login_required
+@super_admin_required
+def get_notification_policy_route():
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        return jsonify(load_notification_policy(cur)), 200
+    except Exception as error:
+        current_app.logger.error("Unable to load notification policy: %s", error)
+        return jsonify({"error": "Unable to load notification policy"}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+
+@admin_bp.route("/admin/notification-policy", methods=["PATCH"])
+@login_required
+@super_admin_required
+def update_notification_policy_route():
+    conn = None
+    cur = None
+    try:
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict) or not payload:
+            return jsonify({"error": "Notification policy payload must be a non-empty object"}), 400
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+        old_policy = load_notification_policy(cur)
+        upsert_notification_policy(cur, payload, current_user.id)
+        updated_policy = load_notification_policy(cur)
+        conn.commit()
+
+        changes = []
+        for key in (
+            "slack_enabled",
+            "minimum_severity",
+            "notify_on_alerts",
+            "notify_on_incidents",
+            "slack_format",
+            "pfsense_destination",
+            "honeypot_destination",
+        ):
+            if old_policy.get(key) != updated_policy.get(key):
+                changes.append({"field": key, "old": old_policy.get(key), "new": updated_policy.get(key)})
+
+        log_audit_event(
+            "notification_policy_updated",
+            actor_username=current_user.id,
+            actor_role=current_user.role,
+            http_method=request.method,
+            request_path=request.path,
+            source_ip=request.remote_addr,
+            details={
+                "changes": changes,
+                "old_policy": {
+                    key: old_policy.get(key)
+                    for key in (
+                        "slack_enabled",
+                        "minimum_severity",
+                        "notify_on_alerts",
+                        "notify_on_incidents",
+                        "slack_format",
+                        "pfsense_destination",
+                        "honeypot_destination",
+                    )
+                },
+                "new_policy": {
+                    key: updated_policy.get(key)
+                    for key in (
+                        "slack_enabled",
+                        "minimum_severity",
+                        "notify_on_alerts",
+                        "notify_on_incidents",
+                        "slack_format",
+                        "pfsense_destination",
+                        "honeypot_destination",
+                    )
+                },
+            },
+        )
+        return jsonify(updated_policy), 200
+    except ValueError as error:
+        if conn:
+            conn.rollback()
+        return jsonify({"error": str(error)}), 400
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        current_app.logger.error("Unable to update notification policy: %s", error)
+        return jsonify({"error": "Unable to update notification policy"}), 500
     finally:
         if cur:
             cur.close()

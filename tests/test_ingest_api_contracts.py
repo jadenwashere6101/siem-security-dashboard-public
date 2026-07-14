@@ -116,6 +116,7 @@ def test_ingest_schedules_playbooks_before_queue_precedence_work(client, monkeyp
     monkeypatch.setattr(ingest_routes, "ingest_normalized_event", lambda *_args, **_kwargs: alerts_created)
     monkeypatch.setattr(ingest_routes, "enqueue_committed_alerts", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(ingest_routes, "_create_incidents_for_alerts", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(ingest_routes, "notify_for_alert", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         ingest_routes,
         "create_pending_executions_for_committed_alerts",
@@ -134,7 +135,7 @@ def test_ingest_schedules_playbooks_before_queue_precedence_work(client, monkeyp
         "alerts_created": alerts_created,
     }
     assert playbook_call_commit_count == [1]
-    assert conn.commit.call_count == 4
+    assert conn.commit.call_count == 6
     conn.rollback.assert_not_called()
 
 
@@ -151,6 +152,7 @@ def test_ingest_playbook_scheduling_failure_does_not_fail_response(client, monke
     monkeypatch.setattr(ingest_routes, "ingest_normalized_event", lambda *_args, **_kwargs: alerts_created)
     monkeypatch.setattr(ingest_routes, "enqueue_committed_alerts", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(ingest_routes, "_create_incidents_for_alerts", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(ingest_routes, "notify_for_alert", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         ingest_routes,
         "create_pending_executions_for_committed_alerts",

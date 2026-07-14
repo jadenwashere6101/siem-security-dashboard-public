@@ -15,6 +15,7 @@ const EXPECTED_SECTION_IDS = [
   "live-logs-otel",
   "detection-rules",
   "pfsense-ingest-filters",
+  "notification-policy",
   "admin-users",
   "admin-audit-logs",
   "soar-queue",
@@ -135,6 +136,12 @@ const expectedVisibility = {
     viewer: false,
     unauthenticated: false,
   },
+  "notification-policy": {
+    super_admin: true,
+    analyst: false,
+    viewer: false,
+    unauthenticated: false,
+  },
   "admin-users": {
     super_admin: true,
     analyst: false,
@@ -199,7 +206,7 @@ const expectedVisibility = {
 
 describe("sectionsConfig", () => {
   test("contains exactly the expected section ids", () => {
-    expect(sectionsConfig).toHaveLength(24);
+    expect(sectionsConfig).toHaveLength(25);
     expect(sectionsConfig.map((section) => section.id)).toEqual(EXPECTED_SECTION_IDS);
   });
 

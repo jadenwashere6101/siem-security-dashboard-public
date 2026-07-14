@@ -95,6 +95,9 @@ def _get_timeout_seconds() -> int:
 
 
 def _format_slack_payload(action: str, params: dict[str, Any], context: dict[str, Any]) -> dict[str, str]:
+    preformatted_text = str(params.get("text") or "").strip()
+    if preformatted_text:
+        return {"text": preformatted_text[:MAX_SLACK_TEXT_CHARS]}
     summary = str(
         params.get("message")
         or params.get("summary")
@@ -113,6 +116,9 @@ def _format_slack_payload(action: str, params: dict[str, Any], context: dict[str
         lines.append(f"Alert: {context.get('alert_id')}")
     if context.get("incident_id") is not None:
         lines.append(f"Incident: {context.get('incident_id')}")
+    destination_label = str(params.get("destination_label") or "").strip()
+    if destination_label:
+        lines.append(f"Destination: {destination_label}")
     lines.append(f"Summary: {summary}")
     return {"text": "\n".join(lines)[:MAX_SLACK_TEXT_CHARS]}
 

@@ -140,7 +140,7 @@ def maybe_create_or_link_incident(
             alert_id,
             iid,
         )
-        return existing
+        return {**existing, "created": False}
 
     title = f"[AUTO] {sev_upper} alert from {source_ip}"
     new_inc = create_incident(conn, title, severity, source_ip)
@@ -150,7 +150,7 @@ def maybe_create_or_link_incident(
         new_inc["id"],
         alert_id,
     )
-    return new_inc
+    return {**new_inc, "created": True}
 
 
 def list_incidents(
