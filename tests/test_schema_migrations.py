@@ -156,7 +156,7 @@ def test_schema_snapshot_marker_matches_latest_migration():
         migrations_dir=repo_root / "migrations",
     )
 
-    assert version == 21
+    assert version == 22
 
 
 def test_pfsense_ingest_config_migration_scope_and_defaults():
@@ -232,6 +232,23 @@ def test_notification_policy_critical_cross_source_migration_scope_and_defaults(
     assert "DEFAULT 'Critical / Cross-Source Security destination'" in sql
     assert "CHECK (btrim(critical_cross_source_destination) <> '')" in sql
     for destructive in ("DROP ", "TRUNCATE ", "DELETE FROM "):
+        assert destructive not in sql.upper()
+
+
+def test_ingestion_checkpoints_migration_scope_and_defaults():
+    migration_path = (
+        Path(__file__).resolve().parent.parent / "migrations" / "0022_ingestion_checkpoints.sql"
+    )
+    sql = migration_path.read_text(encoding="utf-8")
+
+    assert "CREATE TABLE IF NOT EXISTS ingestion_checkpoints" in sql
+    assert "connector_name TEXT PRIMARY KEY" in sql
+    assert "last_processed_at TIMESTAMPTZ" in sql
+    assert "last_poll_status TEXT" in sql
+    assert "last_poll_counts JSONB NOT NULL DEFAULT '{}'::jsonb" in sql
+    assert "updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()" in sql
+    assert "idx_ingestion_checkpoints_updated_at" in sql
+    for destructive in ("DROP ", "TRUNCATE ", "DELETE FROM ", "ALTER TABLE "):
         assert destructive not in sql.upper()
 
 

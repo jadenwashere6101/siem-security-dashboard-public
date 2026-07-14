@@ -22,6 +22,12 @@ CORE_V1_WEB_TO_APP_ATTACK_INVESTIGATION_ID = "core-v1-web-to-app-attack-investig
 CORE_V1_CLOUD_APP_ERROR_CORRELATION_INVESTIGATION_ID = (
     "core-v1-cloud-app-error-correlation-investigation"
 )
+CORE_V1_APP_INSIGHTS_UNAUTHORIZED_ACCESS_INVESTIGATION_ID = (
+    "core-v1-app-insights-unauthorized-access-investigation"
+)
+CORE_V1_AZURE_AUTH_ABUSE_EXCEPTION_CORRELATION_INVESTIGATION_ID = (
+    "core-v1-azure-auth-abuse-exception-correlation-investigation"
+)
 CORE_V1_SPRAY_THEN_SUCCESS_CORRELATION_INVESTIGATION_ID = (
     "core-v1-spray-then-success-correlation-investigation"
 )
@@ -189,6 +195,52 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
         "steps": [
             {"action": "enrich_context"},
             {"action": "monitor"},
+        ],
+    },
+    {
+        "id": CORE_V1_APP_INSIGHTS_UNAUTHORIZED_ACCESS_INVESTIGATION_ID,
+        "name": "App Insights Unauthorized Access Investigation",
+        "description": (
+            "Investigate repeated Application Insights unauthorized access "
+            "activity with enriched context, monitoring, and analyst notification."
+        ),
+        "trigger_config": {
+            "alert_type": "app_insights_unauthorized_access_threshold",
+            "min_severity": "high",
+        },
+        "steps": [
+            {"action": "enrich_context"},
+            {"action": "monitor"},
+            {
+                "action": "notify_slack",
+                "params": {
+                    "purpose": "investigation",
+                    "message": "{{alert.message}}",
+                },
+            },
+        ],
+    },
+    {
+        "id": CORE_V1_AZURE_AUTH_ABUSE_EXCEPTION_CORRELATION_INVESTIGATION_ID,
+        "name": "Azure Auth Abuse Exception Correlation Investigation",
+        "description": (
+            "Investigate correlated Azure authentication abuse and application "
+            "exception activity with enriched context, monitoring, and analyst notification."
+        ),
+        "trigger_config": {
+            "alert_type": "azure_auth_abuse_exception_correlation",
+            "min_severity": "high",
+        },
+        "steps": [
+            {"action": "enrich_context"},
+            {"action": "monitor"},
+            {
+                "action": "notify_slack",
+                "params": {
+                    "purpose": "investigation",
+                    "message": "{{alert.message}}",
+                },
+            },
         ],
     },
     {

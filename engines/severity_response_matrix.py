@@ -49,6 +49,14 @@ _RULE_METADATA: dict[str, dict[str, Any]] = {
         "escalation_conditions": "Can contribute to higher-confidence correlation rules, but standalone exceptions remain investigation-only.",
         "why": "Application exceptions are useful attack evidence, but they do not by themselves prove successful compromise.",
     },
+    "app_insights_unauthorized_access_threshold": {
+        "default_severity": "high",
+        "maximum_severity": "high",
+        "source": "azure_insights",
+        "source_type": "cloud_api",
+        "escalation_conditions": "Threshold-based High detector for repeated 401/403 application responses; it does not bypass the platform's successful-authentication bar for Critical.",
+        "why": "Application-tier authorization failures indicate probing or abuse, not confirmed access.",
+    },
     "high_request_rate_threshold": {
         "default_severity": "medium",
         "maximum_severity": "high",
@@ -161,6 +169,14 @@ _RULE_METADATA: dict[str, dict[str, Any]] = {
         "escalation_conditions": "Requires matching cloud and nginx error activity from the same IP within the rule window.",
         "why": "Cross-platform error correlations can be malicious, but they still require analyst validation before being treated as compromise evidence.",
     },
+    "azure_auth_abuse_exception_correlation": {
+        "default_severity": "high",
+        "maximum_severity": "high",
+        "source": "azure_insights",
+        "source_type": "cloud_api",
+        "escalation_conditions": "Requires both Azure authentication-abuse pressure and an Application Insights exception spike from the same IP within the rule window.",
+        "why": "Correlated auth abuse and application instability is a stronger signal, but still not proof of a successful compromise.",
+    },
 }
 
 _CORRELATION_RULES: tuple[dict[str, Any], ...] = (
@@ -168,6 +184,7 @@ _CORRELATION_RULES: tuple[dict[str, Any], ...] = (
     {"rule_id": "web_to_app_attack_pattern", "display_name": "Web-to-App Attack Pattern", "active": True},
     {"rule_id": "spray_then_success_pattern", "display_name": "Spray-Then-Success Pattern", "active": True},
     {"rule_id": "cloud_app_error_pattern", "display_name": "Cloud/App Error Pattern", "active": True},
+    {"rule_id": "azure_auth_abuse_exception_correlation", "display_name": "Azure Auth Abuse Exception Correlation", "active": True},
 )
 
 _SEVERITY_ORDER = ("low", "medium", "high", "critical")

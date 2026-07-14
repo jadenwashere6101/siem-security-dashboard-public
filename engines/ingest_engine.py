@@ -4,6 +4,7 @@ from engines.correlation_engine import generate_correlated_activity_alerts, gene
 from engines.detection_applicability import rule_applies_to_source
 from engines.detection_config import get_effective_detection_rule
 from engines.detection_engine import (
+    _generate_app_insights_unauthorized_access_alerts_core,
     _generate_application_exception_alerts_core,
     _generate_credential_stuffing_alerts_core,
     _generate_env_probe_alerts_core,
@@ -96,6 +97,7 @@ def ingest_normalized_event(event_dict, conn, cur):
         ),
         "unauthorized_access": (
             ("failed_login_threshold", _generate_failed_login_alerts_core),
+            ("app_insights_unauthorized_access_threshold", _generate_app_insights_unauthorized_access_alerts_core),
             ("high_request_rate_threshold", _generate_high_request_rate_alerts_core),
         ),
         "http_error": (

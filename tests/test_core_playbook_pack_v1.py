@@ -4,6 +4,8 @@ import pytest
 
 from core import approval_store, playbook_store
 from core.core_playbook_pack_v1 import (
+    CORE_V1_APP_INSIGHTS_UNAUTHORIZED_ACCESS_INVESTIGATION_ID,
+    CORE_V1_AZURE_AUTH_ABUSE_EXCEPTION_CORRELATION_INVESTIGATION_ID,
     CORE_PLAYBOOK_PACK_V1,
     CORE_V1_BRUTE_FORCE_CONTAINMENT_ID,
     CORE_V1_CLOUD_APP_ERROR_CORRELATION_INVESTIGATION_ID,
@@ -135,6 +137,22 @@ def _insert_alert(cur, **kwargs):
             {
                 "alert_type": "cloud_app_error_pattern",
                 "severity": "HIGH",
+            },
+        ),
+        (
+            CORE_V1_APP_INSIGHTS_UNAUTHORIZED_ACCESS_INVESTIGATION_ID,
+            {
+                "alert_type": "app_insights_unauthorized_access_threshold",
+                "severity": "HIGH",
+                "source": "azure_insights",
+            },
+        ),
+        (
+            CORE_V1_AZURE_AUTH_ABUSE_EXCEPTION_CORRELATION_INVESTIGATION_ID,
+            {
+                "alert_type": "azure_auth_abuse_exception_correlation",
+                "severity": "HIGH",
+                "source": "azure_insights",
             },
         ),
         (

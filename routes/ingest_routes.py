@@ -1,12 +1,15 @@
 import ipaddress
 import logging
+from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, current_app, jsonify, request
+from psycopg2.extras import Json
 
 from adapters.azure_insights_adapter import (
     normalize_azure_identity_telemetry,
     normalize_azure_insights_telemetry,
 )
+from core.ingestion_checkpoint_store import get_checkpoint, upsert_checkpoint
 from adapters.nginx_adapter import parse_nginx_access_log_line
 from adapters.otel_adapter import normalize_otel_telemetry
 from adapters.pfsense_filterlog_adapter import (
@@ -67,6 +70,9 @@ HONEYPOT_SEVERITY_BY_EVENT_TYPE = {
     "http_error": "medium",
 }
 INCIDENT_SEVERITIES = {"HIGH", "CRITICAL"}
+AZURE_CHECKPOINT_CONNECTOR = "azure_insights"
+AZURE_CHECKPOINT_DEFAULT_LOOKBACK = timedelta(hours=1)
+AZURE_CHECKPOINT_MIN_LOOKBACK = timedelta(minutes=15)
 
 
 def _create_incidents_for_alerts(alerts_created, conn):
@@ -170,6 +176,88 @@ def _playbook_claimed_alert_ids(playbook_result):
         except (TypeError, ValueError):
             continue
     return claimed
+
+
+def _utc_now():
+    return datetime.now(timezone.utc)
+
+
+def _serialize_datetime(value):
+    if value is None:
+        return None
+    if value.tzinfo is None or value.utcoffset() is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
+
+
+def _bounded_default_checkpoint(now=None):
+    now = now or _utc_now()
+    bounded = now - AZURE_CHECKPOINT_DEFAULT_LOOKBACK
+    floor = now - AZURE_CHECKPOINT_MIN_LOOKBACK
+    if bounded > floor:
+        bounded = floor
+    return bounded
+
+
+def _parse_checkpoint_timestamp(raw_value):
+    if raw_value in (None, ""):
+        return None
+    if not isinstance(raw_value, str):
+        raise ValueError("last_processed_at must be an ISO 8601 timestamp string")
+    candidate = raw_value.strip()
+    if not candidate:
+        return None
+    if candidate.endswith("Z"):
+        candidate = f"{candidate[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError as error:
+        raise ValueError("last_processed_at must be an ISO 8601 timestamp string") from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("last_processed_at must be timezone-aware")
+    return parsed.astimezone(timezone.utc)
+
+
+def _serialize_checkpoint_payload(row, *, fallback_to_default=False):
+    checkpoint = row.get("last_processed_at") if row else None
+    if checkpoint is None and fallback_to_default:
+        checkpoint = _bounded_default_checkpoint()
+    return {
+        "connector_name": AZURE_CHECKPOINT_CONNECTOR,
+        "last_processed_at": _serialize_datetime(checkpoint),
+        "last_poll_status": row.get("last_poll_status") if row else None,
+        "last_poll_counts": row.get("last_poll_counts") if row else {},
+        "updated_at": _serialize_datetime(row.get("updated_at")) if row else None,
+    }
+
+
+def _azure_event_already_ingested(cur, event_dict):
+    cur.execute(
+        """
+        SELECT 1
+        FROM events
+        WHERE source = %s
+          AND source_type = %s
+          AND event_type = %s
+          AND source_ip = %s
+          AND app_name = %s
+          AND message = %s
+          AND event_timestamp IS NOT DISTINCT FROM %s
+          AND raw_payload = %s::jsonb
+        LIMIT 1
+        """,
+        (
+            event_dict["source"],
+            event_dict["source_type"],
+            event_dict["event_type"],
+            event_dict["source_ip"],
+            event_dict["app_name"],
+            event_dict["message"],
+            event_dict.get("event_timestamp"),
+            Json(event_dict["raw_payload"]),
+        ),
+    )
+    return cur.fetchone() is not None
 
 
 def _normalize_honeypot_event(data):
@@ -611,6 +699,8 @@ def add_azure_event():
 
         alerts_created = []
         for event_dict in normalized_events:
+            if _azure_event_already_ingested(cur, event_dict):
+                continue
             alerts_created.extend(ingest_normalized_event(event_dict, conn, cur))
 
         conn.commit()
@@ -656,6 +746,70 @@ def add_azure_event():
     finally:
         if cur:
             cur.close()
+        if conn:
+            conn.close()
+
+
+@ingest_bp.route("/ingest/azure/checkpoint", methods=["GET"])
+def get_azure_ingestion_checkpoint():
+    api_key_error = require_azure_api_key()
+    if api_key_error:
+        return api_key_error
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        row = get_checkpoint(AZURE_CHECKPOINT_CONNECTOR, conn)
+        return jsonify(_serialize_checkpoint_payload(row, fallback_to_default=True)), 200
+    except Exception as error:
+        current_app.logger.error("Error in get_azure_ingestion_checkpoint: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@ingest_bp.route("/ingest/azure/checkpoint", methods=["PATCH"])
+def patch_azure_ingestion_checkpoint():
+    api_key_error = require_azure_api_key()
+    if api_key_error:
+        return api_key_error
+
+    conn = None
+    try:
+        data = request.get_json()
+        if not isinstance(data, dict):
+            return jsonify({"error": "Invalid JSON"}), 400
+
+        try:
+            last_processed_at = _parse_checkpoint_timestamp(data.get("last_processed_at"))
+        except ValueError as error:
+            return jsonify({"error": str(error)}), 400
+
+        poll_status = data.get("last_poll_status")
+        if poll_status is not None and poll_status not in {"success", "failure", "partial"}:
+            return jsonify({"error": "last_poll_status must be success, failure, or partial"}), 400
+
+        poll_counts = data.get("last_poll_counts") or {}
+        if not isinstance(poll_counts, dict):
+            return jsonify({"error": "last_poll_counts must be an object"}), 400
+
+        conn = get_db_connection()
+        row = upsert_checkpoint(
+            AZURE_CHECKPOINT_CONNECTOR,
+            conn,
+            last_processed_at=last_processed_at,
+            poll_status=poll_status,
+            poll_counts=poll_counts,
+        )
+        conn.commit()
+        return jsonify(_serialize_checkpoint_payload(row)), 200
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        current_app.logger.error("Error in patch_azure_ingestion_checkpoint: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
         if conn:
             conn.close()
 

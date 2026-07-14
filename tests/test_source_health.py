@@ -7,7 +7,11 @@ from unittest.mock import MagicMock, patch
 
 from werkzeug.security import generate_password_hash
 
-from core.source_health import SOURCE_HEALTH_AGGREGATION_SQL, aggregate_source_health
+from core.source_health import (
+    SOURCE_HEALTH_AGGREGATION_SQL,
+    SOURCE_HEALTH_CHECKPOINT_SQL,
+    aggregate_source_health,
+)
 from core.source_inventory import CANONICAL_SOURCE_IDS, CANONICAL_SOURCES
 from routes.alerts_events_routes import VALID_EVENT_SOURCES
 
@@ -51,6 +55,36 @@ def insert_event(
 
 def source_entry(response, source):
     return next(item for item in response["sources"] if item["source"] == source)
+
+
+def insert_checkpoint(
+    cur,
+    *,
+    connector_name="azure_insights",
+    last_processed_at=None,
+    last_poll_status="success",
+    last_poll_counts=None,
+    updated_at=None,
+):
+    cur.execute(
+        """
+        INSERT INTO ingestion_checkpoints (
+            connector_name,
+            last_processed_at,
+            last_poll_status,
+            last_poll_counts,
+            updated_at
+        )
+        VALUES (%s, %s, %s, %s::jsonb, %s)
+        """,
+        (
+            connector_name,
+            last_processed_at,
+            last_poll_status,
+            json.dumps(last_poll_counts or {"returned": 0, "forwarded": 0, "failures": 0}),
+            updated_at or GENERATED_AT,
+        ),
+    )
 
 
 def login_super_admin(client):
@@ -229,16 +263,50 @@ def test_last_event_at_is_independent_per_source(postgres_db):
 
 def test_aggregation_issues_exactly_one_grouped_query():
     cursor = MagicMock()
-    cursor.fetchall.return_value = []
+    cursor.fetchall.side_effect = [[], []]
     conn = MagicMock()
     conn.cursor.return_value = cursor
 
     aggregate_source_health(conn, generated_at=GENERATED_AT)
 
-    cursor.execute.assert_called_once()
-    executed_sql = cursor.execute.call_args.args[0]
-    assert executed_sql == SOURCE_HEALTH_AGGREGATION_SQL
-    assert "GROUP BY source" in executed_sql
+    assert cursor.execute.call_count == 2
+    assert cursor.execute.call_args_list[0].args[0] == SOURCE_HEALTH_AGGREGATION_SQL
+    assert "GROUP BY source" in cursor.execute.call_args_list[0].args[0]
+    assert cursor.execute.call_args_list[1].args[0] == SOURCE_HEALTH_CHECKPOINT_SQL
+
+
+def test_source_health_includes_checkpoint_fields_for_azure_insights(postgres_db):
+    conn, cur = postgres_db
+    insert_checkpoint(
+        cur,
+        last_processed_at=GENERATED_AT - timedelta(minutes=5),
+        last_poll_status="failure",
+        last_poll_counts={"returned": 25, "forwarded": 24, "failures": 1},
+        updated_at=GENERATED_AT - timedelta(minutes=2),
+    )
+    conn.commit()
+
+    azure = source_entry(aggregate_source_health(conn, generated_at=GENERATED_AT), "azure_insights")
+
+    assert azure["last_poll_status"] == "failure"
+    assert azure["last_poll_at"] == "2026-07-12T14:58:00+00:00"
+    assert azure["last_processed_at"] == "2026-07-12T14:55:00+00:00"
+    assert azure["checkpoint_age_seconds"] == 300
+    assert azure["connector_status"] == "failed"
+    assert azure["last_poll_counts"] == {"returned": 25, "forwarded": 24, "failures": 1}
+
+
+def test_sources_without_checkpoint_row_remain_unaffected(postgres_db):
+    conn, _cur = postgres_db
+
+    nginx = source_entry(aggregate_source_health(conn, generated_at=GENERATED_AT), "nginx")
+
+    assert "last_poll_status" not in nginx
+    assert "last_poll_at" not in nginx
+    assert "last_poll_counts" not in nginx
+    assert "last_processed_at" not in nginx
+    assert "checkpoint_age_seconds" not in nginx
+    assert "connector_status" not in nginx
 
 
 def test_representative_query_plan_scans_events_once_without_per_source_queries(postgres_db):
@@ -318,7 +386,7 @@ def test_source_health_allows_super_admin(client, postgres_db):
         item.source for item in CANONICAL_SOURCES
     ]
     for item in payload["sources"]:
-        assert set(item) == {
+        assert {
             "source",
             "source_type",
             "display_label",
@@ -327,7 +395,7 @@ def test_source_health_allows_super_admin(client, postgres_db):
             "events_today",
             "total_events",
             "ever_seen",
-        }
+        }.issubset(set(item))
         assert item["last_event_at"] is None
         assert isinstance(item["events_last_hour"], int)
         assert isinstance(item["events_today"], int)

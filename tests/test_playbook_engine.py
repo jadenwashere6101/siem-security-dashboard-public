@@ -27,6 +27,7 @@ def test_correlated_alert_types_expected_set():
             "web_to_app_attack_pattern",
             "spray_then_success_pattern",
             "cloud_app_error_pattern",
+            "azure_auth_abuse_exception_correlation",
         }
     )
 

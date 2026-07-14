@@ -1077,6 +1077,153 @@ def _generate_application_exception_alerts_core(cur, conn, source=None, source_t
     return alerts_created
 
 
+def _generate_app_insights_unauthorized_access_alerts_core(
+    cur,
+    conn,
+    source=None,
+    source_type=None,
+    source_ip=None,
+    rule_config=None,
+):
+    rule_config = _prepare_rule_evaluation(
+        "app_insights_unauthorized_access_threshold", cur, source, source_type, rule_config
+    )
+    if rule_config is None:
+        return []
+    source_ip = _resolve_evaluation_source_ip(cur, source_ip, source, source_type)
+    if source_ip is None:
+        return []
+    threshold = rule_config["parameters"]["threshold"]
+    window_minutes = rule_config["parameters"]["window_minutes"]
+
+    cur.execute(
+        f"""
+        SELECT source_ip, COUNT(*) as attempts
+        FROM events
+        WHERE event_type = 'unauthorized_access'
+          AND (%s::inet IS NULL OR source_ip = %s)
+          AND source = %s
+          AND source_type = %s
+          AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
+        GROUP BY source_ip
+        HAVING COUNT(*) >= %s
+        """,
+        (source_ip, source_ip, source, source_type, threshold),
+    )
+
+    rows = cur.fetchall()
+    alerts_created = []
+
+    for row in rows:
+        source_ip = row[0]
+        attempts = row[1]
+        reputation = lookup_ip_reputation(str(source_ip))
+        reputation_score = reputation["reputation_score"]
+        response_action = determine_response_action(reputation_score)
+        response_action = floor_response_action_for_severity(response_action, "high")
+        response_status = "pending"
+        reputation_label = reputation["reputation_label"]
+        reputation_source = reputation["reputation_source"]
+        reputation_summary = reputation["reputation_summary"]
+
+        cur.execute(
+            """
+            SELECT
+                raw_payload->'location'->>'country',
+                raw_payload->'location'->>'city',
+                NULLIF(raw_payload->'location'->>'lat', '')::double precision,
+                NULLIF(raw_payload->'location'->>'lon', '')::double precision
+            FROM events
+            WHERE source_ip = %s
+              AND event_type = 'unauthorized_access'
+              AND source = %s
+              AND source_type = %s
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (source_ip, source, source_type),
+        )
+
+        location_row = cur.fetchone()
+        country = location_row[0] if location_row else None
+        city = location_row[1] if location_row else None
+        latitude = location_row[2] if location_row else None
+        longitude = location_row[3] if location_row else None
+
+        cur.execute(
+            """
+            SELECT 1 FROM alerts
+            WHERE source_ip = %s
+              AND alert_type = %s
+              AND status = 'open'
+            """,
+            (source_ip, "app_insights_unauthorized_access_threshold"),
+        )
+        if cur.fetchone():
+            continue
+
+        message = f"Repeated Application Insights unauthorized access detected from {source_ip}"
+
+        cur.execute(
+            """
+            INSERT INTO alerts (
+                source_ip,
+                alert_type,
+                severity,
+                source,
+                source_type,
+                message,
+                status,
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                source_ip,
+                "app_insights_unauthorized_access_threshold",
+                "high",
+                source,
+                source_type,
+                message,
+                "open",
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary,
+            ),
+        )
+
+        cur.execute("SELECT currval(pg_get_serial_sequence('alerts', 'id'))")
+        alert_id = cur.fetchone()[0]
+
+        alerts_created.append(
+            {
+                "source_ip": source_ip,
+                "attempts": attempts,
+                "alert_id": alert_id,
+                "response_action": response_action,
+                "severity": "high",
+            }
+        )
+
+    return alerts_created
+
+
 def _generate_high_request_rate_alerts_core(cur, conn, source=None, source_type=None, source_ip=None, rule_config=None):
     rule_config = _prepare_rule_evaluation("high_request_rate_threshold", cur, source, source_type, rule_config)
     if rule_config is None:

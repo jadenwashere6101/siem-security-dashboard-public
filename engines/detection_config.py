@@ -20,6 +20,8 @@ HTTP_ERROR_THRESHOLD = 5
 HTTP_ERROR_WINDOW_MINUTES = 15
 APPLICATION_EXCEPTION_THRESHOLD = 3
 APPLICATION_EXCEPTION_WINDOW_MINUTES = 10
+APP_INSIGHTS_UNAUTHORIZED_ACCESS_THRESHOLD = 5
+APP_INSIGHTS_UNAUTHORIZED_ACCESS_WINDOW_MINUTES = 10
 
 HIGH_REQUEST_RATE_THRESHOLD = 20
 HIGH_REQUEST_RATE_WINDOW_MINUTES = 5
@@ -137,6 +139,16 @@ def get_detection_rule_defaults():
             },
             "active": True,
             "description": "Triggers when repeated application exception events occur from the same source within a time window.",
+        },
+        "app_insights_unauthorized_access_threshold": {
+            "rule_id": "app_insights_unauthorized_access_threshold",
+            "display_name": "App Insights Unauthorized Access Threshold",
+            "parameters": {
+                "threshold": APP_INSIGHTS_UNAUTHORIZED_ACCESS_THRESHOLD,
+                "window_minutes": APP_INSIGHTS_UNAUTHORIZED_ACCESS_WINDOW_MINUTES,
+            },
+            "active": True,
+            "description": "Triggers when repeated Application Insights 401/403 events occur from the same source within a time window.",
         },
         "high_request_rate_threshold": {
             "rule_id": "high_request_rate_threshold",

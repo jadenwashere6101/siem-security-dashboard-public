@@ -18,6 +18,17 @@ SOURCE_HEALTH_AGGREGATION_SQL = """
     GROUP BY source
 """
 
+SOURCE_HEALTH_CHECKPOINT_SQL = """
+    SELECT
+        connector_name,
+        last_processed_at,
+        last_poll_status,
+        last_poll_counts,
+        updated_at
+    FROM ingestion_checkpoints
+    WHERE connector_name = ANY(%s)
+"""
+
 
 def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
@@ -56,27 +67,61 @@ def aggregate_source_health(conn, *, generated_at: datetime | None = None) -> di
             }
             for row in cur.fetchall()
         }
+
+        cur.execute(
+            SOURCE_HEALTH_CHECKPOINT_SQL,
+            ([item.source for item in CANONICAL_SOURCES],),
+        )
+        checkpoints_by_source = {
+            row[0]: {
+                "last_processed_at": row[1],
+                "last_poll_status": row[2],
+                "last_poll_counts": row[3] or {},
+                "updated_at": row[4],
+            }
+            for row in cur.fetchall()
+        }
     finally:
         cur.close()
 
     sources = []
     for definition in CANONICAL_SOURCES:
         aggregate = rows_by_source.get(definition.source)
+        checkpoint = checkpoints_by_source.get(definition.source)
         total_events = aggregate["total_events"] if aggregate else 0
-        sources.append(
-            {
-                "source": definition.source,
-                "source_type": definition.source_type,
-                "display_label": definition.display_label,
-                "last_event_at": _serialize_timestamp(
-                    aggregate["last_event_at"] if aggregate else None
-                ),
-                "events_last_hour": aggregate["events_last_hour"] if aggregate else 0,
-                "events_today": aggregate["events_today"] if aggregate else 0,
-                "total_events": total_events,
-                "ever_seen": total_events > 0,
-            }
-        )
+        source_entry = {
+            "source": definition.source,
+            "source_type": definition.source_type,
+            "display_label": definition.display_label,
+            "last_event_at": _serialize_timestamp(
+                aggregate["last_event_at"] if aggregate else None
+            ),
+            "events_last_hour": aggregate["events_last_hour"] if aggregate else 0,
+            "events_today": aggregate["events_today"] if aggregate else 0,
+            "total_events": total_events,
+            "ever_seen": total_events > 0,
+        }
+        if checkpoint:
+            source_entry["last_poll_status"] = checkpoint["last_poll_status"]
+            source_entry["last_poll_at"] = _serialize_timestamp(checkpoint["updated_at"])
+            source_entry["last_poll_counts"] = checkpoint["last_poll_counts"]
+            source_entry["last_processed_at"] = _serialize_timestamp(
+                checkpoint["last_processed_at"]
+            )
+            if checkpoint["last_processed_at"] is not None:
+                source_entry["checkpoint_age_seconds"] = int(
+                    (observation_time - _as_utc(checkpoint["last_processed_at"])).total_seconds()
+                )
+            source_entry["connector_status"] = (
+                "healthy"
+                if checkpoint["last_poll_status"] == "success"
+                else "degraded"
+                if checkpoint["last_poll_status"] == "partial"
+                else "failed"
+                if checkpoint["last_poll_status"] == "failure"
+                else "unknown"
+            )
+        sources.append(source_entry)
 
     return {
         "generated_at": observation_time.isoformat(),
@@ -87,4 +132,3 @@ def aggregate_source_health(conn, *, generated_at: datetime | None = None) -> di
         },
         "sources": sources,
     }
-

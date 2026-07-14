@@ -6,15 +6,14 @@
 
 For runtime debugging, see `siem-azure-function/AZURE_TIMER_DEBUG.md`.
 
-This is the current working Azure -> SIEM demo path.
+This is the current Azure -> SIEM polling path.
 
 ```text
-Azure Function test_endpoint
-  -> Application Insights traces
+Azure Application Insights / Log Analytics
   -> poll_application_insights timer
-  -> SIEM /ingest/azure
-  -> events table
-  -> dashboard
+  -> SIEM /ingest/azure + /ingest/azure/checkpoint
+  -> events + ingestion_checkpoints
+  -> detections / Source Health / dashboard
 ```
 
 ## Required Azure Function Settings
@@ -27,6 +26,12 @@ Azure Function test_endpoint
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` | Yes | Sends Function logs and traces to Application Insights |
 | `AzureWebJobsStorage` | Yes | Required by Azure Functions runtime |
 | `FUNCTIONS_WORKER_RUNTIME` | Yes | Set to `python` |
+| `PAGE_SIZE` | No | Per-query page size. Default `25` |
+| `MAX_POLL_PAGES` | No | Max pages per timer invocation. Default `10` |
+| `QUERY_RETRY_ATTEMPTS` | No | Query retry attempts. Default `3` |
+| `FORWARD_RETRY_ATTEMPTS` | No | Per-row forward retry attempts. Default `3` |
+| `RETRY_BACKOFF_SECONDS` | No | Base retry backoff in seconds. Default `1` |
+| `HTTP_TIMEOUT_SECONDS` | No | Checkpoint/ingest HTTP timeout in seconds. Default `10` |
 
 ## Required SIEM Backend Setting
 
@@ -44,28 +49,16 @@ AZURE_INGEST_API_KEY=<SHARED_AZURE_INGEST_KEY>
 
 The backend must be restarted after updating the value.
 
-## Demo Steps
+## Polling Steps
 
-### 1. Call the Azure Function test endpoint
-
-Use the deployed Function URL with a function key:
-
-```bash
-curl "https://<FUNCTION_APP_HOST>/api/test_endpoint?code=<FUNCTION_KEY>"
-```
-
-Expected response:
-
-```json
-{"status": "ok"}
-```
-
-### 2. Wait for the next timer run
+### 1. Wait for the next timer run
 
 - `poll_application_insights` runs every 5 minutes
-- It queries recent Application Insights telemetry and forwards supported rows to the SIEM
+- It reads the last checkpoint from `/ingest/azure/checkpoint`
+- It queries the checkpoint-to-now window in pages
+- It forwards supported rows to the SIEM and patches the checkpoint with poll outcome/counts
 
-### 3. Confirm Azure Function settings
+### 2. Confirm Azure Function settings
 
 Azure Portal -> Function App -> Settings -> Environment variables
 
@@ -78,14 +71,16 @@ AZURE_INGEST_API_KEY
 APPLICATIONINSIGHTS_CONNECTION_STRING
 AzureWebJobsStorage
 FUNCTIONS_WORKER_RUNTIME=python
+PAGE_SIZE
+MAX_POLL_PAGES
 ```
 
-### 4. Confirm Azure logs show successful polling
+### 3. Confirm Azure logs show successful polling
 
 Look for a line like:
 
 ```text
-Application Insights polling complete: returned=N forwarded=N skipped_invalid_ip=N failures=0 ...
+Application Insights polling complete: status=success returned=N forwarded=N skipped_invalid_ip=N failures=0 ...
 ```
 
 For a successful demo:
@@ -93,7 +88,7 @@ For a successful demo:
 - `returned > 0`
 - `forwarded > 0`
 
-### 5. Confirm SIEM received Azure rows
+### 4. Confirm SIEM received Azure rows
 
 ```sql
 SELECT created_at, source_ip, event_type, source, source_type, message
@@ -107,6 +102,14 @@ Expected:
 
 - `source = 'azure_insights'`
 - `source_type = 'cloud_api'`
+
+Checkpoint state:
+
+```sql
+SELECT connector_name, last_processed_at, last_poll_status, last_poll_counts, updated_at
+FROM ingestion_checkpoints
+WHERE connector_name = 'azure_insights';
+```
 
 ## Verification
 
@@ -142,7 +145,7 @@ LIMIT 5;
 
 ### `returned=0`
 
-- Meaning: no matching telemetry was found in the query window
+- Meaning: no matching telemetry was found between the persisted checkpoint and now
 
 ### `skipped_invalid_ip > 0`
 
@@ -150,7 +153,7 @@ LIMIT 5;
 
 ### `failures > 0`
 
-- Meaning: the SIEM backend rejected the payload or the endpoint was unreachable
+- Meaning: the query or checkpoint/ingest HTTP call exhausted retries
 
 ### `401` from `test_endpoint`
 
@@ -160,12 +163,19 @@ LIMIT 5;
 
 - Meaning: the SIEM backend Azure adapter rejected the forwarded payload
 
-## Demo Talking Points
+## Supported Telemetry
 
-- This proves real Azure telemetry can flow into the SIEM.
-- Real IP is extracted from Azure trace logs.
-- Azure events normalize into the same SIEM ingestion pipeline as other sources.
-- No new database schema was required for the demo.
+- `AppExceptions`
+- `AppRequests` for `401/403` and `5xx`
+- `AppDependencies` where `Success == false`
+- `AppAvailabilityResults` where `Success == false`
+
+Not ingested:
+
+- `AppTraces`
+- Custom events
+- Custom metrics
+- Successful dependency or availability rows
 
 ## See Also
 

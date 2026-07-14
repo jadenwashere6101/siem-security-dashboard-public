@@ -51,6 +51,9 @@ RULE_APPLICABILITY = MappingProxyType(
         "application_exception_threshold": RuleApplicability(
             "canonical_multi_source_application", frozenset({AZURE_INSIGHTS, OPENTELEMETRY})
         ),
+        "app_insights_unauthorized_access_threshold": RuleApplicability(
+            "source_specific", frozenset({AZURE_INSIGHTS})
+        ),
         "high_request_rate_threshold": RuleApplicability(
             "partially_source_aware_becoming_explicit", frozenset({NGINX, OPENTELEMETRY})
         ),

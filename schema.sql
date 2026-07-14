@@ -1,4 +1,4 @@
--- Schema snapshot version: 0021
+-- Schema snapshot version: 0022
 
 CREATE TABLE IF NOT EXISTS events (
     id SERIAL PRIMARY KEY,
@@ -194,6 +194,17 @@ ON CONFLICT (id) DO NOTHING;
 
 CREATE INDEX IF NOT EXISTS idx_notification_policy_updated_at
 ON notification_policy (updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS ingestion_checkpoints (
+    connector_name TEXT PRIMARY KEY,
+    last_processed_at TIMESTAMPTZ,
+    last_poll_status TEXT,
+    last_poll_counts JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ingestion_checkpoints_updated_at
+ON ingestion_checkpoints (updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS blocked_ips (
     id SERIAL PRIMARY KEY,

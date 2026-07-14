@@ -1,9 +1,10 @@
 import json
 import logging
 import os
+import time
 import urllib.request
 import urllib.error
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import azure.functions as func
 from azure.identity import DefaultAzureCredential
@@ -14,13 +15,43 @@ app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
 SIEM_AZURE_INGEST_URL = os.environ["SIEM_AZURE_INGEST_URL"]
 AZURE_INGEST_API_KEY = os.environ["AZURE_INGEST_API_KEY"]
 LOG_ANALYTICS_WORKSPACE_ID = os.environ["LOG_ANALYTICS_WORKSPACE_ID"]
-QUERY_WINDOW_MINUTES = 5
-MAX_RECORDS = 25
+PAGE_SIZE = int(os.getenv("PAGE_SIZE", "25"))
+MAX_POLL_PAGES = int(os.getenv("MAX_POLL_PAGES", "10"))
+QUERY_RETRY_ATTEMPTS = int(os.getenv("QUERY_RETRY_ATTEMPTS", "3"))
+FORWARD_RETRY_ATTEMPTS = int(os.getenv("FORWARD_RETRY_ATTEMPTS", "3"))
+RETRY_BACKOFF_SECONDS = float(os.getenv("RETRY_BACKOFF_SECONDS", "1"))
+HTTP_TIMEOUT_SECONDS = float(os.getenv("HTTP_TIMEOUT_SECONDS", "10"))
+CHECKPOINT_ENDPOINT_URL = (
+    SIEM_AZURE_INGEST_URL.rstrip("/") + "/checkpoint"
+    if SIEM_AZURE_INGEST_URL.rstrip("/").endswith("/ingest/azure")
+    else SIEM_AZURE_INGEST_URL.rstrip("/") + "/ingest/azure/checkpoint"
+)
+CHECKPOINT_FALLBACK_MINUTES = 15
+CHECKPOINT_FALLBACK_MAX_MINUTES = 60
 UNKNOWN_AZURE_SERVICE = "unknown_azure_service"
 
-APP_INSIGHTS_QUERY = f"""
+
+def _utc_now():
+    return datetime.now(timezone.utc)
+
+
+def _format_kql_datetime(value):
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _fallback_checkpoint():
+    now = _utc_now()
+    return now - timedelta(
+        minutes=max(CHECKPOINT_FALLBACK_MINUTES, min(CHECKPOINT_FALLBACK_MAX_MINUTES, 60))
+    )
+
+
+def _build_app_insights_query(lower_bound, upper_bound):
+    lower_text = _format_kql_datetime(lower_bound)
+    upper_text = _format_kql_datetime(upper_bound)
+    return f"""
 let exceptionRows = AppExceptions
-| where TimeGenerated >= ago({QUERY_WINDOW_MINUTES}m)
+| where TimeGenerated > datetime({lower_text}) and TimeGenerated <= datetime({upper_text})
 | project
     itemType = "exception",
     timestamp = TimeGenerated,
@@ -31,9 +62,10 @@ let exceptionRows = AppExceptions
     resultCode = "",
     cloud_RoleName = AppRoleName,
     severityLevel = SeverityLevel,
+    success = bool(null),
     customDimensions = Properties;
 let requestRows = AppRequests
-| where TimeGenerated >= ago({QUERY_WINDOW_MINUTES}m)
+| where TimeGenerated > datetime({lower_text}) and TimeGenerated <= datetime({upper_text})
 | where isnotempty(ClientIP)
 | project
     itemType = "request",
@@ -45,24 +77,41 @@ let requestRows = AppRequests
     resultCode = ResultCode,
     cloud_RoleName = AppRoleName,
     severityLevel = int(null),
+    success = bool(null),
     customDimensions = Properties;
-let traceRows = AppTraces
-| where TimeGenerated >= ago({QUERY_WINDOW_MINUTES}m)
-| where Message contains "HTTP request received"
+let dependencyRows = AppDependencies
+| where TimeGenerated > datetime({lower_text}) and TimeGenerated <= datetime({upper_text})
+| where Success == false
 | project
-    itemType = "trace",
+    itemType = "dependency",
     timestamp = TimeGenerated,
-    operation_Name = "",
-    name = "trace_log",
-    message = Message,
-    client_IP = "",
-    resultCode = "",
-    cloud_RoleName = "",
+    operation_Name = OperationName,
+    name = Name,
+    message = Name,
+    client_IP = ClientIP,
+    resultCode = ResultCode,
+    cloud_RoleName = AppRoleName,
     severityLevel = int(null),
+    success = Success,
     customDimensions = Properties;
-union isfuzzy=true exceptionRows, requestRows, traceRows
+let availabilityRows = AppAvailabilityResults
+| where TimeGenerated > datetime({lower_text}) and TimeGenerated <= datetime({upper_text})
+| where Success == false
+| project
+    itemType = "availability",
+    timestamp = TimeGenerated,
+    operation_Name = Name,
+    name = Name,
+    message = Message,
+    client_IP = ClientIP,
+    resultCode = "",
+    cloud_RoleName = AppRoleName,
+    severityLevel = int(null),
+    success = Success,
+    customDimensions = Properties;
+union isfuzzy=true exceptionRows, requestRows, dependencyRows, availabilityRows
 | order by timestamp asc
-| take {MAX_RECORDS}
+| take {PAGE_SIZE}
 """.strip()
 
 
@@ -79,17 +128,83 @@ def forward_telemetry_to_siem(telemetry: dict):
         },
     )
 
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_SECONDS) as resp:
         return resp.status, resp.read().decode("utf-8")
 
 
-def _query_recent_telemetry():
+def _fetch_checkpoint():
+    req = urllib.request.Request(
+        CHECKPOINT_ENDPOINT_URL,
+        method="GET",
+        headers={"X-API-Key": AZURE_INGEST_API_KEY},
+    )
+
+    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_SECONDS) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+
+    raw_value = payload.get("last_processed_at")
+    if not isinstance(raw_value, str) or not raw_value.strip():
+        return _fallback_checkpoint()
+
+    normalized = raw_value.strip()
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return _fallback_checkpoint()
+    return parsed.astimezone(timezone.utc)
+
+
+def _persist_checkpoint(last_processed_at, poll_status, poll_counts):
+    body = json.dumps(
+        {
+            "last_processed_at": last_processed_at.isoformat() if last_processed_at else None,
+            "last_poll_status": poll_status,
+            "last_poll_counts": poll_counts,
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        CHECKPOINT_ENDPOINT_URL,
+        data=body,
+        method="PATCH",
+        headers={
+            "Content-Type": "application/json",
+            "X-API-Key": AZURE_INGEST_API_KEY,
+        },
+    )
+
+    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_SECONDS) as resp:
+        return resp.status, resp.read().decode("utf-8")
+
+
+def _retry(operation, *, attempts, backoff_seconds, operation_name):
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return operation()
+        except Exception as error:
+            last_error = error
+            if attempt >= attempts:
+                break
+            logging.warning(
+                "%s attempt %d/%d failed: %s",
+                operation_name,
+                attempt,
+                attempts,
+                error,
+            )
+            time.sleep(backoff_seconds * (2 ** (attempt - 1)))
+    raise last_error
+
+
+def _query_recent_telemetry(lower_bound, upper_bound):
     credential = DefaultAzureCredential()
     client = LogsQueryClient(credential)
+    query = _build_app_insights_query(lower_bound, upper_bound)
     result = client.query_workspace(
         workspace_id=LOG_ANALYTICS_WORKSPACE_ID,
-        query=APP_INSIGHTS_QUERY,
-        timespan=timedelta(minutes=QUERY_WINDOW_MINUTES),
+        query=query,
+        timespan=max(upper_bound - lower_bound, timedelta(minutes=1)),
     )
 
     tables = getattr(result, "tables", None) or []
@@ -197,10 +312,37 @@ def _classify_telemetry_row(row: dict) -> dict:
             "reason": "unsupported_request_result_code",
         }
 
-    if item_type == "trace":
+    if item_type == "dependency":
+        result_code = _normalize_result_code(row.get("resultCode"))
+        success_value = row.get("success")
+        success_text = str(success_value).strip().lower() if success_value is not None else ""
+        if result_code in {401, 403}:
+            return {
+                "status": "mapped",
+                "event_type": "unauthorized_access",
+                "response_code": result_code,
+            }
+        if result_code is not None and result_code >= 500:
+            return {
+                "status": "mapped",
+                "event_type": "http_error",
+                "response_code": result_code,
+            }
+        if success_text == "false":
+            return {
+                "status": "mapped",
+                "event_type": "dependency_failure",
+                "response_code": result_code,
+            }
+        return {
+            "status": "unmapped",
+            "reason": "unsupported_dependency_result",
+        }
+
+    if item_type == "availability":
         return {
             "status": "mapped",
-            "event_type": "normal_activity",
+            "event_type": "availability_failure",
         }
 
     return {
@@ -249,6 +391,29 @@ def _row_to_siem_telemetry(row: dict, mapping: dict) -> dict:
             }
         }
 
+    if event_type == "availability_failure":
+        return {
+            "client_IP": client_ip,
+            "source_ip": client_ip,
+            "event_type": event_type,
+            "message": message,
+            "app_name": app_name,
+            "timestamp": timestamp_text,
+            "raw_payload": _sample_row_for_logging(row),
+            "cloud_RoleName": row.get("cloud_RoleName"),
+            "operationName": operation_name,
+            "success": False,
+            "baseType": "AvailabilityData",
+            "time": timestamp_text,
+            "data": {
+                "baseData": {
+                    "name": operation_name or request_name or message,
+                    "message": message,
+                    "success": False,
+                }
+            },
+        }
+
     return {
         "client_IP": client_ip,
         "source_ip": client_ip,
@@ -260,13 +425,15 @@ def _row_to_siem_telemetry(row: dict, mapping: dict) -> dict:
         "raw_payload": _sample_row_for_logging(row),
         "cloud_RoleName": row.get("cloud_RoleName"),
         "operationName": operation_name,
-        "baseType": "RequestData",
+        "success": bool(False) if event_type == "dependency_failure" else row.get("success"),
+        "baseType": "RemoteDependencyData" if event_type == "dependency_failure" else "RequestData",
         "time": timestamp_text,
         "data": {
             "baseData": {
                 "name": operation_name or request_name or message,
                 "message": message,
                 "responseCode": str(result_code),
+                "success": False if event_type == "dependency_failure" else row.get("success"),
             }
         }
     }
@@ -328,59 +495,124 @@ def test_endpoint(req: func.HttpRequest) -> func.HttpResponse:
 @app.timer_trigger(schedule="0 */5 * * * *", arg_name="timer", run_on_startup=False)
 def poll_application_insights(timer: func.TimerRequest) -> None:
     try:
-        rows = _query_recent_telemetry()
+        checkpoint = _fetch_checkpoint()
     except Exception:
-        logging.exception("Failed to query Application Insights telemetry")
-        return
+        logging.exception("Failed to read Application Insights checkpoint; using bounded fallback")
+        checkpoint = _fallback_checkpoint()
+
+    poll_upper_bound = _utc_now()
+    watermark = checkpoint
 
     mapping_counts = {
         "application_exception": 0,
         "unauthorized_access": 0,
         "http_error": 0,
-        "normal_activity": 0,
+        "dependency_failure": 0,
+        "availability_failure": 0,
     }
+    returned = 0
     forwarded = 0
     skipped_invalid_ip = 0
     unmapped_telemetry = 0
     missing_critical_fields = 0
     failures = 0
+    pages_processed = 0
     sample_skipped_reason = None
     sample_skipped_row = None
+    poll_status = "success"
 
-    for row in rows:
-        if not _has_valid_client_ip(row):
-            skipped_invalid_ip += 1
-            continue
-
-        mapping = _classify_telemetry_row(row)
-        if mapping["status"] == "missing_critical":
-            missing_critical_fields += 1
-            if sample_skipped_row is None:
-                sample_skipped_reason = mapping["reason"]
-                sample_skipped_row = _sample_row_for_logging(row)
-            continue
-
-        if mapping["status"] == "unmapped":
-            unmapped_telemetry += 1
-            if sample_skipped_row is None:
-                sample_skipped_reason = mapping["reason"]
-                sample_skipped_row = _sample_row_for_logging(row)
-            continue
-
+    for _page in range(MAX_POLL_PAGES):
         try:
-            telemetry = _row_to_siem_telemetry(row, mapping)
-            forward_telemetry_to_siem(telemetry)
-            mapping_counts[mapping["event_type"]] += 1
-            forwarded += 1
+            rows = _retry(
+                lambda: _query_recent_telemetry(watermark, poll_upper_bound),
+                attempts=QUERY_RETRY_ATTEMPTS,
+                backoff_seconds=RETRY_BACKOFF_SECONDS,
+                operation_name="Application Insights query",
+            )
         except Exception:
+            poll_status = "failure" if pages_processed == 0 else "partial"
             failures += 1
-            logging.exception("Failed to forward Application Insights telemetry row")
+            logging.exception("Failed to query Application Insights telemetry after retries")
+            break
+
+        if not rows:
+            break
+
+        returned += len(rows)
+        pages_processed += 1
+        page_failed = False
+
+        for row in rows:
+            if not _has_valid_client_ip(row):
+                skipped_invalid_ip += 1
+                continue
+
+            mapping = _classify_telemetry_row(row)
+            if mapping["status"] == "missing_critical":
+                missing_critical_fields += 1
+                if sample_skipped_row is None:
+                    sample_skipped_reason = mapping["reason"]
+                    sample_skipped_row = _sample_row_for_logging(row)
+                continue
+
+            if mapping["status"] == "unmapped":
+                unmapped_telemetry += 1
+                if sample_skipped_row is None:
+                    sample_skipped_reason = mapping["reason"]
+                    sample_skipped_row = _sample_row_for_logging(row)
+                continue
+
+            try:
+                telemetry = _row_to_siem_telemetry(row, mapping)
+                _retry(
+                    lambda telemetry=telemetry: forward_telemetry_to_siem(telemetry),
+                    attempts=FORWARD_RETRY_ATTEMPTS,
+                    backoff_seconds=RETRY_BACKOFF_SECONDS,
+                    operation_name="Application Insights forward",
+                )
+                mapping_counts[mapping["event_type"]] += 1
+                forwarded += 1
+            except Exception:
+                failures += 1
+                page_failed = True
+                logging.exception("Failed to forward Application Insights telemetry row after retries")
+                break
+
+        if page_failed:
+            poll_status = "failure" if pages_processed == 1 else "partial"
+            break
+
+        last_timestamp = rows[-1].get("timestamp")
+        if isinstance(last_timestamp, datetime):
+            watermark = last_timestamp.astimezone(timezone.utc)
+
+        if len(rows) < PAGE_SIZE:
+            break
+
+    poll_counts = {
+        "returned": returned,
+        "forwarded": forwarded,
+        "skipped_invalid_ip": skipped_invalid_ip,
+        "failures": failures,
+        "unmapped_telemetry": unmapped_telemetry,
+        "missing_critical_fields": missing_critical_fields,
+        "pages_processed": pages_processed,
+        "page_size": PAGE_SIZE,
+        "max_poll_pages": MAX_POLL_PAGES,
+    }
+
+    try:
+        _persist_checkpoint(watermark, poll_status, poll_counts)
+    except Exception:
+        logging.exception("Failed to persist Application Insights checkpoint")
 
     logging.info(
-        "Application Insights mapping decisions: application_exception=%d unauthorized_access=%d http_error=%d unmapped_telemetry=%d missing_critical_fields=%d",
+        "Application Insights mapping decisions: application_exception=%d unauthorized_access=%d http_error=%d dependency_failure=%d availability_failure=%d unmapped_telemetry=%d missing_critical_fields=%d",
         mapping_counts["application_exception"],
         mapping_counts["unauthorized_access"],
         mapping_counts["http_error"],
+        mapping_counts["dependency_failure"],
+        mapping_counts["availability_failure"],
         unmapped_telemetry,
         missing_critical_fields,
     )
@@ -393,13 +625,17 @@ def poll_application_insights(timer: func.TimerRequest) -> None:
         )
 
     logging.info(
-        "Application Insights polling complete: returned=%d forwarded=%d skipped_invalid_ip=%d failures=%d unmapped_telemetry=%d missing_critical_fields=%d query_window_minutes=%d max_records=%d",
-        len(rows),
+        "Application Insights polling complete: status=%s returned=%d forwarded=%d skipped_invalid_ip=%d failures=%d unmapped_telemetry=%d missing_critical_fields=%d pages_processed=%d page_size=%d max_poll_pages=%d checkpoint=%s poll_upper_bound=%s",
+        poll_status,
+        returned,
         forwarded,
         skipped_invalid_ip,
         failures,
         unmapped_telemetry,
         missing_critical_fields,
-        QUERY_WINDOW_MINUTES,
-        MAX_RECORDS,
+        pages_processed,
+        PAGE_SIZE,
+        MAX_POLL_PAGES,
+        watermark.isoformat() if watermark else None,
+        poll_upper_bound.isoformat(),
     )

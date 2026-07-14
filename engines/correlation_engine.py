@@ -306,6 +306,39 @@ def generate_targeted_correlation_alerts(cur, conn, source_ip):
                 else None
             ),
         },
+        {
+            "alert_type": "azure_auth_abuse_exception_correlation",
+            "window_minutes": 10,
+            "severity": "high",
+            "message": f"Azure auth abuse and application instability correlated from {source_ip}",
+            "matches": lambda row: (
+                (row[2], row[3]) == ("azure_insights", "cloud_api")
+                and row[1]
+                in {
+                    "app_insights_unauthorized_access_threshold",
+                    "password_spraying_threshold",
+                    "failed_login_threshold",
+                }
+            ) or (
+                (row[2], row[3]) == ("azure_insights", "cloud_api")
+                and row[1] == "application_exception_threshold"
+            ),
+            "required_groups": ("azure_auth_abuse", "azure_exception"),
+            "group_for_row": lambda row: (
+                "azure_auth_abuse"
+                if (row[2], row[3]) == ("azure_insights", "cloud_api")
+                and row[1]
+                in {
+                    "app_insights_unauthorized_access_threshold",
+                    "password_spraying_threshold",
+                    "failed_login_threshold",
+                }
+                else "azure_exception"
+                if (row[2], row[3]) == ("azure_insights", "cloud_api")
+                and row[1] == "application_exception_threshold"
+                else None
+            ),
+        },
     )
 
     for rule in rules:

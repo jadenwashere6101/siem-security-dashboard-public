@@ -151,6 +151,10 @@ def get_ip_reputation(source_ip, cur=None):
                 "weight": 4,
                 "label": "Cloud App Error Pattern",
             },
+            "azure_auth_abuse_exception_correlation": {
+                "weight": 4,
+                "label": "Azure Auth Abuse Exception Correlation",
+            },
         }
 
         contributing_signals = []

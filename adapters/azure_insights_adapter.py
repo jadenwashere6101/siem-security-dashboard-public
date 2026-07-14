@@ -126,6 +126,24 @@ def _build_trace_message(base_data, telemetry, operation_name):
     )
 
 
+def _build_unauthorized_access_message(base_data, telemetry, operation_name, result_code):
+    return _first_non_empty_value(
+        base_data.get("message"),
+        telemetry.get("message"),
+        operation_name,
+        f"Azure unauthorized access telemetry detected: status {result_code}",
+    )
+
+
+def _build_dependency_failure_message(base_data, telemetry, operation_name):
+    return _first_non_empty_value(
+        base_data.get("message"),
+        telemetry.get("message"),
+        operation_name,
+        "Azure dependency failure detected",
+    )
+
+
 def _extract_identity_source_ip(telemetry):
     source_ip = _first_non_empty_value(
         telemetry.get("sourceIp"),
@@ -287,6 +305,18 @@ def normalize_azure_insights_telemetry(telemetry):
             }
 
     if "request" in base_type_lower or "request" in telemetry_name_lower or "dependency" in base_type_lower or "dependency" in telemetry_name_lower:
+        if result_code in {401, 403}:
+            message = _build_unauthorized_access_message(
+                base_data, telemetry, operation_name, result_code
+            )
+            return {
+                "event_type": "unauthorized_access",
+                "severity": "medium",
+                "source_ip": source_ip,
+                "message": message,
+                "event_timestamp": event_timestamp,
+            }
+
         if result_code is not None and 500 <= result_code <= 599:
             message = _build_http_error_message(base_data, telemetry, operation_name, result_code)
             return {
@@ -298,6 +328,17 @@ def normalize_azure_insights_telemetry(telemetry):
             }
 
         success_str = str(success_value).strip().lower() if success_value is not None else ""
+        if "dependency" in base_type_lower or "dependency" in telemetry_name_lower:
+            if success_str == "false":
+                message = _build_dependency_failure_message(base_data, telemetry, operation_name)
+                return {
+                    "event_type": "dependency_failure",
+                    "severity": "medium",
+                    "source_ip": source_ip,
+                    "message": message,
+                    "event_timestamp": event_timestamp,
+                }
+
         if result_code is not None or success_str in {"true", "false"}:
             message = _build_request_message(base_data, telemetry, operation_name)
             return {
@@ -307,15 +348,5 @@ def normalize_azure_insights_telemetry(telemetry):
                 "message": message,
                 "event_timestamp": event_timestamp,
             }
-
-    if isinstance(message_text, str) and "HTTP request received" in message_text:
-        message = _build_trace_message(base_data, telemetry, operation_name)
-        return {
-            "event_type": "normal_activity",
-            "severity": "low",
-            "source_ip": source_ip,
-            "message": message,
-            "event_timestamp": event_timestamp,
-        }
 
     raise ValueError("Unsupported Azure telemetry type")
