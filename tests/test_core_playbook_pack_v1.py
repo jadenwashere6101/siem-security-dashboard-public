@@ -248,6 +248,79 @@ def test_core_pack_reputation_playbook_still_matches_pfsense_noisy_source(postgr
     assert CORE_V1_REPUTATION_INVESTIGATION_ID in matched_ids
 
 
+@pytest.mark.parametrize(
+    ("alert_kwargs", "expected_playbook_ids"),
+    [
+        (
+            {
+                "alert_type": "pfsense_firewall_repeated_deny",
+                "severity": "MEDIUM",
+                "reputation_score": 90,
+            },
+            {CORE_V1_PFSENSE_REPEATED_DENY_INVESTIGATION_ID},
+        ),
+        (
+            {
+                "alert_type": "pfsense_firewall_port_scan",
+                "severity": "HIGH",
+                "reputation_score": 90,
+            },
+            {
+                CORE_V1_PFSENSE_PORT_SCAN_INVESTIGATION_ID,
+                CORE_V1_PFSENSE_PORT_SCAN_CONTAINMENT_ID,
+            },
+        ),
+        (
+            {
+                "alert_type": "pfsense_firewall_suspicious_allow",
+                "severity": "HIGH",
+                "reputation_score": 90,
+            },
+            {CORE_V1_PFSENSE_SUSPICIOUS_ALLOW_CONTAINMENT_ID},
+        ),
+    ],
+)
+def test_core_pack_malicious_ip_playbook_excludes_dedicated_pfsense_alert_types(
+    postgres_db, alert_kwargs, expected_playbook_ids
+):
+    conn, cur = postgres_db
+    seed_core_playbook_pack_v1(conn)
+    aid = _insert_alert(cur, **alert_kwargs)
+    matched_ids = {row["id"] for row in match_playbooks(conn, aid)}
+    assert CORE_V1_MALICIOUS_IP_CONTAINMENT_ID not in matched_ids
+    assert expected_playbook_ids.issubset(matched_ids)
+
+
+def test_core_pack_malicious_ip_playbook_still_matches_non_pfsense_reputation_alerts(
+    postgres_db,
+):
+    conn, cur = postgres_db
+    seed_core_playbook_pack_v1(conn)
+    aid = _insert_alert(
+        cur,
+        alert_type="port_scan_threshold",
+        severity="MEDIUM",
+        reputation_score=90,
+        source="bank_app",
+    )
+    matched_ids = {row["id"] for row in match_playbooks(conn, aid)}
+    assert CORE_V1_MALICIOUS_IP_CONTAINMENT_ID in matched_ids
+
+
+def test_core_pack_malicious_ip_playbook_still_matches_pfsense_noisy_source(postgres_db):
+    conn, cur = postgres_db
+    seed_core_playbook_pack_v1(conn)
+    aid = _insert_alert(
+        cur,
+        alert_type="pfsense_firewall_noisy_source",
+        severity="MEDIUM",
+        reputation_score=90,
+        source="pfsense",
+    )
+    matched_ids = {row["id"] for row in match_playbooks(conn, aid)}
+    assert CORE_V1_MALICIOUS_IP_CONTAINMENT_ID in matched_ids
+
+
 def test_password_spray_investigation_executes_with_dynamic_notification(postgres_db):
     conn, cur = postgres_db
     seed_core_playbook_pack_v1(conn)

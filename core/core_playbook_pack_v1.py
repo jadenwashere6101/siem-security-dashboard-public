@@ -120,6 +120,11 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
         "trigger_config": {
             "reputation_score_min": 80,
             "min_severity": "medium",
+            "exclude_alert_types": [
+                "pfsense_firewall_port_scan",
+                "pfsense_firewall_repeated_deny",
+                "pfsense_firewall_suspicious_allow",
+            ],
         },
         "steps": [
             {"action": "flag_high_priority"},
