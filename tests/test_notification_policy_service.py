@@ -214,6 +214,32 @@ def test_notify_for_alert_records_blocked_attempt_when_below_threshold(postgres_
     assert attempt["failure_code"] == "below_minimum_severity"
 
 
+def test_notify_for_alert_short_circuits_when_slack_disabled(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur, severity="critical")
+    conn.commit()
+
+    with patch(
+        "core.notification_policy_service.get_effective_notification_policy",
+        return_value={
+            "status": "applied",
+            "slack_enabled": False,
+            "minimum_severity": "low",
+            "notify_on_alerts": True,
+            "notify_on_incidents": True,
+            "slack_format": "compact",
+            "pfsense_destination": "#pf",
+            "honeypot_destination": "#hp",
+        },
+    ), patch("core.notification_policy_service.get_integration_adapter") as adapter_factory:
+        attempt = notify_for_alert(conn, alert_id)
+        conn.commit()
+
+    assert adapter_factory.called is False
+    assert attempt["status"] == "blocked"
+    assert attempt["failure_code"] == "slack_disabled"
+
+
 def test_notify_for_alert_and_incident_use_existing_slack_adapter_contract(postgres_db):
     conn, cur = postgres_db
     alert_id = _insert_alert(cur, source="honeypot", source_type="honeypot", alert_type="honeypot_credential_stuffing_threshold")

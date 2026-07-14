@@ -10,6 +10,7 @@ from typing import Any
 from core.integration_audit import log_integration_execution_attempt
 from integrations.adapter_rate_limiter import check_adapter_rate_limit
 from integrations.base_integration import (
+    FAILURE_CLASSIFICATION_CREDENTIAL_MISSING,
     FAILURE_CLASSIFICATION_NON_TRANSIENT,
     FAILURE_CLASSIFICATION_TIMEOUT,
     FAILURE_CLASSIFICATION_TRANSIENT,
@@ -21,11 +22,17 @@ from integrations.base_integration import (
 )
 
 SLACK_WEBHOOK_ENV = "SLACK_WEBHOOK_URL"
+SLACK_PFSENSE_WEBHOOK_ENV = "SLACK_PFSENSE_WEBHOOK_URL"
+SLACK_HONEYPOT_WEBHOOK_ENV = "SLACK_HONEYPOT_WEBHOOK_URL"
 SLACK_REAL_ALLOW_ENV = "SOAR_REAL_SLACK_ENABLED"
 SLACK_ENV_ENV = "SOAR_ENV"
 SLACK_TIMEOUT_ENV = "SLACK_TIMEOUT_SECONDS"
 DEFAULT_SLACK_TIMEOUT_SECONDS = 3
 MAX_SLACK_TEXT_CHARS = 3000
+ROUTE_KEY_TO_SLACK_WEBHOOK_ENV = {
+    "pfsense": SLACK_PFSENSE_WEBHOOK_ENV,
+    "honeypot": SLACK_HONEYPOT_WEBHOOK_ENV,
+}
 
 
 # spec: SPEC-INTEG-003
@@ -42,6 +49,44 @@ def _slack_webhook_valid() -> bool:
     return value.startswith("https://hooks.slack.com/services/")
 
 
+def _slack_webhook_value(env_name: str) -> str:
+    return os.getenv(env_name, "").strip()
+
+
+def _slack_webhook_valid_for_env(env_name: str) -> bool:
+    return _slack_webhook_value(env_name).startswith("https://hooks.slack.com/services/")
+
+
+def _notification_policy_route_key(context: dict[str, Any]) -> str | None:
+    if context.get("notification_policy") is not True:
+        return None
+    route_key = str(context.get("route_key") or "").strip().lower()
+    return route_key or None
+
+
+def _resolve_slack_webhook_target(context: dict[str, Any]) -> dict[str, Any]:
+    route_key = _notification_policy_route_key(context)
+    if route_key in ROUTE_KEY_TO_SLACK_WEBHOOK_ENV:
+        env_name = ROUTE_KEY_TO_SLACK_WEBHOOK_ENV[route_key]
+        webhook_url = _slack_webhook_value(env_name)
+        return {
+            "route_key": route_key,
+            "env_name": env_name,
+            "webhook_url": webhook_url,
+            "configured": bool(webhook_url),
+            "valid": _slack_webhook_valid_for_env(env_name),
+            "generic": False,
+        }
+    return {
+        "route_key": None,
+        "env_name": SLACK_WEBHOOK_ENV,
+        "webhook_url": _slack_webhook_value(SLACK_WEBHOOK_ENV),
+        "configured": _slack_webhook_configured(),
+        "valid": _slack_webhook_valid(),
+        "generic": True,
+    }
+
+
 def _slack_real_mode_allowed() -> bool:
     readiness = _validate_real_mode_guards(
         "slack",
@@ -50,6 +95,15 @@ def _slack_real_mode_allowed() -> bool:
         credential_envs=(SLACK_WEBHOOK_ENV,),
     )
     return bool(readiness["real_mode_allowed"])
+
+
+def _slack_real_guard_readiness(mode: str, credential_envs: tuple[str, ...]) -> dict[str, Any]:
+    return _validate_real_mode_guards(
+        "slack",
+        mode=mode,
+        enabled_env=SLACK_REAL_ALLOW_ENV,
+        credential_envs=credential_envs,
+    )
 
 
 # spec: SPEC-INTEG-003 / SPEC-INTEG-005 - Slack is real-capable only after adapter guards pass.
@@ -161,28 +215,87 @@ class SlackSimulationAdapter(BaseIntegration):
         return result
 
     def _execute_real_slack(self, action, params, context):
-        readiness = get_slack_real_mode_readiness(REAL_MODE)
         timeout_seconds = _get_timeout_seconds()
+        webhook_target = _resolve_slack_webhook_target(context)
+        guard_readiness = _slack_real_guard_readiness(REAL_MODE, (webhook_target["env_name"],))
         base_metadata = {
             "delivery": "not_sent",
-            "slack_configured": readiness["slack_configured"],
-            "real_mode_allowed": readiness["real_mode_allowed"],
-            "real_mode_ready": readiness["real_mode_ready"],
-            "webhook_configured": readiness["webhook_configured"],
+            "slack_configured": webhook_target["configured"],
+            "real_mode_allowed": guard_readiness["real_mode_allowed"],
+            "real_mode_ready": bool(
+                guard_readiness["real_mode_allowed"] and webhook_target["configured"] and webhook_target["valid"]
+            ),
+            "webhook_configured": webhook_target["configured"],
             "timeout_seconds": timeout_seconds,
             "max_adapter_attempts": 1,
         }
-        if not readiness["real_mode_ready"]:
+        if not guard_readiness["real_mode_allowed"]:
+            missing_guards = guard_readiness.get("missing_guards") or []
+            failure_classification = (
+                FAILURE_CLASSIFICATION_CREDENTIAL_MISSING
+                if webhook_target["env_name"] in missing_guards
+                else FAILURE_CLASSIFICATION_NON_TRANSIENT
+            )
             return self._audit_real_attempt(self._result(
                 action,
                 params,
                 context,
                 success=False,
-                message=f"Slack real mode failed closed: {readiness['real_mode_status']}.",
+                message=f"Slack real mode failed closed: {guard_readiness['real_mode_status']}.",
+                metadata={
+                    **base_metadata,
+                    "failure_classification": failure_classification,
+                    "retry_eligible": False,
+                },
+                mode=REAL_MODE,
+                simulated=True,
+                executed=False,
+            ), context)
+
+        if not webhook_target["configured"]:
+            target_name = webhook_target["env_name"]
+            route_key = webhook_target["route_key"]
+            message = (
+                f"Slack real mode failed closed: missing route-specific webhook {target_name} for {route_key}."
+                if route_key
+                else f"Slack real mode failed closed: missing webhook {target_name}."
+            )
+            return self._audit_real_attempt(self._result(
+                action,
+                params,
+                context,
+                success=False,
+                message=message,
+                metadata={
+                    **base_metadata,
+                    "failure_classification": FAILURE_CLASSIFICATION_CREDENTIAL_MISSING,
+                    "retry_eligible": False,
+                    "webhook_configured": False,
+                },
+                mode=REAL_MODE,
+                simulated=True,
+                executed=False,
+            ), context)
+
+        if not webhook_target["valid"]:
+            target_name = webhook_target["env_name"]
+            route_key = webhook_target["route_key"]
+            message = (
+                f"Slack real mode failed closed: invalid route-specific webhook {target_name} for {route_key}."
+                if route_key
+                else f"Slack real mode failed closed: invalid webhook {target_name}."
+            )
+            return self._audit_real_attempt(self._result(
+                action,
+                params,
+                context,
+                success=False,
+                message=message,
                 metadata={
                     **base_metadata,
                     "failure_classification": FAILURE_CLASSIFICATION_NON_TRANSIENT,
                     "retry_eligible": False,
+                    "webhook_configured": True,
                 },
                 mode=REAL_MODE,
                 simulated=True,
@@ -213,7 +326,7 @@ class SlackSimulationAdapter(BaseIntegration):
                 executed=False,
             ), context)
 
-        webhook_url = os.getenv(SLACK_WEBHOOK_ENV, "").strip()
+        webhook_url = webhook_target["webhook_url"]
         payload = _format_slack_payload(action, params, context)
         started = time.monotonic()
         try:

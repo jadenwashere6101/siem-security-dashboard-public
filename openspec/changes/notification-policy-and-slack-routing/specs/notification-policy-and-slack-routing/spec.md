@@ -65,10 +65,12 @@ The system SHALL route Slack notifications by the existing alert source family, 
 #### Scenario: pfSense source routes to the pfSense Slack destination
 - **WHEN** notification policy evaluates an alert or incident whose source belongs to the pfSense source family
 - **THEN** the Slack notification SHALL use the pfSense route configuration
+- **AND** SHALL select only the `SLACK_PFSENSE_WEBHOOK_URL` secret for real delivery
 
 #### Scenario: Honeypot source routes to the honeypot Slack destination
 - **WHEN** notification policy evaluates an alert or incident whose source belongs to the honeypot source family
 - **THEN** the Slack notification SHALL use the honeypot route configuration
+- **AND** SHALL select only the `SLACK_HONEYPOT_WEBHOOK_URL` secret for real delivery
 
 #### Scenario: Routing does not depend on individual detection rules
 - **WHEN** two alerts share the same routed source family but come from different detection rules
@@ -78,7 +80,17 @@ The system SHALL route Slack notifications by the existing alert source family, 
 - **WHEN** a future telemetry source is added after this capability
 - **THEN** it SHALL be able to plug into the same source-routing contract without redesigning notification policy fundamentals
 
-### Requirement: Slack route channel names are runtime configurable
+#### Scenario: One source webhook never becomes another source fallback
+- **WHEN** the pfSense webhook is missing or invalid
+- **THEN** pfSense notifications SHALL be suppressed with a clear operational reason
+- **AND** the system SHALL NOT fall back to the honeypot webhook or the generic `SLACK_WEBHOOK_URL`
+
+#### Scenario: Missing webhook for one route does not suppress the other route
+- **WHEN** only one route-specific Slack webhook is configured correctly
+- **THEN** notifications for that configured route SHALL remain eligible
+- **AND** notifications for the missing route only SHALL be suppressed
+
+### Requirement: Slack route destination labels are runtime configurable
 The system SHALL treat Slack destination labels for the pfSense and honeypot routes as runtime-configurable policy values rather than hardcoded strings.
 
 #### Scenario: pfSense channel label is configurable
@@ -98,6 +110,11 @@ The system SHALL treat Slack destination labels for the pfSense and honeypot rou
 - **THEN** it SHALL be treated as a validated routing label only
 - **AND** SHALL NOT store webhook URLs, credentials, or other Slack secrets
 
+#### Scenario: Destination labels do not control secret selection
+- **WHEN** a notification-policy delivery is attempted
+- **THEN** the stored pfSense or honeypot destination label SHALL remain human-readable metadata only
+- **AND** actual Slack route selection SHALL come from the canonical source route key and the corresponding environment-backed webhook secret
+
 ### Requirement: Slack policy respects enablement, severity floor, and object-type toggles
 The system SHALL evaluate runtime policy gates before attempting Slack delivery.
 
@@ -105,6 +122,11 @@ The system SHALL evaluate runtime policy gates before attempting Slack delivery.
 - **WHEN** Slack notifications are disabled in runtime policy
 - **THEN** the system SHALL NOT attempt Slack delivery for alerts or incidents
 - **AND** alerts, incidents, playbooks, audit evidence, and UI visibility SHALL remain otherwise unchanged
+
+#### Scenario: Route-specific missing secret is distinguishable
+- **WHEN** runtime policy would otherwise notify Slack for a supported source route but that route's webhook secret is missing or invalid
+- **THEN** the system SHALL suppress only that Slack delivery attempt
+- **AND** the resulting evidence SHALL distinguish route-specific credential failure from policy-disabled, below-severity, and unsupported-source outcomes
 
 #### Scenario: Below-minimum severity suppresses notification attempts
 - **WHEN** an alert or incident severity is below the configured minimum notification severity

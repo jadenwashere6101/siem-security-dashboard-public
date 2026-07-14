@@ -730,6 +730,90 @@ def test_slack_real_mode_prefers_preformatted_text_and_destination_label(monkeyp
     assert captured["payload"]["text"].startswith("[#soc-pfsense] ALERT HIGH pfsense #17")
 
 
+@pytest.mark.parametrize(
+    ("route_key", "env_name", "env_value"),
+    [
+        ("pfsense", "SLACK_PFSENSE_WEBHOOK_URL", "https://hooks.slack.com/services/T000/B000/PFSENSE"),
+        ("honeypot", "SLACK_HONEYPOT_WEBHOOK_URL", "https://hooks.slack.com/services/T000/B000/HONEYPOT"),
+    ],
+)
+def test_slack_notification_policy_route_uses_only_route_specific_webhook(
+    monkeypatch, route_key, env_name, env_value
+):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_SLACK_ENABLED", "true")
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T000/B000/GENERIC")
+    monkeypatch.setenv("SLACK_PFSENSE_WEBHOOK_URL", "https://hooks.slack.com/services/T000/B000/PFSENSE")
+    monkeypatch.setenv("SLACK_HONEYPOT_WEBHOOK_URL", "https://hooks.slack.com/services/T000/B000/HONEYPOT")
+
+    captured = {}
+
+    def _capture(webhook_url, payload, timeout_seconds):
+        captured["webhook_url"] = webhook_url
+        captured["payload"] = payload
+        captured["timeout_seconds"] = timeout_seconds
+        return {"status_code": 200}
+
+    with patch("integrations.slack_adapter._post_slack_webhook", side_effect=_capture):
+        result = get_integration_adapter("slack").execute(
+            "send_message",
+            params={"message": "Route-specific policy notification"},
+            context={"notification_policy": True, "route_key": route_key},
+        )
+
+    assert result["success"] is True
+    assert result["executed"] is True
+    assert captured["webhook_url"] == env_value
+    assert captured["webhook_url"] != "https://hooks.slack.com/services/T000/B000/GENERIC"
+
+
+def test_slack_notification_policy_missing_one_route_webhook_does_not_cross_route(monkeypatch):
+    monkeypatch.setenv("INTEGRATION_MODE", "real")
+    monkeypatch.setenv("SOAR_ENV", "staging")
+    monkeypatch.setenv("SOAR_REAL_SLACK_ENABLED", "true")
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T000/B000/GENERIC")
+    monkeypatch.delenv("SLACK_PFSENSE_WEBHOOK_URL", raising=False)
+    monkeypatch.setenv("SLACK_HONEYPOT_WEBHOOK_URL", "https://hooks.slack.com/services/T000/B000/HONEYPOT")
+
+    with patch(
+        "integrations.slack_adapter._post_slack_webhook",
+        side_effect=AssertionError("Route-specific missing webhook must fail closed before network"),
+    ):
+        blocked = get_integration_adapter("slack").execute(
+            "send_message",
+            params={"message": "pfSense policy notification"},
+            context={"notification_policy": True, "route_key": "pfsense"},
+        )
+
+    assert blocked["success"] is False
+    assert blocked["executed"] is False
+    assert blocked["simulated"] is True
+    assert blocked["metadata"]["failure_classification"] == "credential_missing"
+    assert "SLACK_PFSENSE_WEBHOOK_URL" in blocked["message"]
+    rendered = json.dumps(blocked, sort_keys=True)
+    assert "hooks.slack.com/services" not in rendered
+    assert "HONEYPOT" not in rendered
+    assert "GENERIC" not in rendered
+
+    captured = {}
+
+    def _capture(webhook_url, payload, timeout_seconds):
+        captured["webhook_url"] = webhook_url
+        return {"status_code": 200}
+
+    with patch("integrations.slack_adapter._post_slack_webhook", side_effect=_capture):
+        delivered = get_integration_adapter("slack").execute(
+            "send_message",
+            params={"message": "honeypot policy notification"},
+            context={"notification_policy": True, "route_key": "honeypot"},
+        )
+
+    assert delivered["success"] is True
+    assert delivered["executed"] is True
+    assert captured["webhook_url"] == "https://hooks.slack.com/services/T000/B000/HONEYPOT"
+
+
 def test_slack_real_mode_failure_audit_redacts_webhook(monkeypatch):
     monkeypatch.setenv("INTEGRATION_MODE", "real")
     monkeypatch.setenv("SOAR_ENV", "staging")

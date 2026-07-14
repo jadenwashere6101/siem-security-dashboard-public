@@ -5,10 +5,10 @@ Alert severities are now normalized, but notification behavior is still too tigh
 ## What Changes
 
 - Define one notification-policy capability that consumes existing alert severity and alert source instead of duplicating rule logic.
-- Add runtime-configurable notification policy controls for Slack enabled/disabled, minimum notification severity, notify-on-alerts, notify-on-incidents, Slack format, and source-to-channel labels.
-- Design source-based Slack routing with exactly two initial destinations: pfSense and honeypot.
+- Add runtime-configurable notification policy controls for Slack enabled/disabled, minimum notification severity, notify-on-alerts, notify-on-incidents, Slack format, and per-source human-readable destination labels.
+- Design source-based Slack routing with exactly two initial webhook-backed routes: pfSense and honeypot.
 - Limit Slack formatting to two bounded modes: compact and detailed.
-- Keep channel names runtime configurable while preventing arbitrary per-rule routing, custom templates, or additional providers in this change.
+- Keep destination labels runtime configurable while preventing arbitrary per-rule routing, custom templates, or additional providers in this change.
 - Reuse existing runtime configuration and integration patterns where possible, while keeping detection, SOAR guardrails, RBAC, and audit boundaries intact.
 
 ## Capabilities
@@ -21,7 +21,7 @@ Alert severities are now normalized, but notification behavior is still too tigh
 
 ## Impact
 
-- **Affected backend:** notification policy service/helper layer, Slack notification integration path, runtime configuration read/write path, alert/incident notification entrypoints, and audit-safe routing/formatting helpers.
+- **Affected backend:** notification policy service/helper layer, Slack notification integration path, source-specific Slack webhook selection, runtime configuration read/write path, alert/incident notification entrypoints, and audit-safe routing/formatting helpers.
 - **Affected frontend:** admin/runtime configuration UI and notification settings UI for super-admin operators.
 - **Affected APIs:** likely additive admin/runtime configuration endpoints for reading and updating notification policy.
 - **Affected database/migrations:** one small additive migration for a dedicated `notification_policy` table with a single authoritative current-policy row and typed non-secret columns.
