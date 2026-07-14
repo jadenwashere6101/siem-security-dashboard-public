@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from './App';
 import { loadCurrentSession } from './services/authService';
-import { loadAlerts } from './services/alertsService';
+import { loadAlertDashboardSummary, loadAlerts } from './services/alertsService';
 import { UI_SETTINGS_STORAGE_KEY } from './utils/uiSettings';
 
 jest.mock('./services/authService', () => ({
@@ -13,12 +13,16 @@ jest.mock('./services/authService', () => ({
 
 jest.mock('./services/alertsService', () => ({
   loadAlerts: jest.fn(),
+  loadAlertDashboardSummary: jest.fn(),
 }));
 
 jest.mock('./components/DashboardSection', () => (props) => (
   <div data-testid="dashboard-section">
     <h2>Dashboard workspace</h2>
     Dashboard Section Mock search:{props.searchTerm || ''}
+    <div>loading:{String(Boolean(props.loading))}</div>
+    <div>refreshing:{String(Boolean(props.refreshing))}</div>
+    <div>error:{props.error || ''}</div>
     <button type="button" onClick={() => props.onOpenResponseRegistry({ sourceIp: '8.8.8.8', relatedAlertId: 12 })}>
       Dashboard open registry
     </button>
@@ -141,7 +145,19 @@ beforeEach(() => {
   jest.clearAllMocks();
   window.localStorage.clear();
   loadCurrentSession.mockResolvedValue({ authenticated: false });
-  loadAlerts.mockResolvedValue([]);
+  loadAlerts.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0, sort: 'newest' });
+  loadAlertDashboardSummary.mockResolvedValue({
+    metrics: {
+      total_alerts: 0,
+      high_count: 0,
+      medium_count: 0,
+      low_count: 0,
+      unique_source_ips: 0,
+    },
+    top_source_ips: [],
+    timeline: [],
+    map_markers: [],
+  });
 });
 
 test('renders without crashing', async () => {
@@ -225,6 +241,20 @@ test('renders SOC Command Center nav for analyst and loads command center when s
   await userEvent.click(screen.getByRole('button', { name: /soc command center/i }));
 
   expect(await screen.findByTestId('soc-command-center')).toHaveTextContent(/analyst analyst1/i);
+});
+
+test('passes dashboard loading state before the first alerts requests resolve', async () => {
+  loadCurrentSession.mockResolvedValue({
+    authenticated: true,
+    user: 'analyst1',
+    role: 'analyst',
+  });
+  loadAlerts.mockImplementation(() => new Promise(() => {}));
+  loadAlertDashboardSummary.mockImplementation(() => new Promise(() => {}));
+
+  render(<App />);
+
+  expect(await screen.findByTestId('dashboard-section')).toHaveTextContent('loading:true');
 });
 
 test('ordinary sidebar and SOC navigation reset the shared main scroll container', async () => {

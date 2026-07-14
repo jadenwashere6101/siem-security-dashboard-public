@@ -90,6 +90,17 @@ def _fetch_alerts_response(client, conn):
         return client.get("/alerts")
 
 
+def _fetch_alert_summary_response(client, conn):
+    with patch("routes.alerts_events_routes.get_db_connection", return_value=_RouteSafeConnection(conn)), patch(
+        "routes.alerts_events_routes.get_ip_reputation", return_value=BEHAVIORAL_REPUTATION
+    ):
+        return client.get("/alerts/summary")
+
+
+def _alert_items(payload):
+    return payload["items"] if isinstance(payload, dict) else payload
+
+
 def _fetch_why_fired_response(client, conn, alert_id):
     with patch("routes.alerts_events_routes.get_db_connection", return_value=_RouteSafeConnection(conn)), patch(
         "routes.alerts_events_routes.get_ip_reputation", return_value=BEHAVIORAL_REPUTATION
@@ -118,6 +129,11 @@ def test_get_alerts_without_session_returns_401(client):
     assert resp.status_code == 401
 
 
+def test_get_alerts_summary_without_session_returns_401(client):
+    resp = client.get("/alerts/summary")
+    assert resp.status_code == 401
+
+
 def test_get_alerts_authenticated_returns_200_and_json_list_with_core_fields(client, postgres_db):
     conn, cur = postgres_db
     _insert_alert(
@@ -133,12 +149,134 @@ def test_get_alerts_authenticated_returns_200_and_json_list_with_core_fields(cli
 
     assert resp.status_code == 200
     data = resp.get_json()
-    assert isinstance(data, list)
-    assert len(data) >= 1
+    assert isinstance(data, dict)
+    assert isinstance(data["items"], list)
+    assert len(data["items"]) >= 1
+    assert data["limit"] == 50
+    assert data["offset"] == 0
 
-    alert = data[0]
+    alert = data["items"][0]
     for field in ("id", "alert_type", "severity", "source_ip", "status", "created_at"):
         assert field in alert
+
+
+def test_get_alerts_applies_limit_offset_and_max_page_size(client, postgres_db):
+    conn, cur = postgres_db
+    for index in range(3):
+        _insert_alert(
+            cur,
+            alert_type=f"paged_alert_{index}",
+            source_ip=f"198.51.100.{230 + index}",
+            message=f"Paged alert {index}",
+        )
+    conn.commit()
+
+    _login_as_super_admin(client)
+    with patch("routes.alerts_events_routes.get_db_connection", return_value=_RouteSafeConnection(conn)), patch(
+        "routes.alerts_events_routes.get_ip_reputation", return_value=BEHAVIORAL_REPUTATION
+    ):
+        resp = client.get("/alerts?limit=999&offset=1&sort=newest")
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["limit"] == 100
+    assert payload["offset"] == 1
+    items = payload["items"]
+    assert len(items) == 2
+    assert [item["alert_type"] for item in items] == ["paged_alert_1", "paged_alert_0"]
+
+
+def test_get_alerts_summary_remains_authoritative_independent_of_alert_page(client, postgres_db):
+    conn, cur = postgres_db
+    cur.execute(
+        """
+        INSERT INTO alerts (
+            alert_type,
+            severity,
+            source_ip,
+            source,
+            source_type,
+            message,
+            status,
+            latitude,
+            longitude,
+            country,
+            city,
+            created_at
+        )
+        VALUES
+            (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s),
+            (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s),
+            (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            "summary_high_one",
+            "high",
+            "198.51.100.10",
+            "bank_app",
+            "custom",
+            "Summary high alert 1",
+            "open",
+            40.7128,
+            -74.0060,
+            "United States",
+            "New York",
+            "2026-07-14T10:00:00Z",
+            "summary_high_two",
+            "high",
+            "198.51.100.10",
+            "bank_app",
+            "custom",
+            "Summary high alert 2",
+            "open",
+            40.7128,
+            -74.0060,
+            "United States",
+            "New York",
+            "2026-07-14T10:10:00Z",
+            "summary_medium_one",
+            "medium",
+            "198.51.100.11",
+            "nginx",
+            "web_log",
+            "Summary medium alert",
+            "open",
+            34.0522,
+            -118.2437,
+            "United States",
+            "Los Angeles",
+            "2026-07-14T11:00:00Z",
+        ),
+    )
+    conn.commit()
+
+    _login_as_super_admin(client)
+
+    with patch("routes.alerts_events_routes.get_db_connection", return_value=_RouteSafeConnection(conn)), patch(
+        "routes.alerts_events_routes.get_ip_reputation", return_value=BEHAVIORAL_REPUTATION
+    ):
+        paged_resp = client.get("/alerts?limit=1&offset=0&sort=newest")
+        summary_resp = client.get("/alerts/summary")
+
+    assert paged_resp.status_code == 200
+    assert summary_resp.status_code == 200
+
+    paged_payload = paged_resp.get_json()
+    summary_payload = summary_resp.get_json()
+
+    assert len(paged_payload["items"]) == 1
+    assert paged_payload["total"] == 3
+    assert summary_payload["metrics"] == {
+        "total_alerts": 3,
+        "high_count": 2,
+        "medium_count": 1,
+        "low_count": 0,
+        "unique_source_ips": 2,
+    }
+    assert summary_payload["top_source_ips"][0] == {"name": "198.51.100.10", "value": 2}
+    assert [bucket["count"] for bucket in summary_payload["timeline"]] == [2, 1]
+    assert summary_payload["map_markers"][0]["source_ip"] == "198.51.100.10"
+    assert summary_payload["map_markers"][0]["alert_count"] == 2
 
 
 def test_get_alerts_preserves_stored_external_reputation_and_adds_behavioral_reputation(client, postgres_db):
@@ -162,7 +300,7 @@ def test_get_alerts_preserves_stored_external_reputation_and_adds_behavioral_rep
     resp = _fetch_alerts_response(client, conn)
 
     assert resp.status_code == 200
-    alert = _alert_by_type(resp.get_json(), "failed_login_threshold")
+    alert = _alert_by_type(_alert_items(resp.get_json()), "failed_login_threshold")
     assert alert["reputation_score"] == 71
     assert alert["reputation_label"] == "abuseipdb-high"
     assert alert["reputation_source"] == "abuseipdb"
@@ -192,7 +330,7 @@ def test_get_alerts_behavioral_reputation_shape_always_present(client, postgres_
     resp = _fetch_alerts_response(client, conn)
 
     assert resp.status_code == 200
-    alert = _alert_by_type(resp.get_json(), "port_scan_threshold")
+    alert = _alert_by_type(_alert_items(resp.get_json()), "port_scan_threshold")
     behavioral = alert["behavioral_reputation"]
     assert set(behavioral) == {"score", "label", "source", "summary", "contributing_signals"}
     assert behavioral["source"] == "siem_internal"
@@ -217,7 +355,7 @@ def test_get_alerts_correlation_alerts_include_correlation_contract_fields(clien
     resp = _fetch_alerts_response(client, conn)
 
     assert resp.status_code == 200
-    data = resp.get_json()
+    data = _alert_items(resp.get_json())
     correlation_alerts = [alert for alert in data if alert.get("alert_type") == "correlated_activity"]
     assert correlation_alerts
 
@@ -273,7 +411,7 @@ def test_get_alerts_prefers_structured_context_over_message_parsing(client, post
     resp = _fetch_alerts_response(client, conn)
 
     assert resp.status_code == 200
-    alert = _alert_by_type(resp.get_json(), "correlated_activity")
+    alert = _alert_by_type(_alert_items(resp.get_json()), "correlated_activity")
     assert alert["context"] == structured_context
     assert alert["is_correlation_alert"] is True
     assert alert["correlated_alert_types"] == ["port_scan_threshold", "failed_login_threshold"]
@@ -298,7 +436,7 @@ def test_get_alerts_targeted_correlation_with_empty_context_does_not_fabricate_d
     resp = _fetch_alerts_response(client, conn)
 
     assert resp.status_code == 200
-    alert = _alert_by_type(resp.get_json(), "web_to_app_attack_pattern")
+    alert = _alert_by_type(_alert_items(resp.get_json()), "web_to_app_attack_pattern")
     assert alert.get("context") == {}
     assert "is_correlation_alert" not in alert
     assert "correlated_alert_types" not in alert
@@ -319,7 +457,7 @@ def test_get_alerts_non_correlation_alert_exposes_empty_context(client, postgres
     resp = _fetch_alerts_response(client, conn)
 
     assert resp.status_code == 200
-    alert = _alert_by_type(resp.get_json(), "failed_login_threshold")
+    alert = _alert_by_type(_alert_items(resp.get_json()), "failed_login_threshold")
     assert alert.get("context") == {}
     assert "is_correlation_alert" not in alert
 
@@ -347,7 +485,7 @@ def test_get_alerts_mitre_fields_include_expected_known_mappings(client, postgre
     resp = _fetch_alerts_response(client, conn)
 
     assert resp.status_code == 200
-    data = resp.get_json()
+    data = _alert_items(resp.get_json())
     assert isinstance(data, list)
 
     for alert_type, _source_ip, technique_id, technique_name, tactic in mapped_alerts:
@@ -377,7 +515,7 @@ def test_get_alerts_intentionally_unmapped_mitre_alerts_return_null_fields(clien
     resp = _fetch_alerts_response(client, conn)
 
     assert resp.status_code == 200
-    data = resp.get_json()
+    data = _alert_items(resp.get_json())
     assert isinstance(data, list)
 
     for alert_type in intentionally_unmapped_alert_types:
@@ -398,7 +536,7 @@ def test_get_alerts_unknown_mitre_mapping_keeps_null_field_shape(client, postgre
     resp = _fetch_alerts_response(client, conn)
 
     assert resp.status_code == 200
-    data = resp.get_json()
+    data = _alert_items(resp.get_json())
     assert isinstance(data, list)
 
     _assert_null_mitre(_alert_by_type(data, "custom_unmapped_alert"))
@@ -478,7 +616,7 @@ def test_get_alerts_pfsense_quality_metadata_and_why_fired_use_persisted_context
     _login_as_super_admin(client)
     alerts_resp = _fetch_alerts_response(client, conn)
     assert alerts_resp.status_code == 200
-    alert = _alert_by_type(alerts_resp.get_json(), "pfsense_firewall_repeated_deny")
+    alert = _alert_by_type(_alert_items(alerts_resp.get_json()), "pfsense_firewall_repeated_deny")
     assert alert["pfsense_quality"]["why_fired_available"] is True
     assert alert["pfsense_quality"]["suppressed_rollup"] is False
     assert alert["pfsense_quality"]["cooldown"]["window_minutes"] > 0

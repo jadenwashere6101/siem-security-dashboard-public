@@ -416,6 +416,42 @@ test("polling merges new rows without duplicating existing ids", async () => {
   expect(loadLiveLogs).toHaveBeenLastCalledWith({ source: "pfsense", afterId: 1 });
 });
 
+test("caps retained rows at 500 and trims the oldest events after merge", async () => {
+  const initialRows = Array.from({ length: 500 }, (_, index) => ({
+    ...eventOne,
+    id: index + 1,
+    message: `event ${index + 1}`,
+    created_at: `2026-07-07T10:${String(index % 60).padStart(2, "0")}:00Z`,
+  }));
+  const nextRows = Array.from({ length: 10 }, (_, index) => ({
+    ...eventOne,
+    id: 501 + index,
+    message: `event ${501 + index}`,
+    created_at: `2026-07-07T11:${String(index).padStart(2, "0")}:00Z`,
+  }));
+
+  loadLiveLogs.mockResolvedValueOnce(initialRows).mockResolvedValueOnce(nextRows);
+
+  render(<LiveLogsPanel source="pfsense" {...styleProps} />);
+
+  expect(await screen.findByText("event 500")).toBeInTheDocument();
+  expect(screen.getByText("event 1")).toBeInTheDocument();
+
+  await act(async () => {
+    jest.advanceTimersByTime(5000);
+  });
+
+  await waitFor(() => {
+    expect(screen.getByText("event 510")).toBeInTheDocument();
+  });
+
+  expect(screen.queryByText("event 1")).not.toBeInTheDocument();
+  expect(screen.queryByText("event 10")).not.toBeInTheDocument();
+  expect(screen.getByText("event 11")).toBeInTheDocument();
+  expect(screen.getByText("event 510")).toBeInTheDocument();
+  expect(loadLiveLogs).toHaveBeenLastCalledWith({ source: "pfsense", afterId: 500 });
+});
+
 test("clears polling interval on unmount", async () => {
   loadLiveLogs.mockResolvedValue([eventOne]);
   const clearSpy = jest.spyOn(global, "clearInterval");

@@ -30,15 +30,8 @@ import {
   readStoredSessionIdentity,
   writeStoredSessionIdentity,
 } from "./utils/sessionIdentity";
-import {
-  buildAlertMetrics,
-  buildAlertTimelineData,
-  buildTopIPChartData,
-  filterAlerts,
-  sortAlerts,
-} from "./utils/alertDashboardData";
 import { updateAlertStatusRequest } from "./services/alertStatusService";
-import { loadAlerts } from "./services/alertsService";
+import { loadAlertDashboardSummary, loadAlerts } from "./services/alertsService";
 import {
   loadCurrentSession,
   loginToDashboard,
@@ -53,14 +46,52 @@ import {
 } from "./utils/workspaceNavigation";
 import packageJson from "../package.json";
 
+const DEFAULT_ALERT_PAGE_SIZE = 50;
+const MAX_ALERT_PAGE_SIZE = 100;
+
+const createAlertRowsState = () => ({
+  items: [],
+  total: 0,
+  limit: DEFAULT_ALERT_PAGE_SIZE,
+  offset: 0,
+  loading: true,
+  refreshing: false,
+  error: "",
+  hasLoadedOnce: false,
+});
+
+const createAlertSummaryState = () => ({
+  metrics: null,
+  topSourceIps: [],
+  timeline: [],
+  mapMarkers: [],
+  loading: true,
+  refreshing: false,
+  error: "",
+  hasLoadedOnce: false,
+});
+
+function resolveAlertPageSize(rowsPerPage) {
+  if (rowsPerPage === "all" || rowsPerPage === undefined || rowsPerPage === null) {
+    return DEFAULT_ALERT_PAGE_SIZE;
+  }
+  const parsed = Number(rowsPerPage);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return DEFAULT_ALERT_PAGE_SIZE;
+  }
+  return Math.min(parsed, MAX_ALERT_PAGE_SIZE);
+}
+
 function AppInner() {
-  const [alerts, setAlerts] = useState([]);
+  const [alertsState, setAlertsState] = useState(createAlertRowsState);
+  const [alertSummaryState, setAlertSummaryState] = useState(createAlertSummaryState);
   const [searchTerm, setSearchTerm] = useState("");
   const [sourceFilter, setSourceFilter] = useState("all");
   const [severityFilter, setSeverityFilter] = useState("");
   const [selectedAlertId, setSelectedAlertId] = useState(null);
   const [statusFilter, setStatusFilter] = useState("");
   const [sortOption, setSortOption] = useState("newest");
+  const [alertOffset, setAlertOffset] = useState(0);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUsername, setCurrentUsername] = useState(null);
   const [userRole, setUserRole] = useState(null);
@@ -84,6 +115,19 @@ function AppInner() {
   const hasCheckedAuthRef = useRef(false);
   const hasAppliedLandingRef = useRef(false);
   const alertsTableRef = useRef(null);
+  const alertPageSize = resolveAlertPageSize(settings.display?.rowsPerPage);
+  const alertQuery = useMemo(
+    () => ({
+      searchTerm,
+      severityFilter,
+      statusFilter,
+      sourceFilter,
+      sortOption,
+      limit: alertPageSize,
+      offset: alertOffset,
+    }),
+    [alertOffset, alertPageSize, searchTerm, severityFilter, sourceFilter, sortOption, statusFilter]
+  );
 
   const checkAuth = async () => {
     try {
@@ -118,33 +162,79 @@ function AppInner() {
         role: nextRole,
       });
       hasCheckedAuthRef.current = true;
-
-      if (authenticated) {
-        await fetchAlerts();
-      }
     } catch (err) {
       console.error("Error checking auth:", err);
       setIsAuthenticated(false);
       setCurrentUsername(null);
       setUserRole(null);
+      setAlertsState(createAlertRowsState());
+      setAlertSummaryState(createAlertSummaryState());
       writeStoredSessionIdentity(null);
     } finally {
       setAuthLoading(false);
     }
   };
 
-  const fetchAlerts = useCallback(async () => {
+  const fetchAlerts = useCallback(async ({ quiet = false } = {}) => {
     if (!isAuthenticated) return;
 
-    try {
-      const data = await loadAlerts();
+    if (quiet) {
+      setAlertsState((current) => ({ ...current, refreshing: true, error: "" }));
+      setAlertSummaryState((current) => ({ ...current, refreshing: true, error: "" }));
+    } else {
+      setAlertsState((current) => ({ ...current, loading: !current.hasLoadedOnce, error: "" }));
+      setAlertSummaryState((current) => ({ ...current, loading: !current.hasLoadedOnce, error: "" }));
+    }
 
-      setAlerts(Array.isArray(data) ? data : []);
+    try {
+      const [rowData, summaryData] = await Promise.all([
+        loadAlerts(alertQuery),
+        loadAlertDashboardSummary(alertQuery),
+      ]);
+
+      setAlertsState({
+        items: Array.isArray(rowData?.items) ? rowData.items : [],
+        total: Number(rowData?.total) || 0,
+        limit: Number(rowData?.limit) || alertPageSize,
+        offset: Number(rowData?.offset) || 0,
+        loading: false,
+        refreshing: false,
+        error: "",
+        hasLoadedOnce: true,
+      });
+      setAlertSummaryState({
+        metrics: summaryData?.metrics || null,
+        topSourceIps: Array.isArray(summaryData?.top_source_ips) ? summaryData.top_source_ips : [],
+        timeline: Array.isArray(summaryData?.timeline) ? summaryData.timeline : [],
+        mapMarkers: Array.isArray(summaryData?.map_markers) ? summaryData.map_markers : [],
+        loading: false,
+        refreshing: false,
+        error: "",
+        hasLoadedOnce: true,
+      });
     } catch (err) {
       console.error("Error fetching alerts:", err);
-      setAlerts([]);
+      const message = err.message || "Unable to load dashboard alerts";
+      setAlertsState((current) => ({
+        ...current,
+        items: current.hasLoadedOnce ? current.items : [],
+        total: current.hasLoadedOnce ? current.total : 0,
+        loading: false,
+        refreshing: false,
+        error: message,
+      }));
+      setAlertSummaryState((current) => ({
+        ...current,
+        metrics: current.hasLoadedOnce ? current.metrics : null,
+        topSourceIps: current.hasLoadedOnce ? current.topSourceIps : [],
+        timeline: current.hasLoadedOnce ? current.timeline : [],
+        mapMarkers: current.hasLoadedOnce ? current.mapMarkers : [],
+        loading: false,
+        refreshing: false,
+        error: message,
+      }));
     }
-  }, [isAuthenticated]);
+  }, [alertPageSize, alertQuery, isAuthenticated]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -174,7 +264,8 @@ function AppInner() {
       setUserRole(null);
       setActiveSection("dashboard");
       setSessionNotice("");
-      setAlerts([]);
+      setAlertsState(createAlertRowsState());
+      setAlertSummaryState(createAlertSummaryState());
       writeStoredSessionIdentity(null);
     }
   };
@@ -192,11 +283,15 @@ function AppInner() {
     }
 
     const interval = setInterval(() => {
-      fetchAlerts();
+      fetchAlerts({ quiet: true });
     }, settings.autoRefreshIntervalMs);
 
     return () => clearInterval(interval);
   }, [isAuthenticated, fetchAlerts, settings.autoRefreshIntervalMs]);
+
+  useEffect(() => {
+    setAlertOffset(0);
+  }, [alertPageSize, searchTerm, severityFilter, sourceFilter, sortOption, statusFilter]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -238,19 +333,6 @@ function AppInner() {
 
     return () => clearTimeout(timeout);
   }, [sessionNotice]);
-
-  const filteredAlerts = useMemo(() => {
-    return filterAlerts(alerts, {
-      searchTerm,
-      severityFilter,
-      statusFilter,
-      sourceFilter,
-    });
-  }, [alerts, searchTerm, severityFilter, statusFilter, sourceFilter]);
-
-  const sortedAlerts = useMemo(() => {
-    return sortAlerts(filteredAlerts, sortOption);
-  }, [filteredAlerts, sortOption]);
 
   const isSuperAdmin = userRole === "super_admin";
   const isAnalyst = userRole === "analyst";
@@ -349,15 +431,10 @@ function AppInner() {
     [roleFlags]
   );
 
-  const handleUpdateStatus = async (id, status) => {
+  const handleUpdateStatus = useCallback(async (id, status) => {
     try {
       await updateAlertStatusRequest(id, status);
-
-      setAlerts((prevAlerts) =>
-        prevAlerts.map((alert) =>
-          alert.id === id ? { ...alert, status } : alert
-        )
-      );
+      await fetchAlerts({ quiet: true });
 
       return { ok: true };
     } catch (err) {
@@ -367,20 +444,70 @@ function AppInner() {
         message: err.message || "Failed to update alert status",
       };
     }
-  };
+  }, [fetchAlerts]);
 
   const metrics = useMemo(() => {
-    return buildAlertMetrics(filteredAlerts);
-  }, [filteredAlerts]);
+    if (!alertSummaryState.metrics) {
+      return {
+        totalAlerts: 0,
+        highCount: 0,
+        mediumCount: 0,
+        lowCount: 0,
+        uniqueIPs: 0,
+      };
+    }
 
+    return {
+      totalAlerts: Number(alertSummaryState.metrics.total_alerts) || 0,
+      highCount: Number(alertSummaryState.metrics.high_count) || 0,
+      mediumCount: Number(alertSummaryState.metrics.medium_count) || 0,
+      lowCount: Number(alertSummaryState.metrics.low_count) || 0,
+      uniqueIPs: Number(alertSummaryState.metrics.unique_source_ips) || 0,
+    };
+  }, [alertSummaryState.metrics]);
 
-  const topIPChartData = useMemo(() => {
-    return buildTopIPChartData(filteredAlerts);
-  }, [filteredAlerts]);
+  const topIPChartData = useMemo(
+    () => alertSummaryState.topSourceIps,
+    [alertSummaryState.topSourceIps]
+  );
 
-  const alertTimelineData = useMemo(() => {
-    return buildAlertTimelineData(filteredAlerts);
-  }, [filteredAlerts]);
+  const alertTimelineData = useMemo(
+    () => alertSummaryState.timeline,
+    [alertSummaryState.timeline]
+  );
+
+  const alertMapMarkers = useMemo(
+    () => alertSummaryState.mapMarkers,
+    [alertSummaryState.mapMarkers]
+  );
+
+  const dashboardInitialLoading =
+    (alertsState.loading || alertSummaryState.loading) &&
+    (!alertsState.hasLoadedOnce || !alertSummaryState.hasLoadedOnce);
+  const dashboardInitialError =
+    !dashboardInitialLoading &&
+    ((!alertsState.hasLoadedOnce && alertsState.error) ||
+      (!alertSummaryState.hasLoadedOnce && alertSummaryState.error) ||
+      "");
+  const dashboardRefreshing = alertsState.refreshing || alertSummaryState.refreshing;
+  const dashboardRefreshError =
+    (alertsState.hasLoadedOnce || alertSummaryState.hasLoadedOnce) &&
+    !dashboardRefreshing
+      ? alertsState.error || alertSummaryState.error || ""
+      : "";
+  const alertPageEnd = Math.min(alertsState.offset + alertsState.items.length, alertsState.total);
+  const canGoToPreviousAlertPage = alertsState.offset > 0;
+  const canGoToNextAlertPage = alertsState.offset + alertsState.limit < alertsState.total;
+
+  const handleNextAlertPage = useCallback(() => {
+    if (!canGoToNextAlertPage) return;
+    setAlertOffset((current) => current + alertPageSize);
+  }, [alertPageSize, canGoToNextAlertPage]);
+
+  const handlePreviousAlertPage = useCallback(() => {
+    if (!canGoToPreviousAlertPage) return;
+    setAlertOffset((current) => Math.max(0, current - alertPageSize));
+  }, [alertPageSize, canGoToPreviousAlertPage]);
 
   if (authLoading) {
     return (
@@ -554,10 +681,10 @@ function AppInner() {
             metrics={metrics}
             topIPChartData={topIPChartData}
             alertTimelineData={alertTimelineData}
-            sortedAlerts={sortedAlerts}
+            mapMarkers={alertMapMarkers}
+            alerts={alertsState.items}
             alertsTableRef={alertsTableRef}
             canTakeAlertActions={canTakeAlertActions}
-            setAlerts={setAlerts}
             searchTerm={searchTerm}
             setSearchTerm={setSearchTerm}
             sortOption={sortOption}
@@ -605,6 +732,20 @@ function AppInner() {
             displaySettings={settings.display}
             onOpenResponseRegistry={handleOpenResponseRegistry}
             onReviewIncident={handleOpenIncidentWorkspace}
+            loading={dashboardInitialLoading}
+            error={dashboardInitialError}
+            refreshing={dashboardRefreshing}
+            refreshError={dashboardRefreshError}
+            onRetry={() => fetchAlerts({ quiet: false })}
+            totalAlerts={alertsState.total}
+            pageOffset={alertsState.offset}
+            pageLimit={alertsState.limit}
+            pageEnd={alertPageEnd}
+            canGoToPreviousPage={canGoToPreviousAlertPage}
+            canGoToNextPage={canGoToNextAlertPage}
+            onPreviousPage={handlePreviousAlertPage}
+            onNextPage={handleNextAlertPage}
+            onRefreshAlerts={() => fetchAlerts({ quiet: true })}
           />
         )}
 
@@ -636,7 +777,7 @@ function AppInner() {
 
         {activeSection === "soc-command-center" && isSectionVisible("soc-command-center", roleFlags) && (
           <SocCommandCenter
-            alerts={alerts}
+            alerts={alertsState.items}
             userRole={userRole}
             currentUsername={currentUsername}
             onNavigate={handleNavigate}

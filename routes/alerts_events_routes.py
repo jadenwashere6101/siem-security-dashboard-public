@@ -52,6 +52,10 @@ PFSENSE_WHY_FIRED_LABELS = {
     "first_seen": "First seen",
     "last_seen": "Last seen",
 }
+DEFAULT_ALERT_LIMIT = 50
+MAX_ALERT_LIMIT = 100
+VALID_ALERT_SORT_OPTIONS = frozenset({"newest", "oldest", "severity"})
+VALID_ALERT_SOURCE_FILTERS = VALID_EVENT_SOURCES | {"legacy"}
 
 _ALERT_SELECT = """
     SELECT
@@ -77,6 +81,287 @@ _ALERT_SELECT = """
         context
     FROM alerts
 """
+
+
+def _parse_non_negative_int(value, default, field_name):
+    if value is None:
+        return default, None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None, f"invalid {field_name}"
+    if parsed < 0:
+        return None, f"invalid {field_name}"
+    return parsed, None
+
+
+def _normalize_alert_filter_value(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() == "all":
+        return None
+    return text
+
+
+def _parse_alert_list_request_args(include_pagination: bool = False):
+    search = _normalize_alert_filter_value(request.args.get("search"))
+    severity = _normalize_alert_filter_value(request.args.get("severity"))
+    if severity is not None:
+        severity = severity.lower()
+
+    status = _normalize_alert_filter_value(request.args.get("status"))
+    if status is not None:
+        status = status.lower()
+
+    source = _normalize_alert_filter_value(request.args.get("source"))
+    if source is not None and source not in VALID_ALERT_SOURCE_FILTERS:
+        return None, (jsonify({"error": "invalid source filter"}), 400)
+
+    sort = _normalize_alert_filter_value(request.args.get("sort")) or "newest"
+    if sort not in VALID_ALERT_SORT_OPTIONS:
+        return None, (jsonify({"error": "invalid sort option"}), 400)
+
+    args = {
+        "search": search,
+        "severity": severity,
+        "status": status,
+        "source": source,
+        "sort": sort,
+    }
+
+    if include_pagination:
+        limit, limit_error = _parse_non_negative_int(
+            request.args.get("limit"),
+            DEFAULT_ALERT_LIMIT,
+            "limit",
+        )
+        if limit_error:
+            return None, (jsonify({"error": limit_error}), 400)
+        limit = max(1, min(limit, MAX_ALERT_LIMIT))
+
+        offset, offset_error = _parse_non_negative_int(
+            request.args.get("offset"),
+            0,
+            "offset",
+        )
+        if offset_error:
+            return None, (jsonify({"error": offset_error}), 400)
+
+        args["limit"] = limit
+        args["offset"] = offset
+
+    return args, None
+
+
+def _build_alert_filter_sql(filters: dict):
+    clauses = []
+    params = []
+
+    if filters.get("search"):
+        pattern = f"%{filters['search']}%"
+        clauses.append("(host(source_ip) ILIKE %s OR message ILIKE %s)")
+        params.extend((pattern, pattern))
+
+    if filters.get("severity"):
+        clauses.append("severity = %s")
+        params.append(filters["severity"])
+
+    if filters.get("status"):
+        clauses.append("status = %s")
+        params.append(filters["status"])
+
+    if filters.get("source"):
+        clauses.append("COALESCE(source, 'legacy') = %s")
+        params.append(filters["source"])
+
+    return clauses, params
+
+
+def _build_alert_order_clause(sort: str) -> str:
+    if sort == "oldest":
+        return "ORDER BY created_at ASC, id ASC"
+    if sort == "severity":
+        return """
+            ORDER BY
+                CASE severity
+                    WHEN 'critical' THEN 0
+                    WHEN 'high' THEN 1
+                    WHEN 'medium' THEN 2
+                    WHEN 'low' THEN 3
+                    ELSE 4
+                END ASC,
+                created_at DESC,
+                id DESC
+        """
+    return "ORDER BY created_at DESC, id DESC"
+
+
+def _build_alerts_where_clause(clauses: list[str]) -> str:
+    if not clauses:
+        return ""
+    return " WHERE " + " AND ".join(clauses)
+
+
+def _fetch_alert_rows(cur, where_clause: str, order_clause: str, params: list, *, limit: int, offset: int):
+    query = f"{_ALERT_SELECT}{where_clause} {order_clause} LIMIT %s OFFSET %s"
+    cur.execute(query, (*params, limit, offset))
+    return cur.fetchall()
+
+
+def _fetch_alert_total(cur, where_clause: str, params: list):
+    cur.execute(f"SELECT COUNT(*) FROM alerts{where_clause}", tuple(params))
+    row = cur.fetchone()
+    return int(row[0] or 0) if row else 0
+
+
+def _fetch_alert_summary_metrics(cur, where_clause: str, params: list):
+    cur.execute(
+        f"""
+        SELECT
+            COUNT(*) AS total_alerts,
+            COUNT(*) FILTER (WHERE severity = 'high') AS high_count,
+            COUNT(*) FILTER (WHERE severity = 'medium') AS medium_count,
+            COUNT(*) FILTER (WHERE severity = 'low') AS low_count,
+            COUNT(DISTINCT host(source_ip)) FILTER (WHERE source_ip IS NOT NULL) AS unique_source_ips
+        FROM alerts
+        {where_clause}
+        """,
+        tuple(params),
+    )
+    row = cur.fetchone() or (0, 0, 0, 0, 0)
+    return {
+        "total_alerts": int(row[0] or 0),
+        "high_count": int(row[1] or 0),
+        "medium_count": int(row[2] or 0),
+        "low_count": int(row[3] or 0),
+        "unique_source_ips": int(row[4] or 0),
+    }
+
+
+def _fetch_top_source_ips(cur, where_clause: str, params: list):
+    cur.execute(
+        f"""
+        SELECT host(source_ip) AS source_ip, COUNT(*) AS alert_count
+        FROM alerts
+        {where_clause}
+        AND source_ip IS NOT NULL
+        GROUP BY host(source_ip)
+        ORDER BY alert_count DESC, source_ip ASC
+        LIMIT 5
+        """
+        if where_clause
+        else """
+        SELECT host(source_ip) AS source_ip, COUNT(*) AS alert_count
+        FROM alerts
+        WHERE source_ip IS NOT NULL
+        GROUP BY host(source_ip)
+        ORDER BY alert_count DESC, source_ip ASC
+        LIMIT 5
+        """,
+        tuple(params),
+    )
+    return [{"name": row[0], "value": int(row[1] or 0)} for row in cur.fetchall()]
+
+
+def _fetch_alert_timeline(cur, where_clause: str, params: list):
+    cur.execute(
+        f"""
+        SELECT
+            date_trunc('hour', created_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS bucket_start,
+            COUNT(*) AS alert_count
+        FROM alerts
+        {where_clause}
+        GROUP BY bucket_start
+        ORDER BY bucket_start ASC
+        """,
+        tuple(params),
+    )
+    return [
+        {
+            "bucketStart": int(
+                row[0].replace(tzinfo=timezone.utc).timestamp() * 1000
+            )
+            if row[0].tzinfo is None
+            else int(row[0].astimezone(timezone.utc).timestamp() * 1000),
+            "count": int(row[1] or 0),
+        }
+        for row in cur.fetchall()
+    ]
+
+
+def _fetch_map_marker_rows(cur, where_clause: str, params: list):
+    query = f"""
+        WITH filtered AS (
+            SELECT *
+            FROM alerts
+            {where_clause}
+        ),
+        source_counts AS (
+            SELECT host(source_ip) AS source_ip_key, COUNT(*) AS alert_count
+            FROM filtered
+            WHERE source_ip IS NOT NULL
+              AND latitude IS NOT NULL
+              AND longitude IS NOT NULL
+            GROUP BY host(source_ip)
+        ),
+        latest AS (
+            SELECT DISTINCT ON (host(source_ip))
+                id,
+                alert_type,
+                severity,
+                message,
+                source_ip,
+                created_at,
+                status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary,
+                response_action,
+                response_status,
+                source,
+                source_type,
+                context
+            FROM filtered
+            WHERE source_ip IS NOT NULL
+              AND latitude IS NOT NULL
+              AND longitude IS NOT NULL
+            ORDER BY host(source_ip), created_at DESC, id DESC
+        )
+        SELECT
+            latest.id,
+            latest.alert_type,
+            latest.severity,
+            latest.message,
+            latest.source_ip,
+            latest.created_at,
+            latest.status,
+            latest.country,
+            latest.city,
+            latest.latitude,
+            latest.longitude,
+            latest.reputation_score,
+            latest.reputation_label,
+            latest.reputation_source,
+            latest.reputation_summary,
+            latest.response_action,
+            latest.response_status,
+            latest.source,
+            latest.source_type,
+            latest.context,
+            source_counts.alert_count
+        FROM latest
+        JOIN source_counts
+          ON source_counts.source_ip_key = host(latest.source_ip)
+        ORDER BY source_counts.alert_count DESC, latest.created_at DESC, latest.id DESC
+    """
+    cur.execute(query, tuple(params))
+    return cur.fetchall()
 
 
 def _resolve_alert_list_response_outcomes(conn, alert_ids: list[int]) -> dict[int, dict | None]:
@@ -310,20 +595,32 @@ def _build_alert_payload(
 @login_required
 def get_alerts():
     try:
+        query_args, error_response = _parse_alert_list_request_args(include_pagination=True)
+        if error_response:
+            return error_response
+
         conn = get_db_connection()
         cur = conn.cursor()
-
-        cur.execute(f"{_ALERT_SELECT} ORDER BY created_at DESC")
-
-        rows = cur.fetchall()
+        clauses, params = _build_alert_filter_sql(query_args)
+        where_clause = _build_alerts_where_clause(clauses)
+        order_clause = _build_alert_order_clause(query_args["sort"])
+        total = _fetch_alert_total(cur, where_clause, params)
+        rows = _fetch_alert_rows(
+            cur,
+            where_clause,
+            order_clause,
+            params,
+            limit=query_args["limit"],
+            offset=query_args["offset"],
+        )
         alert_ids = [row[0] for row in rows]
         response_outcomes_by_alert = _resolve_alert_list_response_outcomes(conn, alert_ids)
         cooldown_by_alert_id = _fetch_latest_resolved_audits(cur, alert_ids)
         reputation_by_ip = {}
 
-        alerts = []
+        items = []
         for row in rows:
-            alerts.append(
+            items.append(
                 _build_alert_payload(
                     row,
                     cur=cur,
@@ -336,11 +633,78 @@ def get_alerts():
         cur.close()
         conn.close()
 
-        return jsonify(alerts), 200
+        return (
+            jsonify(
+                {
+                    "items": items,
+                    "total": total,
+                    "limit": query_args["limit"],
+                    "offset": query_args["offset"],
+                    "sort": query_args["sort"],
+                }
+            ),
+            200,
+        )
 
     except Exception as e:
         current_app.logger.error("Error in get_alerts: %s", e)
         return jsonify({"error": "Internal server error"}), 500
+
+
+@alerts_events_bp.route("/alerts/summary", methods=["GET"])
+@login_required
+def get_alerts_summary():
+    conn = None
+    cur = None
+    try:
+        query_args, error_response = _parse_alert_list_request_args(include_pagination=False)
+        if error_response:
+            return error_response
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+        clauses, params = _build_alert_filter_sql(query_args)
+        where_clause = _build_alerts_where_clause(clauses)
+        metrics = _fetch_alert_summary_metrics(cur, where_clause, params)
+        top_source_ips = _fetch_top_source_ips(cur, where_clause, params)
+        timeline = _fetch_alert_timeline(cur, where_clause, params)
+        marker_rows = _fetch_map_marker_rows(cur, where_clause, params)
+
+        marker_ids = [row[0] for row in marker_rows]
+        response_outcomes_by_alert = _resolve_alert_list_response_outcomes(conn, marker_ids)
+        cooldown_by_alert_id = _fetch_latest_resolved_audits(cur, marker_ids)
+        reputation_by_ip = {}
+        map_markers = []
+        for row in marker_rows:
+            alert_payload = _build_alert_payload(
+                row[:20],
+                cur=cur,
+                reputation_by_ip=reputation_by_ip,
+                response_outcome=response_outcomes_by_alert.get(row[0]),
+                cooldown_by_alert_id=cooldown_by_alert_id,
+            )
+            alert_payload["alert_count"] = int(row[20] or 0)
+            map_markers.append(alert_payload)
+
+        return (
+            jsonify(
+                {
+                    "metrics": metrics,
+                    "top_source_ips": top_source_ips,
+                    "timeline": timeline,
+                    "map_markers": map_markers,
+                }
+            ),
+            200,
+        )
+    except Exception as error:
+        current_app.logger.error("Error in get_alerts_summary: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 
 @alerts_events_bp.route("/alerts/<int:alert_id>", methods=["GET"])

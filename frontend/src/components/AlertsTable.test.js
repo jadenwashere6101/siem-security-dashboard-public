@@ -64,7 +64,6 @@ function AlertsTableHarness({ initialAlerts, onSetAlerts }) {
     <AlertsTable
       alerts={alerts}
       canTakeAlertActions={true}
-      setAlerts={handleSetAlerts}
       searchTerm=""
       setSearchTerm={() => {}}
       sortOption="newest"
@@ -98,6 +97,16 @@ function AlertsTableHarness({ initialAlerts, onSetAlerts }) {
       expandedContentStyle={styles}
       expandedLabelStyle={styles}
       expandedTextStyle={styles}
+      totalAlerts={alerts.length}
+      pageOffset={0}
+      pageLimit={50}
+      pageEnd={alerts.length}
+      onRefreshAlerts={async () => {
+        const response = await global.fetch("/alerts");
+        const payload = await response.json();
+        const nextItems = Array.isArray(payload?.items) ? payload.items : payload;
+        handleSetAlerts(nextItems);
+      }}
     />
   );
 }
@@ -140,7 +149,7 @@ test("side panel uses refreshed alert data after manual response execution", asy
     if (path.endsWith("/alerts")) {
       return Promise.resolve({
         ok: true,
-        json: () => Promise.resolve([refreshedAlert]),
+        json: () => Promise.resolve({ items: [refreshedAlert], total: 1, limit: 50, offset: 0 }),
       });
     }
     return Promise.reject(new Error(`Unexpected fetch: ${path}`));
@@ -225,7 +234,7 @@ test("manual block_ip feedback uses tracking-only wording without executed copy"
     if (path.endsWith("/alerts")) {
       return Promise.resolve({
         ok: true,
-        json: () => Promise.resolve([refreshedAlert]),
+        json: () => Promise.resolve({ items: [refreshedAlert], total: 1, limit: 50, offset: 0 }),
       });
     }
     return Promise.reject(new Error(`Unexpected fetch: ${path}`));
@@ -269,4 +278,70 @@ test("pfSense alert rows show cooldown and suppressed roll-up indicators", async
 
   expect(screen.getByText("Cooldown active")).toBeInTheDocument();
   expect(screen.getByText("Suppressed roll-up")).toBeInTheDocument();
+});
+
+test("renders bounded-page pagination controls without changing alert interactions", async () => {
+  global.fetch = jest.fn((url) => {
+    const path = String(url);
+    if (path.endsWith("/alerts/101/response-log") || path.endsWith("/alerts/101/notes")) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve([]),
+      });
+    }
+    return Promise.reject(new Error(`Unexpected fetch: ${path}`));
+  });
+
+  render(
+    <AlertsTable
+      alerts={[baseAlert]}
+      canTakeAlertActions={true}
+      searchTerm=""
+      setSearchTerm={() => {}}
+      sortOption="newest"
+      setSortOption={() => {}}
+      severityFilter="all"
+      setSeverityFilter={() => {}}
+      sourceFilter="all"
+      setSourceFilter={() => {}}
+      statusFilter="all"
+      setStatusFilter={() => {}}
+      selectedAlertId={null}
+      setSelectedAlertId={() => {}}
+      getSeverityBadgeStyle={() => ({})}
+      cardStyle={styles}
+      cardHeaderStyle={styles}
+      cardTitleStyle={styles}
+      cardSubtitleStyle={styles}
+      filterWrapperStyle={styles}
+      filterLabelStyle={styles}
+      selectStyle={styles}
+      emptyStateStyle={styles}
+      emptyStateTextStyle={styles}
+      tableWrapperStyle={styles}
+      tableStyle={styles}
+      headerCellStyle={styles}
+      bodyCellStyle={styles}
+      onUpdateStatus={() => ({ ok: true })}
+      monoCellStyle={styles}
+      tableRowStyle={styles}
+      expandedCellStyle={styles}
+      expandedContentStyle={styles}
+      expandedLabelStyle={styles}
+      expandedTextStyle={styles}
+      totalAlerts={120}
+      pageOffset={50}
+      pageLimit={50}
+      pageEnd={100}
+      canGoToPreviousPage={true}
+      canGoToNextPage={true}
+      onPreviousPage={jest.fn()}
+      onNextPage={jest.fn()}
+    />
+  );
+
+  expect(screen.getByText("Showing 51-100 of 120 · Page size 50")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Previous" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Next" })).toBeEnabled();
+  expect(screen.getByText("failed_login_threshold")).toBeInTheDocument();
 });

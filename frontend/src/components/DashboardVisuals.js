@@ -8,7 +8,7 @@ function DashboardVisuals({
   metrics,
   topIPChartData,
   alertTimelineData,
-  sortedAlerts,
+  mapMarkers,
   chartsGridStyle,
   tooltipStyle,
   tooltipLabelStyle,
@@ -62,7 +62,7 @@ function DashboardVisuals({
           </p>
         </div>
         <div style={{ padding: "20px" }}>
-          <MapView alerts={sortedAlerts} onOpenResponseRegistry={onOpenResponseRegistry} />
+          <MapView alerts={mapMarkers} onOpenResponseRegistry={onOpenResponseRegistry} />
         </div>
       </div>
     </>

@@ -2,15 +2,16 @@ import React from "react";
 import AlertsTable from "./AlertsTable";
 import DashboardMetrics from "./DashboardMetrics";
 import DashboardVisuals from "./DashboardVisuals";
+import { WorkspaceInitialState, WorkspaceRefreshState } from "./WorkspaceAsyncState";
 
 function DashboardSection({
   metrics,
   topIPChartData,
   alertTimelineData,
-  sortedAlerts,
+  mapMarkers,
+  alerts,
   alertsTableRef,
   canTakeAlertActions,
-  setAlerts,
   onOpenResponseRegistry,
   onReviewIncident,
   searchTerm,
@@ -55,9 +56,36 @@ function DashboardSection({
   expandedLabelStyle,
   expandedTextStyle,
   displaySettings,
+  loading,
+  error,
+  refreshing,
+  refreshError,
+  onRetry,
+  totalAlerts,
+  pageOffset,
+  pageLimit,
+  pageEnd,
+  canGoToPreviousPage,
+  canGoToNextPage,
+  onPreviousPage,
+  onNextPage,
+  onRefreshAlerts,
 }) {
+  if (loading || error) {
+    return (
+      <WorkspaceInitialState
+        loading={loading}
+        error={error}
+        loadingLabel="Loading dashboard alerts…"
+        errorLabel={error}
+        onRetry={onRetry}
+      />
+    );
+  }
+
   return (
     <>
+      <WorkspaceRefreshState refreshing={refreshing} refreshError={refreshError} />
       <DashboardMetrics
         metrics={metrics}
         metricsGridStyle={metricsGridStyle}
@@ -70,7 +98,7 @@ function DashboardSection({
         metrics={metrics}
         topIPChartData={topIPChartData}
         alertTimelineData={alertTimelineData}
-        sortedAlerts={sortedAlerts}
+        mapMarkers={mapMarkers}
         chartsGridStyle={chartsGridStyle}
         tooltipStyle={tooltipStyle}
         tooltipLabelStyle={tooltipLabelStyle}
@@ -84,9 +112,8 @@ function DashboardSection({
       />
       <div ref={alertsTableRef} data-navigation-target="recent-alerts" aria-label="Recent Alerts">
         <AlertsTable
-          alerts={sortedAlerts}
+          alerts={alerts}
           canTakeAlertActions={canTakeAlertActions}
-          setAlerts={setAlerts}
           searchTerm={searchTerm}
           setSearchTerm={setSearchTerm}
           sortOption={sortOption}
@@ -123,6 +150,15 @@ function DashboardSection({
           setStatusFilter={setStatusFilter}
           onOpenResponseRegistry={onOpenResponseRegistry}
           onReviewIncident={onReviewIncident}
+          totalAlerts={totalAlerts}
+          pageOffset={pageOffset}
+          pageLimit={pageLimit}
+          pageEnd={pageEnd}
+          canGoToPreviousPage={canGoToPreviousPage}
+          canGoToNextPage={canGoToNextPage}
+          onPreviousPage={onPreviousPage}
+          onNextPage={onNextPage}
+          onRefreshAlerts={onRefreshAlerts}
         />
       </div>
     </>

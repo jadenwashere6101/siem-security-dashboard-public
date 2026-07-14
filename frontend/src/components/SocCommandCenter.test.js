@@ -301,6 +301,15 @@ describe("SocCommandCenter", () => {
     expect(screen.getByText("Dry-Run Only")).toBeInTheDocument();
   });
 
+  test("shows a true initial loading state before first command-center data resolves", async () => {
+    loadIncidents.mockImplementation(() => new Promise(() => {}));
+
+    renderPanel();
+
+    expect(screen.getByText("Loading SOC command center…")).toBeInTheDocument();
+    expect(screen.queryByText("Incident pressure")).not.toBeInTheDocument();
+  });
+
   test("uses read-only services and never calls mutation endpoints", async () => {
     renderPanel();
 
@@ -333,6 +342,21 @@ describe("SocCommandCenter", () => {
     expect((await screen.findAllByText("High-risk identity incident")).length).toBeGreaterThan(0);
     expect(screen.getByRole("status")).toHaveTextContent("integration status");
     expect(screen.getByText("Integration status is unavailable or no adapters are registered.")).toBeInTheDocument();
+  });
+
+  test("preserves loaded data during refresh failure and surfaces a refresh warning", async () => {
+    renderPanel();
+
+    expect((await screen.findAllByText("High-risk identity incident")).length).toBeGreaterThan(0);
+
+    getIntegrationStatus.mockRejectedValueOnce(new Error("integration unavailable"));
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Refresh failed: integration unavailable. Showing the last successful data."
+    );
+    expect(screen.getAllByText("High-risk identity incident").length).toBeGreaterThan(0);
+    expect(screen.getByRole("status")).toHaveTextContent("integration status");
   });
 
   test("loads incident context and changes selected incident", async () => {

@@ -28,6 +28,7 @@ import ExecutionSafetyModelPanel from "./ExecutionSafetyModelPanel";
 import SourceIpContext from "./SourceIpContext";
 import { CanonicalOutcomeBreakdown, ResponseOutcomeSummary } from "./ResponseOutcome";
 import { mergeCanonicalOutcomeCounts } from "../utils/responseOutcomeDisplay";
+import { WorkspaceInitialState, WorkspaceRefreshState } from "./WorkspaceAsyncState";
 
 // spec: SPEC-UI-004 - SOC safety model wording separates real workflows from guarded integrations.
 const SOURCE_LIMIT = 12;
@@ -541,7 +542,9 @@ function SocCommandCenter({
 }) {
   const canOperate = ACTION_ROLES.has(userRole);
   const [data, setData] = useState(emptyCommandData);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  const [refreshError, setRefreshError] = useState("");
   const [sourceErrors, setSourceErrors] = useState({});
   const [selectedIncidentId, setSelectedIncidentId] = useState(null);
   const [incidentContext, setIncidentContext] = useState({
@@ -559,6 +562,7 @@ function SocCommandCenter({
   const loadCommandData = useCallback(async () => {
     if (!canOperate) return;
     setLoading(true);
+    setRefreshError("");
 
     const results = await Promise.all([
       settleSource("incidents", () => loadIncidents({ limit: SOURCE_LIMIT })),
@@ -579,35 +583,83 @@ function SocCommandCenter({
       settleSource("integration status", () => getIntegrationStatus()),
     ]);
 
-    const byLabel = Object.fromEntries(results.map((result) => [result.label, result.value]));
-    const nextData = {
-      incidents: normalizeItems(byLabel.incidents, ["incidents"]),
-      executions: normalizeItems(byLabel["playbook executions"], ["items", "executions"]),
-      approvals: normalizeItems(byLabel.approvals, ["approvals"]),
-      deadLetters: normalizeItems(byLabel["dead letters"], ["items", "dead_letters"]),
-      notifications: normalizeItems(byLabel["notification deliveries"], ["items"]),
-      queueItems: normalizeItems(byLabel["queue activity"], ["items"]),
-      incidentMetrics: byLabel["incident metrics"] || {},
-      playbookMetrics: byLabel["playbook metrics"] || {},
-      approvalMetrics: byLabel["approval metrics"] || {},
-      deadLetterMetrics: byLabel["dead letter metrics"] || {},
-      notificationMetrics: byLabel["notification metrics"] || {},
-      workerMetrics: byLabel["worker metrics"] || {},
-      queueStatus: byLabel["queue status"] || {},
-      integrationStatus: byLabel["integration status"] || {},
-    };
+    const byLabel = Object.fromEntries(results.map((result) => [result.label, result]));
+    const failures = sourceFailureMap(results);
+    let nextIncidents = data.incidents;
 
-    setData(nextData);
-    setSourceErrors(sourceFailureMap(results));
+    setData((current) => {
+      nextIncidents =
+        byLabel.incidents?.status === "fulfilled"
+          ? normalizeItems(byLabel.incidents.value, ["incidents"])
+          : current.incidents;
+      return {
+        incidents: nextIncidents,
+        executions:
+          byLabel["playbook executions"]?.status === "fulfilled"
+            ? normalizeItems(byLabel["playbook executions"].value, ["items", "executions"])
+            : current.executions,
+        approvals:
+          byLabel.approvals?.status === "fulfilled"
+            ? normalizeItems(byLabel.approvals.value, ["approvals"])
+            : current.approvals,
+        deadLetters:
+          byLabel["dead letters"]?.status === "fulfilled"
+            ? normalizeItems(byLabel["dead letters"].value, ["items", "dead_letters"])
+            : current.deadLetters,
+        notifications:
+          byLabel["notification deliveries"]?.status === "fulfilled"
+            ? normalizeItems(byLabel["notification deliveries"].value, ["items"])
+            : current.notifications,
+        queueItems:
+          byLabel["queue activity"]?.status === "fulfilled"
+            ? normalizeItems(byLabel["queue activity"].value, ["items"])
+            : current.queueItems,
+        incidentMetrics:
+          byLabel["incident metrics"]?.status === "fulfilled"
+            ? byLabel["incident metrics"].value || {}
+            : current.incidentMetrics,
+        playbookMetrics:
+          byLabel["playbook metrics"]?.status === "fulfilled"
+            ? byLabel["playbook metrics"].value || {}
+            : current.playbookMetrics,
+        approvalMetrics:
+          byLabel["approval metrics"]?.status === "fulfilled"
+            ? byLabel["approval metrics"].value || {}
+            : current.approvalMetrics,
+        deadLetterMetrics:
+          byLabel["dead letter metrics"]?.status === "fulfilled"
+            ? byLabel["dead letter metrics"].value || {}
+            : current.deadLetterMetrics,
+        notificationMetrics:
+          byLabel["notification metrics"]?.status === "fulfilled"
+            ? byLabel["notification metrics"].value || {}
+            : current.notificationMetrics,
+        workerMetrics:
+          byLabel["worker metrics"]?.status === "fulfilled"
+            ? byLabel["worker metrics"].value || {}
+            : current.workerMetrics,
+        queueStatus:
+          byLabel["queue status"]?.status === "fulfilled"
+            ? byLabel["queue status"].value || {}
+            : current.queueStatus,
+        integrationStatus:
+          byLabel["integration status"]?.status === "fulfilled"
+            ? byLabel["integration status"].value || {}
+            : current.integrationStatus,
+      };
+    });
+    setSourceErrors(failures);
     setLoading(false);
+    setHasLoadedOnce(true);
+    setRefreshError(Object.values(failures).join("; "));
 
     setSelectedIncidentId((current) => {
-      if (current && nextData.incidents.some((incident) => String(incident.id) === String(current))) {
+      if (current && nextIncidents.some((incident) => String(incident.id) === String(current))) {
         return current;
       }
-      return nextData.incidents[0]?.id ?? null;
+      return nextIncidents[0]?.id ?? null;
     });
-  }, [canOperate]);
+  }, [canOperate, data.incidents]);
 
   useEffect(() => {
     loadCommandData();
@@ -692,6 +744,23 @@ function SocCommandCenter({
     [data.integrationStatus]
   );
   const sourceErrorLabels = Object.keys(sourceErrors);
+  const initialLoadFailed =
+    hasLoadedOnce &&
+    sourceErrorLabels.length > 0 &&
+    data.incidents.length === 0 &&
+    data.executions.length === 0 &&
+    data.approvals.length === 0 &&
+    data.deadLetters.length === 0 &&
+    data.notifications.length === 0 &&
+    data.queueItems.length === 0 &&
+    Object.keys(data.incidentMetrics || {}).length === 0 &&
+    Object.keys(data.playbookMetrics || {}).length === 0 &&
+    Object.keys(data.approvalMetrics || {}).length === 0 &&
+    Object.keys(data.deadLetterMetrics || {}).length === 0 &&
+    Object.keys(data.notificationMetrics || {}).length === 0 &&
+    Object.keys(data.workerMetrics || {}).length === 0 &&
+    Object.keys(data.queueStatus || {}).length === 0 &&
+    Object.keys(data.integrationStatus || {}).length === 0;
 
   if (!canOperate) {
     return (
@@ -730,32 +799,55 @@ function SocCommandCenter({
         </div>
       </div>
 
-      {sourceErrorLabels.length > 0 ? (
+      {!hasLoadedOnce || (loading && !hasLoadedOnce) ? (
+        <WorkspaceInitialState
+          loading
+          error=""
+          loadingLabel="Loading SOC command center…"
+        />
+      ) : null}
+
+      {initialLoadFailed ? (
+        <WorkspaceInitialState
+          loading={false}
+          error="Unable to load SOC command center."
+          errorLabel="Unable to load SOC command center."
+          onRetry={loadCommandData}
+        />
+      ) : null}
+
+      {hasLoadedOnce && !initialLoadFailed ? (
+        <WorkspaceRefreshState refreshing={loading} refreshError={!loading ? refreshError : ""} />
+      ) : null}
+
+      {hasLoadedOnce && !initialLoadFailed && sourceErrorLabels.length > 0 ? (
         <div style={warningBannerStyle} role="status">
           Partial data loaded. Unavailable sources: {sourceErrorLabels.join(", ")}.
         </div>
       ) : null}
 
-      <div style={summaryGridStyle}>
-        {summaryCards.map((card) => (
-          <SummaryCard key={card.label} card={card} />
-        ))}
-      </div>
+      {hasLoadedOnce && !initialLoadFailed ? (
+        <>
+          <div style={summaryGridStyle}>
+            {summaryCards.map((card) => (
+              <SummaryCard key={card.label} card={card} />
+            ))}
+          </div>
 
-      <CanonicalOutcomeBreakdown
-        counts={canonicalOutcomeCounts}
-        title="Canonical SOAR outcome counts"
-      />
+          <CanonicalOutcomeBreakdown
+            counts={canonicalOutcomeCounts}
+            title="Canonical SOAR outcome counts"
+          />
 
-      <div
-        style={{
-          ...mainGridStyle,
-          gridTemplateColumns: useSingleColumn
-            ? "minmax(0, 1fr)"
-            : mainGridStyle.gridTemplateColumns,
-        }}
-      >
-        <div style={leftColumnStyle}>
+          <div
+            style={{
+              ...mainGridStyle,
+              gridTemplateColumns: useSingleColumn
+                ? "minmax(0, 1fr)"
+                : mainGridStyle.gridTemplateColumns,
+            }}
+          >
+            <div style={leftColumnStyle}>
           <section style={cardStyle} aria-labelledby="attention-heading">
             <div style={cardHeaderStyle}>
               <div>
@@ -932,9 +1024,9 @@ function SocCommandCenter({
               </div>
             </div>
           </section>
-        </div>
+            </div>
 
-        <aside style={rightColumnStyle}>
+            <aside style={rightColumnStyle}>
           <ExecutionSafetyModelPanel />
 
           <section style={cardStyle} aria-labelledby="feed-heading">
@@ -1009,8 +1101,10 @@ function SocCommandCenter({
               )}
             </div>
           </section>
-        </aside>
-      </div>
+            </aside>
+          </div>
+        </>
+      ) : null}
 
       {selectedSourceIp ? (
         <div

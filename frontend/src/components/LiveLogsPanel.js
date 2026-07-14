@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { loadLiveLogs } from "../services/liveLogsService";
 import { formatTimestamp } from "../utils/displayFormatting";
@@ -7,6 +7,7 @@ import { LIVE_LOG_SOURCE_LABELS } from "../utils/sourceMetadata";
 export { LIVE_LOG_SOURCE_LABELS } from "../utils/sourceMetadata";
 
 const DEFAULT_POLL_INTERVAL_MS = 5000;
+const MAX_RETAINED_EVENTS = 500;
 const VIEW_MODES = {
   eventFeed: "event-feed",
   rawLog: "raw-log",
@@ -272,7 +273,9 @@ function LiveLogsPanel({
       rows.forEach((event) => {
         byId.set(event.id, event);
       });
-      return Array.from(byId.values()).sort((a, b) => Number(b.id) - Number(a.id));
+      return Array.from(byId.values())
+        .sort((a, b) => Number(b.id) - Number(a.id))
+        .slice(0, MAX_RETAINED_EVENTS);
     });
 
     const newest = rows.reduce((max, event) => Math.max(max, Number(event.id) || 0), 0);
@@ -281,7 +284,7 @@ function LiveLogsPanel({
     }
   };
 
-  const pollForNewEvents = async () => {
+  const pollForNewEvents = useCallback(async () => {
     try {
       const rows = await loadLiveLogs({ source, afterId: maxSeenIdRef.current });
       setError("");
@@ -289,7 +292,7 @@ function LiveLogsPanel({
     } catch (err) {
       setError(err.message || "Unable to load live logs");
     }
-  };
+  }, [source]);
 
   useEffect(() => {
     let isMounted = true;
@@ -329,7 +332,7 @@ function LiveLogsPanel({
         clearInterval(intervalId);
       }
     };
-  }, [source, pollIntervalMs]);
+  }, [pollForNewEvents, source, pollIntervalMs]);
 
   const subtitle = useMemo(
     () =>

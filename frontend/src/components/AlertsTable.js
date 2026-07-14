@@ -45,7 +45,6 @@ import { useResponseSync } from "../context/ResponseSyncContext";
 function AlertsTable({
   alerts,
   canTakeAlertActions,
-  setAlerts,
   searchTerm,
   setSearchTerm,
   sortOption,
@@ -82,6 +81,15 @@ function AlertsTable({
   displaySettings,
   onOpenResponseRegistry = null,
   onReviewIncident = null,
+  totalAlerts = 0,
+  pageOffset = 0,
+  pageLimit = 50,
+  pageEnd = 0,
+  canGoToPreviousPage = false,
+  canGoToNextPage = false,
+  onPreviousPage = null,
+  onNextPage = null,
+  onRefreshAlerts = null,
 }) {
   // ==========================================================================
   // Component State / Derived Values
@@ -299,22 +307,9 @@ function AlertsTable({
       // refresh response log for that alert
       await fetchResponseLog(alertId);
 
-      // refresh alerts without reloading page
-      const res = await fetch(buildSiemPath("/alerts"), {
-        credentials: "include",
-      });
-
-      if (!res.ok) {
-        throw new Error("Failed to refresh alerts");
+      if (typeof onRefreshAlerts === "function") {
+        await onRefreshAlerts();
       }
-
-      const data = await res.json();
-
-      if (!Array.isArray(data)) {
-        throw new Error("Invalid alerts response");
-      }
-
-      setAlerts(data);
 
       publishMutation(executeData?.affected_resource_keys || [], {
         action,
@@ -357,9 +352,6 @@ function AlertsTable({
 
   // Filtered/resolved alert collections used by the table and summary UI.
   const filteredAlerts = alerts;
-  const rowsPerPage = displaySettings?.rowsPerPage ?? "all";
-  const limitedAlerts =
-    rowsPerPage === "all" ? filteredAlerts : filteredAlerts.slice(0, Number(rowsPerPage));
   const visibleColumns = displaySettings?.columnVisibility?.alertsTable || {
     id: true,
     type: true,
@@ -473,7 +465,7 @@ function AlertsTable({
   const groupedFilteredAlertsMap = new Map();
 
   // Grouping happens after upstream filtering/sorting so table behavior stays intact.
-  limitedAlerts.forEach((alert) => {
+  filteredAlerts.forEach((alert) => {
     const groupKey = alert.source_ip || "Unknown IP";
     const existingGroup = groupedFilteredAlertsMap.get(groupKey);
 
@@ -545,7 +537,7 @@ function AlertsTable({
 
       <section style={cardStyle}>
         <AlertsToolbar
-          filteredAlertsCount={filteredAlerts.length}
+          filteredAlertsCount={totalAlerts || filteredAlerts.length}
           resolvedAlertsCount={resolvedAlerts.length}
           searchTerm={searchTerm}
           setSearchTerm={setSearchTerm}
@@ -687,6 +679,41 @@ function AlertsTable({
         />
       )}
 
+      {(canGoToPreviousPage || canGoToNextPage || totalAlerts > filteredAlerts.length) && (
+        <div style={paginationBarStyle}>
+          <span style={paginationMetaStyle}>
+            Showing {filteredAlerts.length === 0 ? 0 : pageOffset + 1}-{pageEnd} of {totalAlerts}
+            {" "}· Page size {pageLimit}
+          </span>
+          <div style={paginationControlsStyle}>
+            <button
+              type="button"
+              onClick={onPreviousPage}
+              disabled={!canGoToPreviousPage}
+              style={{
+                ...paginationButtonStyle,
+                opacity: canGoToPreviousPage ? 1 : 0.55,
+                cursor: canGoToPreviousPage ? "pointer" : "default",
+              }}
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              onClick={onNextPage}
+              disabled={!canGoToNextPage}
+              style={{
+                ...paginationButtonStyle,
+                opacity: canGoToNextPage ? 1 : 0.55,
+                cursor: canGoToNextPage ? "pointer" : "default",
+              }}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
+
       {latestSelectedAlert && (
         <AlertSidePanel
           onClose={() => {
@@ -757,5 +784,32 @@ function AlertsTable({
     </>
   );
 }
+
+const paginationBarStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: "12px",
+  flexWrap: "wrap",
+  marginTop: "14px",
+};
+
+const paginationMetaStyle = {
+  color: "#8b949e",
+  fontSize: "13px",
+};
+
+const paginationControlsStyle = {
+  display: "flex",
+  gap: "8px",
+};
+
+const paginationButtonStyle = {
+  border: "1px solid #30363d",
+  backgroundColor: "#161b22",
+  color: "#f0f6fc",
+  borderRadius: "8px",
+  padding: "8px 12px",
+};
 
 export default AlertsTable;
