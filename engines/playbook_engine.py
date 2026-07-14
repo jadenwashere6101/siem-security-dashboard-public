@@ -36,6 +36,7 @@ SEVERITY_RANK: dict[str, int] = {
 _KNOWN_TRIGGER_KEYS = frozenset(
     {
         "alert_type",
+        "exclude_alert_types",
         "min_severity",
         "source",
         "correlation_flag",
@@ -109,6 +110,24 @@ def _evaluate_trigger(trigger_config: dict[str, Any], alert: dict[str, Any]) -> 
     if not isinstance(trigger_config, dict):
         return False
 
+    excluded_alert_types = trigger_config.get("exclude_alert_types")
+    if excluded_alert_types is not None:
+        if not isinstance(excluded_alert_types, list):
+            return False
+        alert_type = alert.get("alert_type")
+        if alert_type is not None:
+            alert_type_normalized = str(alert_type).lower()
+            normalized_exclusions: list[str] = []
+            for item in excluded_alert_types:
+                if not isinstance(item, str):
+                    return False
+                stripped = item.strip()
+                if not stripped:
+                    return False
+                normalized_exclusions.append(stripped.lower())
+            if alert_type_normalized in normalized_exclusions:
+                return False
+
     for key, value in trigger_config.items():
         if key not in _KNOWN_TRIGGER_KEYS:
             continue
@@ -164,6 +183,9 @@ def _evaluate_trigger(trigger_config: dict[str, Any], alert: dict[str, Any]) -> 
             effective = 0.0 if score is None else float(score)
             if effective < minimum:
                 return False
+
+        elif key == "exclude_alert_types":
+            continue
 
     return True
 

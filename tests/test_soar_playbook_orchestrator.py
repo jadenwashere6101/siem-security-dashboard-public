@@ -123,6 +123,41 @@ def test_multiple_matches_create_multiple_pending_executions(postgres_db):
     assert cur.fetchall() == [("pb_a", "pending"), ("pb_b", "pending")]
 
 
+def test_excluded_alert_type_prevents_generic_playbook_overlap(postgres_db):
+    conn, cur = postgres_db
+    aid = _insert_alert(
+        cur,
+        alert_type="pfsense_firewall_port_scan",
+        severity="HIGH",
+        source="pfsense",
+        reputation_score=90,
+    )
+    playbook_store.create_playbook_definition(
+        conn,
+        "pb_generic_reputation",
+        "Generic Reputation",
+        steps=_valid_steps(),
+        trigger_config={
+            "min_severity": "LOW",
+            "reputation_score_min": 40,
+            "exclude_alert_types": ["pfsense_firewall_port_scan"],
+        },
+    )
+    playbook_store.create_playbook_definition(
+        conn,
+        "pb_pfsense_owned",
+        "Owned pfSense",
+        steps=_valid_steps(),
+        trigger_config={"alert_type": "pfsense_firewall_port_scan", "min_severity": "HIGH"},
+    )
+
+    result = create_pending_executions_for_committed_alerts([{"alert_id": aid}], conn)
+
+    assert result["summary"]["created"] == 1
+    cur.execute("SELECT playbook_id FROM playbook_executions ORDER BY playbook_id")
+    assert cur.fetchall() == [("pb_pfsense_owned",)]
+
+
 def test_disabled_playbooks_do_not_create_executions(postgres_db):
     conn, cur = postgres_db
     aid = _insert_alert(cur)

@@ -108,7 +108,21 @@ def _validate_trigger_config_field(raw: Any) -> tuple[dict[str, Any] | None, str
         return {}, None
     if not isinstance(raw, dict):
         return None, "trigger_config must be an object"
-    return raw, None
+    normalized = dict(raw)
+    exclude_alert_types = normalized.get("exclude_alert_types")
+    if exclude_alert_types is not None:
+        if not isinstance(exclude_alert_types, list):
+            return None, "trigger_config.exclude_alert_types must be a list"
+        normalized_exclusions: list[str] = []
+        for item in exclude_alert_types:
+            if not isinstance(item, str):
+                return None, "trigger_config.exclude_alert_types entries must be strings"
+            stripped = item.strip()
+            if not stripped:
+                return None, "trigger_config.exclude_alert_types entries must not be empty"
+            normalized_exclusions.append(stripped)
+        normalized["exclude_alert_types"] = normalized_exclusions
+    return normalized, None
 
 
 def _validate_steps_field(

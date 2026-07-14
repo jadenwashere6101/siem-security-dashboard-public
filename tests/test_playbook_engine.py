@@ -214,6 +214,41 @@ def test_unrecognized_key_does_not_force_match():
     )
 
 
+def test_trigger_excluded_alert_type_does_not_match():
+    assert not _evaluate_trigger(
+        {"exclude_alert_types": ["password_spraying"]},
+        _base_alert(alert_type="password_spraying"),
+    )
+
+
+def test_trigger_non_excluded_alert_type_still_matches():
+    assert _evaluate_trigger(
+        {"exclude_alert_types": ["failed_login"], "reputation_score_min": 40},
+        _base_alert(alert_type="password_spraying", reputation_score=50),
+    )
+
+
+def test_trigger_excluded_alert_type_case_insensitive():
+    assert not _evaluate_trigger(
+        {"exclude_alert_types": ["PASSWORD_SPRAYING"]},
+        _base_alert(alert_type="password_spraying"),
+    )
+
+
+def test_trigger_invalid_exclude_alert_types_list_fails_closed():
+    assert not _evaluate_trigger(
+        {"exclude_alert_types": "password_spraying"},
+        _base_alert(alert_type="password_spraying"),
+    )
+
+
+def test_trigger_invalid_exclude_alert_types_entry_fails_closed():
+    assert not _evaluate_trigger(
+        {"exclude_alert_types": ["password_spraying", " "]},
+        _base_alert(alert_type="failed_login"),
+    )
+
+
 # --- match_playbooks (DB) ---
 
 

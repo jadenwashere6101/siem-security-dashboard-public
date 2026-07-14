@@ -1289,6 +1289,39 @@ def test_post_playbooks_invalid_steps_returns_400(client, postgres_db):
 
 
 @pytest.mark.usefixtures("postgres_db")
+def test_post_playbooks_accepts_exclude_alert_types(client, postgres_db):
+    conn, _cur = postgres_db
+    _login_super_admin(client)
+    body = _create_body("pb_exclude_ok")
+    body["trigger_config"] = {
+        "min_severity": "LOW",
+        "exclude_alert_types": [
+            " pfsense_firewall_port_scan ",
+            "pfsense_firewall_repeated_deny",
+        ],
+    }
+    with _patched_app_db(conn):
+        resp = client.post("/playbooks", json=body)
+    assert resp.status_code == 201
+    assert resp.get_json()["trigger_config"]["exclude_alert_types"] == [
+        "pfsense_firewall_port_scan",
+        "pfsense_firewall_repeated_deny",
+    ]
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_post_playbooks_rejects_malformed_exclude_alert_types(client, postgres_db):
+    conn, _cur = postgres_db
+    _login_super_admin(client)
+    body = _create_body("pb_exclude_bad")
+    body["trigger_config"] = {"exclude_alert_types": ["ok", " "]}
+    with _patched_app_db(conn):
+        resp = client.post("/playbooks", json=body)
+    assert resp.status_code == 400
+    assert "exclude_alert_types" in resp.get_json()["error"]
+
+
+@pytest.mark.usefixtures("postgres_db")
 def test_super_admin_put_playbook_200_and_404(client, postgres_db):
     conn, _cur = postgres_db
     playbook_store.create_playbook_definition(
@@ -1319,6 +1352,57 @@ def test_super_admin_put_playbook_200_and_404(client, postgres_db):
     assert ok.status_code == 200
     assert ok.get_json()["name"] == "New name"
     assert missing.status_code == 404
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_put_playbook_accepts_exclude_alert_types(client, postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(
+        conn, "pb_put_exclude", "Old", steps=_valid_steps(), trigger_config={}, enabled=True
+    )
+    conn.commit()
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.put(
+            "/playbooks/pb_put_exclude",
+            json={
+                "name": "Updated",
+                "description": None,
+                "trigger_config": {
+                    "exclude_alert_types": ["pfsense_firewall_port_scan"],
+                    "reputation_score_min": 40,
+                },
+                "steps": _valid_steps(),
+                "enabled": True,
+            },
+        )
+    assert resp.status_code == 200
+    assert resp.get_json()["trigger_config"]["exclude_alert_types"] == [
+        "pfsense_firewall_port_scan"
+    ]
+
+
+@pytest.mark.usefixtures("postgres_db")
+def test_put_playbook_rejects_non_list_exclude_alert_types(client, postgres_db):
+    conn, _cur = postgres_db
+    playbook_store.create_playbook_definition(
+        conn, "pb_put_exclude_bad", "Old", steps=_valid_steps(), trigger_config={}, enabled=True
+    )
+    conn.commit()
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.put(
+            "/playbooks/pb_put_exclude_bad",
+            json={
+                "name": "Updated",
+                "description": None,
+                "trigger_config": {"exclude_alert_types": "pfsense_firewall_port_scan"},
+                "steps": _valid_steps(),
+                "enabled": True,
+            },
+        )
+    assert resp.status_code == 400
+    assert "exclude_alert_types" in resp.get_json()["error"]
 
 
 @pytest.mark.usefixtures("postgres_db")
