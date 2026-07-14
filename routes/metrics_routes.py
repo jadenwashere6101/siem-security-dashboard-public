@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from flask import Blueprint, current_app, jsonify
+from flask import Blueprint, current_app, jsonify, request
 from flask_login import login_required
 
 from core.approval_store import list_approval_requests
@@ -18,6 +18,10 @@ from core.auth import analyst_or_super_admin_required
 from core import dead_letter_store
 from core.db import get_db_connection
 from core.playbook_store import list_playbook_executions
+from core.pfsense_operational_baseline import (
+    build_pfsense_incident_scope_filter,
+    normalize_operational_scope,
+)
 from core.soar_response_outcomes import (
     get_canonical_outcome_retention_policy,
     get_outcome_count_groups,
@@ -730,14 +734,31 @@ def incident_metrics_route():
     # spec: SPEC-METRICS-001
     conn = None
     try:
+        try:
+            operational_scope = normalize_operational_scope(
+                request.args.get("operational_scope")
+            )
+        except ValueError:
+            return jsonify({"error": "invalid operational scope"}), 400
         conn = get_db_connection()
         with conn.cursor() as cur:
+            where_clause = ""
+            params: list[Any] = []
+            operational_clause, operational_params = build_pfsense_incident_scope_filter(
+                operational_scope,
+                incident_alias="incidents",
+            )
+            if operational_clause:
+                where_clause = f"WHERE {operational_clause}"
+                params.extend(operational_params)
             cur.execute(
-                """
+                f"""
                 SELECT status, severity, COUNT(*)
                 FROM incidents
+                {where_clause}
                 GROUP BY status, severity
-                """
+                """,
+                tuple(params),
             )
             rows = cur.fetchall() or []
 
@@ -760,20 +781,23 @@ def incident_metrics_route():
                     open_high_critical_count += count
 
             cur.execute(
-                """
+                f"""
                 SELECT MAX(created_at)
                 FROM incidents
-                """
+                {where_clause}
+                """,
+                tuple(params),
             )
             newest_row = cur.fetchone()
             newest_incident_at = newest_row[0] if newest_row else None
 
             cur.execute(
-                """
+                f"""
                 SELECT MIN(created_at)
                 FROM incidents
-                WHERE status = 'open'
-                """
+                {f'{where_clause} AND' if where_clause else 'WHERE'} status = 'open'
+                """,
+                tuple(params),
             )
             oldest_open_row = cur.fetchone()
             oldest_open_incident_at = oldest_open_row[0] if oldest_open_row else None

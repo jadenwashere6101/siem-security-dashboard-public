@@ -246,6 +246,53 @@ def test_incident_metrics_aggregates_status_severity_and_open_high_critical(clie
     assert data["oldest_open_incident_at"] is not None
 
 
+@pytest.mark.usefixtures("postgres_db")
+def test_incident_metrics_since_tuning_excludes_legacy_only_pfsense_incidents(client, postgres_db, monkeypatch):
+    conn, cur = postgres_db
+    monkeypatch.setenv("SIEM_PFSENSE_TUNING_BASELINE", "2026-06-01T00:00:00Z")
+    cur.execute(
+        """
+        INSERT INTO alerts (alert_type, severity, source_ip, source, source_type, message, created_at)
+        VALUES
+          ('pfsense_firewall_repeated_deny', 'HIGH', '198.51.100.60'::inet, 'pfsense', 'firewall', 'legacy', '2026-05-01T00:00:00+00:00'),
+          ('pfsense_firewall_port_scan', 'HIGH', '198.51.100.61'::inet, 'pfsense', 'firewall', 'current', '2026-06-15T00:00:00+00:00'),
+          ('failed_login_threshold', 'HIGH', '198.51.100.62'::inet, 'bank_app', 'custom', 'other', '2026-05-01T00:00:00+00:00')
+        RETURNING id
+        """
+    )
+    legacy_alert_id, current_alert_id, other_alert_id = [row[0] for row in cur.fetchall()]
+    legacy_incident_id = _insert_incident(cur, title="Legacy", severity="HIGH", status="open", age="1 hour")
+    current_incident_id = _insert_incident(cur, title="Current", severity="HIGH", status="investigating", age="1 hour")
+    other_incident_id = _insert_incident(cur, title="Other", severity="MEDIUM", status="open", age="1 hour")
+    cur.execute(
+        """
+        INSERT INTO incident_alerts (incident_id, alert_id)
+        VALUES (%s, %s), (%s, %s), (%s, %s)
+        """,
+        (
+            legacy_incident_id,
+            legacy_alert_id,
+            current_incident_id,
+            current_alert_id,
+            other_incident_id,
+            other_alert_id,
+        ),
+    )
+    conn.commit()
+
+    with _patched_fake_user("incident_metrics_scope", "apass", "analyst"):
+        assert client.post("/login", json={"username": "incident_metrics_scope", "password": "apass"}).status_code == 200
+        with _patched_metrics_db(conn):
+            resp = client.get("/metrics/incidents?operational_scope=since_tuning")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["total_count"] == 2
+    assert body["by_status"]["open"] == 1
+    assert body["by_status"]["investigating"] == 1
+    assert body["open_high_critical"] == 1
+
+
 def test_approval_metrics_without_session_returns_401(client):
     assert client.get("/metrics/approvals").status_code == 401
 

@@ -7,6 +7,9 @@ import {
   loadIncidentTimeline,
   loadIncidents,
 } from "../services/incidentService";
+import OperationalScopeToggle, {
+  OPERATIONAL_SCOPE_SINCE_TUNING,
+} from "./OperationalScopeToggle";
 import { getIntegrationStatus } from "../services/integrationService";
 import {
   getApprovalMetrics,
@@ -24,6 +27,7 @@ import {
   loadRecentSoarQueueItems,
   loadSoarQueueStatus,
 } from "../services/soarQueueService";
+import { getOperationalHistoryBadge, getOperationalHistoryDescription } from "../utils/operationalHistory";
 import ExecutionSafetyModelPanel from "./ExecutionSafetyModelPanel";
 import SourceIpContext from "./SourceIpContext";
 import { CanonicalOutcomeBreakdown, ResponseOutcomeSummary } from "./ResponseOutcome";
@@ -547,6 +551,7 @@ function SocCommandCenter({
   const [refreshError, setRefreshError] = useState("");
   const [sourceErrors, setSourceErrors] = useState({});
   const [selectedIncidentId, setSelectedIncidentId] = useState(null);
+  const [operationalScope, setOperationalScope] = useState(OPERATIONAL_SCOPE_SINCE_TUNING);
   const [incidentContext, setIncidentContext] = useState({
     detail: null,
     timeline: [],
@@ -565,7 +570,10 @@ function SocCommandCenter({
     setRefreshError("");
 
     const results = await Promise.all([
-      settleSource("incidents", () => loadIncidents({ limit: SOURCE_LIMIT })),
+      settleSource("incidents", () => loadIncidents({
+        limit: SOURCE_LIMIT,
+        operationalScope,
+      })),
       settleSource("playbook executions", () => listPlaybookExecutions({ limit: SOURCE_LIMIT })),
       settleSource("approvals", () => listApprovals({ limit: SOURCE_LIMIT })),
       settleSource("dead letters", () => getDeadLetters({ limit: SOURCE_LIMIT })),
@@ -573,7 +581,7 @@ function SocCommandCenter({
         listNotificationDeliveries({ limit: SOURCE_LIMIT })
       ),
       settleSource("queue activity", () => loadRecentSoarQueueItems({ limit: SOURCE_LIMIT })),
-      settleSource("incident metrics", () => getIncidentMetrics()),
+      settleSource("incident metrics", () => getIncidentMetrics({ operationalScope })),
       settleSource("playbook metrics", () => getPlaybookMetrics()),
       settleSource("approval metrics", () => getApprovalMetrics()),
       settleSource("dead letter metrics", () => getDeadLetterMetrics()),
@@ -659,7 +667,7 @@ function SocCommandCenter({
       }
       return nextIncidents[0]?.id ?? null;
     });
-  }, [canOperate, data.incidents]);
+  }, [canOperate, data.incidents, operationalScope]);
 
   useEffect(() => {
     loadCommandData();
@@ -790,6 +798,11 @@ function SocCommandCenter({
           </p>
         </div>
         <div style={headerActionsStyle}>
+          <OperationalScopeToggle
+            value={operationalScope}
+            onChange={setOperationalScope}
+            label="Operational scope"
+          />
           <StatusBadge tone={integrationSummary.realEnabledCount > 0 ? "warning" : "info"}>
             {integrationSummary.realEnabledCount > 0 ? "Guarded Real-Capable" : "Simulation-Safe Execution"}
           </StatusBadge>
@@ -931,6 +944,9 @@ function SocCommandCenter({
                       <span style={incidentTitleStyle}>
                         {incident.title || `Incident #${valueOrFallback(incident.id, "unknown")}`}
                       </span>
+                      {getOperationalHistoryBadge(incident) ? (
+                        <span style={incidentLegacyBadgeStyle}>{getOperationalHistoryBadge(incident)}</span>
+                      ) : null}
                       <span style={incidentMetaStyle}>
                         {joinDefined([titleCase(incident.severity), titleCase(incident.status)])}
                       </span>
@@ -989,6 +1005,14 @@ function SocCommandCenter({
                           )}
                         </dd>
                       </div>
+                      {getOperationalHistoryBadge(selectedIncident) ? (
+                        <div>
+                          <dt style={detailTermStyle}>Operational History</dt>
+                          <dd style={detailValueStyle}>
+                            {getOperationalHistoryBadge(selectedIncident)}. {getOperationalHistoryDescription(selectedIncident)}
+                          </dd>
+                        </div>
+                      ) : null}
                     </dl>
                     <div style={incidentOutcomeStyle}>
                       <p style={miniHeadingStyle}>Response outcome</p>
@@ -1391,6 +1415,20 @@ const incidentButtonStyle = {
   color: "#e6edf3",
   padding: "10px",
   cursor: "pointer",
+};
+
+const incidentLegacyBadgeStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  marginTop: "8px",
+  borderRadius: "999px",
+  padding: "3px 8px",
+  border: "1px solid rgba(244, 114, 182, 0.28)",
+  backgroundColor: "rgba(244, 114, 182, 0.12)",
+  color: "#fbcfe8",
+  fontSize: "10px",
+  fontWeight: "800",
+  textTransform: "uppercase",
 };
 
 const incidentButtonActiveStyle = {

@@ -75,6 +75,17 @@ describe("incidentService", () => {
     expect(url).toContain("severity=CRITICAL");
   });
 
+  test("loadIncidents includes operational scope when requested", async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ incidents: [], count: 0 }),
+    });
+
+    await loadIncidents({ operationalScope: "since_tuning" });
+
+    expect(global.fetch.mock.calls[0][0]).toContain("operational_scope=since_tuning");
+  });
+
   test("loadIncidents surfaces backend errors", async () => {
     global.fetch.mockResolvedValue({
       ok: false,

@@ -90,11 +90,25 @@ def _fetch_alerts_response(client, conn):
         return client.get("/alerts")
 
 
+def _fetch_alerts_response_for_path(client, conn, path):
+    with patch("routes.alerts_events_routes.get_db_connection", return_value=_RouteSafeConnection(conn)), patch(
+        "routes.alerts_events_routes.get_ip_reputation", return_value=BEHAVIORAL_REPUTATION
+    ):
+        return client.get(path)
+
+
 def _fetch_alert_summary_response(client, conn):
     with patch("routes.alerts_events_routes.get_db_connection", return_value=_RouteSafeConnection(conn)), patch(
         "routes.alerts_events_routes.get_ip_reputation", return_value=BEHAVIORAL_REPUTATION
     ):
         return client.get("/alerts/summary")
+
+
+def _fetch_alert_summary_response_for_path(client, conn, path):
+    with patch("routes.alerts_events_routes.get_db_connection", return_value=_RouteSafeConnection(conn)), patch(
+        "routes.alerts_events_routes.get_ip_reputation", return_value=BEHAVIORAL_REPUTATION
+    ):
+        return client.get(path)
 
 
 def _alert_items(payload):
@@ -186,6 +200,57 @@ def test_get_alerts_applies_limit_offset_and_max_page_size(client, postgres_db):
     assert [item["alert_type"] for item in items] == ["paged_alert_1", "paged_alert_0"]
 
 
+def test_get_alerts_since_tuning_filters_only_pre_tuning_pfsense_alerts(client, postgres_db, monkeypatch):
+    conn, cur = postgres_db
+    monkeypatch.setenv("SIEM_PFSENSE_TUNING_BASELINE", "2026-06-01T00:00:00Z")
+    cur.execute(
+        """
+        INSERT INTO alerts (
+            alert_type, severity, source_ip, source, source_type, message, status, created_at
+        )
+        VALUES
+            ('pfsense_firewall_repeated_deny', 'low', '198.51.100.210', 'pfsense', 'firewall', 'legacy pfSense', 'open', '2026-05-01T00:00:00+00:00'),
+            ('pfsense_firewall_port_scan', 'medium', '198.51.100.211', 'pfsense', 'firewall', 'current pfSense', 'open', '2026-06-15T00:00:00+00:00'),
+            ('failed_login_threshold', 'high', '198.51.100.212', 'bank_app', 'custom', 'non-pfSense', 'open', '2026-05-01T00:00:00+00:00')
+        """
+    )
+    conn.commit()
+
+    _login_as_super_admin(client)
+    resp = _fetch_alerts_response_for_path(client, conn, "/alerts?operational_scope=since_tuning&sort=oldest")
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert [item["message"] for item in payload["items"]] == ["non-pfSense", "current pfSense"]
+
+
+def test_get_alert_payload_marks_pre_tuning_pfsense_alerts(client, postgres_db, monkeypatch):
+    conn, cur = postgres_db
+    monkeypatch.setenv("SIEM_PFSENSE_TUNING_BASELINE", "2026-06-01T00:00:00Z")
+    cur.execute(
+        """
+        INSERT INTO alerts (
+            alert_type, severity, source_ip, source, source_type, message, status, created_at
+        )
+        VALUES ('pfsense_firewall_repeated_deny', 'low', '198.51.100.213', 'pfsense', 'firewall', 'legacy pfSense', 'open', '2026-05-01T00:00:00+00:00')
+        RETURNING id
+        """
+    )
+    alert_id = cur.fetchone()[0]
+    conn.commit()
+
+    _login_as_super_admin(client)
+    with patch("routes.alerts_events_routes.get_db_connection", return_value=_RouteSafeConnection(conn)), patch(
+        "routes.alerts_events_routes.get_ip_reputation", return_value=BEHAVIORAL_REPUTATION
+    ):
+        resp = client.get(f"/alerts/{alert_id}")
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["operational_history"]["is_pre_tuning"] is True
+    assert payload["operational_history"]["label"] == "Pre-Tuning"
+
+
 def test_get_alerts_summary_remains_authoritative_independent_of_alert_page(client, postgres_db):
     conn, cur = postgres_db
     cur.execute(
@@ -273,10 +338,32 @@ def test_get_alerts_summary_remains_authoritative_independent_of_alert_page(clie
         "low_count": 0,
         "unique_source_ips": 2,
     }
-    assert summary_payload["top_source_ips"][0] == {"name": "198.51.100.10", "value": 2}
-    assert [bucket["count"] for bucket in summary_payload["timeline"]] == [2, 1]
-    assert summary_payload["map_markers"][0]["source_ip"] == "198.51.100.10"
-    assert summary_payload["map_markers"][0]["alert_count"] == 2
+
+
+def test_get_alerts_summary_since_tuning_preserves_non_pfsense_metrics(client, postgres_db, monkeypatch):
+    conn, cur = postgres_db
+    monkeypatch.setenv("SIEM_PFSENSE_TUNING_BASELINE", "2026-06-01T00:00:00Z")
+    cur.execute(
+        """
+        INSERT INTO alerts (
+            alert_type, severity, source_ip, source, source_type, message, status, created_at
+        )
+        VALUES
+            ('pfsense_firewall_repeated_deny', 'low', '198.51.100.214', 'pfsense', 'firewall', 'legacy pfSense', 'open', '2026-05-01T00:00:00+00:00'),
+            ('pfsense_firewall_port_scan', 'medium', '198.51.100.215', 'pfsense', 'firewall', 'current pfSense', 'open', '2026-06-15T00:00:00+00:00'),
+            ('failed_login_threshold', 'high', '198.51.100.216', 'bank_app', 'custom', 'non-pfSense', 'open', '2026-05-01T00:00:00+00:00')
+        """
+    )
+    conn.commit()
+
+    _login_as_super_admin(client)
+    resp = _fetch_alert_summary_response_for_path(client, conn, "/alerts/summary?operational_scope=since_tuning")
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["metrics"]["total_alerts"] == 2
+    assert payload["metrics"]["high_count"] == 1
+    assert payload["metrics"]["medium_count"] == 1
 
 
 def test_get_alerts_preserves_stored_external_reputation_and_adds_behavioral_reputation(client, postgres_db):

@@ -268,6 +268,7 @@ test("pfSense alert rows show cooldown and suppressed roll-up indicators", async
       alert_type: "pfsense_firewall_noisy_source",
       source: "pfsense",
       source_type: "firewall",
+      operational_history: { is_pre_tuning: true, label: "Pre-Tuning" },
       pfsense_quality: {
         why_fired_available: true,
         suppressed_rollup: true,
@@ -278,6 +279,7 @@ test("pfSense alert rows show cooldown and suppressed roll-up indicators", async
 
   expect(screen.getByText("Cooldown active")).toBeInTheDocument();
   expect(screen.getByText("Suppressed roll-up")).toBeInTheDocument();
+  expect(screen.getByText("Pre-Tuning")).toBeInTheDocument();
 });
 
 test("renders bounded-page pagination controls without changing alert interactions", async () => {

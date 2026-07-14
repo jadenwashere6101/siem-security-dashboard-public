@@ -18,6 +18,8 @@ function DashboardSection({
   setSearchTerm,
   sortOption,
   setSortOption,
+  operationalScope,
+  setOperationalScope,
   severityFilter,
   setSeverityFilter,
   sourceFilter,
@@ -118,6 +120,8 @@ function DashboardSection({
           setSearchTerm={setSearchTerm}
           sortOption={sortOption}
           setSortOption={setSortOption}
+          operationalScope={operationalScope}
+          setOperationalScope={setOperationalScope}
           severityFilter={severityFilter}
           setSeverityFilter={setSeverityFilter}
           sourceFilter={sourceFilter}

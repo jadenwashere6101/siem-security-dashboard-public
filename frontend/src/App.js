@@ -44,6 +44,7 @@ import {
   WORKSPACE_TARGETS,
   createWorkspaceNavigationRequest,
 } from "./utils/workspaceNavigation";
+import { OPERATIONAL_SCOPE_SINCE_TUNING } from "./components/OperationalScopeToggle";
 import packageJson from "../package.json";
 
 const DEFAULT_ALERT_PAGE_SIZE = 50;
@@ -90,6 +91,7 @@ function AppInner() {
   const [severityFilter, setSeverityFilter] = useState("");
   const [selectedAlertId, setSelectedAlertId] = useState(null);
   const [statusFilter, setStatusFilter] = useState("");
+  const [operationalScope, setOperationalScope] = useState(OPERATIONAL_SCOPE_SINCE_TUNING);
   const [sortOption, setSortOption] = useState("newest");
   const [alertOffset, setAlertOffset] = useState(0);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -123,10 +125,20 @@ function AppInner() {
       statusFilter,
       sourceFilter,
       sortOption,
+      operationalScope,
       limit: alertPageSize,
       offset: alertOffset,
     }),
-    [alertOffset, alertPageSize, searchTerm, severityFilter, sourceFilter, sortOption, statusFilter]
+    [
+      alertOffset,
+      alertPageSize,
+      operationalScope,
+      searchTerm,
+      severityFilter,
+      sourceFilter,
+      sortOption,
+      statusFilter,
+    ]
   );
 
   const checkAuth = async () => {
@@ -291,7 +303,7 @@ function AppInner() {
 
   useEffect(() => {
     setAlertOffset(0);
-  }, [alertPageSize, searchTerm, severityFilter, sourceFilter, sortOption, statusFilter]);
+  }, [alertPageSize, operationalScope, searchTerm, severityFilter, sourceFilter, sortOption, statusFilter]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -689,6 +701,8 @@ function AppInner() {
             setSearchTerm={setSearchTerm}
             sortOption={sortOption}
             setSortOption={setSortOption}
+            operationalScope={operationalScope}
+            setOperationalScope={setOperationalScope}
             severityFilter={severityFilter}
             setSeverityFilter={setSeverityFilter}
             sourceFilter={sourceFilter}

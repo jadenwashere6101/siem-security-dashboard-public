@@ -32,6 +32,10 @@ const incidentFixture = {
   assigned_to: null,
   created_at: "2026-05-07T12:00:00Z",
   resolved_at: null,
+  operational_history: {
+    is_pre_tuning: true,
+    label: "Pre-Tuning",
+  },
 };
 
 const incidentDetailFixture = {
@@ -115,6 +119,7 @@ describe("IncidentsPanel", () => {
     expect(screen.getAllByText("HIGH").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Open").length).toBeGreaterThan(0);
     expect(screen.getByText("203.0.113.10")).toBeInTheDocument();
+    expect(screen.getByText("Pre-Tuning")).toBeInTheDocument();
   });
 
   test("refetches when status filter changes", async () => {
@@ -129,6 +134,21 @@ describe("IncidentsPanel", () => {
       expect(loadIncidents).toHaveBeenCalledWith({
         status: "resolved",
         severity: "all",
+        operationalScope: "since_tuning",
+      })
+    );
+  });
+
+  test("defaults incident list requests to since tuning", async () => {
+    loadIncidents.mockResolvedValue({ incidents: [incidentFixture], count: 1 });
+
+    renderPanel();
+
+    await waitFor(() =>
+      expect(loadIncidents).toHaveBeenCalledWith({
+        status: "all",
+        severity: "all",
+        operationalScope: "since_tuning",
       })
     );
   });

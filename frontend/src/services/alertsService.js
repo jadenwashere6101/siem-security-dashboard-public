@@ -21,6 +21,7 @@ function buildAlertQuery({
   statusFilter,
   sourceFilter,
   sortOption,
+  operationalScope,
   limit,
   offset,
 } = {}) {
@@ -30,6 +31,9 @@ function buildAlertQuery({
   if (statusFilter && statusFilter !== "all") params.set("status", statusFilter);
   if (sourceFilter && sourceFilter !== "all") params.set("source", sourceFilter);
   if (sortOption) params.set("sort", sortOption);
+  if (operationalScope && operationalScope !== "all_history") {
+    params.set("operational_scope", operationalScope);
+  }
   if (limit !== undefined && limit !== null && limit !== "") params.set("limit", String(limit));
   if (offset !== undefined && offset !== null && offset !== "") params.set("offset", String(offset));
   return params.toString();

@@ -32,6 +32,16 @@ test("loads pfSense detection health with credentials", async () => {
   });
 });
 
+test("loads pfSense detection health with operational scope when requested", async () => {
+  const rows = [{ rule_id: "pfsense_firewall_port_scan" }];
+  fetch.mockResolvedValue({ ok: true, json: async () => rows });
+
+  await expect(loadPfsenseDetectionHealth({ operationalScope: "since_tuning" })).resolves.toEqual(rows);
+  expect(fetch).toHaveBeenCalledWith("/admin/detection-rules/pfsense-health?operational_scope=since_tuning", {
+    credentials: "include",
+  });
+});
+
 test("sends parameter-only updates with the legacy-compatible payload", async () => {
   fetch.mockResolvedValue({ ok: true, json: async () => ({}) });
 

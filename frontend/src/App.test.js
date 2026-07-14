@@ -20,9 +20,13 @@ jest.mock('./components/DashboardSection', () => (props) => (
   <div data-testid="dashboard-section">
     <h2>Dashboard workspace</h2>
     Dashboard Section Mock search:{props.searchTerm || ''}
+    <div>scope:{props.operationalScope}</div>
     <div>loading:{String(Boolean(props.loading))}</div>
     <div>refreshing:{String(Boolean(props.refreshing))}</div>
     <div>error:{props.error || ''}</div>
+    <button type="button" onClick={() => props.setOperationalScope('all_history')}>
+      Dashboard show all history
+    </button>
     <button type="button" onClick={() => props.onOpenResponseRegistry({ sourceIp: '8.8.8.8', relatedAlertId: 12 })}>
       Dashboard open registry
     </button>
@@ -255,6 +259,27 @@ test('passes dashboard loading state before the first alerts requests resolve', 
   render(<App />);
 
   expect(await screen.findByTestId('dashboard-section')).toHaveTextContent('loading:true');
+});
+
+test('dashboard defaults alert requests to since tuning and can switch to all history', async () => {
+  loadCurrentSession.mockResolvedValue({
+    authenticated: true,
+    user: 'analyst1',
+    role: 'analyst',
+  });
+
+  render(<App />);
+
+  await screen.findByTestId('dashboard-section');
+  expect(loadAlerts).toHaveBeenCalledWith(expect.objectContaining({ operationalScope: 'since_tuning' }));
+  expect(loadAlertDashboardSummary).toHaveBeenCalledWith(expect.objectContaining({ operationalScope: 'since_tuning' }));
+
+  await userEvent.click(screen.getByRole('button', { name: 'Dashboard show all history' }));
+
+  await waitFor(() => {
+    expect(loadAlerts).toHaveBeenLastCalledWith(expect.objectContaining({ operationalScope: 'all_history' }));
+  });
+  expect(loadAlertDashboardSummary).toHaveBeenLastCalledWith(expect.objectContaining({ operationalScope: 'all_history' }));
 });
 
 test('ordinary sidebar and SOC navigation reset the shared main scroll container', async () => {

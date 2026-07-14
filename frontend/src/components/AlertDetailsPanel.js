@@ -3,6 +3,7 @@ import AlertTimeline from "./AlertTimeline";
 import { ResponseOutcomeSummary } from "./ResponseOutcome";
 import SourceIpContext from "./SourceIpContext";
 import { getBehavioralReputation, getExternalReputation } from "../utils/alertDisplay";
+import { getOperationalHistoryDescription } from "../utils/operationalHistory";
 import { loadPfsenseWhyFired } from "../services/pfsenseAlertInvestigationService";
 
 const PFSENSE_ALERT_TYPES = new Set([
@@ -90,6 +91,9 @@ function AlertDetailsPanel({
   const isPfsenseAlert = PFSENSE_ALERT_TYPES.has(selectedAlert?.alert_type);
   const targetContext = selectedAlert?.context?.target_context;
   const targetContextRows = buildTargetContextRows(targetContext);
+  const operationalHistoryLabel = selectedAlert?.operational_history?.is_pre_tuning
+    ? selectedAlert.operational_history.label || "Pre-Tuning"
+    : "";
 
   useEffect(() => {
     let cancelled = false;
@@ -171,6 +175,12 @@ function AlertDetailsPanel({
       <p><strong>Source IP:</strong> {selectedAlert.source_ip}</p>
       <p><strong>Severity:</strong> {selectedAlert.severity}</p>
       <p><strong>Status:</strong> {selectedAlert.status}</p>
+      {operationalHistoryLabel ? (
+        <p>
+          <strong>Operational History:</strong> {operationalHistoryLabel}{" "}
+          <span style={{ color: "#94a3b8" }}>{getOperationalHistoryDescription(selectedAlert)}</span>
+        </p>
+      ) : null}
       <p><strong>Message:</strong> {selectedAlert.message}</p>
       {shouldLoadWhyFired ? (
         <div style={whyFiredPanelStyle}>

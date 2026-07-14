@@ -131,6 +131,7 @@ test("renders active state, source coverage, global parameters, and override sta
   expect(screen.getByText("Overridden")).toBeInTheDocument();
   expect(screen.getByLabelText("Bank App: bank_app/custom")).toHaveAttribute("title", "bank_app/custom");
   expect(screen.queryByRole("button", { name: /edit.*source/i })).not.toBeInTheDocument();
+  expect(loadPfsenseDetectionHealth).toHaveBeenCalledWith({ operationalScope: "since_tuning" });
 });
 
 test("confirms and sends an active-only disable update", async () => {

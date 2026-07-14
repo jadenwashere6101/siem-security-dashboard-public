@@ -111,6 +111,16 @@ def _pfsense_escalated_severity(base_severity, *, count, threshold, reputation_s
     return "medium"
 
 
+def _pfsense_repeated_deny_severity(*, count, threshold, reputation_score, direction=None):
+    if reputation_score is not None and reputation_score >= PFSENSE_HIGH_REPUTATION_SCORE:
+        return "high"
+    if direction == "out":
+        return "high" if threshold and count >= threshold else "medium"
+    if threshold and count >= threshold * PFSENSE_SEVERITY_ESCALATION_MULTIPLIER:
+        return "medium"
+    return "low"
+
+
 def _pfsense_response_action_for_severity(severity):
     if severity == "high":
         return "block_ip"
@@ -1792,8 +1802,7 @@ def _generate_pfsense_repeated_deny_alerts_core(cur, conn, source=None, source_t
         reputation_source = reputation["reputation_source"]
         reputation_summary = reputation["reputation_summary"]
 
-        severity = _pfsense_escalated_severity(
-            "medium",
+        severity = _pfsense_repeated_deny_severity(
             count=event_count,
             threshold=threshold,
             reputation_score=reputation_score,

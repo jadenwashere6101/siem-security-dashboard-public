@@ -185,8 +185,9 @@ def test_get_incidents_limit_is_clamped_to_100(client, postgres_db, monkeypatch)
     conn, _cur = postgres_db
     captured = {}
 
-    def fake_list_incidents(conn, status=None, severity=None, limit=50, offset=0):
+    def fake_list_incidents(conn, status=None, severity=None, operational_scope="all_history", limit=50, offset=0):
         captured["limit"] = limit
+        captured["operational_scope"] = operational_scope
         return []
 
     monkeypatch.setattr("routes.incident_routes.list_incidents", fake_list_incidents)
@@ -197,6 +198,24 @@ def test_get_incidents_limit_is_clamped_to_100(client, postgres_db, monkeypatch)
 
     assert resp.status_code == 200
     assert captured["limit"] == 100
+
+
+def test_get_incidents_since_tuning_scope_is_forwarded(client, postgres_db, monkeypatch):
+    conn, _cur = postgres_db
+    captured = {}
+
+    def fake_list_incidents(conn, status=None, severity=None, operational_scope="all_history", limit=50, offset=0):
+        captured["operational_scope"] = operational_scope
+        return []
+
+    monkeypatch.setattr("routes.incident_routes.list_incidents", fake_list_incidents)
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get("/incidents?operational_scope=since_tuning")
+
+    assert resp.status_code == 200
+    assert captured["operational_scope"] == "since_tuning"
 
 
 def test_get_incident_detail_without_session_returns_401(client):

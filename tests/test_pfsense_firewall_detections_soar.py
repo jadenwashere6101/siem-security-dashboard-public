@@ -223,14 +223,14 @@ def test_repeated_deny_threshold_creates_aggregate_alert_with_expected_fields(po
         )
 
     assert len(alerts_created) == 1
-    assert alerts_created[0]["severity"] == "medium"
-    assert alerts_created[0]["response_action"] == "enrich_source_ip"
+    assert alerts_created[0]["severity"] == "low"
+    assert alerts_created[0]["response_action"] == "monitor_only"
 
     alert = fetch_alert_by_type(cur, source_ip, "pfsense_firewall_repeated_deny")
     assert alert is not None
     _, alert_type, severity, response_action, response_status, context = alert
-    assert severity == "medium"
-    assert response_action == "enrich_source_ip"
+    assert severity == "low"
+    assert response_action == "monitor_only"
     assert response_status == "pending"
     assert context["destination_ip"] == "203.0.113.55"
     assert context["destination_port"] == "8080"
@@ -354,12 +354,12 @@ def test_repeated_deny_outbound_direction_escalates_at_base_threshold(postgres_d
     assert context["direction"] == "out"
 
 
-def test_repeated_deny_inbound_direction_uses_existing_multiplier(postgres_db):
+def test_repeated_deny_inbound_direction_stays_low_at_base_threshold(postgres_db):
     conn, cur = postgres_db
     source_ip = "198.51.100.36"
 
     # Same count, same threshold, but inbound (direction="in", the fixture
-    # default) — severity behavior is unchanged from before direction-awareness.
+    # default) now stays low for routine WAN deny noise at the base threshold.
     for seconds_ago in range(5, 0, -1):
         insert_pfsense_event(
             cur,
@@ -378,8 +378,8 @@ def test_repeated_deny_inbound_direction_uses_existing_multiplier(postgres_db):
         )
 
     assert len(alerts_created) == 1
-    assert alerts_created[0]["severity"] == "medium"
-    assert alerts_created[0]["response_action"] == "enrich_source_ip"
+    assert alerts_created[0]["severity"] == "low"
+    assert alerts_created[0]["response_action"] == "monitor_only"
 
 
 def test_repeated_deny_cooldown_suppresses_equal_severity_recurrence_after_close(postgres_db):
@@ -442,7 +442,7 @@ def test_repeated_deny_escalation_breaks_cooldown_suppression(postgres_db):
         first = backend_detection_engine._generate_pfsense_repeated_deny_alerts_core(
             cur, conn, source="pfsense", source_type="firewall"
         )
-    assert first[0]["severity"] == "medium"
+    assert first[0]["severity"] == "low"
     alert_id = first[0]["alert_id"]
 
     cur.execute("UPDATE alerts SET status = 'resolved' WHERE id = %s", (alert_id,))
@@ -464,6 +464,32 @@ def test_repeated_deny_escalation_breaks_cooldown_suppression(postgres_db):
 
     assert len(second) == 1
     assert second[0]["severity"] == "high"
+
+
+def test_repeated_deny_inbound_sustained_volume_reaches_medium_before_high(postgres_db):
+    conn, cur = postgres_db
+    source_ip = "198.51.100.38"
+
+    for seconds_ago in range(15, 0, -1):
+        insert_pfsense_event(
+            cur,
+            event_type="firewall_block",
+            source_ip=source_ip,
+            destination_ip="203.0.113.62",
+            destination_port=8080,
+            seconds_ago=seconds_ago,
+        )
+
+    with siem_backend.app.app_context(), patch(
+        "engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION_LOW
+    ):
+        alerts_created = backend_detection_engine._generate_pfsense_repeated_deny_alerts_core(
+            cur, conn, source="pfsense", source_type="firewall"
+        )
+
+    assert len(alerts_created) == 1
+    assert alerts_created[0]["severity"] == "medium"
+    assert alerts_created[0]["response_action"] == "enrich_source_ip"
 
 
 # ---------------------------------------------------------------------------
@@ -1011,7 +1037,7 @@ def test_ingest_normalized_event_dispatches_firewall_block_detectors(postgres_db
             )
             result = ingest_normalized_event(event, conn, cur)
 
-    assert any(alert["response_action"] == "enrich_source_ip" for alert in result)
+    assert any(alert["response_action"] == "monitor_only" for alert in result)
 
     cur.execute("SELECT COUNT(*) FROM events WHERE source_ip = %s AND source = 'pfsense'", (source_ip,))
     assert cur.fetchone()[0] == 5
@@ -1123,7 +1149,7 @@ def test_pfsense_playbooks_match_expected_alert_severities(postgres_db):
     conn.commit()
 
     matched = match_playbooks(conn, repeated_deny_alert_id)
-    assert any(row["id"] == CORE_V1_PFSENSE_REPEATED_DENY_INVESTIGATION_ID for row in matched)
+    assert matched == []
 
 
 def test_pfsense_port_scan_containment_matches_only_high_severity(postgres_db):

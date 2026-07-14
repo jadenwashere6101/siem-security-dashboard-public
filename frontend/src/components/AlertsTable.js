@@ -37,6 +37,7 @@ import { formatTimestamp } from "../utils/displayFormatting";
 import { formatCanonicalActionSuccess } from "../utils/responseStateLabels";
 import { registryNavFromAlert } from "../utils/responseNavigation";
 import { useResponseSync } from "../context/ResponseSyncContext";
+import { getOperationalHistoryBadge } from "../utils/operationalHistory";
 
 // ============================================================================
 // Imports / Utilities
@@ -49,6 +50,8 @@ function AlertsTable({
   setSearchTerm,
   sortOption,
   setSortOption,
+  operationalScope,
+  setOperationalScope,
   severityFilter,
   setSeverityFilter,
   sourceFilter,
@@ -379,6 +382,9 @@ function AlertsTable({
   if (statusFilter && statusFilter !== "all") {
     reportQuery.set("status", statusFilter);
   }
+  if (operationalScope && operationalScope !== "all_history") {
+    reportQuery.set("operational_scope", operationalScope);
+  }
   const multiAlertReportHref = buildSiemPath(
     `/alerts/report${reportQuery.toString() ? `?${reportQuery.toString()}` : ""}`
   );
@@ -543,6 +549,8 @@ function AlertsTable({
           setSearchTerm={setSearchTerm}
           sortOption={sortOption}
           setSortOption={setSortOption}
+          operationalScope={operationalScope}
+          setOperationalScope={setOperationalScope}
           severityFilter={severityFilter}
           setSeverityFilter={setSeverityFilter}
           sourceFilter={sourceFilter}
@@ -603,6 +611,7 @@ function AlertsTable({
                           alert={alert}
                           sourceBadge={sourceBadge}
                           targetedAlertMeta={targetedAlertMeta}
+                          operationalHistoryBadge={getOperationalHistoryBadge(alert)}
                           isSelected={selectedAlertId === alert.id}
                           isHovered={hoveredAlertId === alert.id}
                           onHoverStart={() => setHoveredAlertId(alert.id)}

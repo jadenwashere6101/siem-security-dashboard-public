@@ -6,6 +6,9 @@ import {
 } from "../services/detectionRulesService";
 import { formatAdminTimestamp } from "../utils/adminPanelDisplay";
 import { SOURCE_DISPLAY_LABELS } from "../utils/sourceMetadata";
+import OperationalScopeToggle, {
+  OPERATIONAL_SCOPE_SINCE_TUNING,
+} from "./OperationalScopeToggle";
 
 function DetectionRulesPanel({
   cardStyle,
@@ -25,6 +28,7 @@ function DetectionRulesPanel({
   const [healthRows, setHealthRows] = useState([]);
   const [healthLoading, setHealthLoading] = useState(true);
   const [healthError, setHealthError] = useState("");
+  const [operationalScope, setOperationalScope] = useState(OPERATIONAL_SCOPE_SINCE_TUNING);
 
   const loadRules = async () => {
     try {
@@ -42,24 +46,27 @@ function DetectionRulesPanel({
     }
   };
 
-  const loadHealth = async () => {
-    try {
-      setHealthLoading(true);
-      setHealthError("");
-      const data = await loadPfsenseDetectionHealth();
-      setHealthRows(Array.isArray(data) ? data : []);
-    } catch (err) {
-      setHealthError(err.message || "Unable to load pfSense detection health");
-      setHealthRows([]);
-    } finally {
-      setHealthLoading(false);
-    }
-  };
-
   useEffect(() => {
     loadRules();
-    loadHealth();
   }, []);
+
+  useEffect(() => {
+    const loadHealth = async () => {
+      try {
+        setHealthLoading(true);
+        setHealthError("");
+        const data = await loadPfsenseDetectionHealth({ operationalScope });
+        setHealthRows(Array.isArray(data) ? data : []);
+      } catch (err) {
+        setHealthError(err.message || "Unable to load pfSense detection health");
+        setHealthRows([]);
+      } finally {
+        setHealthLoading(false);
+      }
+    };
+
+    loadHealth();
+  }, [operationalScope]);
 
   useEffect(() => {
     if (!saveSuccess) {
@@ -112,7 +119,8 @@ function DetectionRulesPanel({
       await updateDetectionRule(ruleId, payloadParameters);
 
       await loadRules();
-      await loadHealth();
+      const data = await loadPfsenseDetectionHealth({ operationalScope });
+      setHealthRows(Array.isArray(data) ? data : []);
       setEditingRuleId("");
       setDraftParameters({});
       setSaveError("");
@@ -141,7 +149,8 @@ function DetectionRulesPanel({
     try {
       await updateDetectionRule(rule.rule_id, undefined, nextActive);
       await loadRules();
-      await loadHealth();
+      const data = await loadPfsenseDetectionHealth({ operationalScope });
+      setHealthRows(Array.isArray(data) ? data : []);
       setSaveSuccess(`${nextActive ? "Enabled" : "Disabled"} ${rule.rule_id}`);
     } catch (err) {
       setRules(previousRules);
@@ -228,7 +237,14 @@ function DetectionRulesPanel({
               <p style={sectionLabelStyle}>Read-only</p>
               <h3 id="pfsense-detection-health-heading" style={healthTitleStyle}>pfSense Detection Health</h3>
             </div>
-            <span style={healthWindowStyle}>24h UTC window</span>
+            <div style={healthHeaderActionsStyle}>
+              <OperationalScopeToggle
+                value={operationalScope}
+                onChange={setOperationalScope}
+                label="Operational scope"
+              />
+              <span style={healthWindowStyle}>24h UTC window</span>
+            </div>
           </div>
           {healthLoading ? (
             <p style={emptyTextStyle}>Loading detection health...</p>
@@ -410,6 +426,14 @@ const healthHeaderStyle = {
   gap: "12px",
   flexWrap: "wrap",
   marginBottom: "10px",
+};
+
+const healthHeaderActionsStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "flex-end",
+  gap: "12px",
+  flexWrap: "wrap",
 };
 
 const healthTitleStyle = {

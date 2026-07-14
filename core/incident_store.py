@@ -4,6 +4,12 @@ import logging
 from datetime import datetime
 from typing import Any
 
+from core.pfsense_operational_baseline import (
+    build_alert_operational_history,
+    build_incident_operational_history,
+    build_pfsense_incident_scope_filter,
+)
+
 logger = logging.getLogger(__name__)
 
 SEVERITY_TO_PRIORITY = {"CRITICAL": "P1", "HIGH": "P2"}
@@ -24,7 +30,11 @@ def _iso(dt: datetime | None) -> str | None:
     return dt.isoformat()
 
 
-def _incident_row_to_dict(record: tuple[Any, ...]) -> dict[str, Any]:
+def _incident_row_to_dict(
+    record: tuple[Any, ...],
+    *,
+    operational_history: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     (
         row_id,
         title,
@@ -46,6 +56,7 @@ def _incident_row_to_dict(record: tuple[Any, ...]) -> dict[str, Any]:
         "assigned_to": assigned_to,
         "created_at": _iso(created_at),
         "resolved_at": _iso(resolved_at),
+        "operational_history": operational_history,
     }
 
 
@@ -146,6 +157,7 @@ def list_incidents(
     conn,
     status: str | None = None,
     severity: str | None = None,
+    operational_scope: str = "all_history",
     limit: int = 50,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
@@ -160,6 +172,13 @@ def list_incidents(
     if severity is not None:
         filters.append("severity = %s")
         params.append(severity)
+    operational_clause, operational_params = build_pfsense_incident_scope_filter(
+        operational_scope,
+        incident_alias="incidents",
+    )
+    if operational_clause:
+        filters.append(operational_clause)
+        params.extend(operational_params)
 
     where = f"WHERE {' AND '.join(filters)}" if filters else ""
     params.extend([cap, offset])
@@ -176,7 +195,16 @@ def list_incidents(
             """,
             params,
         )
-        return [_incident_row_to_dict(row) for row in cur.fetchall()]
+        rows = cur.fetchall()
+        incident_ids = [row[0] for row in rows]
+        legacy_by_incident_id = _build_incident_legacy_map(cur, incident_ids)
+        return [
+            _incident_row_to_dict(
+                row,
+                operational_history=legacy_by_incident_id.get(row[0]),
+            )
+            for row in rows
+        ]
 
 
 def get_incident_detail(conn, incident_id: int) -> dict[str, Any] | None:
@@ -197,6 +225,7 @@ def get_incident_detail(conn, incident_id: int) -> dict[str, Any] | None:
         cur.execute(
             """
             SELECT a.id, a.alert_type, a.severity, host(a.source_ip), a.status, a.created_at,
+                   a.source, a.source_type,
                    ia.linked_at
             FROM incident_alerts ia
             JOIN alerts a ON a.id = ia.alert_id
@@ -214,6 +243,8 @@ def get_incident_detail(conn, incident_id: int) -> dict[str, Any] | None:
                 a_ip,
                 a_status,
                 a_created,
+                a_source,
+                a_source_type,
                 linked_at,
             ) = a_row
             alerts.append(
@@ -224,11 +255,65 @@ def get_incident_detail(conn, incident_id: int) -> dict[str, Any] | None:
                     "source_ip": a_ip,
                     "status": a_status,
                     "created_at": _iso(a_created),
+                    "source": a_source,
+                    "source_type": a_source_type,
+                    "operational_history": build_alert_operational_history(
+                        created_at=a_created,
+                        source=a_source,
+                        source_type=a_source_type,
+                    ),
                     "linked_at": _iso(linked_at),
                 }
             )
         base["alerts"] = alerts
+        base["operational_history"] = build_incident_operational_history(
+            created_at=base["created_at"],
+            linked_alerts=alerts,
+        )
         return base
+
+
+def _build_incident_legacy_map(cur, incident_ids: list[int]) -> dict[int, dict[str, Any] | None]:
+    filtered_ids = [int(incident_id) for incident_id in incident_ids if incident_id is not None]
+    if not filtered_ids:
+        return {}
+    cur.execute(
+        """
+        SELECT
+            i.id,
+            i.created_at,
+            a.created_at,
+            a.source,
+            a.source_type
+        FROM incidents i
+        LEFT JOIN incident_alerts ia ON ia.incident_id = i.id
+        LEFT JOIN alerts a ON a.id = ia.alert_id
+        WHERE i.id = ANY(%s)
+        ORDER BY i.id ASC, ia.linked_at ASC
+        """,
+        (filtered_ids,),
+    )
+    grouped: dict[int, dict[str, Any]] = {}
+    for incident_id, incident_created_at, alert_created_at, alert_source, alert_source_type in cur.fetchall():
+        bucket = grouped.setdefault(
+            incident_id,
+            {"created_at": incident_created_at, "alerts": []},
+        )
+        if alert_created_at is not None:
+            bucket["alerts"].append(
+                {
+                    "created_at": alert_created_at,
+                    "source": alert_source,
+                    "source_type": alert_source_type,
+                }
+            )
+    return {
+        incident_id: build_incident_operational_history(
+            created_at=bucket["created_at"],
+            linked_alerts=bucket["alerts"],
+        )
+        for incident_id, bucket in grouped.items()
+    }
 
 
 def update_incident_status(

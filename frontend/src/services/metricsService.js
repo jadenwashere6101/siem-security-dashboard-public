@@ -3,8 +3,8 @@ import { buildSiemPath } from "../utils/siemPath";
 
 const metricsFallback = {};
 
-const fetchMetrics = async (path, fallbackMessage) => {
-  const res = await fetch(buildSiemPath(path), {
+const fetchMetrics = async (path, fallbackMessage, query = "") => {
+  const res = await fetch(buildSiemPath(`${path}${query ? `?${query}` : ""}`), {
     credentials: "include",
   });
   const data = await parseJsonResponse(res, metricsFallback);
@@ -27,8 +27,16 @@ export async function getNotificationDeliveryMetrics() {
   );
 }
 
-export async function getIncidentMetrics() {
-  return fetchMetrics("/metrics/incidents", "Unable to load incident metrics");
+export async function getIncidentMetrics({ operationalScope } = {}) {
+  const params = new URLSearchParams();
+  if (operationalScope && operationalScope !== "all_history") {
+    params.set("operational_scope", operationalScope);
+  }
+  return fetchMetrics(
+    "/metrics/incidents",
+    "Unable to load incident metrics",
+    params.toString()
+  );
 }
 
 export async function getApprovalMetrics() {

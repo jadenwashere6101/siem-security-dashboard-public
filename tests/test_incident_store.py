@@ -353,6 +353,55 @@ def test_list_incidents_offset(postgres_db):
     assert page[0]["title"] == "x2"
 
 
+def test_list_incidents_since_tuning_excludes_legacy_only_pfsense_incidents(postgres_db, monkeypatch):
+    conn, cur = postgres_db
+    monkeypatch.setenv("SIEM_PFSENSE_TUNING_BASELINE", "2026-06-01T00:00:00Z")
+    cur.execute(
+        """
+        INSERT INTO alerts (alert_type, severity, source_ip, source, source_type, message, status, created_at)
+        VALUES
+          ('pfsense_firewall_repeated_deny', 'HIGH', '198.51.100.40'::inet, 'pfsense', 'firewall', 'legacy', 'open', '2026-05-01T00:00:00+00:00'),
+          ('pfsense_firewall_port_scan', 'HIGH', '198.51.100.41'::inet, 'pfsense', 'firewall', 'current', 'open', '2026-06-15T00:00:00+00:00'),
+          ('failed_login_threshold', 'HIGH', '198.51.100.42'::inet, 'bank_app', 'custom', 'non-pfsense', 'open', '2026-05-01T00:00:00+00:00')
+        RETURNING id
+        """
+    )
+    legacy_alert_id, current_alert_id, non_pfsense_alert_id = [row[0] for row in cur.fetchall()]
+    legacy_incident = create_incident(conn, "legacy", "HIGH", "198.51.100.40")
+    current_incident = create_incident(conn, "current", "HIGH", "198.51.100.41")
+    non_pfsense_incident = create_incident(conn, "other", "HIGH", "198.51.100.42")
+    link_alert_to_incident(conn, legacy_incident["id"], legacy_alert_id)
+    link_alert_to_incident(conn, current_incident["id"], current_alert_id)
+    link_alert_to_incident(conn, non_pfsense_incident["id"], non_pfsense_alert_id)
+    conn.commit()
+
+    rows = list_incidents(conn, operational_scope="since_tuning")
+    titles = {row["title"] for row in rows}
+
+    assert titles == {"current", "other"}
+
+
+def test_get_incident_detail_marks_pre_tuning_pfsense_incident(postgres_db, monkeypatch):
+    conn, cur = postgres_db
+    monkeypatch.setenv("SIEM_PFSENSE_TUNING_BASELINE", "2026-06-01T00:00:00Z")
+    cur.execute(
+        """
+        INSERT INTO alerts (alert_type, severity, source_ip, source, source_type, message, status, created_at)
+        VALUES ('pfsense_firewall_repeated_deny', 'HIGH', '198.51.100.43'::inet, 'pfsense', 'firewall', 'legacy', 'open', '2026-05-01T00:00:00+00:00')
+        RETURNING id
+        """
+    )
+    alert_id = cur.fetchone()[0]
+    incident = create_incident(conn, "legacy detail", "HIGH", "198.51.100.43")
+    link_alert_to_incident(conn, incident["id"], alert_id)
+    conn.commit()
+
+    detail = get_incident_detail(conn, incident["id"])
+
+    assert detail["operational_history"]["is_pre_tuning"] is True
+    assert detail["alerts"][0]["operational_history"]["is_pre_tuning"] is True
+
+
 def test_get_incident_unknown_returns_none(postgres_db):
     conn, _cur = postgres_db
     assert get_incident_detail(conn, 999999) is None

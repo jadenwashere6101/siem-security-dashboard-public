@@ -7,7 +7,11 @@ import {
 } from "../services/incidentService";
 import { listIncidentNotificationDeliveries } from "../services/notificationDeliveryService";
 import { formatTimestamp } from "../utils/displayFormatting";
+import { getOperationalHistoryBadge, getOperationalHistoryDescription } from "../utils/operationalHistory";
 import { getSeverityBadgeStyle } from "../utils/severityDisplay";
+import OperationalScopeToggle, {
+  OPERATIONAL_SCOPE_SINCE_TUNING,
+} from "./OperationalScopeToggle";
 import {
   MasterDetailLayout,
   MasterDetailMaster,
@@ -72,6 +76,7 @@ function IncidentsPanel({
   const [error, setError] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [severityFilter, setSeverityFilter] = useState("all");
+  const [operationalScope, setOperationalScope] = useState(OPERATIONAL_SCOPE_SINCE_TUNING);
   const [selectedIncidentId, setSelectedIncidentId] = useState(null);
   const [selectedIncident, setSelectedIncident] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -101,6 +106,7 @@ function IncidentsPanel({
       const data = await loadIncidents({
         status: statusFilter,
         severity: severityFilter,
+        operationalScope,
       });
       setIncidents(Array.isArray(data?.incidents) ? data.incidents : []);
     } catch (err) {
@@ -112,7 +118,7 @@ function IncidentsPanel({
       setLoading(false);
       setRefreshing(false);
     }
-  }, [statusFilter, severityFilter]);
+  }, [operationalScope, severityFilter, statusFilter]);
 
   const loadDetail = useCallback(async (incidentId) => {
     if (!incidentId) return;
@@ -251,6 +257,14 @@ function IncidentsPanel({
           </p>
         </div>
         <div style={controlsStyle}>
+          <div style={filterWrapperStyle}>
+            <OperationalScopeToggle
+              value={operationalScope}
+              onChange={setOperationalScope}
+              label="Operational scope"
+              compact
+            />
+          </div>
           <label style={filterWrapperStyle}>
             <span style={filterLabelStyle}>Status</span>
             <select
@@ -366,7 +380,12 @@ function IncidentsPanel({
                     >
                       <td style={{ ...bodyCellStyle, ...monoCellStyle }}>{incident.id}</td>
                       {visibleColumns.title && <td style={bodyCellStyle} title={incident.title || ""}>
-                        {truncateText(incident.title || "Untitled incident", 44)}
+                        <div>{truncateText(incident.title || "Untitled incident", 44)}</div>
+                        {getOperationalHistoryBadge(incident) ? (
+                          <div style={legacyBadgeRowStyle}>
+                            <span style={legacyBadgeStyle}>{getOperationalHistoryBadge(incident)}</span>
+                          </div>
+                        ) : null}
                       </td>}
                       {visibleColumns.severity && <td style={bodyCellStyle}>
                         <span
@@ -476,6 +495,12 @@ function IncidentsPanel({
                     label="Created"
                     value={formatTimestamp(selectedIncident.created_at, displaySettings, "N/A")}
                   />
+                  {getOperationalHistoryBadge(selectedIncident) ? (
+                    <DetailField
+                      label="Operational History"
+                      value={`${getOperationalHistoryBadge(selectedIncident)} · ${getOperationalHistoryDescription(selectedIncident)}`}
+                    />
+                  ) : null}
                   <DetailField
                     label="Resolved"
                     value={
@@ -904,30 +929,6 @@ const badgeStyle = {
   letterSpacing: "0.04em",
 };
 
-const criticalBadgeStyle = {
-  color: "#fca5a5",
-  backgroundColor: "rgba(239, 68, 68, 0.12)",
-  border: "1px solid rgba(239, 68, 68, 0.28)",
-};
-
-const highBadgeStyle = {
-  color: "#fb923c",
-  backgroundColor: "rgba(251, 146, 60, 0.12)",
-  border: "1px solid rgba(251, 146, 60, 0.28)",
-};
-
-const mediumBadgeStyle = {
-  color: "#f5d487",
-  backgroundColor: "rgba(217, 164, 65, 0.14)",
-  border: "1px solid rgba(217, 164, 65, 0.32)",
-};
-
-const lowBadgeStyle = {
-  color: "#7ee787",
-  backgroundColor: "rgba(63, 185, 80, 0.12)",
-  border: "1px solid rgba(63, 185, 80, 0.28)",
-};
-
 const openBadgeStyle = {
   color: "#93c5fd",
   backgroundColor: "rgba(59, 130, 246, 0.12)",
@@ -1216,6 +1217,23 @@ const updateButtonStyle = {
   color: "#93c5fd",
   fontSize: "13px",
   fontWeight: "700",
+};
+
+const legacyBadgeRowStyle = {
+  marginTop: "6px",
+};
+
+const legacyBadgeStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  borderRadius: "999px",
+  padding: "3px 8px",
+  border: "1px solid rgba(244, 114, 182, 0.28)",
+  backgroundColor: "rgba(244, 114, 182, 0.12)",
+  color: "#fbcfe8",
+  fontSize: "10px",
+  fontWeight: "800",
+  textTransform: "uppercase",
 };
 
 function DetailField({ label, value, mono = false }) {

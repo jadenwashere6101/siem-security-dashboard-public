@@ -232,6 +232,17 @@ describe("SOAR operational metric fetchers", () => {
     await expect(getIncidentMetrics()).rejects.toThrow("forbidden");
   });
 
+  test("getIncidentMetrics includes operational scope when requested", async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ total_count: 0 }),
+    });
+
+    await getIncidentMetrics({ operationalScope: "since_tuning" });
+
+    expect(global.fetch.mock.calls[0][0]).toContain("operational_scope=since_tuning");
+  });
+
   test("getApprovalMetrics throws fallback message on non-OK malformed JSON", async () => {
     global.fetch.mockResolvedValue({
       ok: false,

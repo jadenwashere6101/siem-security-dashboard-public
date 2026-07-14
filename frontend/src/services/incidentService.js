@@ -4,12 +4,16 @@ import { buildSiemPath } from "../utils/siemPath";
 export const loadIncidents = async ({
   status,
   severity,
+  operationalScope,
   limit = 50,
   offset = 0,
 } = {}) => {
   const params = new URLSearchParams();
   if (status && status !== "all") params.set("status", status);
   if (severity && severity !== "all") params.set("severity", severity);
+  if (operationalScope && operationalScope !== "all_history") {
+    params.set("operational_scope", operationalScope);
+  }
   if (limit && limit !== 50) params.set("limit", String(limit));
   if (offset) params.set("offset", String(offset));
 

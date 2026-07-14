@@ -315,6 +315,33 @@ def test_get_pfsense_detection_health_returns_zero_count_rows_when_no_alerts_exi
     assert all(row["health_badge"] == "Normal" for row in data)
 
 
+def test_get_pfsense_detection_health_since_tuning_respects_baseline_within_window(client, postgres_db, monkeypatch):
+    conn, cur = postgres_db
+    now = datetime.now(timezone.utc)
+    baseline = now - timedelta(hours=12)
+    monkeypatch.setenv("SIEM_PFSENSE_TUNING_BASELINE", baseline.isoformat())
+    cur.execute(
+        """
+        INSERT INTO alerts (alert_type, severity, source_ip, source, source_type, message, status, created_at)
+        VALUES
+            ('pfsense_firewall_port_scan', 'medium', '198.51.100.66', 'pfsense', 'firewall', 'before baseline', 'open', %s),
+            ('pfsense_firewall_port_scan', 'high', '198.51.100.67', 'pfsense', 'firewall', 'after baseline', 'open', %s)
+        """
+        ,
+        (baseline - timedelta(minutes=5), baseline + timedelta(minutes=5)),
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_app_db(conn):
+        resp = client.get("/admin/detection-rules/pfsense-health?operational_scope=since_tuning")
+
+    assert resp.status_code == 200
+    data = {row["rule_id"]: row for row in resp.get_json()}
+    assert data["pfsense_firewall_port_scan"]["fired_count_24h"] == 1
+    assert data["pfsense_firewall_port_scan"]["highest_severity_24h"] == "high"
+
+
 def test_get_pfsense_detection_health_single_rule_and_tie_breaking_by_rule_name(client, postgres_db):
     conn, cur = postgres_db
     now = datetime.now(timezone.utc)

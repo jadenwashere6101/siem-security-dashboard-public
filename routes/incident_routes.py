@@ -9,6 +9,7 @@ from flask_login import current_user, login_required
 from core.audit_helpers import log_audit_event
 from core.auth import analyst_or_super_admin_required
 from core.db import get_db_connection
+from core.pfsense_operational_baseline import normalize_operational_scope
 from core.incident_store import (
     ALL_INCIDENT_STATUSES,
     get_incident_detail,
@@ -651,6 +652,12 @@ def list_incidents_route():
     try:
         status = request.args.get("status")
         severity = request.args.get("severity")
+        try:
+            operational_scope = normalize_operational_scope(
+                request.args.get("operational_scope")
+            )
+        except ValueError:
+            return jsonify({"error": "invalid operational scope"}), 400
 
         if status is not None and status not in ALL_INCIDENT_STATUSES:
             return jsonify({"error": "invalid status filter"}), 400
@@ -682,6 +689,7 @@ def list_incidents_route():
             conn,
             status=status,
             severity=severity,
+            operational_scope=operational_scope,
             limit=limit,
             offset=offset,
         )

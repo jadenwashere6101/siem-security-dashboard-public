@@ -91,6 +91,7 @@ const incidentAlpha = {
   status: "open",
   source_ip: "203.0.113.10",
   created_at: "2026-05-18T12:00:00Z",
+  operational_history: { is_pre_tuning: true, label: "Pre-Tuning" },
 };
 
 const incidentBeta = {
@@ -310,10 +311,20 @@ describe("SocCommandCenter", () => {
     expect(screen.queryByText("Incident pressure")).not.toBeInTheDocument();
   });
 
+  test("defaults incident data to since tuning and shows legacy badge when present", async () => {
+    renderPanel();
+
+    await waitFor(() =>
+      expect(loadIncidents).toHaveBeenCalledWith({ limit: 12, operationalScope: "since_tuning" })
+    );
+    expect(getIncidentMetrics).toHaveBeenCalledWith({ operationalScope: "since_tuning" });
+    expect(await screen.findByText("Pre-Tuning")).toBeInTheDocument();
+  });
+
   test("uses read-only services and never calls mutation endpoints", async () => {
     renderPanel();
 
-    await waitFor(() => expect(loadIncidents).toHaveBeenCalledWith({ limit: 12 }));
+    await waitFor(() => expect(loadIncidents).toHaveBeenCalledWith({ limit: 12, operationalScope: "since_tuning" }));
     expect(listPlaybookExecutions).toHaveBeenCalledWith({ limit: 12 });
     expect(listApprovals).toHaveBeenCalledWith({ limit: 12 });
     expect(getDeadLetters).toHaveBeenCalledWith({ limit: 12 });

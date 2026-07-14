@@ -14,6 +14,7 @@ function AlertTableRow({
   alert,
   sourceBadge,
   targetedAlertMeta,
+  operationalHistoryBadge,
   isSelected,
   isHovered,
   onRowClick,
@@ -143,8 +144,20 @@ function AlertTableRow({
       {visibleColumns.message && (
       <td style={bodyCellStyle}>
         <div>{alert.message}</div>
-        {cooldownActive || suppressedRollup ? (
+        {cooldownActive || suppressedRollup || operationalHistoryBadge ? (
           <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginTop: "8px" }}>
+            {operationalHistoryBadge ? (
+              <span
+                style={{
+                  ...sourceBadgeStyle,
+                  backgroundColor: "rgba(244, 114, 182, 0.12)",
+                  color: "#fbcfe8",
+                  borderColor: "rgba(244, 114, 182, 0.28)",
+                }}
+              >
+                {operationalHistoryBadge}
+              </span>
+            ) : null}
             {cooldownActive ? (
               <span
                 style={{

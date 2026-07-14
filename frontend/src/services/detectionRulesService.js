@@ -16,8 +16,13 @@ export const loadDetectionRules = async () => {
   return data;
 };
 
-export const loadPfsenseDetectionHealth = async () => {
-  const res = await fetch(buildSiemPath("/admin/detection-rules/pfsense-health"), {
+export const loadPfsenseDetectionHealth = async ({ operationalScope } = {}) => {
+  const params = new URLSearchParams();
+  if (operationalScope && operationalScope !== "all_history") {
+    params.set("operational_scope", operationalScope);
+  }
+  const query = params.toString();
+  const res = await fetch(buildSiemPath(`/admin/detection-rules/pfsense-health${query ? `?${query}` : ""}`), {
     credentials: "include",
   });
   const data = await parseJsonResponse(res, []);

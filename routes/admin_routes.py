@@ -13,6 +13,11 @@ from core.approval_store import (
 )
 from core.auth import super_admin_required
 from core.db import get_db_connection
+from core.pfsense_operational_baseline import (
+    OPERATIONAL_SCOPE_SINCE_TUNING,
+    get_pfsense_tuning_baseline,
+    normalize_operational_scope,
+)
 from core.response_action_queue_store import (
     get_queue_status_counts,
     get_queue_action,
@@ -495,10 +500,20 @@ def list_pfsense_detection_health():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
+        try:
+            operational_scope = normalize_operational_scope(
+                request.args.get("operational_scope")
+            )
+        except ValueError:
+            return jsonify({"error": "invalid operational scope"}), 400
 
         rule_defaults = get_detection_rule_defaults()
         window_end = datetime.now(timezone.utc)
         window_start = window_end - timedelta(hours=24)
+        effective_window_start = window_start
+        baseline = get_pfsense_tuning_baseline()
+        if operational_scope == OPERATIONAL_SCOPE_SINCE_TUNING and baseline is not None:
+            effective_window_start = max(window_start, baseline)
 
         cur.execute(
             """
@@ -523,7 +538,7 @@ def list_pfsense_detection_health():
               AND created_at < %s
             GROUP BY alert_type
             """,
-            (list(PFSENSE_DETECTION_HEALTH_RULE_IDS), window_start, window_end),
+            (list(PFSENSE_DETECTION_HEALTH_RULE_IDS), effective_window_start, window_end),
         )
         aggregate_by_rule = {
             row[0]: {

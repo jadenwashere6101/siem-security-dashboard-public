@@ -1,4 +1,5 @@
 import React from "react";
+import OperationalScopeToggle from "./OperationalScopeToggle";
 import { SOURCE_METADATA } from "../utils/sourceMetadata";
 
 function AlertsToolbar({
@@ -8,6 +9,8 @@ function AlertsToolbar({
   setSearchTerm,
   sortOption,
   setSortOption,
+  operationalScope,
+  setOperationalScope,
   severityFilter,
   setSeverityFilter,
   sourceFilter,
@@ -62,6 +65,15 @@ function AlertsToolbar({
             </button>
           </div>
         </details>
+      </div>
+
+      <div style={filterWrapperStyle}>
+        <OperationalScopeToggle
+          value={operationalScope}
+          onChange={setOperationalScope}
+          label="Operational scope"
+          compact
+        />
       </div>
 
       <div style={filterWrapperStyle}>

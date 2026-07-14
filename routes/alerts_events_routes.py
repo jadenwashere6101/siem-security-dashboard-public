@@ -8,6 +8,11 @@ from flask_login import login_required
 
 from core.auth import admin_required, analyst_or_super_admin_required
 from core.db import get_db_connection
+from core.pfsense_operational_baseline import (
+    build_alert_operational_history,
+    build_pfsense_alert_baseline_filter,
+    normalize_operational_scope,
+)
 from core.soar_response_outcomes import (
     build_latest_outcome_api_shape,
     get_latest_decisions_for_alerts_bulk,
@@ -121,6 +126,10 @@ def _parse_alert_list_request_args(include_pagination: bool = False):
     sort = _normalize_alert_filter_value(request.args.get("sort")) or "newest"
     if sort not in VALID_ALERT_SORT_OPTIONS:
         return None, (jsonify({"error": "invalid sort option"}), 400)
+    try:
+        operational_scope = normalize_operational_scope(request.args.get("operational_scope"))
+    except ValueError:
+        return None, (jsonify({"error": "invalid operational scope"}), 400)
 
     args = {
         "search": search,
@@ -128,6 +137,7 @@ def _parse_alert_list_request_args(include_pagination: bool = False):
         "status": status,
         "source": source,
         "sort": sort,
+        "operational_scope": operational_scope,
     }
 
     if include_pagination:
@@ -174,6 +184,13 @@ def _build_alert_filter_sql(filters: dict):
     if filters.get("source"):
         clauses.append("COALESCE(source, 'legacy') = %s")
         params.append(filters["source"])
+
+    operational_clause, operational_params = build_pfsense_alert_baseline_filter(
+        filters.get("operational_scope") or "all_history"
+    )
+    if operational_clause:
+        clauses.append(operational_clause)
+        params.extend(operational_params)
 
     return clauses, params
 
@@ -586,6 +603,11 @@ def _build_alert_payload(
                 "source_type": row[18] or "legacy",
                 "context": row[19] if row[19] is not None else {},
                 "pfsense_quality": _build_pfsense_quality_metadata(row, cooldown_by_alert_id),
+                "operational_history": build_alert_operational_history(
+                    created_at=row[5],
+                    source=row[17],
+                    source_type=row[18],
+                ),
             }
         )
     )
