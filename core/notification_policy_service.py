@@ -6,7 +6,7 @@ from typing import Any
 from uuid import uuid4
 
 from core import notification_delivery_store
-from core.notification_policy_store import get_effective_notification_policy
+from core.notification_policy_store import get_effective_notification_policy, load_notification_policy
 from integrations.base_integration import REAL_MODE
 from integrations.integration_registry import get_integration_adapter
 
@@ -51,6 +51,7 @@ def evaluate_notification_policy(
     severity: Any,
     source: Any,
     source_type: Any = None,
+    bypass_slack_disabled: bool = False,
 ) -> dict[str, Any]:
     if policy.get("status") == "unavailable":
         return {"should_notify": False, "reason": "policy_unavailable", "route_key": None, "destination": None}
@@ -60,7 +61,7 @@ def evaluate_notification_policy(
         return {"should_notify": False, "reason": "alerts_disabled", "route_key": None, "destination": None}
     if normalized_kind == "incident" and not policy.get("notify_on_incidents", True):
         return {"should_notify": False, "reason": "incidents_disabled", "route_key": None, "destination": None}
-    if not policy.get("slack_enabled", False):
+    if not bypass_slack_disabled and not policy.get("slack_enabled", False):
         return {"should_notify": False, "reason": "slack_disabled", "route_key": None, "destination": None}
 
     normalized_severity = str(severity or "").strip().lower()
@@ -198,6 +199,46 @@ def _record_attempt(
         circuit_breaker_state=circuit_breaker_state,
         metadata=metadata,
     )
+
+
+def _attempt_summary(attempt: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not attempt:
+        return None
+    return {
+        "id": attempt.get("id"),
+        "provider": attempt.get("provider"),
+        "status": attempt.get("status"),
+        "action": attempt.get("action"),
+        "created_at": attempt.get("created_at"),
+        "completed_at": attempt.get("completed_at"),
+        "failure_code": attempt.get("failure_code"),
+        "failure_message": attempt.get("failure_message"),
+    }
+
+
+def _route_test_source(route_key: str) -> tuple[str, str]:
+    if route_key == ROUTE_KEY_PFSENSE:
+        return ("pfsense", "firewall")
+    if route_key == ROUTE_KEY_HONEYPOT:
+        return ("honeypot", "honeypot")
+    raise ValueError("Notification policy test route is not supported")
+
+
+def _format_route_test_text(route_key: str, destination: str, slack_format: str) -> str:
+    route_label = "pfSense" if route_key == ROUTE_KEY_PFSENSE else "Honeypot"
+    header = f"[{destination}] NOTIFICATION POLICY ROUTE TEST"
+    compact = f"{header} {route_label} synthetic verification message. No alert or incident was created."
+    if slack_format == "detailed":
+        return "\n".join(
+            [
+                f"[{destination}] Notification policy route test",
+                f"Route: {route_label}",
+                "Severity: CRITICAL",
+                "Source: synthetic_admin_test",
+                "Summary: Synthetic notification-policy route verification. No alert, incident, playbook, approval, or SOAR execution was created.",
+            ]
+        )[:3000]
+    return compact[:3000]
 
 
 def fetch_alert_notification_context(conn, alert_id: int) -> dict[str, Any] | None:
@@ -460,3 +501,126 @@ def notify_for_incident(conn, incident_id: int) -> dict[str, Any] | None:
         timeout_seconds=metadata.get("timeout_seconds"),
         circuit_breaker_state=metadata.get("circuit_state"),
     )
+
+
+def send_notification_policy_route_test(
+    conn,
+    *,
+    route_key: str,
+    requested_by: str | None = None,
+    bypass_slack_disabled: bool = True,
+) -> dict[str, Any]:
+    source, source_type = _route_test_source(str(route_key or "").strip().lower())
+    with conn.cursor() as cur:
+        policy = load_notification_policy(cur)
+
+    decision = evaluate_notification_policy(
+        policy,
+        event_kind="alert",
+        severity="critical",
+        source=source,
+        source_type=source_type,
+        bypass_slack_disabled=bypass_slack_disabled,
+    )
+    resolved_route_key = decision.get("route_key") or source
+    correlation_id = _notification_correlation_id("route_test", 0, resolved_route_key)
+    idempotency_key = _notification_idempotency_key(
+        "route_test",
+        0,
+        resolved_route_key,
+        str(policy.get("slack_format") or "compact"),
+    )
+
+    if not decision["should_notify"]:
+        attempt = _record_attempt(
+            conn,
+            correlation_id=correlation_id,
+            idempotency_key=idempotency_key,
+            status="blocked",
+            failure_code=decision["reason"],
+            failure_message=f"Notification policy route test was blocked: {decision['reason']}.",
+            metadata={
+                "notification_policy": True,
+                "event_kind": "route_test",
+                "route_test": True,
+                "route_key": resolved_route_key,
+                "policy_status": policy.get("status"),
+                "policy_reason": decision["reason"],
+                "source": source,
+                "source_type": source_type,
+                "severity": "critical",
+                "bypassed_slack_disabled": bool(bypass_slack_disabled),
+                "executed": False,
+                "simulated": True,
+            },
+        )
+        return {
+            "route_key": resolved_route_key,
+            "success": False,
+            "status": attempt["status"],
+            "message": attempt["failure_message"],
+            "attempt": _attempt_summary(attempt),
+        }
+
+    text = _format_route_test_text(
+        resolved_route_key,
+        decision["destination"],
+        str(decision["slack_format"] or "compact"),
+    )
+    adapter = get_integration_adapter("slack", mode=REAL_MODE)
+    result = adapter.execute(
+        "send_message",
+        params={
+            "text": text,
+            "message": f"Notification policy route test for {resolved_route_key}",
+            "destination_label": decision["destination"],
+        },
+        context={
+            "playbook_id": "notification_policy_route_test",
+            "execution_id": correlation_id,
+            "notification_policy": True,
+            "route_key": resolved_route_key,
+            "notification_policy_route_test": True,
+        },
+    )
+    metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+    attempt = _record_attempt(
+        conn,
+        correlation_id=correlation_id,
+        idempotency_key=idempotency_key,
+        status=_delivery_status_from_adapter_result(result),
+        failure_code=metadata.get("failure_classification"),
+        failure_message=None if result.get("success") else result.get("message"),
+        metadata={
+            "notification_policy": True,
+            "event_kind": "route_test",
+            "route_test": True,
+            "route_key": resolved_route_key,
+            "destination_label": decision["destination"],
+            "slack_format": decision["slack_format"],
+            "source": source,
+            "source_type": source_type,
+            "severity": "critical",
+            "bypassed_slack_disabled": bool(bypass_slack_disabled),
+            "requested_by": requested_by,
+            "executed": result.get("executed"),
+            "simulated": result.get("simulated"),
+            "adapter_result": {
+                "success": result.get("success"),
+                "failure_classification": metadata.get("failure_classification"),
+            },
+        },
+        timeout_seconds=metadata.get("timeout_seconds"),
+        circuit_breaker_state=metadata.get("circuit_state"),
+    )
+    return {
+        "route_key": resolved_route_key,
+        "success": attempt["status"] == "success",
+        "status": attempt["status"],
+        "message": (
+            f"Notification policy route test sent for {resolved_route_key}."
+            if attempt["status"] == "success"
+            else attempt["failure_message"]
+        ),
+        "attempt": _attempt_summary(attempt),
+    }

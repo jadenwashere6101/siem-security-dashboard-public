@@ -28,6 +28,7 @@ from core.notification_policy_store import (
     load_notification_policy,
     upsert_notification_policy,
 )
+from core.notification_policy_service import send_notification_policy_route_test
 from core.soar_response_outcomes import get_latest_outcomes_for_queues_bulk
 from engines.soar_action_worker import classify_queue_action_mode, process_batch
 from engines.detection_config import (
@@ -238,6 +239,59 @@ def update_notification_policy_route():
             conn.rollback()
         current_app.logger.error("Unable to update notification policy: %s", error)
         return jsonify({"error": "Unable to update notification policy"}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+
+@admin_bp.route("/admin/notification-policy/test/<route_key>", methods=["POST"])
+@login_required
+@super_admin_required
+def test_notification_policy_route(route_key):
+    conn = None
+    cur = None
+    try:
+        normalized_route = str(route_key or "").strip().lower()
+        if normalized_route not in {"pfsense", "honeypot"}:
+            return jsonify({"error": "Notification policy test route is not supported"}), 404
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+        result = send_notification_policy_route_test(
+            conn,
+            route_key=normalized_route,
+            requested_by=str(current_user.id),
+            bypass_slack_disabled=True,
+        )
+        conn.commit()
+
+        log_audit_event(
+            "notification_policy_route_test_requested",
+            actor_username=current_user.id,
+            actor_role=current_user.role,
+            http_method=request.method,
+            request_path=request.path,
+            source_ip=request.remote_addr,
+            details={
+                "route_key": result["route_key"],
+                "status": result["status"],
+                "success": result["success"],
+                "attempt_id": result["attempt"]["id"] if result.get("attempt") else None,
+                "bypassed_slack_disabled": True,
+            },
+        )
+        return jsonify(result), (200 if result["success"] else 409)
+    except ValueError as error:
+        if conn:
+            conn.rollback()
+        return jsonify({"error": str(error)}), 400
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        current_app.logger.error("Unable to run notification policy route test route=%s: %s", route_key, error)
+        return jsonify({"error": "Unable to run notification policy route test"}), 500
     finally:
         if cur:
             cur.close()

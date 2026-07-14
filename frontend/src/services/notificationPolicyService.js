@@ -26,3 +26,12 @@ export const updateNotificationPolicy = (updates) =>
     },
     "Unable to update notification policy"
   );
+
+export const testNotificationPolicyRoute = (routeKey) =>
+  requestJson(
+    `/admin/notification-policy/test/${encodeURIComponent(routeKey)}`,
+    {
+      method: "POST",
+    },
+    "Unable to run notification policy route test"
+  );

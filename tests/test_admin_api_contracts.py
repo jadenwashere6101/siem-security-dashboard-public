@@ -106,6 +106,30 @@ def test_admin_list_routes_as_viewer_or_analyst_return_403(client, mock_db, path
     assert resp.get_json()["error"] == "forbidden"
 
 
+def test_notification_policy_route_test_without_session_returns_401(client):
+    resp = client.post("/admin/notification-policy/test/pfsense")
+    assert resp.status_code == 401
+    assert resp.get_json()["error"] == "Unauthorized"
+
+
+@pytest.mark.parametrize(
+    "fake_user,password",
+    [
+        (_fake_viewer(), "viewerpass"),
+        (_fake_analyst(), "analystpass"),
+    ],
+)
+def test_notification_policy_route_test_as_viewer_or_analyst_returns_403(client, mock_db, fake_user, password):
+    with patch("routes.auth_routes.get_user_by_username", return_value=fake_user), patch(
+        "core.auth.get_user_by_username", return_value=fake_user
+    ):
+        login = client.post("/login", json={"username": fake_user["username"], "password": password})
+        assert login.status_code == 200
+        resp = client.post("/admin/notification-policy/test/pfsense")
+    assert resp.status_code == 403
+    assert resp.get_json()["error"] == "forbidden"
+
+
 def test_get_admin_users_as_super_admin_returns_200_stable_shape(client, postgres_db):
     conn, cur = postgres_db
     cur.execute(
@@ -700,6 +724,59 @@ def test_notification_policy_update_validation_errors_return_400(client, postgre
         response = client.patch("/admin/notification-policy", json=payload)
     assert response.status_code == 400
     assert error_text in response.get_json()["error"]
+
+
+def test_notification_policy_route_test_records_attempt_without_other_writes(client, postgres_db):
+    conn, cur = postgres_db
+    _login_super_admin(client)
+
+    before = {}
+    for table in (
+        "alerts",
+        "incidents",
+        "playbook_executions",
+        "approval_requests",
+        "notification_delivery_attempts",
+    ):
+        cur.execute(f"SELECT COUNT(*) FROM {table}")
+        before[table] = cur.fetchone()[0]
+
+    with _patched_app_db(conn), patch(
+        "routes.admin_routes.send_notification_policy_route_test",
+        return_value={
+            "route_key": "pfsense",
+            "success": True,
+            "status": "success",
+            "message": "Notification policy route test sent for pfsense.",
+            "attempt": {
+                "id": 77,
+                "provider": "slack",
+                "status": "success",
+                "action": "send_message",
+                "created_at": "2026-07-14T00:00:00+00:00",
+                "completed_at": "2026-07-14T00:00:00+00:00",
+                "failure_code": None,
+                "failure_message": None,
+            },
+        },
+    ) as route_test:
+        response = client.post("/admin/notification-policy/test/pfsense")
+
+    assert response.status_code == 200
+    assert response.get_json()["success"] is True
+    route_test.assert_called_once()
+
+    for table in ("alerts", "incidents", "playbook_executions", "approval_requests"):
+        cur.execute(f"SELECT COUNT(*) FROM {table}")
+        assert cur.fetchone()[0] == before[table]
+
+    cur.execute(
+        "SELECT details FROM audit_log WHERE event_type = 'notification_policy_route_test_requested' ORDER BY id DESC LIMIT 1"
+    )
+    audit = cur.fetchone()[0]
+    assert audit["route_key"] == "pfsense"
+    assert audit["success"] is True
+    assert audit["bypassed_slack_disabled"] is True
 
 
 def test_get_and_patch_pfsense_ingest_filters_apply_immediately_and_audit(client, postgres_db):

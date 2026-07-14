@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 
 import {
   loadNotificationPolicy,
+  testNotificationPolicyRoute,
   updateNotificationPolicy,
 } from "../services/notificationPolicyService";
 import { formatTimestamp } from "../utils/displayFormatting";
@@ -20,6 +21,7 @@ function NotificationPolicyPanel({
   const [draft, setDraft] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [testingRoute, setTestingRoute] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -69,6 +71,20 @@ function NotificationPolicyPanel({
       setError(requestError.message || "Unable to update notification policy");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const runRouteTest = async (routeKey) => {
+    setTestingRoute(routeKey);
+    setError("");
+    setNotice("");
+    try {
+      const result = await testNotificationPolicyRoute(routeKey);
+      setNotice(result.message || "Notification policy route test completed.");
+    } catch (requestError) {
+      setError(requestError.message || "Unable to run notification policy route test");
+    } finally {
+      setTestingRoute("");
     }
   };
 
@@ -178,6 +194,33 @@ function NotificationPolicyPanel({
             evidence, and UI visibility remain unchanged.
           </div>
 
+          <div style={testPanelStyle}>
+            <div style={testTextStyle}>
+              Route tests send a synthetic notification-policy message through the real pfSense or
+              honeypot routing path without creating alerts, incidents, playbooks, approvals, or
+              SOAR executions. These tests may bypass only the global Slack-disabled gate for
+              controlled admin verification.
+            </div>
+            <div style={testActionsStyle}>
+              <button
+                type="button"
+                onClick={() => runRouteTest("pfsense")}
+                disabled={!!testingRoute || saving}
+                style={{ ...secondaryButtonStyle, opacity: testingRoute || saving ? 0.6 : 1 }}
+              >
+                {testingRoute === "pfsense" ? "Testing pfSense…" : "Test pfSense route"}
+              </button>
+              <button
+                type="button"
+                onClick={() => runRouteTest("honeypot")}
+                disabled={!!testingRoute || saving}
+                style={{ ...secondaryButtonStyle, opacity: testingRoute || saving ? 0.6 : 1 }}
+              >
+                {testingRoute === "honeypot" ? "Testing Honeypot…" : "Test Honeypot route"}
+              </button>
+            </div>
+          </div>
+
           <button
             type="button"
             onClick={savePolicy}
@@ -205,5 +248,9 @@ const selectStyle = { padding: 10, borderRadius: 8, border: "1px solid #475569",
 const inputStyle = { padding: 10, borderRadius: 8, border: "1px solid #475569", background: "#020617", color: "#f8fafc" };
 const noteStyle = { padding: 14, borderRadius: 10, background: "#082f49", color: "#e0f2fe", lineHeight: 1.6 };
 const buttonStyle = { padding: "10px 15px", border: 0, borderRadius: 8, background: "#0891b2", color: "#fff", fontWeight: 800, cursor: "pointer", justifySelf: "start" };
+const testPanelStyle = { display: "grid", gap: 12, padding: 14, borderRadius: 10, background: "#172554", color: "#dbeafe" };
+const testTextStyle = { lineHeight: 1.6 };
+const testActionsStyle = { display: "flex", gap: 10, flexWrap: "wrap" };
+const secondaryButtonStyle = { padding: "10px 15px", border: "1px solid #38bdf8", borderRadius: 8, background: "#0f172a", color: "#e0f2fe", fontWeight: 700, cursor: "pointer" };
 
 export default NotificationPolicyPanel;

@@ -34,6 +34,11 @@ beforeEach(() => {
     pfsense_destination: "#soc-pfsense",
     honeypot_destination: "#soc-honeypot",
   });
+  service.testNotificationPolicyRoute.mockResolvedValue({
+    success: true,
+    status: "success",
+    message: "Notification policy route test sent for pfsense.",
+  });
 });
 
 test("renders policy controls and suppression note", async () => {
@@ -80,4 +85,26 @@ test("announces backend failures accessibly", async () => {
   render(<NotificationPolicyPanel {...props} />);
 
   expect(await screen.findByRole("alert")).toHaveTextContent("Forbidden");
+});
+
+test("runs a pfSense route test and shows success feedback", async () => {
+  render(<NotificationPolicyPanel {...props} />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Test pfSense route" }));
+
+  await waitFor(() => expect(service.testNotificationPolicyRoute).toHaveBeenCalledWith("pfsense"));
+  expect(await screen.findByRole("status")).toHaveTextContent(
+    "Notification policy route test sent for pfsense."
+  );
+});
+
+test("shows route test failures accessibly", async () => {
+  service.testNotificationPolicyRoute.mockRejectedValue(new Error("Missing route-specific webhook"));
+
+  render(<NotificationPolicyPanel {...props} />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Test Honeypot route" }));
+
+  await waitFor(() => expect(service.testNotificationPolicyRoute).toHaveBeenCalledWith("honeypot"));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Missing route-specific webhook");
 });

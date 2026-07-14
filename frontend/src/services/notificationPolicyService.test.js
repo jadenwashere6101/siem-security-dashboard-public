@@ -1,5 +1,6 @@
 import {
   loadNotificationPolicy,
+  testNotificationPolicyRoute,
   updateNotificationPolicy,
 } from "./notificationPolicyService";
 
@@ -41,5 +42,14 @@ test("surfaces safe backend validation errors", async () => {
   fetch.mockResolvedValue({ ok: false, json: async () => ({ error: "routing label required" }) });
   await expect(updateNotificationPolicy({ pfsense_destination: "" })).rejects.toThrow(
     "routing label required"
+  );
+});
+
+test("posts notification policy route tests", async () => {
+  fetch.mockResolvedValue({ ok: true, json: async () => ({ success: true }) });
+  await testNotificationPolicyRoute("pfsense");
+  expect(fetch).toHaveBeenCalledWith(
+    "/admin/notification-policy/test/pfsense",
+    expect.objectContaining({ method: "POST", credentials: "include" })
   );
 });

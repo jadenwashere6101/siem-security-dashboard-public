@@ -6,6 +6,7 @@ from core.notification_policy_service import (
     format_incident_notification,
     notify_for_alert,
     notify_for_incident,
+    send_notification_policy_route_test,
 )
 
 
@@ -238,6 +239,60 @@ def test_notify_for_alert_short_circuits_when_slack_disabled(postgres_db):
     assert adapter_factory.called is False
     assert attempt["status"] == "blocked"
     assert attempt["failure_code"] == "slack_disabled"
+
+
+def test_notification_policy_route_test_bypasses_only_global_slack_disable_without_other_writes(postgres_db):
+    conn, cur = postgres_db
+    before = {}
+    for table in ("alerts", "incidents", "playbook_executions", "approval_requests", "notification_delivery_attempts"):
+        cur.execute(f"SELECT COUNT(*) FROM {table}")
+        before[table] = cur.fetchone()[0]
+
+    adapter = type(
+        "Adapter",
+        (),
+        {
+            "execute": lambda self, action, params, context: {
+                "success": True,
+                "simulated": False,
+                "executed": True,
+                "mode": "real",
+                "message": "sent",
+                "metadata": {"failure_classification": None, "timeout_seconds": 3},
+            }
+        },
+    )()
+
+    with patch(
+        "core.notification_policy_service.load_notification_policy",
+        return_value={
+            "status": "applied",
+            "slack_enabled": False,
+            "minimum_severity": "critical",
+            "notify_on_alerts": True,
+            "notify_on_incidents": True,
+            "slack_format": "compact",
+            "pfsense_destination": "#pf",
+            "honeypot_destination": "#hp",
+        },
+    ), patch("core.notification_policy_service.get_integration_adapter", return_value=adapter):
+        result = send_notification_policy_route_test(
+            conn,
+            route_key="pfsense",
+            requested_by="testadmin",
+            bypass_slack_disabled=True,
+        )
+        conn.commit()
+
+    assert result["success"] is True
+    assert result["status"] == "success"
+
+    for table in ("alerts", "incidents", "playbook_executions", "approval_requests"):
+        cur.execute(f"SELECT COUNT(*) FROM {table}")
+        assert cur.fetchone()[0] == before[table]
+
+    cur.execute("SELECT COUNT(*) FROM notification_delivery_attempts")
+    assert cur.fetchone()[0] == before["notification_delivery_attempts"] + 1
 
 
 def test_notify_for_alert_and_incident_use_existing_slack_adapter_contract(postgres_db):
