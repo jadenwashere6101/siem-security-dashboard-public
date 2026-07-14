@@ -199,3 +199,141 @@ test("AlertDetailsPanel renders pfSense why-fired evidence from the backend", as
   expect(screen.getByText("Cooldown active until 2026-07-13T14:10:00+00:00")).toBeInTheDocument();
   expect(loadPfsenseWhyFired).toHaveBeenCalledWith(101);
 });
+
+test("AlertDetailsPanel renders single-target pfSense target context", () => {
+  render(
+    <AlertDetailsPanel
+      selectedAlert={{
+        ...selectedAlert,
+        alert_type: "pfsense_firewall_repeated_deny",
+        context: {
+          target_context: {
+            mode: "single_target",
+            destination_ip: "203.0.113.10",
+            destination_port: "22",
+            protocol: "tcp",
+            firewall_action: "block",
+            attempts: 6,
+            first_seen: "2026-07-13T14:00:00Z",
+            last_seen: "2026-07-13T14:09:00Z",
+            interface: "wan",
+            direction: "out",
+          },
+        },
+      }}
+      selectedAlertTimeline={[]}
+      getSourceBadgeMeta={() => ({ label: "pfSense", style: {} })}
+      getTargetedAlertMeta={() => null}
+      isCorrelationAlert={() => false}
+      getCorrelationAlertTypes={() => []}
+      correlationPanelStyle={{}}
+      targetedAlertPanelStyle={{}}
+      expandedLabelStyle={{}}
+      expandedTextStyle={{}}
+      monoCellStyle={{}}
+      correlationListStyle={{}}
+      signalRowStyle={{}}
+      sourceTypeTextStyle={{}}
+    />
+  );
+
+  expect(screen.getByText("Target Context")).toBeInTheDocument();
+  expect(screen.getByText("Exact destination evidence captured for this alert.")).toBeInTheDocument();
+  expect(screen.getByText("Destination IP")).toBeInTheDocument();
+  expect(screen.getByText("203.0.113.10")).toBeInTheDocument();
+  expect(screen.getByText("LAN to WAN (outbound)")).toBeInTheDocument();
+});
+
+test("AlertDetailsPanel renders aggregate pfSense target context", () => {
+  render(
+    <AlertDetailsPanel
+      selectedAlert={{
+        ...selectedAlert,
+        alert_type: "pfsense_firewall_port_scan",
+        context: {
+          target_context: {
+            mode: "aggregate_targets",
+            top_destination_ip: "203.0.113.20",
+            top_destination_port: 443,
+            distinct_destination_count: 5,
+            distinct_port_count: 2,
+            firewall_action: "block",
+            attempts: 7,
+            first_seen: "2026-07-13T14:00:00Z",
+            last_seen: "2026-07-13T14:09:00Z",
+          },
+        },
+      }}
+      selectedAlertTimeline={[]}
+      getSourceBadgeMeta={() => ({ label: "pfSense", style: {} })}
+      getTargetedAlertMeta={() => null}
+      isCorrelationAlert={() => false}
+      getCorrelationAlertTypes={() => []}
+      correlationPanelStyle={{}}
+      targetedAlertPanelStyle={{}}
+      expandedLabelStyle={{}}
+      expandedTextStyle={{}}
+      monoCellStyle={{}}
+      correlationListStyle={{}}
+      signalRowStyle={{}}
+      sourceTypeTextStyle={{}}
+    />
+  );
+
+  expect(screen.getByText("Top-target aggregate evidence from the detection window.")).toBeInTheDocument();
+  expect(screen.getByText("Top Destination IP")).toBeInTheDocument();
+  expect(screen.getByText("203.0.113.20")).toBeInTheDocument();
+  expect(screen.getByText("Distinct Destinations")).toBeInTheDocument();
+  expect(screen.getByText("5")).toBeInTheDocument();
+});
+
+test("AlertDetailsPanel renders unavailable when pfSense target evidence is missing", () => {
+  render(
+    <AlertDetailsPanel
+      selectedAlert={{
+        ...selectedAlert,
+        alert_type: "pfsense_firewall_noisy_source",
+        context: {},
+      }}
+      selectedAlertTimeline={[]}
+      getSourceBadgeMeta={() => ({ label: "pfSense", style: {} })}
+      getTargetedAlertMeta={() => null}
+      isCorrelationAlert={() => false}
+      getCorrelationAlertTypes={() => []}
+      correlationPanelStyle={{}}
+      targetedAlertPanelStyle={{}}
+      expandedLabelStyle={{}}
+      expandedTextStyle={{}}
+      monoCellStyle={{}}
+      correlationListStyle={{}}
+      signalRowStyle={{}}
+      sourceTypeTextStyle={{}}
+    />
+  );
+
+  expect(screen.getByText("Target Context")).toBeInTheDocument();
+  expect(screen.getByText("Unavailable")).toBeInTheDocument();
+});
+
+test("AlertDetailsPanel does not render target context for non-pfSense alerts", () => {
+  render(
+    <AlertDetailsPanel
+      selectedAlert={selectedAlert}
+      selectedAlertTimeline={[]}
+      getSourceBadgeMeta={() => ({ label: "Bank App", style: {} })}
+      getTargetedAlertMeta={() => null}
+      isCorrelationAlert={() => false}
+      getCorrelationAlertTypes={() => []}
+      correlationPanelStyle={{}}
+      targetedAlertPanelStyle={{}}
+      expandedLabelStyle={{}}
+      expandedTextStyle={{}}
+      monoCellStyle={{}}
+      correlationListStyle={{}}
+      signalRowStyle={{}}
+      sourceTypeTextStyle={{}}
+    />
+  );
+
+  expect(screen.queryByText("Target Context")).not.toBeInTheDocument();
+});

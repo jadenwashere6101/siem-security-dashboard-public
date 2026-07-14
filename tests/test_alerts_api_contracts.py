@@ -554,6 +554,18 @@ def test_get_alerts_pfsense_quality_metadata_and_why_fired_use_persisted_context
         "interface": "wan",
         "first_seen": "2026-07-13T13:00:00Z",
         "last_seen": "2026-07-13T13:09:00Z",
+        "target_context": {
+            "mode": "single_target",
+            "destination_ip": "203.0.113.10",
+            "destination_port": 22,
+            "protocol": "tcp",
+            "firewall_action": "block",
+            "attempts": 6,
+            "first_seen": "2026-07-13T13:00:00Z",
+            "last_seen": "2026-07-13T13:09:00Z",
+            "interface": "wan",
+            "direction": "out",
+        },
     }
     cur.execute(
         """
@@ -631,6 +643,7 @@ def test_get_alerts_pfsense_quality_metadata_and_why_fired_use_persisted_context
     assert payload["source"] == "pfsense"
     assert payload["source_type"] == "firewall"
     assert payload["context"] == context
+    assert payload["context"]["target_context"]["mode"] == "single_target"
     assert payload["suppressed_rollup"] is False
     assert payload["cooldown"]["window_minutes"] > 0
     evidence = {item["field"]: item["value"] for item in payload["evidence"]}

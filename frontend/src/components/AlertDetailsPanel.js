@@ -5,6 +5,64 @@ import SourceIpContext from "./SourceIpContext";
 import { getBehavioralReputation, getExternalReputation } from "../utils/alertDisplay";
 import { loadPfsenseWhyFired } from "../services/pfsenseAlertInvestigationService";
 
+const PFSENSE_ALERT_TYPES = new Set([
+  "pfsense_firewall_repeated_deny",
+  "pfsense_firewall_port_scan",
+  "pfsense_firewall_suspicious_allow",
+  "pfsense_firewall_noisy_source",
+]);
+
+const singleTargetFields = [
+  ["Destination IP", "destination_ip"],
+  ["Destination Port", "destination_port"],
+  ["Protocol", "protocol"],
+  ["Firewall Action", "firewall_action"],
+  ["Attempts", "attempts"],
+  ["First Seen", "first_seen"],
+  ["Last Seen", "last_seen"],
+  ["Interface", "interface"],
+  ["Direction", "direction"],
+];
+
+const aggregateTargetFields = [
+  ["Top Destination IP", "top_destination_ip"],
+  ["Top Destination Port", "top_destination_port"],
+  ["Distinct Destinations", "distinct_destination_count"],
+  ["Distinct Ports", "distinct_port_count"],
+  ["Firewall Action", "firewall_action"],
+  ["Attempts", "attempts"],
+  ["First Seen", "first_seen"],
+  ["Last Seen", "last_seen"],
+];
+
+function formatTargetContextValue(field, value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  if (field === "direction") {
+    return value === "out"
+      ? "LAN to WAN (outbound)"
+      : value === "in"
+        ? "WAN to LAN (inbound)"
+        : String(value);
+  }
+  return String(value);
+}
+
+function buildTargetContextRows(targetContext) {
+  if (!targetContext || typeof targetContext !== "object") {
+    return [];
+  }
+  const fields =
+    targetContext.mode === "aggregate_targets" ? aggregateTargetFields : singleTargetFields;
+  return fields
+    .map(([label, field]) => ({
+      label,
+      value: formatTargetContextValue(field, targetContext[field]),
+    }))
+    .filter((item) => item.value !== null);
+}
+
 function AlertDetailsPanel({
   selectedAlert,
   selectedAlertTimeline,
@@ -29,6 +87,9 @@ function AlertDetailsPanel({
   const [whyFiredLoading, setWhyFiredLoading] = useState(false);
   const [whyFiredError, setWhyFiredError] = useState("");
   const shouldLoadWhyFired = Boolean(selectedAlert?.pfsense_quality?.why_fired_available);
+  const isPfsenseAlert = PFSENSE_ALERT_TYPES.has(selectedAlert?.alert_type);
+  const targetContext = selectedAlert?.context?.target_context;
+  const targetContextRows = buildTargetContextRows(targetContext);
 
   useEffect(() => {
     let cancelled = false;
@@ -143,6 +204,30 @@ function AlertDetailsPanel({
               ) : null}
             </div>
           ) : null}
+        </div>
+      ) : null}
+      {isPfsenseAlert ? (
+        <div style={whyFiredPanelStyle}>
+          <strong>Target Context</strong>
+          <div style={{ marginTop: "8px" }}>
+            {targetContextRows.length > 0 ? (
+              <>
+                <p style={{ margin: "0 0 8px 0", color: "#94a3b8" }}>
+                  {targetContext?.mode === "aggregate_targets"
+                    ? "Top-target aggregate evidence from the detection window."
+                    : "Exact destination evidence captured for this alert."}
+                </p>
+                {targetContextRows.map((item) => (
+                  <div key={item.label} style={signalRowStyle}>
+                    <span>{item.label}</span>
+                    <span style={sourceTypeTextStyle}>{item.value}</span>
+                  </div>
+                ))}
+              </>
+            ) : (
+              <div style={whyFiredMutedStyle}>Unavailable</div>
+            )}
+          </div>
         </div>
       ) : null}
       <div style={{ margin: "14px 0" }}>

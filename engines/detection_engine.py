@@ -119,6 +119,15 @@ def _pfsense_response_action_for_severity(severity):
     return "monitor_only"
 
 
+def _build_pfsense_target_context(mode, **fields):
+    target_context = {"mode": mode}
+    for key, value in fields.items():
+        if value in (None, ""):
+            continue
+        target_context[key] = value
+    return target_context
+
+
 # spec: SPEC-INGEST-001
 def _generate_failed_login_alerts_core(cur, conn, source=None, source_type=None, source_ip=None, rule_config=None):
     rule_config = _prepare_rule_evaluation("failed_login_threshold", cur, source, source_type, rule_config)
@@ -1826,6 +1835,18 @@ def _generate_pfsense_repeated_deny_alerts_core(cur, conn, source=None, source_t
             "event_count": event_count,
             "first_seen": str(first_seen) if first_seen else None,
             "last_seen": str(last_seen) if last_seen else None,
+            "target_context": _build_pfsense_target_context(
+                "single_target",
+                destination_ip=destination_ip,
+                destination_port=destination_port,
+                protocol=protocol,
+                firewall_action="block",
+                attempts=event_count,
+                first_seen=str(first_seen) if first_seen else None,
+                last_seen=str(last_seen) if last_seen else None,
+                interface=interface,
+                direction=direction,
+            ),
         }
 
         cur.execute(
@@ -1927,15 +1948,32 @@ def _generate_pfsense_port_scan_alerts_core(cur, conn, source=None, source_type=
                     ELSE NULL
                 END AS destination_port
             FROM scan_events
+        ),
+        filtered_ports AS (
+            SELECT
+                source_ip,
+                destination_ip,
+                destination_port,
+                created_at,
+                COUNT(*) OVER (PARTITION BY source_ip, destination_ip) AS destination_event_count,
+                COUNT(*) OVER (PARTITION BY source_ip, destination_port) AS port_event_count
+            FROM normalized_ports
+            WHERE destination_port BETWEEN 1 AND 65535
         )
         SELECT
             source_ip,
             COUNT(DISTINCT destination_port) AS distinct_port_count,
             COUNT(DISTINCT destination_ip) AS distinct_destination_count,
+            COUNT(*) AS event_count,
             MIN(created_at) AS first_seen,
-            MAX(created_at) AS last_seen
-        FROM normalized_ports
-        WHERE destination_port BETWEEN 1 AND 65535
+            MAX(created_at) AS last_seen,
+            (
+                ARRAY_AGG(destination_ip ORDER BY destination_event_count DESC, destination_ip ASC)
+            )[1] AS top_destination_ip,
+            (
+                ARRAY_AGG(destination_port ORDER BY port_event_count DESC, destination_port ASC)
+            )[1] AS top_destination_port
+        FROM filtered_ports
         GROUP BY source_ip
         HAVING COUNT(DISTINCT destination_port) >= %s OR COUNT(DISTINCT destination_ip) >= %s
         """,
@@ -1946,7 +1984,16 @@ def _generate_pfsense_port_scan_alerts_core(cur, conn, source=None, source_type=
     alerts_created = []
 
     for row in rows:
-        source_ip, distinct_port_count, distinct_destination_count, first_seen, last_seen = row
+        (
+            source_ip,
+            distinct_port_count,
+            distinct_destination_count,
+            event_count,
+            first_seen,
+            last_seen,
+            top_destination_ip,
+            top_destination_port,
+        ) = row
 
         cur.execute(
             """
@@ -2006,9 +2053,20 @@ def _generate_pfsense_port_scan_alerts_core(cur, conn, source=None, source_type=
             "action": "block",
             "distinct_port_count": distinct_port_count,
             "distinct_destination_count": distinct_destination_count,
-            "event_count": distinct_port_count,
+            "event_count": event_count,
             "first_seen": str(first_seen) if first_seen else None,
             "last_seen": str(last_seen) if last_seen else None,
+            "target_context": _build_pfsense_target_context(
+                "aggregate_targets",
+                top_destination_ip=top_destination_ip,
+                top_destination_port=top_destination_port,
+                distinct_destination_count=distinct_destination_count,
+                distinct_port_count=distinct_port_count,
+                firewall_action="block",
+                attempts=event_count,
+                first_seen=str(first_seen) if first_seen else None,
+                last_seen=str(last_seen) if last_seen else None,
+            ),
         }
 
         cur.execute(
@@ -2209,6 +2267,18 @@ def _generate_pfsense_suspicious_allow_alerts_core(cur, conn, source=None, sourc
             "distinct_sensitive_port_count": distinct_port_count,
             "first_seen": str(first_seen) if first_seen else None,
             "last_seen": str(last_seen) if last_seen else None,
+            "target_context": _build_pfsense_target_context(
+                "single_target",
+                destination_ip=destination_ip,
+                destination_port=destination_port,
+                protocol=protocol,
+                firewall_action="pass",
+                attempts=event_count,
+                first_seen=str(first_seen) if first_seen else None,
+                last_seen=str(last_seen) if last_seen else None,
+                interface=interface,
+                direction="in",
+            ),
         }
 
         cur.execute(
@@ -2285,17 +2355,55 @@ def _generate_pfsense_noisy_source_alerts_core(cur, conn, source=None, source_ty
 
     cur.execute(
         f"""
+        WITH noisy_events AS (
+            SELECT
+                source_ip,
+                raw_payload->>'destination_ip' AS destination_ip,
+                raw_payload->>'destination_port' AS destination_port_text,
+                COALESCE(raw_payload->>'action', CASE WHEN event_type = 'firewall_block' THEN 'block' ELSE 'pass' END) AS action,
+                created_at
+            FROM events
+            WHERE event_type IN ('firewall_block', 'firewall_allow')
+              AND (%s::inet IS NULL OR source_ip = %s)
+              AND source = %s
+              AND source_type = %s
+              AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
+        ),
+        ranked_noisy_events AS (
+            SELECT
+                source_ip,
+                destination_ip,
+                destination_port_text,
+                action,
+                created_at,
+                COUNT(*) OVER (PARTITION BY source_ip, destination_ip) AS destination_event_count,
+                COUNT(*) OVER (PARTITION BY source_ip, destination_port_text) AS port_event_count
+            FROM noisy_events
+        )
         SELECT
             source_ip,
             COUNT(*) AS event_count,
             MIN(created_at) AS first_seen,
-            MAX(created_at) AS last_seen
-        FROM events
-        WHERE event_type IN ('firewall_block', 'firewall_allow')
-          AND (%s::inet IS NULL OR source_ip = %s)
-          AND source = %s
-          AND source_type = %s
-          AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
+            MAX(created_at) AS last_seen,
+            (
+                ARRAY_AGG(destination_ip ORDER BY destination_event_count DESC, destination_ip ASC)
+            )[1] AS top_destination_ip,
+            (
+                ARRAY_AGG(destination_port_text ORDER BY port_event_count DESC, destination_port_text ASC)
+            )[1] AS top_destination_port,
+            CASE
+                WHEN COUNT(DISTINCT destination_ip) > 0 THEN COUNT(DISTINCT destination_ip)
+                ELSE NULL
+            END AS distinct_destination_count,
+            CASE
+                WHEN COUNT(DISTINCT destination_port_text) > 0 THEN COUNT(DISTINCT destination_port_text)
+                ELSE NULL
+            END AS distinct_port_count,
+            CASE
+                WHEN COUNT(DISTINCT action) = 1 THEN MIN(action)
+                ELSE 'mixed'
+            END AS firewall_action
+        FROM ranked_noisy_events
         GROUP BY source_ip
         HAVING COUNT(*) >= %s
         """,
@@ -2306,7 +2414,17 @@ def _generate_pfsense_noisy_source_alerts_core(cur, conn, source=None, source_ty
     alerts_created = []
 
     for row in rows:
-        source_ip, event_count, first_seen, last_seen = row
+        (
+            source_ip,
+            event_count,
+            first_seen,
+            last_seen,
+            top_destination_ip,
+            top_destination_port,
+            distinct_destination_count,
+            distinct_port_count,
+            firewall_action,
+        ) = row
 
         # Suppress this roll-up if the source already has an open alert of any
         # pfSense firewall type, escalated or otherwise, so noisy-source noise
@@ -2348,6 +2466,17 @@ def _generate_pfsense_noisy_source_alerts_core(cur, conn, source=None, source_ty
             "first_seen": str(first_seen) if first_seen else None,
             "last_seen": str(last_seen) if last_seen else None,
             "suppressed": True,
+            "target_context": _build_pfsense_target_context(
+                "aggregate_targets",
+                top_destination_ip=top_destination_ip,
+                top_destination_port=top_destination_port,
+                distinct_destination_count=distinct_destination_count,
+                distinct_port_count=distinct_port_count,
+                firewall_action=firewall_action,
+                attempts=event_count,
+                first_seen=str(first_seen) if first_seen else None,
+                last_seen=str(last_seen) if last_seen else None,
+            ),
         }
 
         cur.execute(

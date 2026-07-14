@@ -143,6 +143,11 @@ def fetch_alert_by_type(cur, source_ip, alert_type):
     return cur.fetchone()
 
 
+def assert_target_context_mode(context, expected_mode):
+    assert "target_context" in context
+    assert context["target_context"]["mode"] == expected_mode
+
+
 # ---------------------------------------------------------------------------
 # Taxonomy / isolated event behavior
 # ---------------------------------------------------------------------------
@@ -233,6 +238,11 @@ def test_repeated_deny_threshold_creates_aggregate_alert_with_expected_fields(po
     assert context["event_count"] == 5
     assert context["first_seen"] is not None
     assert context["last_seen"] is not None
+    assert_target_context_mode(context, "single_target")
+    assert context["target_context"]["destination_ip"] == "203.0.113.55"
+    assert context["target_context"]["destination_port"] == "8080"
+    assert context["target_context"]["firewall_action"] == "block"
+    assert context["target_context"]["attempts"] == 5
 
     mitre = enrich_alert_with_mitre({"alert_type": alert_type})
     assert mitre["mitre_technique_id"] is None
@@ -487,6 +497,11 @@ def test_port_scan_threshold_creates_alert_with_mitre_mapping(postgres_db):
     assert alert is not None
     _, alert_type, severity, response_action, _, context = alert
     assert context["distinct_port_count"] == 2
+    assert context["event_count"] == 2
+    assert_target_context_mode(context, "aggregate_targets")
+    assert context["target_context"]["top_destination_ip"] == "203.0.113.10"
+    assert context["target_context"]["top_destination_port"] == 22
+    assert context["target_context"]["attempts"] == 2
 
     mitre = enrich_alert_with_mitre({"alert_type": alert_type})
     assert mitre["mitre_technique_id"] == "T1046"
@@ -570,6 +585,9 @@ def test_port_scan_host_breadth_sweep_triggers_alert_with_few_ports(postgres_db)
     _, _, _, _, _, context = alert
     assert context["distinct_port_count"] == 1
     assert context["distinct_destination_count"] == 5
+    assert_target_context_mode(context, "aggregate_targets")
+    assert context["target_context"]["top_destination_port"] == 443
+    assert context["target_context"]["distinct_destination_count"] == 5
 
 
 # ---------------------------------------------------------------------------
@@ -608,6 +626,10 @@ def test_suspicious_allow_single_uncorroborated_event_is_medium_severity(postgre
     assert context["destination_port"] == "3389"
     assert context["direction"] == "in"
     assert context["distinct_sensitive_port_count"] == 1
+    assert_target_context_mode(context, "single_target")
+    assert context["target_context"]["destination_ip"] == "203.0.113.10"
+    assert context["target_context"]["destination_port"] == "3389"
+    assert context["target_context"]["firewall_action"] == "pass"
 
     mitre = enrich_alert_with_mitre({"alert_type": alert_type})
     assert mitre["mitre_technique_id"] is None
@@ -814,9 +836,96 @@ def test_noisy_source_suppression_creates_single_low_severity_rollup(postgres_db
     _, alert_type, severity, response_action, _, context = alert
     assert context["event_count"] == 24
     assert context["suppressed"] is True
+    assert_target_context_mode(context, "aggregate_targets")
+    assert context["target_context"]["top_destination_port"] == "443"
+    assert context["target_context"]["distinct_destination_count"] == 2
+    assert context["target_context"]["distinct_port_count"] == 1
+    assert context["target_context"]["firewall_action"] == "block"
 
     mitre = enrich_alert_with_mitre({"alert_type": alert_type})
     assert mitre["mitre_technique_id"] is None
+
+
+def test_port_scan_target_context_uses_most_frequent_destination_and_port(postgres_db):
+    conn, cur = postgres_db
+    source_ip = "198.51.100.44"
+
+    insert_pfsense_event(
+        cur, event_type="firewall_block", source_ip=source_ip, destination_ip="203.0.113.20",
+        destination_port=22, seconds_ago=4,
+    )
+    insert_pfsense_event(
+        cur, event_type="firewall_block", source_ip=source_ip, destination_ip="203.0.113.20",
+        destination_port=22, seconds_ago=3,
+    )
+    insert_pfsense_event(
+        cur, event_type="firewall_block", source_ip=source_ip, destination_ip="203.0.113.21",
+        destination_port=22, seconds_ago=2,
+    )
+    insert_pfsense_event(
+        cur, event_type="firewall_block", source_ip=source_ip, destination_ip="203.0.113.22",
+        destination_port=3389, seconds_ago=1,
+    )
+
+    with siem_backend.app.app_context(), patch(
+        "engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION_LOW
+    ):
+        alerts_created = backend_detection_engine._generate_pfsense_port_scan_alerts_core(
+            cur, conn, source="pfsense", source_type="firewall"
+        )
+
+    assert len(alerts_created) == 1
+    alert = fetch_alert_by_type(cur, source_ip, "pfsense_firewall_port_scan")
+    context = alert[5]
+    assert context["target_context"]["top_destination_ip"] == "203.0.113.20"
+    assert context["target_context"]["top_destination_port"] == 22
+    assert context["target_context"]["attempts"] == 4
+
+
+def test_noisy_source_target_context_uses_most_frequent_target_and_mixed_action(postgres_db):
+    conn, cur = postgres_db
+    source_ip = "198.51.100.63"
+
+    seconds_ago = 24
+    for destination_ip in ("203.0.113.80", "203.0.113.82"):
+        for protocol in ("tcp", "udp", "icmp"):
+            for _ in range(4):
+                insert_pfsense_event(
+                    cur,
+                    event_type="firewall_block",
+                    source_ip=source_ip,
+                    destination_ip=destination_ip,
+                    destination_port=443,
+                    protocol=protocol,
+                    seconds_ago=seconds_ago,
+                )
+                seconds_ago -= 1
+    for _ in range(12):
+        insert_pfsense_event(
+            cur,
+            event_type="firewall_allow",
+            source_ip=source_ip,
+            destination_ip="203.0.113.81",
+            destination_port=8443,
+            direction="out",
+            seconds_ago=seconds_ago,
+        )
+        seconds_ago -= 1
+
+    with siem_backend.app.app_context(), patch(
+        "engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION_LOW
+    ):
+        alerts_created = backend_detection_engine._generate_pfsense_noisy_source_alerts_core(
+            cur, conn, source="pfsense", source_type="firewall"
+        )
+
+    assert len(alerts_created) == 1
+    alert = fetch_alert_by_type(cur, source_ip, "pfsense_firewall_noisy_source")
+    context = alert[5]
+    assert context["target_context"]["top_destination_ip"] == "203.0.113.80"
+    assert context["target_context"]["top_destination_port"] == "443"
+    assert context["target_context"]["firewall_action"] == "mixed"
+    assert context["target_context"]["attempts"] == 36
 
 
 def test_noisy_source_does_not_duplicate_when_specific_alert_already_open(postgres_db):
