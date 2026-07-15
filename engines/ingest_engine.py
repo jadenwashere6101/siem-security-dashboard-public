@@ -14,6 +14,7 @@ from engines.detection_engine import (
     _generate_http_error_alerts_core,
     _generate_password_spraying_alerts_core,
     _generate_pfsense_noisy_source_alerts_core,
+    _generate_pfsense_allow_after_deny_alerts_core,
     _generate_pfsense_port_scan_alerts_core,
     _generate_pfsense_repeated_deny_alerts_core,
     _generate_pfsense_suspicious_allow_alerts_core,
@@ -124,6 +125,7 @@ def ingest_normalized_event(event_dict, conn, cur):
             ("pfsense_firewall_noisy_source", _generate_pfsense_noisy_source_alerts_core),
         ),
         "firewall_allow": (
+            ("pfsense_firewall_allow_after_deny", _generate_pfsense_allow_after_deny_alerts_core),
             ("pfsense_firewall_suspicious_allow", _generate_pfsense_suspicious_allow_alerts_core),
             ("pfsense_firewall_noisy_source", _generate_pfsense_noisy_source_alerts_core),
         ),

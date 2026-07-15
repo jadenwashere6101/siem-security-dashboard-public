@@ -23,6 +23,7 @@ import {
   listNotificationDeliveries,
 } from "../services/notificationDeliveryService";
 import { listPlaybookExecutions } from "../services/playbookService";
+import { loadReconActivities, loadReconActivity } from "../services/reconActivityService";
 import {
   loadRecentSoarQueueItems,
   loadSoarQueueStatus,
@@ -49,6 +50,7 @@ const emptyCommandData = {
   approvals: [],
   deadLetters: [],
   notifications: [],
+  reconActivities: [],
   queueItems: [],
   incidentMetrics: {},
   playbookMetrics: {},
@@ -559,6 +561,12 @@ function SocCommandCenter({
     loading: false,
     error: "",
   });
+  const [selectedReconActivityId, setSelectedReconActivityId] = useState(null);
+  const [reconContext, setReconContext] = useState({
+    detail: null,
+    loading: false,
+    error: "",
+  });
   const [selectedSourceIp, setSelectedSourceIp] = useState(null);
   const viewportWidth = useViewportWidth();
   const useSingleColumn = viewportWidth < 980;
@@ -580,6 +588,7 @@ function SocCommandCenter({
       settleSource("notification deliveries", () =>
         listNotificationDeliveries({ limit: SOURCE_LIMIT })
       ),
+      settleSource("recon activities", () => loadReconActivities({ limit: SOURCE_LIMIT })),
       settleSource("queue activity", () => loadRecentSoarQueueItems({ limit: SOURCE_LIMIT })),
       settleSource("incident metrics", () => getIncidentMetrics({ operationalScope })),
       settleSource("playbook metrics", () => getPlaybookMetrics()),
@@ -618,6 +627,10 @@ function SocCommandCenter({
           byLabel["notification deliveries"]?.status === "fulfilled"
             ? normalizeItems(byLabel["notification deliveries"].value, ["items"])
             : current.notifications,
+        reconActivities:
+          byLabel["recon activities"]?.status === "fulfilled"
+            ? normalizeItems(byLabel["recon activities"].value, ["items"])
+            : current.reconActivities,
         queueItems:
           byLabel["queue activity"]?.status === "fulfilled"
             ? normalizeItems(byLabel["queue activity"].value, ["items"])
@@ -672,6 +685,46 @@ function SocCommandCenter({
   useEffect(() => {
     loadCommandData();
   }, [loadCommandData]);
+
+  useEffect(() => {
+    setSelectedReconActivityId((current) => {
+      if (current && data.reconActivities.some((item) => String(item.id) === String(current))) {
+        return current;
+      }
+      return data.reconActivities[0]?.id ?? null;
+    });
+  }, [data.reconActivities]);
+
+  useEffect(() => {
+    if (!selectedReconActivityId || !canOperate) {
+      setReconContext({
+        detail: null,
+        loading: false,
+        error: "",
+      });
+      return;
+    }
+
+    let isCurrent = true;
+    setReconContext((current) => ({ ...current, loading: true, error: "" }));
+    loadReconActivity(selectedReconActivityId)
+      .then((detail) => {
+        if (!isCurrent) return;
+        setReconContext({ detail, loading: false, error: "" });
+      })
+      .catch((error) => {
+        if (!isCurrent) return;
+        setReconContext({
+          detail: null,
+          loading: false,
+          error: error.message || "Unable to load recon activity",
+        });
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [canOperate, selectedReconActivityId]);
 
   useEffect(() => {
     if (!selectedIncidentId || !canOperate) {
@@ -760,6 +813,7 @@ function SocCommandCenter({
     data.approvals.length === 0 &&
     data.deadLetters.length === 0 &&
     data.notifications.length === 0 &&
+    data.reconActivities.length === 0 &&
     data.queueItems.length === 0 &&
     Object.keys(data.incidentMetrics || {}).length === 0 &&
     Object.keys(data.playbookMetrics || {}).length === 0 &&
@@ -851,6 +905,109 @@ function SocCommandCenter({
             counts={canonicalOutcomeCounts}
             title="Canonical SOAR outcome counts"
           />
+
+          <section style={cardStyle} aria-labelledby="recon-activity-heading">
+            <div style={cardHeaderStyle}>
+              <div>
+                <p style={sectionLabelStyle}>Recon Activity</p>
+                <h3 id="recon-activity-heading" style={cardTitleStyle}>Distributed Internet Reconnaissance Activity</h3>
+              </div>
+            </div>
+            <div
+              style={{
+                ...workspaceGridStyle,
+                gridTemplateColumns: useCompactWorkspace
+                  ? "minmax(0, 1fr)"
+                  : workspaceGridStyle.gridTemplateColumns,
+              }}
+            >
+              <div
+                style={{
+                  ...incidentListStyle,
+                  borderRight: useCompactWorkspace ? "none" : incidentListStyle.borderRight,
+                  borderBottom: useCompactWorkspace ? "1px solid #30363d" : "none",
+                }}
+              >
+                {loading && data.reconActivities.length === 0 ? (
+                  <EmptyState>Loading recon activities...</EmptyState>
+                ) : data.reconActivities.length === 0 ? (
+                  <EmptyState>No active distributed recon activities.</EmptyState>
+                ) : (
+                  data.reconActivities.slice(0, 8).map((activity) => (
+                    <button
+                      type="button"
+                      key={activity.id}
+                      onClick={() => setSelectedReconActivityId(activity.id)}
+                      style={{
+                        ...incidentButtonStyle,
+                        ...(String(selectedReconActivityId) === String(activity.id)
+                          ? incidentButtonActiveStyle
+                          : {}),
+                      }}
+                    >
+                      <span style={incidentTitleStyle}>{activity.label}</span>
+                      <span style={incidentMetaStyle}>
+                        {joinDefined([
+                          titleCase(activity.severity),
+                          titleCase(activity.status),
+                          activity.protected_range_key,
+                        ])}
+                      </span>
+                    </button>
+                  ))
+                )}
+              </div>
+              <div style={incidentDetailStyle}>
+                {reconContext.loading ? (
+                  <EmptyState>Loading recon activity...</EmptyState>
+                ) : reconContext.detail ? (
+                  <>
+                    {reconContext.error ? (
+                      <div style={subtleWarningStyle}>{reconContext.error}</div>
+                    ) : null}
+                    <div style={incidentHeroStyle}>
+                      <div>
+                        <p style={sectionLabelStyle}>Recon Activity #{valueOrFallback(reconContext.detail.id, "unknown")}</p>
+                        <h4 style={incidentHeroTitleStyle}>{reconContext.detail.label}</h4>
+                      </div>
+                      <StatusBadge tone={String(reconContext.detail.severity || "").toLowerCase() === "high" ? "warning" : "info"}>
+                        {titleCase(reconContext.detail.severity)}
+                      </StatusBadge>
+                    </div>
+                    <dl style={detailGridStyle}>
+                      <div>
+                        <dt style={detailTermStyle}>Coordination status</dt>
+                        <dd style={detailValueStyle}>{titleCase(reconContext.detail.coordination_status)}</dd>
+                      </div>
+                      <div>
+                        <dt style={detailTermStyle}>Source IP count</dt>
+                        <dd style={detailValueStyle}>{valueOrFallback(reconContext.detail.summary?.source_ip_count, "0")}</dd>
+                      </div>
+                      <div>
+                        <dt style={detailTermStyle}>Destination IP count</dt>
+                        <dd style={detailValueStyle}>{valueOrFallback(reconContext.detail.summary?.destination_ip_count, "0")}</dd>
+                      </div>
+                      <div>
+                        <dt style={detailTermStyle}>Primary ports</dt>
+                        <dd style={detailValueStyle}>{(reconContext.detail.summary?.primary_destination_ports || []).join(", ") || "Unavailable"}</dd>
+                      </div>
+                      <div>
+                        <dt style={detailTermStyle}>Alert types</dt>
+                        <dd style={detailValueStyle}>{(reconContext.detail.summary?.alert_types || []).join(", ") || "Unavailable"}</dd>
+                      </div>
+                      <div>
+                        <dt style={detailTermStyle}>Underlying alerts</dt>
+                        <dd style={detailValueStyle}>{valueOrFallback(reconContext.detail.summary?.underlying_alert_count, "0")}</dd>
+                      </div>
+                    </dl>
+                    <p style={summaryDetailStyle}>{reconContext.detail.assessment_text}</p>
+                  </>
+                ) : (
+                  <EmptyState>Select a recon activity to inspect.</EmptyState>
+                )}
+              </div>
+            </div>
+          </section>
 
           <div
             style={{

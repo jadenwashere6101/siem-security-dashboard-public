@@ -39,6 +39,8 @@ CORE_V1_PFSENSE_REPEATED_DENY_INVESTIGATION_ID = "core-v1-pfsense-repeated-deny-
 CORE_V1_PFSENSE_PORT_SCAN_INVESTIGATION_ID = "core-v1-pfsense-port-scan-investigation"
 CORE_V1_PFSENSE_PORT_SCAN_CONTAINMENT_ID = "core-v1-pfsense-port-scan-containment"
 CORE_V1_PFSENSE_SUSPICIOUS_ALLOW_CONTAINMENT_ID = "core-v1-pfsense-suspicious-allow-containment"
+CORE_V1_PFSENSE_ALLOW_AFTER_DENY_INVESTIGATION_ID = "core-v1-pfsense-allow-after-deny-investigation"
+CORE_V1_PFSENSE_ALLOW_AFTER_DENY_CONTAINMENT_ID = "core-v1-pfsense-allow-after-deny-containment"
 
 CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
     {
@@ -376,6 +378,45 @@ CORE_PLAYBOOK_PACK_V1: tuple[dict[str, Any], ...] = (
                 "risk_level": "high",
                 "expires_in_minutes": 30,
                 "reason": "pfSense allowed inbound traffic to a sensitive port — approve IP block",
+            },
+            {"action": "block_ip", "params": {"source_ip": "{{alert.source_ip}}"}},
+        ],
+    },
+    {
+        "id": CORE_V1_PFSENSE_ALLOW_AFTER_DENY_INVESTIGATION_ID,
+        "name": "pfSense Allow-After-Deny Investigation",
+        "description": (
+            "Investigate bounded same-source allow-after-deny firewall progression "
+            "with enriched context and no autonomous containment."
+        ),
+        "trigger_config": {
+            "alert_type": "pfsense_firewall_allow_after_deny",
+            "min_severity": "medium",
+        },
+        "steps": [
+            {"action": "enrich_context"},
+            {"action": "monitor"},
+        ],
+    },
+    {
+        "id": CORE_V1_PFSENSE_ALLOW_AFTER_DENY_CONTAINMENT_ID,
+        "name": "pfSense Allow-After-Deny Containment",
+        "description": (
+            "Contain high-confidence allow-after-deny progression with enriched "
+            "context and approval-gated IP blocking."
+        ),
+        "trigger_config": {
+            "alert_type": "pfsense_firewall_allow_after_deny",
+            "min_severity": "high",
+        },
+        "steps": [
+            {"action": "flag_high_priority"},
+            {"action": "enrich_context"},
+            {
+                "action": "require_approval",
+                "risk_level": "high",
+                "expires_in_minutes": 30,
+                "reason": "pfSense allow-after-deny progression detected — approve IP block",
             },
             {"action": "block_ip", "params": {"source_ip": "{{alert.source_ip}}"}},
         ],

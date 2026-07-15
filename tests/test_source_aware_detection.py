@@ -34,6 +34,7 @@ DETECTORS = {
     "pfsense_firewall_port_scan": detection_engine._generate_pfsense_port_scan_alerts_core,
     "pfsense_firewall_noisy_source": detection_engine._generate_pfsense_noisy_source_alerts_core,
     "pfsense_firewall_suspicious_allow": detection_engine._generate_pfsense_suspicious_allow_alerts_core,
+    "pfsense_firewall_allow_after_deny": detection_engine._generate_pfsense_allow_after_deny_alerts_core,
 }
 
 
@@ -46,7 +47,11 @@ RULE_SOURCE_CASES = [
 
 def _parameters_at_threshold_one(rule_id):
     parameters = dict(get_detection_rule_defaults()[rule_id]["parameters"])
-    parameters["threshold"] = 1
+    if "threshold" in parameters:
+        parameters["threshold"] = 1
+    if rule_id == "pfsense_firewall_allow_after_deny":
+        parameters["minimum_deny_threshold"] = 1
+        parameters["high_confidence_deny_threshold"] = 1
     return parameters
 
 
@@ -68,6 +73,7 @@ def _insert_event(cur, rule_id, source_ip, source, source_type, *, event_type=No
         "pfsense_firewall_port_scan": "firewall_block",
         "pfsense_firewall_noisy_source": "firewall_block",
         "pfsense_firewall_suspicious_allow": "firewall_allow",
+        "pfsense_firewall_allow_after_deny": "firewall_allow",
     }
     payload = {
         "username": username,
@@ -112,6 +118,8 @@ def test_every_allowed_rule_source_pair_produces_detection(postgres_db, rule_id,
             source_type,
             event_type="successful_login",
         )
+    if rule_id == "pfsense_firewall_allow_after_deny":
+        _insert_event(cur, "pfsense_firewall_repeated_deny", source_ip, source, source_type, event_type="firewall_block")
 
     with siem_backend.app.app_context(), patch(
         "engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION

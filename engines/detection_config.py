@@ -64,6 +64,8 @@ PFSENSE_SUSPICIOUS_ALLOW_HIGH_CONFIDENCE_REPEAT_THRESHOLD = 3
 # Distinct sensitive destination ports touched in-window at/above which a
 # suspicious-allow candidate escalates to high severity as corroborating context.
 PFSENSE_SUSPICIOUS_ALLOW_DISTINCT_PORT_ESCALATION_THRESHOLD = 2
+PFSENSE_ALLOW_AFTER_DENY_MIN_DENY_THRESHOLD = 3
+PFSENSE_ALLOW_AFTER_DENY_WINDOW_MINUTES = 30
 
 # Minutes after a pfSense alert for a given (source_ip, alert_type) is resolved
 # during which an equal-or-lower-severity recurrence is suppressed rather than
@@ -78,7 +80,7 @@ PFSENSE_ALERT_COOLDOWN_MINUTES = 60
 # configured threshold, independent of reputation-based escalation.
 PFSENSE_SEVERITY_ESCALATION_MULTIPLIER = 3
 
-# Reputation score at/above which a pfSense alert escalates to high severity.
+# Reputation score at/above which a pfSense alert can strengthen already-meaningful evidence.
 PFSENSE_HIGH_REPUTATION_SCORE = 70
 
 # Shared validation bounds for admin-configurable detector settings.
@@ -253,7 +255,18 @@ def get_detection_rule_defaults():
                 "distinct_port_escalation_threshold": PFSENSE_SUSPICIOUS_ALLOW_DISTINCT_PORT_ESCALATION_THRESHOLD,
             },
             "active": True,
-            "description": "Triggers when pfSense allows inbound traffic to a sensitive destination port; escalates to high severity only on repetition, reputation, or multi-port corroboration.",
+            "description": "Triggers when pfSense allows inbound traffic to a sensitive destination port; escalates to high severity only on repeated, multi-port, or progression-backed evidence.",
+        },
+        "pfsense_firewall_allow_after_deny": {
+            "rule_id": "pfsense_firewall_allow_after_deny",
+            "display_name": "pfSense Firewall Allow After Deny",
+            "parameters": {
+                "minimum_deny_threshold": PFSENSE_ALLOW_AFTER_DENY_MIN_DENY_THRESHOLD,
+                "window_minutes": PFSENSE_ALLOW_AFTER_DENY_WINDOW_MINUTES,
+                "high_confidence_deny_threshold": PFSENSE_REPEATED_DENY_THRESHOLD,
+            },
+            "active": True,
+            "description": "Triggers when the same external source first produces repeated inbound firewall denies and later reaches an inbound allow to the same protected service within the bounded progression window.",
         },
     }
 

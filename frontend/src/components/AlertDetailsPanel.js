@@ -11,11 +11,16 @@ const PFSENSE_ALERT_TYPES = new Set([
   "pfsense_firewall_port_scan",
   "pfsense_firewall_suspicious_allow",
   "pfsense_firewall_noisy_source",
+  "pfsense_firewall_allow_after_deny",
 ]);
 
 const singleTargetFields = [
-  ["Destination IP", "destination_ip"],
-  ["Destination Port", "destination_port"],
+  ["Primary Destination IP", "primary_destination_ip"],
+  ["Primary Destination Port", "primary_destination_port"],
+  ["Sample Destination IPs", "sample_destination_ips"],
+  ["Sample Destination Ports", "sample_destination_ports"],
+  ["Distinct Destinations", "distinct_destination_count"],
+  ["Distinct Ports", "distinct_port_count"],
   ["Protocol", "protocol"],
   ["Firewall Action", "firewall_action"],
   ["Attempts", "attempts"],
@@ -23,17 +28,24 @@ const singleTargetFields = [
   ["Last Seen", "last_seen"],
   ["Interface", "interface"],
   ["Direction", "direction"],
+  ["Related Events", "related_event_count"],
 ];
 
 const aggregateTargetFields = [
-  ["Top Destination IP", "top_destination_ip"],
-  ["Top Destination Port", "top_destination_port"],
+  ["Primary Destination IP", "primary_destination_ip"],
+  ["Primary Destination Port", "primary_destination_port"],
+  ["Sample Destination IPs", "sample_destination_ips"],
+  ["Sample Destination Ports", "sample_destination_ports"],
   ["Distinct Destinations", "distinct_destination_count"],
   ["Distinct Ports", "distinct_port_count"],
+  ["Protocol", "protocol"],
   ["Firewall Action", "firewall_action"],
   ["Attempts", "attempts"],
   ["First Seen", "first_seen"],
   ["Last Seen", "last_seen"],
+  ["Interface", "interface"],
+  ["Direction", "direction"],
+  ["Related Events", "related_event_count"],
 ];
 
 function formatTargetContextValue(field, value) {
@@ -46,6 +58,9 @@ function formatTargetContextValue(field, value) {
       : value === "in"
         ? "WAN to LAN (inbound)"
         : String(value);
+  }
+  if (Array.isArray(value)) {
+    return value.join(", ");
   }
   return String(value);
 }
@@ -91,6 +106,8 @@ function AlertDetailsPanel({
   const isPfsenseAlert = PFSENSE_ALERT_TYPES.has(selectedAlert?.alert_type);
   const targetContext = selectedAlert?.context?.target_context;
   const targetContextRows = buildTargetContextRows(targetContext);
+  const reconActivity = selectedAlert?.context?.recon_activity;
+  const scanDescription = selectedAlert?.context?.scan_description;
   const operationalHistoryLabel = selectedAlert?.operational_history?.is_pre_tuning
     ? selectedAlert.operational_history.label || "Pre-Tuning"
     : "";
@@ -223,10 +240,13 @@ function AlertDetailsPanel({
             {targetContextRows.length > 0 ? (
               <>
                 <p style={{ margin: "0 0 8px 0", color: "#94a3b8" }}>
-                  {targetContext?.mode === "aggregate_targets"
-                    ? "Top-target aggregate evidence from the detection window."
+                  {targetContext?.mode === "aggregate_sample"
+                    ? "Bounded aggregate target evidence from the detection window."
                     : "Exact destination evidence captured for this alert."}
                 </p>
+                {scanDescription ? (
+                  <p style={{ margin: "0 0 8px 0", color: "#e2e8f0" }}>{scanDescription}</p>
+                ) : null}
                 {targetContextRows.map((item) => (
                   <div key={item.label} style={signalRowStyle}>
                     <span>{item.label}</span>
@@ -237,6 +257,25 @@ function AlertDetailsPanel({
             ) : (
               <div style={whyFiredMutedStyle}>Unavailable</div>
             )}
+          </div>
+        </div>
+      ) : null}
+      {reconActivity ? (
+        <div style={whyFiredPanelStyle}>
+          <strong>Distributed Recon Activity</strong>
+          <div style={{ marginTop: "8px" }}>
+            <div style={signalRowStyle}>
+              <span>Activity</span>
+              <span style={sourceTypeTextStyle}>{reconActivity.label}</span>
+            </div>
+            <div style={signalRowStyle}>
+              <span>Activity ID</span>
+              <span style={sourceTypeTextStyle}>#{reconActivity.id}</span>
+            </div>
+            <div style={signalRowStyle}>
+              <span>Coordination Status</span>
+              <span style={sourceTypeTextStyle}>{String(reconActivity.coordination_status || "not_established").replaceAll("_", " ")}</span>
+            </div>
           </div>
         </div>
       ) : null}

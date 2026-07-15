@@ -208,9 +208,15 @@ test("AlertDetailsPanel renders single-target pfSense target context", () => {
         alert_type: "pfsense_firewall_repeated_deny",
         context: {
           target_context: {
-            mode: "single_target",
+            mode: "exact_target",
             destination_ip: "203.0.113.10",
-            destination_port: "22",
+            destination_port: 22,
+            primary_destination_ip: "203.0.113.10",
+            primary_destination_port: 22,
+            sample_destination_ips: ["203.0.113.10"],
+            sample_destination_ports: [22],
+            distinct_destination_count: 1,
+            distinct_port_count: 1,
             protocol: "tcp",
             firewall_action: "block",
             attempts: 6,
@@ -239,8 +245,8 @@ test("AlertDetailsPanel renders single-target pfSense target context", () => {
 
   expect(screen.getByText("Target Context")).toBeInTheDocument();
   expect(screen.getByText("Exact destination evidence captured for this alert.")).toBeInTheDocument();
-  expect(screen.getByText("Destination IP")).toBeInTheDocument();
-  expect(screen.getByText("203.0.113.10")).toBeInTheDocument();
+  expect(screen.getByText("Primary Destination IP")).toBeInTheDocument();
+  expect(screen.getAllByText("203.0.113.10").length).toBeGreaterThan(0);
   expect(screen.getByText("LAN to WAN (outbound)")).toBeInTheDocument();
 });
 
@@ -250,17 +256,27 @@ test("AlertDetailsPanel renders aggregate pfSense target context", () => {
       selectedAlert={{
         ...selectedAlert,
         alert_type: "pfsense_firewall_port_scan",
+        message: "Scanned port 443 across 5 public IPs.",
         context: {
           target_context: {
-            mode: "aggregate_targets",
+            mode: "aggregate_sample",
             top_destination_ip: "203.0.113.20",
             top_destination_port: 443,
+            primary_destination_ip: "203.0.113.20",
+            primary_destination_port: 443,
+            sample_destination_ips: ["203.0.113.20", "203.0.113.21"],
+            sample_destination_ports: [443, 3389],
             distinct_destination_count: 5,
             distinct_port_count: 2,
             firewall_action: "block",
             attempts: 7,
             first_seen: "2026-07-13T14:00:00Z",
             last_seen: "2026-07-13T14:09:00Z",
+          },
+          recon_activity: {
+            id: 901,
+            label: "Distributed Internet Reconnaissance Activity",
+            coordination_status: "not_established",
           },
         },
       }}
@@ -280,11 +296,14 @@ test("AlertDetailsPanel renders aggregate pfSense target context", () => {
     />
   );
 
-  expect(screen.getByText("Top-target aggregate evidence from the detection window.")).toBeInTheDocument();
-  expect(screen.getByText("Top Destination IP")).toBeInTheDocument();
+  expect(screen.getByText("Bounded aggregate target evidence from the detection window.")).toBeInTheDocument();
+  expect(screen.getByText("Scanned port 443 across 5 public IPs.")).toBeInTheDocument();
+  expect(screen.getByText("Primary Destination IP")).toBeInTheDocument();
   expect(screen.getByText("203.0.113.20")).toBeInTheDocument();
   expect(screen.getByText("Distinct Destinations")).toBeInTheDocument();
   expect(screen.getByText("5")).toBeInTheDocument();
+  expect(screen.getByText("Distributed Recon Activity")).toBeInTheDocument();
+  expect(screen.getByText("#901")).toBeInTheDocument();
 });
 
 test("AlertDetailsPanel renders unavailable when pfSense target evidence is missing", () => {

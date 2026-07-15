@@ -20,7 +20,12 @@ from helpers.api_guards import require_api_key, require_azure_api_key, require_o
 from core.db import get_db_connection
 from core.extensions import limiter
 from core.incident_store import maybe_create_or_link_incident
-from core.notification_policy_service import notify_for_alert, notify_for_incident
+from core.notification_policy_service import (
+    notify_for_alert,
+    notify_for_incident,
+    notify_for_material_recon_activity,
+)
+from core.recon_activity_store import enroll_alert_in_recon_activity, fetch_alert_context
 from engines.ingest_engine import ingest_normalized_event
 from engines.pfsense_ingest_filter import (
     evaluate_event,
@@ -75,6 +80,27 @@ AZURE_CHECKPOINT_DEFAULT_LOOKBACK = timedelta(hours=1)
 AZURE_CHECKPOINT_MIN_LOOKBACK = timedelta(minutes=15)
 
 
+def _enroll_recon_activity_members(alerts_created, conn):
+    for alert in alerts_created or []:
+        alert_type = str(alert.get("alert_type") or "")
+        if alert_type not in {"pfsense_firewall_port_scan", "pfsense_firewall_repeated_deny"}:
+            continue
+        alert_id = alert.get("alert_id")
+        if not alert_id:
+            continue
+        context = fetch_alert_context(conn, int(alert_id))
+        if not isinstance(context, dict):
+            continue
+        flags = context["context"].get("operational_flags") if isinstance(context.get("context"), dict) else {}
+        if not isinstance(flags, dict):
+            continue
+        if not bool(flags.get("aggregate_eligible")):
+            continue
+        activity = enroll_alert_in_recon_activity(conn, int(alert_id))
+        if isinstance(activity, dict) and activity.get("id"):
+            alert["recon_activity_id"] = activity["id"]
+
+
 def _create_incidents_for_alerts(alerts_created, conn):
     created_incident_ids = []
     for alert in alerts_created or []:
@@ -95,7 +121,14 @@ def _create_incidents_for_alerts(alerts_created, conn):
             continue
 
         try:
-            incident = maybe_create_or_link_incident(conn, alert_id, severity, str(source_ip))
+            incident = maybe_create_or_link_incident(
+                conn,
+                alert_id,
+                severity,
+                str(source_ip),
+                alert_type=alert.get("alert_type"),
+                context=alert.get("context") if isinstance(alert.get("context"), dict) else None,
+            )
             if incident and incident.get("created") is True:
                 created_incident_ids.append(int(incident["id"]))
         except Exception as incident_error:
@@ -133,6 +166,33 @@ def _send_incident_notifications_for_incidents(incident_ids, conn):
                 "[NOTIFICATION POLICY INCIDENT FAILED] %s | incident_id=%s",
                 notify_error,
                 incident_id,
+            )
+
+
+def _send_recon_activity_notifications_for_alerts(alerts_created, conn):
+    activity_ids = []
+    seen = set()
+    for alert in alerts_created or []:
+        activity_id = alert.get("recon_activity_id")
+        if not activity_id:
+            continue
+        try:
+            normalized = int(activity_id)
+        except (TypeError, ValueError):
+            continue
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        activity_ids.append(normalized)
+
+    for activity_id in activity_ids:
+        try:
+            notify_for_material_recon_activity(conn, activity_id)
+        except Exception as notify_error:
+            logger.error(
+                "[NOTIFICATION POLICY RECON FAILED] %s | recon_activity_id=%s",
+                notify_error,
+                activity_id,
             )
 
 
@@ -470,6 +530,23 @@ def add_honeypot_event():
         alerts_created = ingest_normalized_event(normalized_event, conn, cur)
 
         conn.commit()
+        _enroll_recon_activity_members(alerts_created, conn)
+        conn.commit()
+        _send_recon_activity_notifications_for_alerts(alerts_created, conn)
+        conn.commit()
+        for alert in alerts_created:
+            alert_id = alert.get("alert_id")
+            if not alert_id:
+                continue
+            alert_context = fetch_alert_context(conn, int(alert_id))
+            if not isinstance(alert_context, dict):
+                continue
+            alert_context_payload = alert_context.get("context")
+            if isinstance(alert_context_payload, dict):
+                alert["context"] = alert_context_payload
+            alert_type = alert_context.get("alert_type")
+            if isinstance(alert_type, str) and alert_type:
+                alert["alert_type"] = alert_type
 
         playbook_result = _create_playbook_executions_for_alerts(alerts_created, conn)
         playbook_claimed_alert_ids = _playbook_claimed_alert_ids(playbook_result)
@@ -967,6 +1044,23 @@ def add_pfsense_event():
         alerts_created = ingest_normalized_event(normalized_event, conn, cur)
 
         conn.commit()
+        _enroll_recon_activity_members(alerts_created, conn)
+        conn.commit()
+        _send_recon_activity_notifications_for_alerts(alerts_created, conn)
+        conn.commit()
+        for alert in alerts_created:
+            alert_id = alert.get("alert_id")
+            if not alert_id:
+                continue
+            alert_context = fetch_alert_context(conn, int(alert_id))
+            if not isinstance(alert_context, dict):
+                continue
+            alert_context_payload = alert_context.get("context")
+            if isinstance(alert_context_payload, dict):
+                alert["context"] = alert_context_payload
+            alert_type = alert_context.get("alert_type")
+            if isinstance(alert_type, str) and alert_type:
+                alert["alert_type"] = alert_type
 
         playbook_result = _create_playbook_executions_for_alerts(alerts_created, conn)
         playbook_claimed_alert_ids = _playbook_claimed_alert_ids(playbook_result)

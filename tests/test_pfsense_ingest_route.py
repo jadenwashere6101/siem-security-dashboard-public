@@ -88,7 +88,7 @@ def install_route_db(monkeypatch, postgres_db):
     monkeypatch.setattr(ingest_routes, "_create_incidents_for_alerts", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         ingest_routes,
-        "create_pending_executions_for_committed_alerts",
+        "_create_playbook_executions_for_alerts",
         lambda *_args, **_kwargs: {"summary": {"created": 0}, "results": []},
     )
 
@@ -444,7 +444,7 @@ def test_route_calls_centralized_ingest_for_valid_payload(client, monkeypatch):
     monkeypatch.setattr(ingest_routes, "_create_incidents_for_alerts", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         ingest_routes,
-        "create_pending_executions_for_committed_alerts",
+        "_create_playbook_executions_for_alerts",
         lambda *_args, **_kwargs: {"summary": {"created": 0}, "results": []},
     )
 
@@ -470,7 +470,7 @@ def test_route_does_not_directly_insert_events(client, monkeypatch):
     monkeypatch.setattr(ingest_routes, "_create_incidents_for_alerts", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         ingest_routes,
-        "create_pending_executions_for_committed_alerts",
+        "_create_playbook_executions_for_alerts",
         lambda *_args, **_kwargs: {"summary": {"created": 0}, "results": []},
     )
 
@@ -504,7 +504,7 @@ def test_successful_ingest_preserves_downstream_orchestration(client, monkeypatc
     playbook_mock = MagicMock(return_value={"summary": {"created": 1}, "results": [{"alert_id": 789, "status": "created"}]})
     incident_mock = MagicMock()
     monkeypatch.setattr(ingest_routes, "enqueue_committed_alerts", enqueue_mock)
-    monkeypatch.setattr(ingest_routes, "create_pending_executions_for_committed_alerts", playbook_mock)
+    monkeypatch.setattr(ingest_routes, "_create_playbook_executions_for_alerts", playbook_mock)
     monkeypatch.setattr(ingest_routes, "_create_incidents_for_alerts", incident_mock)
 
     response = post_pfsense(client, valid_pfsense_block_payload())

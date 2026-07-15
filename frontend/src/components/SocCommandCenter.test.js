@@ -26,6 +26,7 @@ import {
   listNotificationDeliveries,
 } from "../services/notificationDeliveryService";
 import { listPlaybookExecutions } from "../services/playbookService";
+import { loadReconActivities, loadReconActivity } from "../services/reconActivityService";
 import {
   loadRecentSoarQueueItems,
   loadSoarQueueStatus,
@@ -65,6 +66,11 @@ jest.mock("../services/notificationDeliveryService", () => ({
 
 jest.mock("../services/playbookService", () => ({
   listPlaybookExecutions: jest.fn(),
+}));
+
+jest.mock("../services/reconActivityService", () => ({
+  loadReconActivities: jest.fn(),
+  loadReconActivity: jest.fn(),
 }));
 
 jest.mock("../services/soarQueueService", () => ({
@@ -427,6 +433,7 @@ describe("SocCommandCenter", () => {
     listApprovals.mockResolvedValue({ approvals: [] });
     getDeadLetters.mockResolvedValue({ items: [] });
     listNotificationDeliveries.mockResolvedValue({ items: [] });
+    loadReconActivities.mockResolvedValue({ items: [], count: 0 });
     loadRecentSoarQueueItems.mockResolvedValue({ items: [] });
     getIntegrationStatus.mockResolvedValue({ mode: "simulation", adapters: [] });
 
@@ -435,6 +442,55 @@ describe("SocCommandCenter", () => {
     expect(await screen.findByText("No incidents available.")).toBeInTheDocument();
     expect(screen.getByText("No recent operational activity found.")).toBeInTheDocument();
     expect(screen.getByText("Integration status is unavailable or no adapters are registered.")).toBeInTheDocument();
+    expect(screen.getByText("No active distributed recon activities.")).toBeInTheDocument();
+  });
+
+  test("renders recon activity loading, populated, and detail states", async () => {
+    loadReconActivities.mockResolvedValue({
+      items: [
+        {
+          id: 90,
+          label: "Distributed Internet Reconnaissance Activity",
+          severity: "medium",
+          status: "monitoring",
+          protected_range_key: "203.0.113.0/24",
+        },
+      ],
+      count: 1,
+    });
+    loadReconActivity.mockResolvedValue({
+      id: 90,
+      label: "Distributed Internet Reconnaissance Activity",
+      severity: "medium",
+      coordination_status: "not_established",
+      summary: {
+        source_ip_count: 12,
+        destination_ip_count: 34,
+        primary_destination_ports: [5060, 22],
+        alert_types: ["pfsense_firewall_port_scan", "pfsense_firewall_repeated_deny"],
+        underlying_alert_count: 14,
+      },
+      assessment_text:
+        "Distributed commodity scanning against public services. Coordination is not established.",
+    });
+
+    renderPanel();
+
+    expect(await screen.findByRole("heading", { name: "Distributed Internet Reconnaissance Activity" })).toBeInTheDocument();
+    expect(await screen.findByText("Coordination status")).toBeInTheDocument();
+    expect(screen.getByText("Not Established")).toBeInTheDocument();
+    expect(screen.getByText("5060, 22")).toBeInTheDocument();
+    expect(screen.getByText("Distributed commodity scanning against public services. Coordination is not established.")).toBeInTheDocument();
+  });
+
+  test("renders recon activity source failures without breaking the workspace", async () => {
+    loadReconActivities.mockRejectedValue(new Error("Recon unavailable"));
+
+    renderPanel();
+
+    expect(await screen.findByText("Operational command center")).toBeInTheDocument();
+    expect(await screen.findByText(/Partial data loaded\. Unavailable sources: recon activities\./)).toBeInTheDocument();
+    expect(screen.getByText("Select a recon activity to inspect.")).toBeInTheDocument();
   });
 
   test("keeps viewer and auditor roles out of operational controls", () => {

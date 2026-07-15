@@ -110,7 +110,7 @@ _RULE_METADATA: dict[str, dict[str, Any]] = {
         "maximum_severity": "high",
         "source": "pfsense",
         "source_type": "firewall",
-        "escalation_conditions": "Starts Low, rises to Medium/High on volume, outbound context, or elevated reputation.",
+        "escalation_conditions": "Starts Low for inbound commodity denies, rises to Medium on sustained repetition, and reaches High only for outbound/internal-host behavior or stronger corroboration.",
         "why": "Blocked activity indicates malicious intent or scanning, but blocked traffic alone does not prove successful access.",
     },
     "pfsense_firewall_port_scan": {
@@ -118,7 +118,7 @@ _RULE_METADATA: dict[str, dict[str, Any]] = {
         "maximum_severity": "high",
         "source": "pfsense",
         "source_type": "firewall",
-        "escalation_conditions": "Escalates from Medium to High on breadth, repetition, or elevated reputation.",
+        "escalation_conditions": "Escalates from Medium to High only on materially stronger breadth or reputation-backed stronger breadth; routine commodity scanning stays below High.",
         "why": "Port-scanning is strong reconnaissance evidence, but reconnaissance alone is not a likely-compromise signal.",
     },
     "pfsense_firewall_noisy_source": {
@@ -134,8 +134,16 @@ _RULE_METADATA: dict[str, dict[str, Any]] = {
         "maximum_severity": "high",
         "source": "pfsense",
         "source_type": "firewall",
-        "escalation_conditions": "Escalates to High on repetition, elevated reputation, or corroborating multi-port access.",
+        "escalation_conditions": "Escalates to High only on repeated qualifying allows, multi-port corroboration, or progression-backed evidence; reputation alone is insufficient.",
         "why": "Allowed traffic to sensitive ports is important, but it becomes High only when corroborating context suggests meaningful risk.",
+    },
+    "pfsense_firewall_allow_after_deny": {
+        "default_severity": "medium",
+        "maximum_severity": "high",
+        "source": "pfsense",
+        "source_type": "firewall",
+        "escalation_conditions": "Requires same-source inbound deny-to-allow progression within 30 minutes; High requires exact-target or sensitive-service progression.",
+        "why": "Later inbound access after repeated denies is stronger than commodity recon, but it still requires analyst review and approval-gated containment.",
     },
     "correlated_activity": {
         "default_severity": "high",

@@ -126,11 +126,15 @@ def find_open_incident_by_source_ip(
 
 
 def maybe_create_or_link_incident(
-    conn, alert_id: int, severity: str, source_ip: str
+    conn, alert_id: int, severity: str, source_ip: str, *, alert_type: str | None = None, context: dict[str, Any] | None = None
 ) -> dict[str, Any] | None:
     sev_upper = (severity or "").upper()
     if sev_upper not in {"HIGH", "CRITICAL"}:
         return None
+    if str(alert_type or "").startswith("pfsense_"):
+        flags = context.get("operational_flags") if isinstance(context, dict) else {}
+        if not bool(flags.get("incident_eligible")):
+            return None
 
     existing = find_open_incident_by_source_ip(conn, source_ip)
     if existing is not None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -8,6 +9,10 @@ from uuid import uuid4
 
 from core import notification_delivery_store
 from core.notification_policy_store import get_effective_notification_policy, load_notification_policy
+from core.recon_activity_store import (
+    fetch_recon_activity_notification_state,
+    record_recon_activity_notification,
+)
 from integrations.base_integration import REAL_MODE
 from integrations.integration_registry import get_integration_adapter
 
@@ -108,7 +113,7 @@ def evaluate_notification_policy(
         return {"should_notify": False, "reason": "policy_unavailable", "route_key": None, "destination": None}
 
     normalized_kind = str(event_kind or "").strip().lower()
-    if normalized_kind == "alert" and not policy.get("notify_on_alerts", True):
+    if normalized_kind in {"alert", "recon_activity"} and not policy.get("notify_on_alerts", True):
         return {"should_notify": False, "reason": "alerts_disabled", "route_key": None, "destination": None}
     if normalized_kind == "incident" and not policy.get("notify_on_incidents", True):
         return {"should_notify": False, "reason": "incidents_disabled", "route_key": None, "destination": None}
@@ -173,6 +178,35 @@ def format_alert_notification(alert: dict[str, Any], *, slack_format: str, desti
     if slack_format == "detailed":
         return _detailed_alert_text(alert, destination)
     return _compact_alert_text(alert, destination)
+
+
+def _compact_recon_activity_text(activity: dict[str, Any], destination: str) -> str:
+    return (
+        f"[{destination}] RECON {str(activity.get('severity') or '').upper()} "
+        f"#{activity.get('id')} {activity.get('message') or 'Distributed Internet Reconnaissance Activity'}"
+    )[:3000]
+
+
+def _detailed_recon_activity_text(activity: dict[str, Any], destination: str) -> str:
+    lines = [
+        f"[{destination}] Recon activity notification",
+        f"Severity: {str(activity.get('severity') or '').upper() or 'UNKNOWN'}",
+        f"Label: {activity.get('message') or 'Distributed Internet Reconnaissance Activity'}",
+        f"Status: {activity.get('status') or 'unknown'}",
+    ]
+    if activity.get("assessment_text"):
+        lines.append(f"Assessment: {activity['assessment_text']}")
+    if activity.get("target_context"):
+        lines.append(f"Target context: {activity['target_context']}")
+    return "\n".join(lines)[:3000]
+
+
+def format_recon_activity_notification(
+    activity: dict[str, Any], *, slack_format: str, destination: str
+) -> str:
+    if slack_format == "detailed":
+        return _detailed_recon_activity_text(activity, destination)
+    return _compact_recon_activity_text(activity, destination)
 
 
 def _compact_incident_text(incident: dict[str, Any], destination: str) -> str:
@@ -324,8 +358,10 @@ def _notification_idempotency_key(
     route_key: str,
     purpose: str,
     delivery_stage: str,
+    scope_suffix: str | None = None,
 ) -> str:
-    raw = f"policy:{kind}:{object_id}:{route_key}:{purpose}:{delivery_stage}"
+    suffix = f":{scope_suffix}" if scope_suffix else ""
+    raw = f"policy:{kind}:{object_id}:{route_key}:{purpose}:{delivery_stage}{suffix}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:64]
 
 
@@ -357,6 +393,7 @@ def _record_attempt(
     mode_override: str | None = None,
     timeout_seconds: int | None = None,
     circuit_breaker_state: str | None = None,
+    recon_activity_id: int | None = None,
 ) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     record_mode = str(mode_override or "").strip().lower()
@@ -373,6 +410,7 @@ def _record_attempt(
         action="send_message",
         alert_id=alert_id,
         incident_id=incident_id,
+        recon_activity_id=recon_activity_id,
         playbook_execution_id=playbook_execution_id,
         playbook_step_index=playbook_step_index,
         requested_at=now,
@@ -413,6 +451,8 @@ def _deliver_notification(
     playbook_step_index: int | None = None,
     correlation_kind: str | None = None,
     destination_label_override: str | None = None,
+    idempotency_scope_suffix: str | None = None,
+    recon_activity_id: int | None = None,
 ) -> dict[str, Any]:
     normalized_purpose = _normalize_notification_purpose(
         purpose,
@@ -439,6 +479,7 @@ def _deliver_notification(
         route_key,
         normalized_purpose,
         delivery_stage,
+        idempotency_scope_suffix,
     )
     common_metadata = {
         "notification_policy": True,
@@ -451,6 +492,7 @@ def _deliver_notification(
         "requested_by": requested_by,
         "playbook_execution_id": playbook_execution_id,
         "playbook_step_index": playbook_step_index,
+        "recon_activity_id": recon_activity_id,
     }
     alert_ref = object_id if event_kind == "alert" and object_id > 0 else None
     incident_ref = object_id if event_kind == "incident" and object_id > 0 else None
@@ -474,6 +516,7 @@ def _deliver_notification(
             incident_id=incident_ref,
             playbook_execution_id=playbook_execution_id,
             playbook_step_index=playbook_step_index,
+            recon_activity_id=recon_activity_id,
         )
         return {
             "success": False,
@@ -515,6 +558,7 @@ def _deliver_notification(
                 incident_id=incident_ref,
                 playbook_execution_id=playbook_execution_id,
                 playbook_step_index=playbook_step_index,
+                recon_activity_id=recon_activity_id,
             )
             return {
                 "success": False,
@@ -539,6 +583,12 @@ def _deliver_notification(
             decision["route_key"],
             destination,
             str(decision["slack_format"] or "compact"),
+        )
+    elif event_kind == "recon_activity":
+        text = format_recon_activity_notification(
+            subject,
+            slack_format=decision["slack_format"],
+            destination=destination,
         )
     elif normalized_purpose == PURPOSE_IMMEDIATE_ALERT and event_kind == "alert":
         text = format_alert_notification(
@@ -611,6 +661,7 @@ def _deliver_notification(
         incident_id=incident_ref,
         playbook_execution_id=playbook_execution_id,
         playbook_step_index=playbook_step_index,
+        recon_activity_id=recon_activity_id,
         timeout_seconds=metadata.get("timeout_seconds"),
         circuit_breaker_state=metadata.get("circuit_state"),
         mode_override=str(result.get("mode") or "simulation"),
@@ -689,7 +740,8 @@ def fetch_alert_notification_context(conn, alert_id: int) -> dict[str, Any] | No
                 source_type,
                 message,
                 response_action,
-                response_status
+                response_status,
+                context
             FROM alerts
             WHERE id = %s
             """,
@@ -708,6 +760,7 @@ def fetch_alert_notification_context(conn, alert_id: int) -> dict[str, Any] | No
             "message": row[6],
             "response_action": row[7],
             "response_status": row[8],
+            "context": row[9] if isinstance(row[9], dict) else {},
         }
 
 
@@ -756,6 +809,12 @@ def notify_for_alert(conn, alert_id: int) -> dict[str, Any] | None:
     alert = fetch_alert_notification_context(conn, alert_id)
     if alert is None:
         return None
+    policy_override = alert.get("context") if isinstance(alert.get("context"), dict) else {}
+    if (
+        isinstance(policy_override.get("notification_policy"), dict)
+        and policy_override["notification_policy"].get("immediate_alert_eligible") is False
+    ):
+        return None
     policy = get_effective_notification_policy()
     result = _deliver_notification(
         conn,
@@ -766,6 +825,156 @@ def notify_for_alert(conn, alert_id: int) -> dict[str, Any] | None:
         purpose=PURPOSE_IMMEDIATE_ALERT,
     )
     return result["attempt"]
+
+
+def fetch_recon_activity_notification_context(conn, activity_id: int) -> dict[str, Any] | None:
+    activity = fetch_recon_activity_notification_state(conn, activity_id)
+    if activity is None:
+        return None
+    target_context = (
+        activity["summary"].get("target_context")
+        if isinstance(activity.get("summary"), dict)
+        else {}
+    )
+    return {
+        "id": activity["id"],
+        "severity": activity["severity"],
+        "status": activity["status"],
+        "source": activity["source"],
+        "source_type": activity["source_type"],
+        "message": "Distributed Internet Reconnaissance Activity",
+        "assessment_text": activity["assessment_text"],
+        "coordination_status": activity["coordination_status"],
+        "summary": activity["summary"],
+        "target_context": json.dumps(target_context, sort_keys=True) if target_context else None,
+        "opened_notification_sent_at": activity["opened_notification_sent_at"],
+        "last_notified_fingerprint": activity["last_notified_fingerprint"],
+        "last_notified_at": activity["last_notified_at"],
+    }
+
+
+def _recon_activity_material_fingerprint(activity: dict[str, Any]) -> str:
+    summary = activity.get("summary") if isinstance(activity.get("summary"), dict) else {}
+    ports = [int(value) for value in (summary.get("primary_destination_ports") or [])]
+    payload = {
+        "severity": str(activity.get("severity") or "").lower(),
+        "status": str(activity.get("status") or "").lower(),
+        "coordination_status": str(activity.get("coordination_status") or "").lower(),
+        "primary_destination_ports": ports[:5],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def notify_for_recon_activity(
+    conn,
+    activity_id: int,
+    *,
+    purpose: str = PURPOSE_IMMEDIATE_ALERT,
+    idempotency_scope_suffix: str | None = None,
+    policy: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    activity = fetch_recon_activity_notification_context(conn, activity_id)
+    if activity is None:
+        return None
+    effective_policy = policy or get_effective_notification_policy()
+    result = _deliver_notification(
+        conn,
+        event_kind="recon_activity",
+        object_id=activity_id,
+        subject=activity,
+        policy=effective_policy,
+        purpose=purpose,
+        idempotency_scope_suffix=idempotency_scope_suffix,
+        recon_activity_id=activity_id,
+    )
+    return result
+
+
+def notify_for_material_recon_activity(conn, activity_id: int) -> dict[str, Any] | None:
+    activity = fetch_recon_activity_notification_context(conn, activity_id)
+    if activity is None:
+        return None
+
+    fingerprint = _recon_activity_material_fingerprint(activity)
+    already_opened = activity.get("opened_notification_sent_at") is not None
+    policy = get_effective_notification_policy()
+    decision = evaluate_notification_policy(
+        policy,
+        event_kind="recon_activity",
+        severity=activity.get("severity"),
+        source=activity.get("source"),
+        source_type=activity.get("source_type"),
+    )
+    if not decision.get("should_notify"):
+        return {
+            "success": False,
+            "suppressed": True,
+            "duplicate": False,
+            "purpose": PURPOSE_IMMEDIATE_ALERT if not already_opened else PURPOSE_INVESTIGATION_UPDATE,
+            "delivery_stage": DELIVERY_STAGE_INITIAL if not already_opened else DELIVERY_STAGE_PLAYBOOK,
+            "route_key": decision.get("route_key") or "unrouted",
+            "message": f"Recon activity notification suppressed by policy: {decision['reason']}.",
+            "attempt": None,
+            "adapter_result": None,
+            "policy_decision": decision,
+        }
+    if not already_opened:
+        result = notify_for_recon_activity(
+            conn,
+            activity_id,
+            purpose=PURPOSE_IMMEDIATE_ALERT,
+            idempotency_scope_suffix=f"opening:{fingerprint}",
+            policy=policy,
+        )
+        if (
+            result
+            and not result.get("suppressed")
+            and isinstance(result.get("attempt"), dict)
+            and result["attempt"].get("status") in {"success", "pending"}
+        ):
+            record_recon_activity_notification(
+                conn,
+                activity_id,
+                fingerprint=fingerprint,
+                opened_at=datetime.now(timezone.utc),
+            )
+        return result
+
+    if fingerprint == activity.get("last_notified_fingerprint"):
+        return {
+            "success": False,
+            "suppressed": True,
+            "duplicate": True,
+            "purpose": PURPOSE_INVESTIGATION_UPDATE,
+            "delivery_stage": DELIVERY_STAGE_PLAYBOOK,
+            "route_key": normalize_notification_source(activity.get("source"), activity.get("source_type")) or "unrouted",
+            "message": "Recon activity notification suppressed because no material aggregate change occurred.",
+            "attempt": None,
+            "adapter_result": None,
+            "policy_decision": {"should_notify": False, "reason": "no_material_change"},
+        }
+
+    result = notify_for_recon_activity(
+        conn,
+        activity_id,
+        purpose=PURPOSE_INVESTIGATION_UPDATE,
+        idempotency_scope_suffix=f"update:{fingerprint}",
+        policy=policy,
+    )
+    if (
+        result
+        and not result.get("suppressed")
+        and isinstance(result.get("attempt"), dict)
+        and result["attempt"].get("status") in {"success", "pending"}
+    ):
+        record_recon_activity_notification(
+            conn,
+            activity_id,
+            fingerprint=fingerprint,
+            opened_at=None,
+        )
+    return result
 
 
 def notify_for_incident(conn, incident_id: int) -> dict[str, Any] | None:

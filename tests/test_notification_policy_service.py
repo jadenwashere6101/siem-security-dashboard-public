@@ -1,4 +1,7 @@
+from datetime import datetime, timezone
 from unittest.mock import patch
+
+from psycopg2.extras import Json
 
 from core.notification_policy_service import (
     evaluate_notification_policy,
@@ -6,6 +9,7 @@ from core.notification_policy_service import (
     format_incident_notification,
     notify_for_alert,
     notify_for_incident,
+    notify_for_material_recon_activity,
     send_notification_policy_route_test,
 )
 
@@ -47,6 +51,67 @@ def _insert_incident(cur, *, severity="high", source_ip="198.51.100.11", alert_i
             (incident_id, alert_id),
         )
     return incident_id
+
+
+def _insert_recon_activity(cur, *, severity="high", status="open", ports=None, opened=False):
+    selected_ports = list(ports or [5060])
+    cur.execute(
+        """
+        INSERT INTO recon_activities (
+            activity_type,
+            source,
+            source_type,
+            status,
+            severity,
+            coordination_status,
+            protected_range_key,
+            service_signature,
+            first_seen,
+            last_seen,
+            assessment_text,
+            membership_evidence,
+            summary,
+            opened_notification_sent_at,
+            last_notified_fingerprint,
+            last_notified_at
+        )
+        VALUES (
+            'distributed_internet_reconnaissance',
+            'pfsense',
+            'firewall',
+            %s,
+            %s,
+            'not_established',
+            '203.0.113.0/24',
+            %s::jsonb,
+            NOW() - INTERVAL '5 minutes',
+            NOW(),
+            'Distributed commodity scanning against public services. Coordination is not established.',
+            '{}'::jsonb,
+            %s::jsonb,
+            %s,
+            NULL,
+            NULL
+        )
+        RETURNING id
+        """,
+        (
+            status,
+            severity,
+            Json(selected_ports),
+            Json(
+                {
+                    "primary_destination_ports": selected_ports,
+                    "target_context": {
+                        "primary_destination_port": selected_ports[0],
+                        "sample_destination_ports": selected_ports,
+                    },
+                }
+            ),
+            datetime.now(timezone.utc) if opened else None,
+        ),
+    )
+    return cur.fetchone()[0]
 
 
 def _policy(**overrides):
@@ -325,3 +390,122 @@ def test_notify_for_alert_and_incident_use_existing_slack_adapter_contract(postg
     )
     rows = cur.fetchall()
     assert rows == [("#hp", "alert"), ("#hp", "incident")]
+
+
+def test_recon_activity_notifications_send_one_opening_and_deduplicate_unchanged_updates(postgres_db):
+    conn, cur = postgres_db
+    activity_id = _insert_recon_activity(cur, severity="high", ports=[5060], opened=False)
+    conn.commit()
+
+    adapter = type(
+        "Adapter",
+        (),
+        {
+            "execute": lambda self, action, params, context: {
+                "success": True,
+                "simulated": False,
+                "executed": True,
+                "mode": "real",
+                "message": "sent",
+                "metadata": {"failure_classification": None, "timeout_seconds": 3},
+            }
+        },
+    )()
+
+    with patch(
+        "core.notification_policy_service.get_effective_notification_policy",
+        return_value=_policy(minimum_severity="high"),
+    ), patch("core.notification_policy_service.get_integration_adapter", return_value=adapter):
+        first = notify_for_material_recon_activity(conn, activity_id)
+        conn.commit()
+        second = notify_for_material_recon_activity(conn, activity_id)
+        conn.commit()
+
+    assert first["success"] is True
+    assert first["purpose"] == "immediate_alert"
+    assert second["suppressed"] is True
+    assert second["policy_decision"]["reason"] == "no_material_change"
+
+    cur.execute(
+        """
+        SELECT COUNT(*)
+        FROM notification_delivery_attempts
+        WHERE recon_activity_id = %s
+          AND status = 'success'
+        """,
+        (activity_id,),
+    )
+    assert cur.fetchone()[0] == 1
+
+    cur.execute(
+        """
+        SELECT opened_notification_sent_at, last_notified_fingerprint, last_notified_at
+        FROM recon_activities
+        WHERE id = %s
+        """,
+        (activity_id,),
+    )
+    opened_at, fingerprint, last_notified_at = cur.fetchone()
+    assert opened_at is not None
+    assert fingerprint
+    assert last_notified_at is not None
+
+
+def test_recon_activity_notifications_send_material_update_once(postgres_db):
+    conn, cur = postgres_db
+    activity_id = _insert_recon_activity(cur, severity="high", ports=[5060], opened=False)
+    conn.commit()
+
+    adapter = type(
+        "Adapter",
+        (),
+        {
+            "execute": lambda self, action, params, context: {
+                "success": True,
+                "simulated": False,
+                "executed": True,
+                "mode": "real",
+                "message": "sent",
+                "metadata": {"failure_classification": None, "timeout_seconds": 3},
+            }
+        },
+    )()
+
+    with patch(
+        "core.notification_policy_service.get_effective_notification_policy",
+        return_value=_policy(minimum_severity="high"),
+    ), patch("core.notification_policy_service.get_integration_adapter", return_value=adapter):
+        notify_for_material_recon_activity(conn, activity_id)
+        conn.commit()
+
+        cur.execute(
+            """
+            UPDATE recon_activities
+            SET summary = jsonb_set(summary, '{primary_destination_ports}', '[5060,22]'::jsonb, true)
+            WHERE id = %s
+            """,
+            (activity_id,),
+        )
+        conn.commit()
+
+        updated = notify_for_material_recon_activity(conn, activity_id)
+        conn.commit()
+        duplicate_update = notify_for_material_recon_activity(conn, activity_id)
+        conn.commit()
+
+    assert updated["success"] is True
+    assert updated["purpose"] == "investigation_update"
+    assert duplicate_update["suppressed"] is True
+    assert duplicate_update["policy_decision"]["reason"] == "no_material_change"
+
+    cur.execute(
+        """
+        SELECT metadata->>'purpose', COUNT(*)
+        FROM notification_delivery_attempts
+        WHERE recon_activity_id = %s AND status = 'success'
+        GROUP BY metadata->>'purpose'
+        ORDER BY metadata->>'purpose'
+        """,
+        (activity_id,),
+    )
+    assert cur.fetchall() == [("immediate_alert", 1), ("investigation_update", 1)]

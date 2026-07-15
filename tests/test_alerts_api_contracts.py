@@ -122,6 +122,13 @@ def _fetch_why_fired_response(client, conn, alert_id):
         return client.get(f"/alerts/{alert_id}/why-fired")
 
 
+def _fetch_recon_activities_response(client, conn, path="/recon-activities"):
+    with patch("routes.alerts_events_routes.get_db_connection", return_value=_RouteSafeConnection(conn)), patch(
+        "routes.alerts_events_routes.get_ip_reputation", return_value=BEHAVIORAL_REPUTATION
+    ):
+        return client.get(path)
+
+
 def _alert_by_type(alerts, alert_type):
     return next(alert for alert in alerts if alert.get("alert_type") == alert_type)
 
@@ -642,7 +649,7 @@ def test_get_alerts_pfsense_quality_metadata_and_why_fired_use_persisted_context
         "first_seen": "2026-07-13T13:00:00Z",
         "last_seen": "2026-07-13T13:09:00Z",
         "target_context": {
-            "mode": "single_target",
+            "mode": "exact_target",
             "destination_ip": "203.0.113.10",
             "destination_port": 22,
             "protocol": "tcp",
@@ -730,7 +737,7 @@ def test_get_alerts_pfsense_quality_metadata_and_why_fired_use_persisted_context
     assert payload["source"] == "pfsense"
     assert payload["source_type"] == "firewall"
     assert payload["context"] == context
-    assert payload["context"]["target_context"]["mode"] == "single_target"
+    assert payload["context"]["target_context"]["mode"] == "exact_target"
     assert payload["suppressed_rollup"] is False
     assert payload["cooldown"]["window_minutes"] > 0
     evidence = {item["field"]: item["value"] for item in payload["evidence"]}
@@ -757,3 +764,92 @@ def test_get_alert_why_fired_rejects_non_pfsense_alerts(client, postgres_db):
     resp = _fetch_why_fired_response(client, conn, alert_id)
     assert resp.status_code == 400
     assert resp.get_json()["error"] == "Why this fired is available only for pfSense alerts"
+
+
+def test_get_recon_activities_and_detail_return_bounded_payloads(client, postgres_db):
+    conn, cur = postgres_db
+    cur.execute(
+        """
+        INSERT INTO alerts (
+            alert_type, severity, source_ip, source, source_type, message, status, context
+        )
+        VALUES (
+            'pfsense_firewall_port_scan', 'medium', '198.51.100.252', 'pfsense', 'firewall',
+            'Port scan aggregate member', 'open',
+            %s
+        )
+        RETURNING id
+        """,
+        (
+            Json(
+                {
+                    "target_context": {
+                        "mode": "aggregate_sample",
+                        "primary_destination_ip": "203.0.113.20",
+                        "primary_destination_port": 5060,
+                        "sample_destination_ips": ["203.0.113.20", "203.0.113.21"],
+                        "sample_destination_ports": [5060],
+                        "distinct_destination_count": 2,
+                        "distinct_port_count": 1,
+                    }
+                }
+            ),
+        ),
+    )
+    alert_id = cur.fetchone()[0]
+    cur.execute(
+        """
+        INSERT INTO recon_activities (
+            activity_type, source, source_type, status, severity, coordination_status,
+            protected_range_key, service_signature, first_seen, last_seen, assessment_text, membership_evidence, summary
+        )
+        VALUES (
+            'distributed_internet_reconnaissance', 'pfsense', 'firewall', 'monitoring', 'medium', 'not_established',
+            '203.0.113.0/24', '[5060]'::jsonb, NOW() - INTERVAL '5 minutes', NOW(),
+            'Distributed commodity scanning against public services. Coordination is not established.',
+            '{}'::jsonb,
+            %s
+        )
+        RETURNING id
+        """,
+        (
+            Json(
+                {
+                    "source_ip_count": 1,
+                    "destination_ip_count": 2,
+                    "primary_destination_ports": [5060],
+                    "alert_types": ["pfsense_firewall_port_scan"],
+                    "underlying_alert_count": 1,
+                    "target_context": {
+                        "mode": "aggregate_sample",
+                        "primary_destination_ip": "203.0.113.20",
+                        "primary_destination_port": 5060,
+                        "sample_destination_ips": ["203.0.113.20", "203.0.113.21"],
+                        "sample_destination_ports": [5060],
+                    },
+                }
+            ),
+        ),
+    )
+    activity_id = cur.fetchone()[0]
+    cur.execute(
+        """
+        INSERT INTO recon_activity_alerts (recon_activity_id, alert_id, membership_evidence)
+        VALUES (%s, %s, '{}'::jsonb)
+        """,
+        (activity_id, alert_id),
+    )
+    conn.commit()
+
+    _login_as_super_admin(client)
+    list_resp = _fetch_recon_activities_response(client, conn)
+    assert list_resp.status_code == 200
+    payload = list_resp.get_json()
+    assert payload["count"] == 1
+    assert payload["items"][0]["label"] == "Distributed Internet Reconnaissance Activity"
+
+    detail_resp = _fetch_recon_activities_response(client, conn, f"/recon-activities/{activity_id}")
+    assert detail_resp.status_code == 200
+    detail = detail_resp.get_json()
+    assert detail["summary"]["primary_destination_ports"] == [5060]
+    assert detail["alerts"][0]["id"] == alert_id

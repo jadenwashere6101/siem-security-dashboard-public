@@ -17,12 +17,28 @@ from core.ip_helpers import (
     floor_response_action_for_severity,
     lookup_ip_reputation,
 )
+from core.pfsense_recon import (
+    build_related_event_filter,
+    build_scan_description,
+    build_service_signature,
+    classify_target_mode,
+    is_public_ip,
+    normalize_action,
+    normalize_direction,
+    normalize_interface,
+    normalize_protocol,
+    parse_port,
+    protected_range_key,
+    sample_ranked_values,
+    to_iso,
+)
 
 
 PFSENSE_ESCALATION_ALERT_TYPES = (
     "pfsense_firewall_repeated_deny",
     "pfsense_firewall_port_scan",
     "pfsense_firewall_suspicious_allow",
+    "pfsense_firewall_allow_after_deny",
 )
 PFSENSE_NOISY_SOURCE_GUARD_ALERT_TYPES = PFSENSE_ESCALATION_ALERT_TYPES + (
     "pfsense_firewall_noisy_source",
@@ -115,9 +131,34 @@ def _pfsense_escalated_severity(base_severity, *, count, threshold, reputation_s
     return "medium"
 
 
-def _pfsense_repeated_deny_severity(*, count, threshold, reputation_score, direction=None):
-    if reputation_score is not None and reputation_score >= PFSENSE_HIGH_REPUTATION_SCORE:
+def _safe_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _pfsense_port_scan_severity(
+    *,
+    distinct_port_count,
+    distinct_destination_count,
+    threshold,
+    host_threshold,
+    reputation_score,
+):
+    strong_port_breadth = bool(threshold and distinct_port_count >= threshold * 3)
+    strong_host_breadth = bool(host_threshold and distinct_destination_count >= host_threshold * 3)
+    if strong_port_breadth or strong_host_breadth:
         return "high"
+    if reputation_score is not None and reputation_score >= PFSENSE_HIGH_REPUTATION_SCORE:
+        if bool(threshold and distinct_port_count >= threshold * 2):
+            return "high"
+        if bool(host_threshold and distinct_destination_count >= host_threshold * 2):
+            return "high"
+    return "medium"
+
+
+def _pfsense_repeated_deny_severity(*, count, threshold, reputation_score, direction=None):
     if direction == "out":
         return "high" if threshold and count >= threshold else "medium"
     if threshold and count >= threshold * PFSENSE_SEVERITY_ESCALATION_MULTIPLIER:
@@ -125,8 +166,25 @@ def _pfsense_repeated_deny_severity(*, count, threshold, reputation_score, direc
     return "low"
 
 
-def _pfsense_response_action_for_severity(severity):
-    if severity == "high":
+def _pfsense_suspicious_allow_severity(
+    *,
+    event_count,
+    distinct_port_count,
+    reputation_score,
+    high_confidence_repeat_threshold,
+    distinct_port_escalation_threshold,
+):
+    if event_count >= high_confidence_repeat_threshold:
+        return "high"
+    if distinct_port_count >= distinct_port_escalation_threshold:
+        return "high"
+    if reputation_score is not None and reputation_score >= PFSENSE_HIGH_REPUTATION_SCORE and event_count >= 2:
+        return "high"
+    return "medium"
+
+
+def _pfsense_response_action_for_severity(severity, *, containment_eligible=False):
+    if severity == "high" and containment_eligible:
         return "block_ip"
     if severity == "medium":
         return "enrich_source_ip"
@@ -140,6 +198,30 @@ def _build_pfsense_target_context(mode, **fields):
             continue
         target_context[key] = value
     return target_context
+
+
+def _build_pfsense_operational_flags(
+    *,
+    alert_type,
+    severity,
+    direction=None,
+    containment_eligible=False,
+    aggregate_eligible=False,
+):
+    incident_eligible = False
+    if severity == "high":
+        if alert_type in {"pfsense_firewall_suspicious_allow", "pfsense_firewall_allow_after_deny"}:
+            incident_eligible = True
+        elif alert_type == "pfsense_firewall_repeated_deny" and direction == "out":
+            incident_eligible = True
+        elif alert_type == "pfsense_firewall_port_scan" and not aggregate_eligible:
+            incident_eligible = True
+    return {
+        "incident_eligible": incident_eligible,
+        "containment_eligible": containment_eligible,
+        "aggregate_eligible": aggregate_eligible,
+        "immediate_alert_eligible": severity == "high" and not aggregate_eligible,
+    }
 
 
 # spec: SPEC-INGEST-001
@@ -1966,7 +2048,22 @@ def _generate_pfsense_repeated_deny_alerts_core(cur, conn, source=None, source_t
         if _pfsense_cooldown_suppresses(cur, source_ip, "pfsense_firewall_repeated_deny", severity):
             continue
 
-        response_action = _pfsense_response_action_for_severity(severity)
+        operational_flags = _build_pfsense_operational_flags(
+            alert_type="pfsense_firewall_repeated_deny",
+            severity=severity,
+            direction=direction,
+            containment_eligible=severity == "high" and direction == "out",
+            aggregate_eligible=direction != "out",
+        )
+        destination_port_int = parse_port(destination_port)
+        sample_destination_ips = [destination_ip] if destination_ip else []
+        sample_destination_ports = [destination_port_int] if destination_port_int is not None else []
+        protected_range = protected_range_key(sample_destination_ips)
+        service_signature_ports = build_service_signature(sample_destination_ports)
+        response_action = _pfsense_response_action_for_severity(
+            severity,
+            containment_eligible=operational_flags["containment_eligible"],
+        )
         response_status = "pending"
 
         country, city, latitude, longitude = _fetch_latest_honeypot_location(
@@ -1991,24 +2088,49 @@ def _generate_pfsense_repeated_deny_alerts_core(cur, conn, source=None, source_t
         context = {
             "action": "block",
             "destination_ip": destination_ip,
-            "destination_port": destination_port,
+            "destination_port": destination_port_int or destination_port,
             "protocol": protocol,
             "interface": interface,
             "direction": direction,
             "event_count": event_count,
-            "first_seen": str(first_seen) if first_seen else None,
-            "last_seen": str(last_seen) if last_seen else None,
+            "first_seen": to_iso(first_seen),
+            "last_seen": to_iso(last_seen),
+            "protected_range_key": protected_range,
+            "service_signature_ports": service_signature_ports,
+            "notification_policy": {
+                "immediate_alert_eligible": operational_flags["immediate_alert_eligible"],
+            },
+            "operational_flags": operational_flags,
+            "related_event_filter": build_related_event_filter(
+                event_types=["firewall_block"],
+                source_ip=str(source_ip),
+                destination_ips=sample_destination_ips,
+                destination_ports=sample_destination_ports,
+                protocol=normalize_protocol(protocol),
+                direction=normalize_direction(direction),
+                first_seen=to_iso(first_seen),
+                last_seen=to_iso(last_seen),
+            ),
             "target_context": _build_pfsense_target_context(
-                "single_target",
+                "exact_target",
+                evidence_kind="exact_target",
+                primary_destination_ip=destination_ip,
+                primary_destination_port=destination_port_int or destination_port,
                 destination_ip=destination_ip,
-                destination_port=destination_port,
-                protocol=protocol,
+                destination_port=destination_port_int or destination_port,
+                sample_destination_ips=sample_destination_ips,
+                sample_destination_ports=sample_destination_ports,
+                distinct_destination_count=1 if destination_ip else 0,
+                distinct_port_count=1 if destination_port_int is not None else 0,
+                protocol=normalize_protocol(protocol),
                 firewall_action="block",
                 attempts=event_count,
-                first_seen=str(first_seen) if first_seen else None,
-                last_seen=str(last_seen) if last_seen else None,
-                interface=interface,
-                direction=direction,
+                first_seen=to_iso(first_seen),
+                last_seen=to_iso(last_seen),
+                interface=normalize_interface(interface),
+                direction=normalize_direction(direction),
+                related_event_count=event_count,
+                evidence_window={"first_seen": to_iso(first_seen), "last_seen": to_iso(last_seen)},
             ),
         }
 
@@ -2066,6 +2188,7 @@ def _generate_pfsense_repeated_deny_alerts_core(cur, conn, source=None, source_t
                 "source_ip": source_ip,
                 "event_count": event_count,
                 "alert_id": alert_id,
+                "alert_type": "pfsense_firewall_repeated_deny",
                 "response_action": response_action,
                 "severity": severity,
             }
@@ -2130,12 +2253,17 @@ def _generate_pfsense_port_scan_alerts_core(cur, conn, source=None, source_type=
             COUNT(*) AS event_count,
             MIN(created_at) AS first_seen,
             MAX(created_at) AS last_seen,
-            (
-                ARRAY_AGG(destination_ip ORDER BY destination_event_count DESC, destination_ip ASC)
-            )[1] AS top_destination_ip,
+            CASE
+                WHEN COUNT(DISTINCT destination_ip) = 1 THEN MIN(destination_ip)
+                ELSE (
+                    ARRAY_AGG(destination_ip ORDER BY destination_event_count DESC, destination_ip ASC)
+                )[1]
+            END AS top_destination_ip,
             (
                 ARRAY_AGG(destination_port ORDER BY port_event_count DESC, destination_port ASC)
-            )[1] AS top_destination_port
+            )[1] AS top_destination_port,
+            ARRAY_AGG(DISTINCT destination_ip ORDER BY destination_ip ASC) AS destination_ips,
+            ARRAY_AGG(DISTINCT destination_port ORDER BY destination_port ASC) AS destination_ports
         FROM filtered_ports
         GROUP BY source_ip
         HAVING COUNT(DISTINCT destination_port) >= %s OR COUNT(DISTINCT destination_ip) >= %s
@@ -2156,6 +2284,8 @@ def _generate_pfsense_port_scan_alerts_core(cur, conn, source=None, source_type=
             last_seen,
             top_destination_ip,
             top_destination_port,
+            destination_ips,
+            destination_ports,
         ) = row
 
         cur.execute(
@@ -2180,55 +2310,91 @@ def _generate_pfsense_port_scan_alerts_core(cur, conn, source=None, source_type=
         # (port breadth) and one/few ports swept across many hosts (host
         # breadth). Either axis crossing its own escalation bar is sufficient;
         # they are not summed or blended into a single score.
-        severity = _pfsense_escalated_severity(
-            "medium",
-            count=distinct_port_count,
+        severity = _pfsense_port_scan_severity(
+            distinct_port_count=distinct_port_count,
+            distinct_destination_count=distinct_destination_count,
             threshold=threshold,
+            host_threshold=host_threshold,
             reputation_score=reputation_score,
         )
-        if severity != "high":
-            host_breadth_severity = _pfsense_escalated_severity(
-                "medium",
-                count=distinct_destination_count,
-                threshold=host_threshold,
-                reputation_score=reputation_score,
-            )
-            if host_breadth_severity == "high":
-                severity = "high"
 
         if _pfsense_cooldown_suppresses(cur, source_ip, "pfsense_firewall_port_scan", severity):
             continue
 
-        response_action = _pfsense_response_action_for_severity(severity)
+        sample_destination_ips = sample_ranked_values(
+            {str(value): 1 for value in destination_ips or [] if value},
+            key_type="ip",
+        )
+        sample_destination_ports = sample_ranked_values(
+            {int(value): 1 for value in destination_ports or [] if value is not None},
+            key_type="port",
+        )
+        targets_are_public = bool(sample_destination_ips) and all(is_public_ip(value) for value in sample_destination_ips)
+        scan_description = build_scan_description(
+            distinct_port_count=int(distinct_port_count or 0),
+            distinct_destination_count=int(distinct_destination_count or 0),
+            primary_destination_port=_safe_int(top_destination_port),
+            targets_are_public=targets_are_public,
+        )
+        protected_range = protected_range_key(destination_ips or [])
+        operational_flags = _build_pfsense_operational_flags(
+            alert_type="pfsense_firewall_port_scan",
+            severity=severity,
+            aggregate_eligible=severity != "high",
+            containment_eligible=severity == "high",
+        )
+        response_action = _pfsense_response_action_for_severity(
+            severity,
+            containment_eligible=operational_flags["containment_eligible"],
+        )
         response_status = "pending"
 
         country, city, latitude, longitude = _fetch_latest_honeypot_location(
             cur, source_ip, "firewall_block", source, source_type
         )
 
-        message = (
-            f"pfSense firewall scan activity suspected from {source_ip}: "
-            f"{distinct_port_count} distinct destination ports across "
-            f"{distinct_destination_count} distinct destination hosts"
-        )
+        message = f"pfSense firewall scan activity suspected from {source_ip}: {scan_description}"
 
         context = {
             "action": "block",
             "distinct_port_count": distinct_port_count,
             "distinct_destination_count": distinct_destination_count,
             "event_count": event_count,
-            "first_seen": str(first_seen) if first_seen else None,
-            "last_seen": str(last_seen) if last_seen else None,
+            "first_seen": to_iso(first_seen),
+            "last_seen": to_iso(last_seen),
+            "scan_description": scan_description,
+            "protected_range_key": protected_range,
+            "service_signature_ports": build_service_signature(destination_ports or []),
+            "notification_policy": {
+                "immediate_alert_eligible": operational_flags["immediate_alert_eligible"],
+            },
+            "operational_flags": operational_flags,
+            "related_event_filter": build_related_event_filter(
+                event_types=["firewall_block"],
+                source_ip=str(source_ip),
+                destination_ips=sample_destination_ips,
+                destination_ports=sample_destination_ports,
+                first_seen=to_iso(first_seen),
+                last_seen=to_iso(last_seen),
+            ),
             "target_context": _build_pfsense_target_context(
-                "aggregate_targets",
+                "aggregate_sample",
+                evidence_kind="aggregate_sample",
+                primary_destination_ip=top_destination_ip,
+                primary_destination_port=_safe_int(top_destination_port),
                 top_destination_ip=top_destination_ip,
-                top_destination_port=top_destination_port,
+                top_destination_port=_safe_int(top_destination_port),
+                sample_destination_ips=sample_destination_ips,
+                sample_destination_ports=sample_destination_ports,
                 distinct_destination_count=distinct_destination_count,
                 distinct_port_count=distinct_port_count,
+                protocol=None,
                 firewall_action="block",
                 attempts=event_count,
-                first_seen=str(first_seen) if first_seen else None,
-                last_seen=str(last_seen) if last_seen else None,
+                first_seen=to_iso(first_seen),
+                last_seen=to_iso(last_seen),
+                related_event_count=event_count,
+                evidence_window={"first_seen": to_iso(first_seen), "last_seen": to_iso(last_seen)},
             ),
         }
 
@@ -2286,6 +2452,7 @@ def _generate_pfsense_port_scan_alerts_core(cur, conn, source=None, source_type=
                 "source_ip": source_ip,
                 "distinct_port_count": distinct_port_count,
                 "alert_id": alert_id,
+                "alert_type": "pfsense_firewall_port_scan",
                 "response_action": response_action,
                 "severity": severity,
             }
@@ -2390,24 +2557,31 @@ def _generate_pfsense_suspicious_allow_alerts_core(cur, conn, source=None, sourc
         reputation_source = reputation["reputation_source"]
         reputation_summary = reputation["reputation_summary"]
 
-        # High severity requires repetition or corroborating context, not event
-        # count alone: known-bad reputation, enough repeated allows to rule out
-        # a one-off intentionally-forwarded port, or multiple distinct sensitive
-        # ports touched by the same source in-window. An uncorroborated single
-        # allow is real signal but not yet high-confidence.
-        if reputation_score is not None and reputation_score >= PFSENSE_HIGH_REPUTATION_SCORE:
-            severity = "high"
-        elif event_count >= high_confidence_repeat_threshold:
-            severity = "high"
-        elif distinct_port_count >= distinct_port_escalation_threshold:
-            severity = "high"
-        else:
-            severity = "medium"
+        severity = _pfsense_suspicious_allow_severity(
+            event_count=event_count,
+            distinct_port_count=distinct_port_count,
+            reputation_score=reputation_score,
+            high_confidence_repeat_threshold=high_confidence_repeat_threshold,
+            distinct_port_escalation_threshold=distinct_port_escalation_threshold,
+        )
 
         if _pfsense_cooldown_suppresses(cur, source_ip, "pfsense_firewall_suspicious_allow", severity):
             continue
 
-        response_action = _pfsense_response_action_for_severity(severity)
+        destination_port_int = parse_port(destination_port)
+        sample_destination_ips = [destination_ip] if destination_ip else []
+        sample_destination_ports = [destination_port_int] if destination_port_int is not None else []
+        operational_flags = _build_pfsense_operational_flags(
+            alert_type="pfsense_firewall_suspicious_allow",
+            severity=severity,
+            direction="in",
+            containment_eligible=severity == "high",
+            aggregate_eligible=False,
+        )
+        response_action = _pfsense_response_action_for_severity(
+            severity,
+            containment_eligible=operational_flags["containment_eligible"],
+        )
         response_status = "pending"
 
         country, city, latitude, longitude = _fetch_latest_honeypot_location(
@@ -2422,25 +2596,50 @@ def _generate_pfsense_suspicious_allow_alerts_core(cur, conn, source=None, sourc
         context = {
             "action": "pass",
             "destination_ip": destination_ip,
-            "destination_port": destination_port,
+            "destination_port": destination_port_int or destination_port,
             "protocol": protocol,
             "interface": interface,
             "direction": "in",
             "event_count": event_count,
             "distinct_sensitive_port_count": distinct_port_count,
-            "first_seen": str(first_seen) if first_seen else None,
-            "last_seen": str(last_seen) if last_seen else None,
+            "first_seen": to_iso(first_seen),
+            "last_seen": to_iso(last_seen),
+            "protected_range_key": protected_range_key(sample_destination_ips),
+            "service_signature_ports": build_service_signature([destination_port_int]),
+            "notification_policy": {
+                "immediate_alert_eligible": operational_flags["immediate_alert_eligible"],
+            },
+            "operational_flags": operational_flags,
+            "related_event_filter": build_related_event_filter(
+                event_types=["firewall_allow"],
+                source_ip=str(source_ip),
+                destination_ips=sample_destination_ips,
+                destination_ports=sample_destination_ports,
+                protocol=normalize_protocol(protocol),
+                direction="in",
+                first_seen=to_iso(first_seen),
+                last_seen=to_iso(last_seen),
+            ),
             "target_context": _build_pfsense_target_context(
-                "single_target",
+                "exact_target",
+                evidence_kind="exact_target",
+                primary_destination_ip=destination_ip,
+                primary_destination_port=destination_port_int or destination_port,
                 destination_ip=destination_ip,
-                destination_port=destination_port,
-                protocol=protocol,
+                destination_port=destination_port_int or destination_port,
+                sample_destination_ips=sample_destination_ips,
+                sample_destination_ports=sample_destination_ports,
+                distinct_destination_count=1 if destination_ip else 0,
+                distinct_port_count=1 if destination_port_int is not None else 0,
+                protocol=normalize_protocol(protocol),
                 firewall_action="pass",
                 attempts=event_count,
-                first_seen=str(first_seen) if first_seen else None,
-                last_seen=str(last_seen) if last_seen else None,
-                interface=interface,
+                first_seen=to_iso(first_seen),
+                last_seen=to_iso(last_seen),
+                interface=normalize_interface(interface),
                 direction="in",
+                related_event_count=event_count,
+                evidence_window={"first_seen": to_iso(first_seen), "last_seen": to_iso(last_seen)},
             ),
         }
 
@@ -2498,6 +2697,266 @@ def _generate_pfsense_suspicious_allow_alerts_core(cur, conn, source=None, sourc
                 "source_ip": source_ip,
                 "event_count": event_count,
                 "alert_id": alert_id,
+                "alert_type": "pfsense_firewall_suspicious_allow",
+                "response_action": response_action,
+                "severity": severity,
+            }
+        )
+
+    return alerts_created
+
+
+def _generate_pfsense_allow_after_deny_alerts_core(cur, conn, source=None, source_type=None, source_ip=None, rule_config=None):
+    rule_config = _prepare_rule_evaluation("pfsense_firewall_allow_after_deny", cur, source, source_type, rule_config)
+    if rule_config is None:
+        return []
+    source_ip = _resolve_evaluation_source_ip(cur, source_ip, source, source_type)
+    if source_ip is None:
+        return []
+
+    minimum_deny_threshold = rule_config["parameters"]["minimum_deny_threshold"]
+    window_minutes = rule_config["parameters"]["window_minutes"]
+    high_confidence_deny_threshold = rule_config["parameters"]["high_confidence_deny_threshold"]
+    sensitive_ports = list(get_effective_sensitive_ports(cur))
+
+    cur.execute(
+        f"""
+        SELECT
+            source_ip,
+            raw_payload->>'destination_ip' AS destination_ip,
+            raw_payload->>'destination_port' AS destination_port,
+            raw_payload->>'protocol' AS protocol,
+            raw_payload->>'interface' AS interface,
+            MAX(created_at) AS last_allow_at,
+            COUNT(*) AS allow_count
+        FROM events
+        WHERE event_type = 'firewall_allow'
+          AND (%s::inet IS NULL OR source_ip = %s)
+          AND source = %s
+          AND source_type = %s
+          AND COALESCE(raw_payload->>'direction', '') = 'in'
+          AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
+        GROUP BY source_ip, destination_ip, destination_port, protocol, interface
+        """,
+        (source_ip, source_ip, source, source_type),
+    )
+
+    rows = cur.fetchall()
+    alerts_created = []
+
+    for row in rows:
+        (
+            source_ip,
+            destination_ip,
+            destination_port,
+            protocol,
+            interface,
+            last_allow_at,
+            allow_count,
+        ) = row
+        destination_port_int = parse_port(destination_port)
+        if destination_port_int is None:
+            continue
+        allow_range_key = protected_range_key([destination_ip])
+        if allow_range_key is None:
+            continue
+
+        cur.execute(
+            """
+            SELECT 1 FROM alerts
+            WHERE source_ip = %s
+              AND alert_type = %s
+              AND status = 'open'
+            """,
+            (source_ip, "pfsense_firewall_allow_after_deny"),
+        )
+        if cur.fetchone():
+            continue
+
+        cur.execute(
+            """
+            SELECT
+                COUNT(*) AS deny_count,
+                COUNT(*) FILTER (
+                    WHERE raw_payload->>'destination_ip' = %s
+                ) AS exact_target_deny_count,
+                MIN(created_at) AS first_deny_at,
+                MAX(created_at) AS last_deny_at
+            FROM events
+            WHERE event_type = 'firewall_block'
+              AND source_ip = %s
+              AND source = %s
+              AND source_type = %s
+              AND COALESCE(raw_payload->>'direction', '') = 'in'
+              AND raw_payload->>'protocol' = %s
+              AND raw_payload->>'destination_port' = %s
+              AND created_at >= %s - (%s * INTERVAL '1 minute')
+              AND created_at <= %s
+            """,
+            (
+                destination_ip,
+                source_ip,
+                source,
+                source_type,
+                protocol,
+                str(destination_port_int),
+                last_allow_at,
+                window_minutes,
+                last_allow_at,
+            ),
+        )
+        deny_count, exact_target_deny_count, first_deny_at, last_deny_at = cur.fetchone() or (0, 0, None, None)
+        if int(deny_count or 0) < int(minimum_deny_threshold):
+            continue
+
+        matching_mode = "same_service_within_range"
+        severity = "medium"
+        if int(deny_count or 0) >= int(high_confidence_deny_threshold):
+            if int(exact_target_deny_count or 0) >= int(high_confidence_deny_threshold):
+                matching_mode = "exact_target"
+                severity = "high"
+            elif destination_port_int in sensitive_ports:
+                matching_mode = "sensitive_service"
+                severity = "high"
+
+        if _pfsense_cooldown_suppresses(cur, source_ip, "pfsense_firewall_allow_after_deny", severity):
+            continue
+
+        reputation = lookup_ip_reputation(str(source_ip))
+        reputation_score = reputation["reputation_score"]
+        reputation_label = reputation["reputation_label"]
+        reputation_source = reputation["reputation_source"]
+        reputation_summary = reputation["reputation_summary"]
+        operational_flags = _build_pfsense_operational_flags(
+            alert_type="pfsense_firewall_allow_after_deny",
+            severity=severity,
+            direction="in",
+            containment_eligible=severity == "high",
+            aggregate_eligible=False,
+        )
+        response_action = _pfsense_response_action_for_severity(
+            severity,
+            containment_eligible=operational_flags["containment_eligible"],
+        )
+        response_status = "pending"
+
+        country, city, latitude, longitude = _fetch_latest_honeypot_location(
+            cur, source_ip, "firewall_allow", source, source_type
+        )
+
+        message = (
+            f"pfSense allowed inbound traffic from {source_ip} after {deny_count} prior denies "
+            f"to {destination_ip}:{destination_port_int} ({protocol or 'unknown protocol'})"
+        )
+        context = {
+            "action": "pass",
+            "direction": "in",
+            "destination_ip": destination_ip,
+            "destination_port": destination_port_int,
+            "protocol": protocol,
+            "interface": interface,
+            "event_count": allow_count,
+            "first_seen": to_iso(first_deny_at),
+            "last_seen": to_iso(last_allow_at),
+            "protected_range_key": allow_range_key,
+            "service_signature_ports": [destination_port_int],
+            "progression": {
+                "matching_mode": matching_mode,
+                "qualifying_deny_count": int(deny_count or 0),
+                "exact_target_deny_count": int(exact_target_deny_count or 0),
+                "deny_first_seen": to_iso(first_deny_at),
+                "deny_last_seen": to_iso(last_deny_at),
+                "allow_seen": to_iso(last_allow_at),
+            },
+            "notification_policy": {
+                "immediate_alert_eligible": operational_flags["immediate_alert_eligible"],
+            },
+            "operational_flags": operational_flags,
+            "related_event_filter": build_related_event_filter(
+                event_types=["firewall_block", "firewall_allow"],
+                source_ip=str(source_ip),
+                destination_ips=[destination_ip] if destination_ip else [],
+                destination_ports=[destination_port_int],
+                protocol=normalize_protocol(protocol),
+                direction="in",
+                first_seen=to_iso(first_deny_at),
+                last_seen=to_iso(last_allow_at),
+            ),
+            "target_context": _build_pfsense_target_context(
+                "exact_target",
+                evidence_kind="exact_target",
+                primary_destination_ip=destination_ip,
+                primary_destination_port=destination_port_int,
+                destination_ip=destination_ip,
+                destination_port=destination_port_int,
+                sample_destination_ips=[destination_ip] if destination_ip else [],
+                sample_destination_ports=[destination_port_int],
+                distinct_destination_count=1 if destination_ip else 0,
+                distinct_port_count=1,
+                protocol=normalize_protocol(protocol),
+                firewall_action="pass",
+                attempts=allow_count,
+                first_seen=to_iso(first_deny_at),
+                last_seen=to_iso(last_allow_at),
+                interface=normalize_interface(interface),
+                direction="in",
+                related_event_count=int(deny_count or 0) + int(allow_count or 0),
+                evidence_window={"first_seen": to_iso(first_deny_at), "last_seen": to_iso(last_allow_at)},
+            ),
+        }
+
+        cur.execute(
+            """
+            INSERT INTO alerts (
+                source_ip,
+                alert_type,
+                severity,
+                source,
+                source_type,
+                message,
+                status,
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary,
+                context
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                source_ip,
+                "pfsense_firewall_allow_after_deny",
+                severity,
+                source,
+                source_type,
+                message,
+                "open",
+                response_action,
+                response_status,
+                country,
+                city,
+                latitude,
+                longitude,
+                reputation_score,
+                reputation_label,
+                reputation_source,
+                reputation_summary,
+                Json(context),
+            ),
+        )
+        cur.execute("SELECT currval(pg_get_serial_sequence('alerts', 'id'))")
+        alert_id = cur.fetchone()[0]
+        alerts_created.append(
+            {
+                "source_ip": source_ip,
+                "alert_id": alert_id,
+                "alert_type": "pfsense_firewall_allow_after_deny",
                 "response_action": response_action,
                 "severity": severity,
             }
@@ -2626,19 +3085,35 @@ def _generate_pfsense_noisy_source_alerts_core(cur, conn, source=None, source_ty
 
         context = {
             "event_count": event_count,
-            "first_seen": str(first_seen) if first_seen else None,
-            "last_seen": str(last_seen) if last_seen else None,
+            "first_seen": to_iso(first_seen),
+            "last_seen": to_iso(last_seen),
             "suppressed": True,
+            "notification_policy": {"immediate_alert_eligible": False},
+            "operational_flags": _build_pfsense_operational_flags(
+                alert_type="pfsense_firewall_noisy_source",
+                severity="low",
+                aggregate_eligible=False,
+                containment_eligible=False,
+            ),
             "target_context": _build_pfsense_target_context(
-                "aggregate_targets",
+                "aggregate_sample",
+                evidence_kind="aggregate_sample",
+                primary_destination_ip=top_destination_ip,
+                primary_destination_port=_safe_int(top_destination_port),
                 top_destination_ip=top_destination_ip,
-                top_destination_port=top_destination_port,
+                top_destination_port=_safe_int(top_destination_port),
+                sample_destination_ips=[top_destination_ip] if top_destination_ip else [],
+                sample_destination_ports=[
+                    _safe_int(top_destination_port)
+                ] if _safe_int(top_destination_port) is not None else [],
                 distinct_destination_count=distinct_destination_count,
                 distinct_port_count=distinct_port_count,
                 firewall_action=firewall_action,
                 attempts=event_count,
-                first_seen=str(first_seen) if first_seen else None,
-                last_seen=str(last_seen) if last_seen else None,
+                first_seen=to_iso(first_seen),
+                last_seen=to_iso(last_seen),
+                related_event_count=event_count,
+                evidence_window={"first_seen": to_iso(first_seen), "last_seen": to_iso(last_seen)},
             ),
         }
 
@@ -2696,6 +3171,7 @@ def _generate_pfsense_noisy_source_alerts_core(cur, conn, source=None, source_ty
                 "source_ip": source_ip,
                 "event_count": event_count,
                 "alert_id": alert_id,
+                "alert_type": "pfsense_firewall_noisy_source",
                 "response_action": response_action,
                 "severity": severity,
             }

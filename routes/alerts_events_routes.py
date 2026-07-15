@@ -13,6 +13,7 @@ from core.pfsense_operational_baseline import (
     build_pfsense_alert_baseline_filter,
     normalize_operational_scope,
 )
+from core.recon_activity_store import get_recon_activity_detail, list_recon_activities
 from core.soar_response_outcomes import (
     build_latest_outcome_api_shape,
     get_latest_decisions_for_alerts_bulk,
@@ -41,6 +42,7 @@ PFSENSE_ALERT_TYPES = frozenset(
         "pfsense_firewall_port_scan",
         "pfsense_firewall_suspicious_allow",
         "pfsense_firewall_noisy_source",
+        "pfsense_firewall_allow_after_deny",
     }
 )
 PFSENSE_WHY_FIRED_LABELS = {
@@ -54,6 +56,7 @@ PFSENSE_WHY_FIRED_LABELS = {
     "distinct_port_count": "Distinct destination ports",
     "distinct_destination_count": "Distinct destination hosts",
     "distinct_sensitive_port_count": "Distinct sensitive ports",
+    "scan_description": "Scan description",
     "first_seen": "First seen",
     "last_seen": "Last seen",
 }
@@ -458,6 +461,7 @@ def _build_pfsense_quality_metadata(row, cooldown_by_alert_id: dict[int, dict]):
         "why_fired_available": True,
         "suppressed_rollup": bool(context.get("suppressed")),
         "cooldown": cooldown,
+        "recon_activity": context.get("recon_activity") if isinstance(context.get("recon_activity"), dict) else None,
     }
 
 
@@ -496,6 +500,7 @@ def _build_pfsense_why_fired_payload(row, cooldown_by_alert_id: dict[int, dict])
         ),
         "pfsense_firewall_port_scan": (
             "action",
+            "scan_description",
             "distinct_port_count",
             "distinct_destination_count",
             "first_seen",
@@ -506,6 +511,17 @@ def _build_pfsense_why_fired_payload(row, cooldown_by_alert_id: dict[int, dict])
             "direction",
             "event_count",
             "distinct_sensitive_port_count",
+            "destination_ip",
+            "destination_port",
+            "protocol",
+            "interface",
+            "first_seen",
+            "last_seen",
+        ),
+        "pfsense_firewall_allow_after_deny": (
+            "action",
+            "direction",
+            "event_count",
             "destination_ip",
             "destination_port",
             "protocol",
@@ -554,6 +570,70 @@ def _build_pfsense_why_fired_payload(row, cooldown_by_alert_id: dict[int, dict])
         "suppressed_rollup": bool(context.get("suppressed")),
         "cooldown": cooldown,
     }
+
+
+def _query_related_pfsense_events(cur, related_filter: dict, *, limit: int = 25):
+    event_types = [value for value in related_filter.get("event_types") or [] if value]
+    if not event_types:
+        return []
+
+    clauses = ["source = 'pfsense'", "source_type = 'firewall'", "event_type = ANY(%s)"]
+    params: list = [event_types]
+    source_ip = related_filter.get("source_ip")
+    if source_ip:
+        clauses.append("source_ip = %s::inet")
+        params.append(source_ip)
+    destination_ips = [value for value in related_filter.get("destination_ips") or [] if value]
+    if destination_ips:
+        clauses.append("raw_payload->>'destination_ip' = ANY(%s)")
+        params.append(destination_ips)
+    destination_ports = [str(int(value)) for value in related_filter.get("destination_ports") or [] if value is not None]
+    if destination_ports:
+        clauses.append("raw_payload->>'destination_port' = ANY(%s)")
+        params.append(destination_ports)
+    protocol = related_filter.get("protocol")
+    if protocol:
+        clauses.append("raw_payload->>'protocol' = %s")
+        params.append(protocol)
+    direction = related_filter.get("direction")
+    if direction:
+        clauses.append("COALESCE(raw_payload->>'direction', '') = %s")
+        params.append(direction)
+    first_seen = related_filter.get("first_seen")
+    if first_seen:
+        clauses.append("created_at >= %s::timestamptz")
+        params.append(first_seen)
+    last_seen = related_filter.get("last_seen")
+    if last_seen:
+        clauses.append("created_at <= %s::timestamptz")
+        params.append(last_seen)
+
+    query = f"""
+        SELECT
+            id,
+            event_type,
+            host(source_ip),
+            message,
+            created_at,
+            raw_payload
+        FROM events
+        WHERE {' AND '.join(clauses)}
+        ORDER BY created_at DESC, id DESC
+        LIMIT %s
+    """
+    params.append(max(1, min(int(limit), 100)))
+    cur.execute(query, params)
+    return [
+        {
+            "id": row[0],
+            "event_type": row[1],
+            "source_ip": row[2],
+            "message": row[3],
+            "created_at": row[4].isoformat() if row[4] else None,
+            "raw_payload": row[5],
+        }
+        for row in cur.fetchall()
+    ]
 
 
 def _build_alert_payload(
@@ -786,6 +866,106 @@ def get_pfsense_why_fired(alert_id):
         return jsonify(payload), 200
     except Exception as error:
         current_app.logger.error("Error in get_pfsense_why_fired: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+
+@alerts_events_bp.route("/alerts/<int:alert_id>/related-events", methods=["GET"])
+@login_required
+def get_alert_related_events(alert_id):
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(f"{_ALERT_SELECT} WHERE id = %s", (alert_id,))
+        row = cur.fetchone()
+        if row is None:
+            return jsonify({"error": "Alert not found"}), 404
+        context = row[19] if isinstance(row[19], dict) else {}
+        related_filter = context.get("related_event_filter") if isinstance(context.get("related_event_filter"), dict) else {}
+        events = _query_related_pfsense_events(cur, related_filter, limit=request.args.get("limit", 25))
+        return jsonify({"alert_id": alert_id, "events": events, "count": len(events)}), 200
+    except Exception as error:
+        current_app.logger.error("Error in get_alert_related_events: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+
+@alerts_events_bp.route("/recon-activities", methods=["GET"])
+@login_required
+def get_recon_activities():
+    conn = None
+    try:
+        conn = get_db_connection()
+        status = _normalize_alert_filter_value(request.args.get("status"))
+        limit, limit_error = _parse_non_negative_int(request.args.get("limit"), 20, "limit")
+        if limit_error:
+            return jsonify({"error": limit_error}), 400
+        items = list_recon_activities(conn, status=status, limit=limit or 20)
+        return jsonify({"items": items, "count": len(items)}), 200
+    except Exception as error:
+        current_app.logger.error("Error in get_recon_activities: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@alerts_events_bp.route("/recon-activities/<int:activity_id>", methods=["GET"])
+@login_required
+def get_recon_activity(activity_id):
+    conn = None
+    try:
+        conn = get_db_connection()
+        payload = get_recon_activity_detail(conn, activity_id)
+        if payload is None:
+            return jsonify({"error": "Recon activity not found"}), 404
+        return jsonify(payload), 200
+    except Exception as error:
+        current_app.logger.error("Error in get_recon_activity: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@alerts_events_bp.route("/recon-activities/<int:activity_id>/related-events", methods=["GET"])
+@login_required
+def get_recon_activity_related_events(activity_id):
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        payload = get_recon_activity_detail(conn, activity_id)
+        if payload is None:
+            return jsonify({"error": "Recon activity not found"}), 404
+        cur = conn.cursor()
+        summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        target_context = summary.get("target_context") if isinstance(summary.get("target_context"), dict) else {}
+        first_seen = payload.get("first_seen")
+        last_seen = payload.get("last_seen")
+        representative_sources = summary.get("representative_sources") or []
+        related_filter = {
+            "event_types": ["firewall_block", "firewall_allow"],
+            "source_ip": representative_sources[0] if representative_sources else None,
+            "destination_ips": target_context.get("sample_destination_ips") or [],
+            "destination_ports": target_context.get("sample_destination_ports") or [],
+            "first_seen": first_seen,
+            "last_seen": last_seen,
+        }
+        events = _query_related_pfsense_events(cur, related_filter, limit=request.args.get("limit", 25))
+        return jsonify({"activity_id": activity_id, "events": events, "count": len(events)}), 200
+    except Exception as error:
+        current_app.logger.error("Error in get_recon_activity_related_events: %s", error)
         return jsonify({"error": "Internal server error"}), 500
     finally:
         if cur:

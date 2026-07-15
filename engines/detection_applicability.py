@@ -70,6 +70,7 @@ RULE_APPLICABILITY = MappingProxyType(
         "pfsense_firewall_port_scan": RuleApplicability("source_specific", frozenset({PFSENSE})),
         "pfsense_firewall_noisy_source": RuleApplicability("source_specific", frozenset({PFSENSE})),
         "pfsense_firewall_suspicious_allow": RuleApplicability("source_specific", frozenset({PFSENSE})),
+        "pfsense_firewall_allow_after_deny": RuleApplicability("source_specific", frozenset({PFSENSE})),
     }
 )
 

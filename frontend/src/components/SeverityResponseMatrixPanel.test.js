@@ -74,3 +74,42 @@ test("navigates to linked workspaces", async () => {
   await waitFor(() => expect(onNavigate).toHaveBeenNthCalledWith(1, "detection-rules"));
   expect(onNavigate).toHaveBeenNthCalledWith(2, "notification-policy");
 });
+
+test("renders backend-authored pfSense severity wording without inventing critical escalation", async () => {
+  service.loadSeverityResponseMatrix.mockResolvedValue({
+    ...matrix,
+    rules: [
+      {
+        rule_id: "pfsense_firewall_port_scan",
+        display_name: "pfSense Port Scan",
+        default_severity: "medium",
+        escalation_conditions: "High requires materially stronger breadth, progression, or corroboration. Reputation alone is insufficient.",
+        maximum_severity: "high",
+        creates_incident: "Only when approved High source-specific behavior remains incident-eligible.",
+        notification_behavior: "Commodity aggregate member alerts stay dashboard-only; the recon aggregate opens once when policy-eligible and updates only on material change.",
+        response_playbook_behavior: "Investigation by default. No automatic containment.",
+        why: "Routine inbound commodity scanning should remain visible without being overstated as likely compromise.",
+      },
+      {
+        rule_id: "pfsense_firewall_allow_after_deny",
+        display_name: "pfSense Allow After Deny",
+        default_severity: "medium",
+        escalation_conditions: "High requires repeated denies plus exact target or sensitive-service progression, or corroboration.",
+        maximum_severity: "high",
+        creates_incident: "High only.",
+        notification_behavior: "Immediate only for approved High progression behavior.",
+        response_playbook_behavior: "Approval-gated containment only for High. Never automatic blocking.",
+        why: "Allow-after-deny is suspicious progression, but not every allow merits escalation.",
+      },
+    ],
+  });
+
+  render(<SeverityResponseMatrixPanel {...props} />);
+
+  expect(await screen.findByText("pfSense Port Scan")).toBeInTheDocument();
+  expect(screen.getByText("pfSense Allow After Deny")).toBeInTheDocument();
+  expect(screen.getAllByText("high").length).toBeGreaterThan(0);
+  expect(screen.getByText(/Reputation alone is insufficient/)).toBeInTheDocument();
+  expect(screen.getByText(/Never automatic blocking/)).toBeInTheDocument();
+  expect(screen.queryByText("maximum_severity: critical")).not.toBeInTheDocument();
+});

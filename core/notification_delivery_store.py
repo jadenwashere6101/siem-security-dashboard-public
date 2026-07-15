@@ -137,6 +137,7 @@ def _row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
         incident_id,
         approval_request_id,
         alert_id,
+        recon_activity_id,
         adapter_name,
         action,
         requested_at,
@@ -161,6 +162,7 @@ def _row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
         "incident_id": incident_id,
         "approval_request_id": approval_request_id,
         "alert_id": alert_id,
+        "recon_activity_id": recon_activity_id,
         "adapter_name": adapter_name,
         "action": action,
         "requested_at": _iso(requested_at),
@@ -177,7 +179,7 @@ def _row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
 
 _COLUMNS = (
     "id, correlation_id, idempotency_key, provider, mode, status, "
-    "playbook_execution_id, playbook_step_index, incident_id, approval_request_id, alert_id, "
+    "playbook_execution_id, playbook_step_index, incident_id, approval_request_id, alert_id, recon_activity_id, "
     "adapter_name, action, requested_at, started_at, completed_at, created_at, "
     "failure_code, failure_message, timeout_seconds, circuit_breaker_state, metadata"
 )
@@ -199,6 +201,7 @@ def create_notification_delivery_attempt(
     incident_id: int | None = None,
     approval_request_id: int | None = None,
     alert_id: int | None = None,
+    recon_activity_id: int | None = None,
     requested_at: datetime | None = None,
     started_at: datetime | None = None,
     completed_at: datetime | None = None,
@@ -248,6 +251,7 @@ def create_notification_delivery_attempt(
                 incident_id,
                 approval_request_id,
                 alert_id,
+                recon_activity_id,
                 adapter_name,
                 action,
                 requested_at,
@@ -262,6 +266,7 @@ def create_notification_delivery_attempt(
             VALUES (
                 %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s,
+                %s,
                 %s, %s,
                 COALESCE(%s, NOW()),
                 %s, %s,
@@ -281,6 +286,7 @@ def create_notification_delivery_attempt(
                 incident_id,
                 approval_request_id,
                 alert_id,
+                recon_activity_id,
                 adapter_name.strip(),
                 action.strip(),
                 requested_at,
@@ -324,6 +330,7 @@ def list_notification_delivery_attempts(
     incident_id: int | None = None,
     approval_request_id: int | None = None,
     alert_id: int | None = None,
+    recon_activity_id: int | None = None,
     adapter_name: str | None = None,
     action: str | None = None,
 ) -> list[dict[str, Any]]:
@@ -372,6 +379,9 @@ def list_notification_delivery_attempts(
     if alert_id is not None:
         clauses.append("alert_id = %s")
         params.append(alert_id)
+    if recon_activity_id is not None:
+        clauses.append("recon_activity_id = %s")
+        params.append(recon_activity_id)
     if adapter_name is not None:
         clauses.append("adapter_name = %s")
         params.append(adapter_name.strip())

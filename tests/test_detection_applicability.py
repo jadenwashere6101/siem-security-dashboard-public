@@ -18,7 +18,7 @@ import engines.detection_engine as detection_engine
 def test_registry_is_immutable_complete_and_nonempty():
     assert isinstance(RULE_APPLICABILITY, MappingProxyType)
     validate_rule_inventory(get_detection_rule_defaults())
-    assert len(RULE_APPLICABILITY) == 16
+    assert len(RULE_APPLICABILITY) == 17
     assert all(item.allowed_sources for item in RULE_APPLICABILITY.values())
 
 
