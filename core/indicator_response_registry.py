@@ -561,6 +561,28 @@ def get_registry_detail(conn, registry_id: int) -> dict[str, Any] | None:
     if record.get("active_incident_id") and record["active_incident_id"] not in related_incident_ids:
         related_incident_ids.append(record["active_incident_id"])
 
+    cur.execute(
+        """
+        SELECT DISTINCT playbook_execution_id
+        FROM indicator_response_events
+        WHERE registry_id = %s AND playbook_execution_id IS NOT NULL
+        ORDER BY playbook_execution_id
+        """,
+        (registry_id,),
+    )
+    related_playbook_execution_ids = [row[0] for row in cur.fetchall()]
+
+    cur.execute(
+        """
+        SELECT DISTINCT approval_request_id
+        FROM indicator_response_events
+        WHERE registry_id = %s AND approval_request_id IS NOT NULL
+        ORDER BY approval_request_id
+        """,
+        (registry_id,),
+    )
+    related_approval_request_ids = [row[0] for row in cur.fetchall()]
+
     latest = events[0] if events else None
     disposition = record.get("current_disposition")
     enforcement = (latest or {}).get("enforcement") or "none"
@@ -573,6 +595,121 @@ def get_registry_detail(conn, registry_id: int) -> dict[str, Any] | None:
     else:
         enforcement_statement = f"Enforcement mode: {enforcement}"
 
+    primary_alert_id = (latest or {}).get("alert_id") or (
+        related_alert_ids[0] if related_alert_ids else None
+    )
+    primary_incident_id = (
+        (latest or {}).get("incident_id")
+        or record.get("active_incident_id")
+        or (related_incident_ids[0] if related_incident_ids else None)
+    )
+    primary_playbook_execution_id = (latest or {}).get("playbook_execution_id") or (
+        related_playbook_execution_ids[0] if related_playbook_execution_ids else None
+    )
+    primary_approval_request_id = (latest or {}).get("approval_request_id") or (
+        related_approval_request_ids[0] if related_approval_request_ids else None
+    )
+
+    primary_alert = None
+    if primary_alert_id is not None:
+        cur.execute(
+            """
+            SELECT id, alert_type, severity, host(source_ip), message
+            FROM alerts
+            WHERE id = %s
+            """,
+            (primary_alert_id,),
+        )
+        arow = cur.fetchone()
+        if arow:
+            primary_alert = {
+                "id": arow[0],
+                "alert_type": arow[1],
+                "severity": arow[2],
+                "source_ip": arow[3],
+                "message": arow[4],
+            }
+
+    primary_incident = None
+    if primary_incident_id is not None:
+        cur.execute(
+            """
+            SELECT id, title, status, priority, severity, host(source_ip)
+            FROM incidents
+            WHERE id = %s
+            """,
+            (primary_incident_id,),
+        )
+        irow = cur.fetchone()
+        if irow:
+            primary_incident = {
+                "id": irow[0],
+                "title": irow[1],
+                "status": irow[2],
+                "priority": irow[3],
+                "severity": irow[4],
+                "source_ip": irow[5],
+            }
+
+    primary_playbook_execution = None
+    if primary_playbook_execution_id is not None:
+        cur.execute(
+            """
+            SELECT
+                pe.id,
+                pe.playbook_id,
+                pe.status,
+                pe.alert_id,
+                pe.incident_id,
+                COALESCE(host(a.source_ip), host(i.source_ip))
+            FROM playbook_executions pe
+            LEFT JOIN alerts a ON a.id = pe.alert_id
+            LEFT JOIN incidents i ON i.id = pe.incident_id
+            WHERE pe.id = %s
+            """,
+            (primary_playbook_execution_id,),
+        )
+        prow = cur.fetchone()
+        if prow:
+            primary_playbook_execution = {
+                "id": prow[0],
+                "playbook_id": prow[1],
+                "status": prow[2],
+                "alert_id": prow[3],
+                "incident_id": prow[4],
+                "source_ip": prow[5],
+            }
+
+    primary_approval_request = None
+    if primary_approval_request_id is not None:
+        cur.execute(
+            """
+            SELECT
+                ar.id,
+                ar.status,
+                ar.risk_level,
+                pe.alert_id,
+                COALESCE(ar.incident_id, pe.incident_id),
+                ar.queue_id,
+                ar.playbook_execution_id
+            FROM approval_requests ar
+            LEFT JOIN playbook_executions pe ON pe.id = ar.playbook_execution_id
+            WHERE ar.id = %s
+            """,
+            (primary_approval_request_id,),
+        )
+        prow = cur.fetchone()
+        if prow:
+            primary_approval_request = {
+                "id": prow[0],
+                "status": prow[1],
+                "risk_level": prow[2],
+                "alert_id": prow[3],
+                "incident_id": prow[4],
+                "queue_id": prow[5],
+                "playbook_execution_id": prow[6],
+            }
+
     return {
         "record": record,
         "events": events,
@@ -581,12 +718,42 @@ def get_registry_detail(conn, registry_id: int) -> dict[str, Any] | None:
         "related_incident_ids": related_incident_ids,
         "related_alert_count": len(related_alert_ids),
         "related_incident_count": len(related_incident_ids),
+        "related_playbook_execution_ids": related_playbook_execution_ids,
+        "related_playbook_execution_count": len(related_playbook_execution_ids),
+        "related_approval_request_ids": related_approval_request_ids,
+        "related_approval_request_count": len(related_approval_request_ids),
         "enforcement": enforcement,
         "enforcement_statement": enforcement_statement,
         "first_seen": record.get("created_at"),
         "last_updated": record.get("updated_at"),
         "response_source": (latest or {}).get("origin_surface"),
         "latest_event": latest,
+        "relationships": {
+            "alerts": {
+                "count": len(related_alert_ids),
+                "ids": related_alert_ids,
+                "primary_id": primary_alert_id,
+            },
+            "incidents": {
+                "count": len(related_incident_ids),
+                "ids": related_incident_ids,
+                "primary_id": primary_incident_id,
+            },
+            "playbooks": {
+                "count": len(related_playbook_execution_ids),
+                "ids": related_playbook_execution_ids,
+                "primary_id": primary_playbook_execution_id,
+            },
+            "approvals": {
+                "count": len(related_approval_request_ids),
+                "ids": related_approval_request_ids,
+                "primary_id": primary_approval_request_id,
+            },
+        },
+        "primary_alert": primary_alert,
+        "primary_incident": primary_incident,
+        "primary_playbook_execution": primary_playbook_execution,
+        "primary_approval_request": primary_approval_request,
     }
 
 

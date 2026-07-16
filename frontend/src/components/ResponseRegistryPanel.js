@@ -7,7 +7,18 @@ import {
   loadRegistryRecords,
 } from "../services/responseRegistryService";
 import { formatTimestamp } from "../utils/displayFormatting";
-import { formatCanonicalActionSuccess } from "../utils/responseStateLabels";
+import {
+  actionSummaryLabel,
+  dispositionSummaryLabel,
+  formatCanonicalActionSuccess,
+} from "../utils/responseStateLabels";
+import {
+  registryActionLabel,
+  registryInvestigateTarget,
+  registryOutcomeLabel,
+  registryOutcomeTone,
+  registryRecommendedNextStep,
+} from "../utils/responseRegistryPresentation";
 import { keysOverlap, useResponseSync } from "../context/ResponseSyncContext";
 
 const PAGE_SIZE = 50;
@@ -69,6 +80,64 @@ const inputStyle = {
   fontSize: "13px",
 };
 
+const outcomeToneStyles = {
+  success: {
+    color: "#86efac",
+    backgroundColor: "rgba(34, 197, 94, 0.12)",
+    border: "1px solid rgba(34, 197, 94, 0.30)",
+  },
+  warning: {
+    color: "#fcd34d",
+    backgroundColor: "rgba(251, 191, 36, 0.12)",
+    border: "1px solid rgba(251, 191, 36, 0.30)",
+  },
+  info: {
+    color: "#93c5fd",
+    backgroundColor: "rgba(59, 130, 246, 0.12)",
+    border: "1px solid rgba(59, 130, 246, 0.30)",
+  },
+  neutral: {
+    color: "#c9d1d9",
+    backgroundColor: "rgba(148, 163, 184, 0.10)",
+    border: "1px solid rgba(148, 163, 184, 0.24)",
+  },
+  danger: {
+    color: "#fca5a5",
+    backgroundColor: "rgba(239, 68, 68, 0.14)",
+    border: "1px solid rgba(239, 68, 68, 0.34)",
+  },
+};
+
+const linkButtonStyle = {
+  background: "transparent",
+  border: "1px solid #388bfd",
+  color: "#58a6ff",
+  borderRadius: "999px",
+  padding: "4px 10px",
+  cursor: "pointer",
+  fontSize: "12px",
+};
+
+function outcomeBadgeStyle(label) {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    padding: "4px 8px",
+    borderRadius: "999px",
+    fontSize: "12px",
+    fontWeight: 600,
+    ...(outcomeToneStyles[registryOutcomeTone(label)] || outcomeToneStyles.neutral),
+  };
+}
+
+function summaryValueStyle(mono = false) {
+  return {
+    margin: 0,
+    fontFamily: mono ? "monospace" : "inherit",
+    color: "#e6edf3",
+  };
+}
+
 function dispositionLabel(value) {
   if (!value) return "—";
   return String(value).replace(/_/g, " ");
@@ -84,6 +153,11 @@ function ResponseRegistryPanel({
   canTakeAlertActions = false,
   initialView = "all",
   navigationRequest = null,
+  onOpenAlert = null,
+  onOpenIncident = null,
+  onOpenPlaybookExecution = null,
+  onOpenApproval = null,
+  onOpenSourceContext = null,
 }) {
   const { publishMutation, subscribe } = useResponseSync();
   const [view, setView] = useState(initialView || "all");
@@ -95,6 +169,8 @@ function ResponseRegistryPanel({
   const [error, setError] = useState("");
   const [relatedAlertId, setRelatedAlertId] = useState(null);
   const [relatedIncidentId, setRelatedIncidentId] = useState(null);
+  const [relatedPlaybookExecutionId, setRelatedPlaybookExecutionId] = useState(null);
+  const [relatedApprovalRequestId, setRelatedApprovalRequestId] = useState(null);
   const [feedback, setFeedback] = useState({ type: "", message: "" });
 
   const [search, setSearch] = useState("");
@@ -114,8 +190,9 @@ function ResponseRegistryPanel({
   const [noteText, setNoteText] = useState("");
   const [monitorExpiry, setMonitorExpiry] = useState("");
   const [trackReason, setTrackReason] = useState("");
-  const [escalateReason, setEscalateReason] = useState("");
+  const [incidentReason, setIncidentReason] = useState("");
   const submitLockRef = useRef(false);
+  const lastRequestedOffsetRef = useRef(0);
 
   useEffect(() => {
     setView(initialView || "all");
@@ -133,6 +210,8 @@ function ResponseRegistryPanel({
     }
     setRelatedAlertId(navigationRequest.relatedAlertId || null);
     setRelatedIncidentId(navigationRequest.relatedIncidentId || null);
+    setRelatedPlaybookExecutionId(navigationRequest.relatedPlaybookExecutionId || null);
+    setRelatedApprovalRequestId(navigationRequest.relatedApprovalRequestId || null);
     setSelectedId(null);
     setDetail(null);
   }, [navigationRequest]);
@@ -140,6 +219,7 @@ function ResponseRegistryPanel({
   const loadList = useCallback(
     async ({ quiet = false, nextOffset = offset } = {}) => {
       try {
+        lastRequestedOffsetRef.current = nextOffset;
         if (quiet) {
           setRefreshing(true);
         } else {
@@ -225,6 +305,8 @@ function ResponseRegistryPanel({
           "blocklist",
           relatedAlertId ? `alert:${relatedAlertId}` : null,
           relatedIncidentId ? `incident:${relatedIncidentId}` : null,
+          relatedPlaybookExecutionId ? `playbook_execution:${relatedPlaybookExecutionId}` : null,
+          relatedApprovalRequestId ? `approval_request:${relatedApprovalRequestId}` : null,
         ].filter(Boolean))
       ) {
         loadList({ quiet: true, nextOffset: offset });
@@ -233,7 +315,17 @@ function ResponseRegistryPanel({
         }
       }
     });
-  }, [subscribe, loadList, loadDetail, offset, selectedId, relatedAlertId, relatedIncidentId]);
+  }, [
+    subscribe,
+    loadList,
+    loadDetail,
+    offset,
+    selectedId,
+    relatedAlertId,
+    relatedIncidentId,
+    relatedPlaybookExecutionId,
+    relatedApprovalRequestId,
+  ]);
 
   useEffect(() => {
     if (selectedId) {
@@ -251,6 +343,36 @@ function ResponseRegistryPanel({
   const record = detail?.record;
   const canMutate = Boolean(canTakeAlertActions);
   const restrictionTitle = "Viewers can review registry history but cannot mutate responses.";
+  const latestEvent = detail?.latest_event ?? null;
+  const currentOutcomeLabel = useMemo(
+    () =>
+      registryOutcomeLabel({
+        currentDisposition: record?.current_disposition,
+        latestOutcome: latestEvent?.outcome,
+        latestRequestedAction: latestEvent?.requested_action,
+        enforcement: latestEvent?.enforcement || detail?.enforcement,
+        safeMetadata: latestEvent?.safe_metadata || {},
+      }),
+    [detail?.enforcement, latestEvent, record?.current_disposition]
+  );
+  const investigateTarget = useMemo(
+    () =>
+      registryInvestigateTarget(detail, {
+        relatedAlertId,
+        relatedIncidentId,
+        sourceIp: record?.indicator_value,
+      }),
+    [detail, record?.indicator_value, relatedAlertId, relatedIncidentId]
+  );
+  const recommendedNextStep = useMemo(
+    () =>
+      registryRecommendedNextStep(detail, {
+        relatedAlertId,
+        relatedIncidentId,
+        sourceIp: record?.indicator_value,
+      }),
+    [detail, record?.indicator_value, relatedAlertId, relatedIncidentId]
+  );
 
   const runCommand = async (action, extras = {}) => {
     if (!canMutate || !record || submitLockRef.current) return;
@@ -266,6 +388,30 @@ function ResponseRegistryPanel({
         indicatorValue,
         reason: extras.reason,
         expiresAt: extras.expiresAt,
+        alertId:
+          extras.alertId ??
+          detail?.relationships?.alerts?.primary_id ??
+          latestEvent?.alert_id ??
+          relatedAlertId ??
+          null,
+        incidentId:
+          extras.incidentId ??
+          detail?.relationships?.incidents?.primary_id ??
+          latestEvent?.incident_id ??
+          relatedIncidentId ??
+          null,
+        playbookExecutionId:
+          extras.playbookExecutionId ??
+          detail?.relationships?.playbooks?.primary_id ??
+          latestEvent?.playbook_execution_id ??
+          relatedPlaybookExecutionId ??
+          null,
+        approvalRequestId:
+          extras.approvalRequestId ??
+          detail?.relationships?.approvals?.primary_id ??
+          latestEvent?.approval_request_id ??
+          relatedApprovalRequestId ??
+          null,
         idempotencyKey:
           extras.idempotencyKey ||
           `${action}-${record.id}-${Date.now()}`,
@@ -276,7 +422,7 @@ function ResponseRegistryPanel({
       });
       setNoteText("");
       setTrackReason("");
-      setEscalateReason("");
+      setIncidentReason("");
       setMonitorExpiry("");
       publishMutation(result.affected_resource_keys || [], { action, result });
       await loadDetail(record.id);
@@ -298,6 +444,64 @@ function ResponseRegistryPanel({
     setDetailError("");
     setFeedback({ type: "", message: "" });
   };
+
+  const handleInvestigate = useCallback(() => {
+    if (investigateTarget.kind === "incident" && typeof onOpenIncident === "function") {
+      onOpenIncident(investigateTarget.id);
+      return;
+    }
+    if (investigateTarget.kind === "alert" && typeof onOpenAlert === "function") {
+      onOpenAlert(investigateTarget.id, investigateTarget.sourceIp || record?.indicator_value || "");
+      return;
+    }
+    if (investigateTarget.kind === "source_ip" && typeof onOpenSourceContext === "function") {
+      onOpenSourceContext(investigateTarget.sourceIp);
+      return;
+    }
+    setFeedback({
+      type: "info",
+      message: investigateTarget.label,
+    });
+  }, [investigateTarget, onOpenIncident, onOpenAlert, onOpenSourceContext, record?.indicator_value]);
+
+  const openRelationship = useCallback(
+    (kind) => {
+      if (kind === "alerts" && typeof onOpenAlert === "function") {
+        const primaryId = detail?.relationships?.alerts?.primary_id;
+        const sourceIp = detail?.primary_alert?.source_ip || record?.indicator_value || "";
+        if (primaryId != null) {
+          onOpenAlert(primaryId, sourceIp);
+          return;
+        }
+      }
+      if (kind === "incidents" && typeof onOpenIncident === "function") {
+        const primaryId = detail?.relationships?.incidents?.primary_id;
+        if (primaryId != null) {
+          onOpenIncident(primaryId);
+          return;
+        }
+      }
+      if (kind === "playbooks" && typeof onOpenPlaybookExecution === "function") {
+        const primaryId = detail?.relationships?.playbooks?.primary_id;
+        if (primaryId != null) {
+          onOpenPlaybookExecution(primaryId);
+          return;
+        }
+      }
+      if (kind === "approvals" && typeof onOpenApproval === "function") {
+        const primaryId = detail?.relationships?.approvals?.primary_id;
+        if (primaryId != null) {
+          onOpenApproval(primaryId);
+          return;
+        }
+      }
+      setFeedback({
+        type: "info",
+        message: `No linked ${kind} destination is available for this record.`,
+      });
+    },
+    [detail, onOpenAlert, onOpenApproval, onOpenIncident, onOpenPlaybookExecution, record?.indicator_value]
+  );
 
   return (
     <section
@@ -490,7 +694,11 @@ function ResponseRegistryPanel({
           }}
         >
           {error}{" "}
-          <button type="button" onClick={() => loadList({ nextOffset: 0 })} style={secondaryButtonStyle(false)}>
+          <button
+            type="button"
+            onClick={() => loadList({ nextOffset: lastRequestedOffsetRef.current })}
+            style={secondaryButtonStyle(false)}
+          >
             Retry
           </button>
         </div>
@@ -503,9 +711,25 @@ function ResponseRegistryPanel({
             marginBottom: "12px",
             padding: "10px 12px",
             borderRadius: "6px",
-            border: `1px solid ${feedback.type === "error" ? "#f85149" : "#238636"}`,
-            color: feedback.type === "error" ? "#ffa198" : "#3fb950",
-            background: feedback.type === "error" ? "#3d1214" : "#0d2818",
+            border: `1px solid ${
+              feedback.type === "error"
+                ? "#f85149"
+                : feedback.type === "info"
+                ? "#388bfd"
+                : "#238636"
+            }`,
+            color:
+              feedback.type === "error"
+                ? "#ffa198"
+                : feedback.type === "info"
+                ? "#93c5fd"
+                : "#3fb950",
+            background:
+              feedback.type === "error"
+                ? "#3d1214"
+                : feedback.type === "info"
+                ? "#0d1b2a"
+                : "#0d2818",
           }}
         >
           {feedback.message}
@@ -593,7 +817,25 @@ function ResponseRegistryPanel({
                         <td style={{ padding: "8px" }}>
                           {item.latest_requested_action || "—"}
                         </td>
-                        <td style={{ padding: "8px" }}>{item.latest_outcome || "—"}</td>
+                        <td style={{ padding: "8px" }}>
+                          <span
+                            style={outcomeBadgeStyle(
+                              registryOutcomeLabel({
+                                currentDisposition: item.current_disposition,
+                                latestOutcome: item.latest_outcome,
+                                latestRequestedAction: item.latest_requested_action,
+                                enforcement: item.enforcement,
+                              })
+                            )}
+                          >
+                            {registryOutcomeLabel({
+                              currentDisposition: item.current_disposition,
+                              latestOutcome: item.latest_outcome,
+                              latestRequestedAction: item.latest_requested_action,
+                              enforcement: item.enforcement,
+                            })}
+                          </span>
+                        </td>
                         <td style={{ padding: "8px" }}>{item.enforcement || "none"}</td>
                         <td style={{ padding: "8px" }}>
                           {item.latest_origin_surface || "—"}
@@ -630,18 +872,125 @@ function ResponseRegistryPanel({
 
             {detailLoading && <p aria-live="polite">Loading detail…</p>}
             {detailError && (
-              <p role="alert" style={{ color: "#ffa198" }}>
-                {detailError}
-              </p>
+              <div role="alert" style={{ color: "#ffa198", display: "grid", gap: "8px" }}>
+                <span>{detailError}</span>
+                <button
+                  type="button"
+                  onClick={() => loadDetail(selectedId)}
+                  style={secondaryButtonStyle(false)}
+                >
+                  Retry detail
+                </button>
+              </div>
             )}
 
             {!detailLoading && record && (
               <>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "start",
+                    gap: "10px",
+                    marginTop: "12px",
+                    marginBottom: "14px",
+                  }}
+                >
+                  <div style={{ display: "grid", gap: "8px", flex: 1 }}>
+                    <div>
+                      <div style={{ color: "#8b949e", fontSize: "12px", marginBottom: "4px" }}>
+                        Response Summary
+                      </div>
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+                          gap: "10px",
+                          fontSize: "13px",
+                        }}
+                      >
+                        <div>
+                          <div style={{ color: "#8b949e" }}>Alert</div>
+                          <p style={summaryValueStyle()}>
+                            {detail.primary_alert
+                              ? `#${detail.primary_alert.id} · ${detail.primary_alert.alert_type || "Alert"}`
+                              : "None recorded"}
+                          </p>
+                        </div>
+                        <div>
+                          <div style={{ color: "#8b949e" }}>Indicator</div>
+                          <p style={summaryValueStyle(true)}>{record.indicator_value}</p>
+                        </div>
+                        <div>
+                          <div style={{ color: "#8b949e" }}>Response</div>
+                          <p style={summaryValueStyle()}>
+                            {registryActionLabel(
+                              latestEvent?.requested_action,
+                              record.current_disposition
+                            )}
+                          </p>
+                        </div>
+                        <div>
+                          <div style={{ color: "#8b949e" }}>Outcome</div>
+                          <span style={outcomeBadgeStyle(currentOutcomeLabel)}>
+                            {currentOutcomeLabel}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ color: "#8b949e", fontSize: "12px", marginBottom: "4px" }}>
+                        Recommended Next Step
+                      </div>
+                      <p style={{ margin: 0, fontSize: "13px" }}>{recommendedNextStep}</p>
+                    </div>
+                    <div>
+                      <div style={{ color: "#8b949e", fontSize: "12px", marginBottom: "6px" }}>
+                        Related
+                      </div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                        {[
+                          ["alerts", "Alerts", detail.relationships?.alerts?.count || 0],
+                          ["incidents", "Incident", detail.relationships?.incidents?.count || 0],
+                          ["playbooks", "Playbook", detail.relationships?.playbooks?.count || 0],
+                          ["approvals", "Approvals", detail.relationships?.approvals?.count || 0],
+                        ].map(([kind, label, count]) => (
+                          <button
+                            key={kind}
+                            type="button"
+                            disabled={!count}
+                            onClick={() => openRelationship(kind)}
+                            style={{
+                              ...linkButtonStyle,
+                              opacity: count ? 1 : 0.55,
+                              cursor: count ? "pointer" : "not-allowed",
+                            }}
+                          >
+                            {label} ({count})
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gap: "8px" }}>
+                    <button
+                      type="button"
+                      onClick={handleInvestigate}
+                      style={buttonStyle(false)}
+                    >
+                      Investigate
+                    </button>
+                    {investigateTarget.kind === "none" ? (
+                      <p style={{ margin: 0, color: "#8b949e", fontSize: "12px", maxWidth: "220px" }}>
+                        {investigateTarget.label}
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+
                 <dl style={{ display: "grid", gridTemplateColumns: "140px 1fr", gap: "8px", fontSize: "13px" }}>
-                  <dt style={{ color: "#8b949e" }}>Indicator</dt>
-                  <dd style={{ margin: 0, fontFamily: "monospace" }}>{record.indicator_value}</dd>
                   <dt style={{ color: "#8b949e" }}>Current state</dt>
-                  <dd style={{ margin: 0 }}>{dispositionLabel(record.current_disposition)}</dd>
+                  <dd style={{ margin: 0 }}>{dispositionSummaryLabel(record.current_disposition) || dispositionLabel(record.current_disposition)}</dd>
                   <dt style={{ color: "#8b949e" }}>First seen</dt>
                   <dd style={{ margin: 0 }}>{formatTimestamp(detail.first_seen) || "—"}</dd>
                   <dt style={{ color: "#8b949e" }}>Last updated</dt>
@@ -650,18 +999,6 @@ function ResponseRegistryPanel({
                   <dd style={{ margin: 0 }}>{detail.response_source || "—"}</dd>
                   <dt style={{ color: "#8b949e" }}>Enforcement</dt>
                   <dd style={{ margin: 0 }}>{detail.enforcement_statement}</dd>
-                  <dt style={{ color: "#8b949e" }}>Related alerts</dt>
-                  <dd style={{ margin: 0 }}>
-                    {detail.related_alert_count
-                      ? detail.related_alert_ids.join(", ")
-                      : "None recorded"}
-                  </dd>
-                  <dt style={{ color: "#8b949e" }}>Related incidents</dt>
-                  <dd style={{ margin: 0 }}>
-                    {detail.related_incident_count
-                      ? detail.related_incident_ids.join(", ")
-                      : "None recorded"}
-                  </dd>
                 </dl>
 
                 {detail.blocklist_entry ? (
@@ -789,16 +1126,16 @@ function ResponseRegistryPanel({
                     <button
                       type="button"
                       disabled={!canMutate || Boolean(actionBusy)}
-                      title={canMutate ? "Escalate indicator" : restrictionTitle}
+                      title={canMutate ? "Create or link an incident" : restrictionTitle}
                       aria-disabled={!canMutate}
                       onClick={() =>
                         runCommand("flag_high_priority", {
-                          reason: escalateReason || "Escalated from Response Registry",
+                          reason: incidentReason || "Create or link incident from Response Registry",
                         })
                       }
                       style={buttonStyle(!canMutate || Boolean(actionBusy))}
                     >
-                      {actionBusy === "flag_high_priority" ? "Working…" : "Escalate"}
+                      {actionBusy === "flag_high_priority" ? "Working…" : "Create / Link Incident"}
                     </button>
                   </div>
 
@@ -813,14 +1150,20 @@ function ResponseRegistryPanel({
                     />
                   </label>
                   <label style={{ display: "grid", gap: "4px", marginBottom: "8px" }}>
-                    <span style={filterLabelStyle}>Track / escalate reason</span>
+                    <span style={filterLabelStyle}>Tracking reason</span>
                     <input
-                      value={trackReason || escalateReason}
+                      value={trackReason}
                       disabled={!canMutate}
-                      onChange={(event) => {
-                        setTrackReason(event.target.value);
-                        setEscalateReason(event.target.value);
-                      }}
+                      onChange={(event) => setTrackReason(event.target.value)}
+                      style={inputStyle}
+                    />
+                  </label>
+                  <label style={{ display: "grid", gap: "4px", marginBottom: "8px" }}>
+                    <span style={filterLabelStyle}>Incident reason</span>
+                    <input
+                      value={incidentReason}
+                      disabled={!canMutate}
+                      onChange={(event) => setIncidentReason(event.target.value)}
                       style={inputStyle}
                     />
                   </label>
@@ -865,12 +1208,29 @@ function ResponseRegistryPanel({
                           }}
                         >
                           <div>
-                            <strong>{event.event_type}</strong> · {event.requested_action} ·{" "}
-                            {event.outcome}
+                            <strong>{event.event_type}</strong> ·{" "}
+                            {actionSummaryLabel(event.requested_action) || event.requested_action} ·{" "}
+                            <span style={outcomeBadgeStyle(
+                              registryOutcomeLabel({
+                                currentDisposition: event.disposition_after,
+                                latestOutcome: event.outcome,
+                                latestRequestedAction: event.requested_action,
+                                enforcement: event.enforcement,
+                                safeMetadata: event.safe_metadata || {},
+                              })
+                            )}>
+                              {registryOutcomeLabel({
+                                currentDisposition: event.disposition_after,
+                                latestOutcome: event.outcome,
+                                latestRequestedAction: event.requested_action,
+                                enforcement: event.enforcement,
+                                safeMetadata: event.safe_metadata || {},
+                              })}
+                            </span>
                           </div>
                           <div style={{ color: "#8b949e" }}>
                             {formatTimestamp(event.created_at)} · {event.origin_surface || "—"} ·
-                            disposition {dispositionLabel(event.disposition_after)}
+                            disposition {dispositionSummaryLabel(event.disposition_after) || dispositionLabel(event.disposition_after)}
                           </div>
                           {event.reason && <div>{event.reason}</div>}
                         </li>

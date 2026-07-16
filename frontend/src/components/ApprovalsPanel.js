@@ -40,6 +40,7 @@ function ApprovalsPanel({
   userRole,
   displaySettings,
   initialStatusFilter = "all",
+  initialApprovalRequest = null,
   onOpenResponseRegistry = null,
 }) {
   const [approvals, setApprovals] = useState([]);
@@ -212,6 +213,11 @@ function ApprovalsPanel({
       loadApprovalNotificationDeliveries(selectedApprovalId);
     }
   }, [loadApprovalNotificationDeliveries, loadDetail, selectedApprovalId]);
+
+  useEffect(() => {
+    if (!initialApprovalRequest?.approvalId) return;
+    setSelectedApprovalId(Number(initialApprovalRequest.approvalId));
+  }, [initialApprovalRequest]);
 
   const filteredApprovals = useMemo(() => {
     if (riskFilter === "all") return approvals;
@@ -417,6 +423,7 @@ function ApprovalsPanel({
                         onOpenResponseRegistry({
                           relatedAlertId: selectedApproval.alert_id,
                           relatedIncidentId: selectedApproval.incident_id,
+                          relatedApprovalRequestId: selectedApproval.id,
                           sourceIp: selectedApproval.source_ip,
                         })
                       }

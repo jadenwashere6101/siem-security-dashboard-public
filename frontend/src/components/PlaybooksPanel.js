@@ -1157,6 +1157,8 @@ function PlaybooksPanel({
                             onOpenResponseRegistry({
                               relatedAlertId: detailRecord.alert_id,
                               relatedIncidentId: detailRecord.incident_id,
+                              relatedPlaybookExecutionId: detailRecord.id,
+                              sourceIp: detailRecord.source_ip,
                             })
                           }
                           style={{
@@ -1216,6 +1218,7 @@ function PlaybooksPanel({
                                 onOpenResponseRegistry({
                                   relatedAlertId: kind === "alert" ? id : undefined,
                                   relatedIncidentId: kind === "incident" ? id : undefined,
+                                  relatedPlaybookExecutionId: detailRecord?.id,
                                   sourceIp: outcome?.source_ip || detailRecord?.source_ip || undefined,
                                 });
                               }

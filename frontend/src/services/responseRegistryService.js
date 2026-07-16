@@ -85,6 +85,8 @@ export const executeRegistryCommand = async ({
   expiresAt,
   alertId,
   incidentId,
+  playbookExecutionId,
+  approvalRequestId,
   idempotencyKey,
 }) => {
   const res = await fetch(buildSiemPath("/response-registry/commands"), {
@@ -98,6 +100,8 @@ export const executeRegistryCommand = async ({
       expires_at: expiresAt || null,
       alert_id: alertId || null,
       incident_id: incidentId || null,
+      playbook_execution_id: playbookExecutionId || null,
+      approval_request_id: approvalRequestId || null,
       idempotency_key: idempotencyKey || null,
     }),
   });

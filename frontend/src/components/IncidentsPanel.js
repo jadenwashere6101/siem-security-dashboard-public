@@ -68,6 +68,7 @@ function IncidentsPanel({
   canTakeAlertActions,
   displaySettings,
   onOpenResponseRegistry = null,
+  initialIncidentRequest = null,
   onViewRelatedAlerts = null,
 }) {
   const [incidents, setIncidents] = useState([]);
@@ -232,6 +233,11 @@ function IncidentsPanel({
       loadNotificationDeliveries(selectedIncidentId);
     }
   }, [loadDetail, loadNotificationDeliveries, loadTimeline, selectedIncidentId]);
+
+  useEffect(() => {
+    if (!initialIncidentRequest?.incidentId) return;
+    setSelectedIncidentId(Number(initialIncidentRequest.incidentId));
+  }, [initialIncidentRequest]);
 
   const rowsPerPage = displaySettings?.rowsPerPage ?? "all";
   const limitedIncidents =

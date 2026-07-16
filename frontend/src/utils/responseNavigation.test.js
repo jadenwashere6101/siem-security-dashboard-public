@@ -29,6 +29,26 @@ describe("responseNavigation", () => {
     expect(registryNavFromIncident({ id: 9, source_ip: "9.9.9.9" }).relatedIncidentId).toBe(9);
   });
 
+  test("preserves alert, incident, playbook, and approval provenance in registry navigation", () => {
+    expect(
+      buildRegistryNavigation({
+        q: "8.8.4.4",
+        relatedAlertId: "42",
+        relatedIncidentId: "77",
+        relatedPlaybookExecutionId: "19",
+        relatedApprovalRequestId: "31",
+      })
+    ).toEqual(
+      expect.objectContaining({
+        q: "8.8.4.4",
+        relatedAlertId: 42,
+        relatedIncidentId: 77,
+        relatedPlaybookExecutionId: 19,
+        relatedApprovalRequestId: 31,
+      })
+    );
+  });
+
   test("maps SOC attention items to authoritative workspaces", () => {
     expect(attentionNavTarget("Pending approvals")).toEqual({
       sectionId: "soar-approvals",

@@ -105,6 +105,8 @@ function AppInner() {
   const [registryInitialView, setRegistryInitialView] = useState("all");
   const [registryNavigationRequest, setRegistryNavigationRequest] = useState(null);
   const [approvalsInitialStatus, setApprovalsInitialStatus] = useState("all");
+  const [approvalsInitialRequest, setApprovalsInitialRequest] = useState(null);
+  const [incidentsInitialRequest, setIncidentsInitialRequest] = useState(null);
   const [playbooksInitialExecutionRequest, setPlaybooksInitialExecutionRequest] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [loginUsername, setLoginUsername] = useState("");
@@ -410,6 +412,38 @@ function AppInner() {
       nonce: Date.now(),
     });
     navigateWorkspace("soar-playbooks");
+  }, [navigateWorkspace]);
+
+  const handleOpenIncident = useCallback((incidentId) => {
+    if (incidentId == null) return;
+    setIncidentsInitialRequest({
+      incidentId: Number(incidentId),
+      nonce: Date.now(),
+    });
+    navigateWorkspace("soar-incidents");
+  }, [navigateWorkspace]);
+
+  const handleOpenApproval = useCallback((approvalId) => {
+    if (approvalId == null) return;
+    setApprovalsInitialRequest({
+      approvalId: Number(approvalId),
+      nonce: Date.now(),
+    });
+    navigateWorkspace("soar-approvals", {
+      destination: NAVIGATION_DESTINATIONS.element,
+      targetKey: WORKSPACE_TARGETS.approvals,
+    });
+  }, [navigateWorkspace]);
+
+  const handleOpenAlert = useCallback((alertId, sourceIp = "") => {
+    if (alertId == null) return;
+    setSearchTerm(sourceIp || String(alertId));
+    setSelectedAlertId(Number(alertId));
+    navigateWorkspace("dashboard", {
+      destination: NAVIGATION_DESTINATIONS.element,
+      targetKey: WORKSPACE_TARGETS.recentAlerts,
+      context: { alertId: Number(alertId), sourceIp: sourceIp || "" },
+    });
   }, [navigateWorkspace]);
 
   const handleViewRelatedAlerts = (sourceIp) => {
@@ -825,13 +859,18 @@ function AppInner() {
               cardTitleStyle={cardTitleStyle}
               cardSubtitleStyle={cardSubtitleStyle}
               filterLabelStyle={filterLabelStyle}
-              selectStyle={selectStyle}
-              canTakeAlertActions={canTakeAlertActions}
-              initialView={registryInitialView}
-              navigationRequest={registryNavigationRequest}
-            />
-          </div>
-        )}
+            selectStyle={selectStyle}
+            canTakeAlertActions={canTakeAlertActions}
+            initialView={registryInitialView}
+            navigationRequest={registryNavigationRequest}
+            onOpenAlert={handleOpenAlert}
+            onOpenIncident={handleOpenIncident}
+            onOpenPlaybookExecution={handleOpenPlaybookExecution}
+            onOpenApproval={handleOpenApproval}
+            onOpenSourceContext={handleViewRelatedAlerts}
+          />
+        </div>
+      )}
 
         {activeLiveLogsSection && isSectionVisible(activeLiveLogsSection.id, roleFlags) && (
           <LiveLogsPanel
@@ -958,6 +997,7 @@ function AppInner() {
             selectStyle={selectStyle}
             canTakeAlertActions={canTakeAlertActions}
             onOpenResponseRegistry={handleOpenResponseRegistry}
+            initialIncidentRequest={incidentsInitialRequest}
             onViewRelatedAlerts={handleViewRelatedAlerts}
           />
         )}
@@ -977,6 +1017,7 @@ function AppInner() {
               selectStyle={selectStyle}
               userRole={userRole}
               initialStatusFilter={approvalsInitialStatus}
+              initialApprovalRequest={approvalsInitialRequest}
               onOpenResponseRegistry={handleOpenResponseRegistry}
             />
           </div>

@@ -173,6 +173,8 @@ def execute_registry_command():
                 origin_surface=ORIGIN_RESPONSE_REGISTRY,
                 idempotency_key=idempotency_key,
                 expires_at=expires_at,
+                playbook_execution_id=_safe_int(data.get("playbook_execution_id")),
+                approval_request_id=_safe_int(data.get("approval_request_id")),
             ),
         )
         if not result.success:

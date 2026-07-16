@@ -60,6 +60,10 @@ describe("responseRegistryService", () => {
       action: "monitor",
       indicatorValue: "8.8.8.8",
       reason: "watch",
+      alertId: 42,
+      incidentId: 7,
+      playbookExecutionId: 55,
+      approvalRequestId: 12,
       idempotencyKey: "k1",
     });
 
@@ -72,8 +76,10 @@ describe("responseRegistryService", () => {
           indicator_value: "8.8.8.8",
           reason: "watch",
           expires_at: null,
-          alert_id: null,
-          incident_id: null,
+          alert_id: 42,
+          incident_id: 7,
+          playbook_execution_id: 55,
+          approval_request_id: 12,
           idempotency_key: "k1",
         }),
       })

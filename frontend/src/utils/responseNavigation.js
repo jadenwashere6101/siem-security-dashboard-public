@@ -10,6 +10,8 @@ export function buildRegistryNavigation({
   q = "",
   relatedAlertId = null,
   relatedIncidentId = null,
+  relatedPlaybookExecutionId = null,
+  relatedApprovalRequestId = null,
   sourceIp = "",
 } = {}) {
   const indicator = String(q || sourceIp || "").trim();
@@ -22,6 +24,14 @@ export function buildRegistryNavigation({
       relatedIncidentId == null || relatedIncidentId === ""
         ? null
         : Number(relatedIncidentId),
+    relatedPlaybookExecutionId:
+      relatedPlaybookExecutionId == null || relatedPlaybookExecutionId === ""
+        ? null
+        : Number(relatedPlaybookExecutionId),
+    relatedApprovalRequestId:
+      relatedApprovalRequestId == null || relatedApprovalRequestId === ""
+        ? null
+        : Number(relatedApprovalRequestId),
   };
 }
 
@@ -31,6 +41,8 @@ export function registryNavFromSourceIp(sourceIp, extras = {}) {
     sourceIp,
     relatedAlertId: extras.relatedAlertId,
     relatedIncidentId: extras.relatedIncidentId,
+    relatedPlaybookExecutionId: extras.relatedPlaybookExecutionId,
+    relatedApprovalRequestId: extras.relatedApprovalRequestId,
   });
 }
 

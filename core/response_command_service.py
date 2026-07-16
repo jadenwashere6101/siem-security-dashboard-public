@@ -76,7 +76,10 @@ def _default_idempotency_key(request: ResponseCommandRequest) -> str:
 
 def _resolve_source_ip(conn, request: ResponseCommandRequest) -> str | None:
     if request.indicator_value:
-        return _normalize_ip_or_raise(request.indicator_value)
+        try:
+            return _normalize_ip_or_raise(request.indicator_value)
+        except ValueError as error:
+            raise ValueError("This registry record does not contain a valid actionable IP.") from error
     if request.alert_id is None:
         return None
     cur = conn.cursor()
@@ -274,8 +277,8 @@ def execute_response_command(conn, request: ResponseCommandRequest) -> ResponseC
             success=False,
             action=action,
             outcome_label="rejected",
-            message="source_ip is required",
-            error="source_ip is required",
+            message="No actionable IP is available for this registry record.",
+            error="No actionable IP is available for this registry record.",
             error_code="validation_no_target",
         )
 
@@ -524,6 +527,42 @@ def _execute_monitor(
     if expires_at is None:
         expires_at = _now() + timedelta(hours=DEFAULT_MONITOR_TTL_HOURS)
 
+    existing_registry = get_indicator_by_value(
+        conn, indicator_type=INDICATOR_TYPE_IP, indicator_value=source_ip
+    )
+    if existing_registry and existing_registry.get("current_disposition") == DISPOSITION_MONITORED:
+        cur.execute(
+            """
+            UPDATE indicator_registry
+            SET monitor_expires_at = %s,
+                updated_at = NOW()
+            WHERE id = %s
+            """,
+            (expires_at, existing_registry["id"]),
+        )
+        return ResponseCommandResult(
+            success=True,
+            action=action,
+            outcome_label="monitored",
+            idempotent=True,
+            enforcement="none",
+            registry_record_id=existing_registry["id"],
+            disposition=DISPOSITION_MONITORED,
+            message="Monitoring is already active for this indicator; expiry renewed.",
+            affected_resource_keys=build_affected_resource_keys(
+                alert_id=request.alert_id,
+                incident_id=request.incident_id,
+                source_ip=source_ip,
+                registry_record_id=existing_registry["id"],
+                playbook_execution_id=request.playbook_execution_id,
+            ),
+            compatible_fields={
+                "response_status": "executed",
+                "alert_id": request.alert_id,
+                "action": action,
+            },
+        )
+
     registry = upsert_indicator_identity(
         conn, indicator_type=INDICATOR_TYPE_IP, indicator_value=source_ip
     )
@@ -767,23 +806,23 @@ def _execute_stop_monitor(
             conn, indicator_type=INDICATOR_TYPE_IP, indicator_value=source_ip
         )
     if registry.get("current_disposition") != DISPOSITION_MONITORED:
-        # Idempotent: already not monitored
-        if registry.get("current_disposition") == DISPOSITION_REMOVED:
-            return ResponseCommandResult(
-                success=True,
-                action=action,
-                outcome_label="removed",
-                idempotent=True,
-                enforcement="none",
+        return ResponseCommandResult(
+            success=True,
+            action=action,
+            outcome_label="removed",
+            idempotent=True,
+            enforcement="none",
+            registry_record_id=registry["id"],
+            disposition=registry.get("current_disposition"),
+            message="Monitoring is already inactive for this indicator.",
+            affected_resource_keys=build_affected_resource_keys(
+                source_ip=source_ip,
                 registry_record_id=registry["id"],
-                disposition=DISPOSITION_REMOVED,
-                message="Monitoring is already stopped for this indicator.",
-                affected_resource_keys=build_affected_resource_keys(
-                    source_ip=source_ip,
-                    registry_record_id=registry["id"],
-                    alert_id=request.alert_id,
-                ),
-            )
+                alert_id=request.alert_id,
+                incident_id=request.incident_id,
+                playbook_execution_id=request.playbook_execution_id,
+            ),
+        )
 
     event = append_registry_event(
         conn,
