@@ -55,6 +55,8 @@ function SourceIpContext({ sourceIp, compact = false, onOpenResponseRegistry = n
         context.reputation?.latest_external ||
         context.reputation?.external_snapshots?.length ||
         context.playbook_executions?.recent?.length ||
+        context.returning_attacker ||
+        context.campaigns?.recent?.length ||
         context.reputation?.behavioral ||
         context.response_outcomes?.length ||
         context.response_outcome_counts
@@ -153,6 +155,55 @@ function SourceIpContext({ sourceIp, compact = false, onOpenResponseRegistry = n
             <CanonicalOutcomeBreakdown
               counts={context.response_outcome_counts}
               title="Outcome counts for this source IP"
+            />
+          </ContextSection>
+
+          <ContextSection title="Returning Attacker">
+            <SummaryLine
+              label="Current assessment"
+              value={context.returning_attacker?.headline || "No prior history"}
+            />
+            <SummaryLine
+              label="Days observed"
+              value={context.returning_attacker?.days_observed ?? 0}
+            />
+            <SummaryLine
+              label="Previous incidents"
+              value={context.returning_attacker?.previous_incidents ?? 0}
+            />
+            <SummaryLine
+              label="Previous responses"
+              value={context.returning_attacker?.previous_responses ?? 0}
+            />
+            <RecordList
+              records={context.returning_attacker?.reasons}
+              emptyText="No returning-attacker evidence"
+              renderRecord={(reason) => (
+                <>
+                  <span style={recordTitleStyle}>{reason.text}</span>
+                </>
+              )}
+            />
+          </ContextSection>
+
+          <ContextSection title="Campaigns">
+            <SummaryLine label="Recent campaigns" value={context.campaigns?.count ?? 0} />
+            <RecordList
+              records={context.campaigns?.recent}
+              emptyText="No recent campaign memberships"
+              renderRecord={(campaign) => (
+                <>
+                  <span style={recordTitleStyle}>{campaign.label}</span>
+                  <span style={recordMetaStyle}>
+                    {campaign.campaign_intelligence?.summary || "No campaign summary"}
+                  </span>
+                  <span style={recordMetaStyle}>
+                    {campaign.related_incident_id
+                      ? `Related incident: ${campaign.related_incident_id}`
+                      : "No active incident"}
+                  </span>
+                </>
+              )}
             />
           </ContextSection>
 
@@ -281,7 +332,7 @@ function PanelHeader({ sourceIp, compact }) {
       <div>
         <h3 style={titleStyle}>Source-IP Context</h3>
         {!compact && (
-          <p style={subtitleStyle}>What the backend knows about this source IP</p>
+          <p style={subtitleStyle}>Recent history, campaign context, and response activity for this source IP</p>
         )}
       </div>
       <span style={ipPillStyle}>{sourceIp || "none"}</span>

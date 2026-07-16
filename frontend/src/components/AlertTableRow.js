@@ -44,6 +44,11 @@ function AlertTableRow({
   const behavioralReputation = getBehavioralReputation(alert);
   const cooldownActive = Boolean(alert.pfsense_quality?.cooldown?.active);
   const suppressedRollup = Boolean(alert.pfsense_quality?.suppressed_rollup);
+  const investigationValue = alert.investigation_value;
+  const alertStory = alert.alert_story;
+  const visibleReasons = Array.isArray(investigationValue?.reasons)
+    ? investigationValue.reasons.slice(0, 2)
+    : [];
 
   return (
     <tr
@@ -138,12 +143,28 @@ function AlertTableRow({
             {alert.severity}
           </span>
         </div>
+        {investigationValue?.label ? (
+          <div style={{ fontSize: "12px", color: "#cbd5e1", marginTop: "6px" }}>
+            {investigationValue.label}
+          </div>
+        ) : null}
       </td>
       )}
 
       {visibleColumns.message && (
       <td style={bodyCellStyle}>
         <div>{alert.message}</div>
+        {alertStory?.headline ? (
+          <div style={{ fontSize: "12px", color: "#e2e8f0", marginTop: "6px" }}>
+            {alertStory.headline}
+            {alertStory.disposition ? ` · ${alertStory.disposition}` : ""}
+          </div>
+        ) : null}
+        {visibleReasons.length > 0 ? (
+          <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "6px" }}>
+            {visibleReasons.map((reason) => reason.text).join(" · ")}
+          </div>
+        ) : null}
         {cooldownActive || suppressedRollup || operationalHistoryBadge ? (
           <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginTop: "8px" }}>
             {operationalHistoryBadge ? (

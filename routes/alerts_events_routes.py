@@ -2,12 +2,19 @@ from __future__ import annotations
 
 import ipaddress
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from flask import Blueprint, current_app, jsonify, request
 from flask_login import login_required
 
 from core.auth import admin_required, analyst_or_super_admin_required
 from core.db import get_db_connection
+from core.investigation_intelligence import (
+    build_campaign_intelligence,
+    build_investigation_value,
+    build_port_scan_story,
+    build_returning_attacker_context,
+)
 from core.pfsense_operational_baseline import (
     build_alert_operational_history,
     build_pfsense_alert_baseline_filter,
@@ -636,6 +643,182 @@ def _query_related_pfsense_events(cur, related_filter: dict, *, limit: int = 25)
     ]
 
 
+def _is_important_destination(target_context: dict[str, Any]) -> bool:
+    if not isinstance(target_context, dict):
+        return False
+    try:
+        return int(target_context.get("primary_destination_port")) in {22, 443, 3389, 8443, 1194, 51820}
+    except (TypeError, ValueError):
+        return False
+
+
+def _build_campaign_seed(row) -> dict[str, Any]:
+    context = row[19] if isinstance(row[19], dict) else {}
+    target_context = context.get("target_context") if isinstance(context.get("target_context"), dict) else {}
+    recon_activity = context.get("recon_activity") if isinstance(context.get("recon_activity"), dict) else {}
+    sample_destination_ips = target_context.get("sample_destination_ips") or []
+    sample_destination_ports = target_context.get("sample_destination_ports") or []
+    first_seen = target_context.get("first_seen") or context.get("first_seen")
+    last_seen = target_context.get("last_seen") or context.get("last_seen") or str(row[5])
+    days_active = 0
+    try:
+        if first_seen and last_seen:
+            first_dt = datetime.fromisoformat(str(first_seen).replace("Z", "+00:00"))
+            last_dt = datetime.fromisoformat(str(last_seen).replace("Z", "+00:00"))
+            days_active = max((last_dt.date() - first_dt.date()).days + 1, 1)
+    except ValueError:
+        days_active = 0
+    return {
+        "first_seen": first_seen,
+        "last_seen": last_seen,
+        "days_active": days_active,
+        "source_count": int(recon_activity.get("source_ip_count") or 0),
+        "destination_count": int(target_context.get("distinct_destination_count") or len(sample_destination_ips) or 0),
+        "service_count": int(target_context.get("distinct_port_count") or len(sample_destination_ports) or 0),
+        "corroborating_alert_types": 1,
+        "progression_observed": bool(
+            row[1] == "pfsense_firewall_allow_after_deny"
+            or context.get("progression_observed")
+        ),
+        "timing_pattern": bool(context.get("beacon_like_timing")),
+        "relationship": "Shared recon activity" if recon_activity.get("id") else "",
+    }
+
+
+def _fetch_alert_intelligence(conn, rows) -> dict[int, dict[str, Any]]:
+    if not rows:
+        return {}
+
+    alert_ids = [int(row[0]) for row in rows]
+    source_ips = sorted({str(row[4]) for row in rows if row[4] is not None})
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                host(a.source_ip),
+                MIN(a.created_at),
+                MAX(a.created_at),
+                COUNT(DISTINCT DATE(a.created_at)),
+                COUNT(DISTINCT ia.incident_id),
+                COUNT(*) FILTER (WHERE a.response_status IS NOT NULL),
+                COUNT(DISTINCT NULLIF(COALESCE(a.context->'target_context'->>'primary_destination_ip', ''), '')),
+                COUNT(DISTINCT NULLIF(COALESCE(a.context->'target_context'->>'primary_destination_port', ''), ''))
+            FROM alerts a
+            LEFT JOIN incident_alerts ia ON ia.alert_id = a.id
+            WHERE a.source_ip = ANY(%s::inet[])
+            GROUP BY host(a.source_ip)
+            """,
+            (source_ips,),
+        )
+        history_by_ip = {
+            row[0]: {
+                "first_seen": row[1].isoformat() if row[1] else None,
+                "last_seen": row[2].isoformat() if row[2] else None,
+                "days_observed": int(row[3] or 0),
+                "previous_incidents": max(int(row[4] or 0) - 1, 0),
+                "previous_responses": int(row[5] or 0),
+                "repeated_destinations": int(row[6] or 0),
+                "repeated_services": int(row[7] or 0),
+                "campaign_count": 0,
+            }
+            for row in cur.fetchall()
+        }
+
+        cur.execute(
+            """
+            SELECT
+                ral.alert_id,
+                ra.id,
+                ra.first_seen,
+                ra.last_seen,
+                COALESCE((ra.summary->>'source_ip_count')::integer, 0),
+                COALESCE((ra.summary->>'destination_ip_count')::integer, 0),
+                COALESCE((ra.summary->>'distinct_service_count')::integer, 0),
+                COALESCE(jsonb_array_length(COALESCE(ra.summary->'alert_types', '[]'::jsonb)), 0),
+                ra.coordination_status
+            FROM recon_activity_alerts ral
+            JOIN recon_activities ra ON ra.id = ral.recon_activity_id
+            WHERE ral.alert_id = ANY(%s::int[])
+            """,
+            (alert_ids,),
+        )
+        campaign_rows = cur.fetchall()
+
+    campaign_by_alert_id = {
+        int(row[0]): {
+            "id": int(row[1]),
+            "first_seen": row[2].isoformat() if row[2] else None,
+            "last_seen": row[3].isoformat() if row[3] else None,
+            "source_count": int(row[4] or 0),
+            "destination_count": int(row[5] or 0),
+            "service_count": int(row[6] or 0),
+            "corroborating_alert_types": int(row[7] or 0),
+            "relationship": f"Recon activity #{row[1]} ({str(row[8] or 'not_established').replace('_', ' ')})",
+        }
+        for row in campaign_rows
+    }
+
+    intelligence: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        alert_id = int(row[0])
+        source_ip = str(row[4]) if row[4] is not None else None
+        context = row[19] if isinstance(row[19], dict) else {}
+        target_context = context.get("target_context") if isinstance(context.get("target_context"), dict) else {}
+        history = dict(history_by_ip.get(source_ip, {}))
+        campaign_seed = _build_campaign_seed(row)
+        campaign_seed.update(campaign_by_alert_id.get(alert_id, {}))
+        history["campaign_count"] = 1 if campaign_seed.get("id") else 0
+
+        returning_attacker = build_returning_attacker_context(history)
+        campaign_intelligence = build_campaign_intelligence(campaign_seed)
+        progression_observed = bool(
+            row[1] == "pfsense_firewall_allow_after_deny" or campaign_seed.get("progression_observed")
+        )
+        repeated_destination = returning_attacker.get("repeated_destinations", 0) > 0
+        persistent_activity = returning_attacker.get("days_observed", 0) > 1
+        investigation_value = build_investigation_value(
+            severity=row[2],
+            returning_attacker=returning_attacker,
+            campaign_intelligence=campaign_intelligence,
+            progression_observed=progression_observed,
+            corroborating_detection_count=max(int(campaign_seed.get("corroborating_alert_types") or 0), 1),
+            destination_important=_is_important_destination(target_context),
+            response_history_present=returning_attacker.get("previous_responses", 0) > 0,
+            repeated_destination=repeated_destination,
+            persistent_activity=persistent_activity,
+        )
+
+        alert_story = None
+        if row[1] == "pfsense_firewall_port_scan":
+            alert_story = build_port_scan_story(
+                investigation_value=investigation_value,
+                returning_attacker=returning_attacker,
+                campaign_intelligence=campaign_intelligence,
+                repeated_destination=repeated_destination,
+                progression_observed=progression_observed,
+            )
+        elif row[1] == "pfsense_firewall_allow_after_deny":
+            alert_story = {
+                "headline": (
+                    "Campaign-linked deny-then-allow progression"
+                    if campaign_intelligence.get("present")
+                    else "Repeated deny activity led to a later allow"
+                ),
+                "disposition": investigation_value["label"],
+            }
+
+        intelligence[alert_id] = {
+            "returning_attacker": returning_attacker,
+            "campaign_intelligence": campaign_intelligence,
+            "investigation_value": investigation_value,
+            "alert_story": alert_story,
+            "progression_observed": progression_observed,
+        }
+
+    return intelligence
+
+
 def _build_alert_payload(
     row,
     *,
@@ -643,12 +826,14 @@ def _build_alert_payload(
     reputation_by_ip: dict,
     response_outcome,
     cooldown_by_alert_id: dict[int, dict],
+    intelligence: dict[str, Any] | None = None,
 ) -> dict:
     source_ip = str(row[4]) if row[4] is not None else None
     if source_ip not in reputation_by_ip:
         reputation_by_ip[source_ip] = get_ip_reputation(source_ip, cur=cur)
     behavioral_reputation = reputation_by_ip[source_ip]
     behavioral_contributing_signals = behavioral_reputation.get("contributing_signals", [])
+    intelligence = intelligence or {}
 
     return enrich_alert_with_correlation_context(
         enrich_alert_with_mitre(
@@ -682,6 +867,13 @@ def _build_alert_payload(
                 "source": row[17] or "unknown",
                 "source_type": row[18] or "legacy",
                 "context": row[19] if row[19] is not None else {},
+                "investigation_value": intelligence.get("investigation_value"),
+                "returning_attacker": intelligence.get("returning_attacker"),
+                "campaign_intelligence": intelligence.get("campaign_intelligence"),
+                "alert_story": intelligence.get("alert_story"),
+                "investigation_intelligence": {
+                    "progression_observed": bool(intelligence.get("progression_observed")),
+                },
                 "pfsense_quality": _build_pfsense_quality_metadata(row, cooldown_by_alert_id),
                 "operational_history": build_alert_operational_history(
                     created_at=row[5],
@@ -718,6 +910,7 @@ def get_alerts():
         alert_ids = [row[0] for row in rows]
         response_outcomes_by_alert = _resolve_alert_list_response_outcomes(conn, alert_ids)
         cooldown_by_alert_id = _fetch_latest_resolved_audits(cur, alert_ids)
+        intelligence_by_alert_id = _fetch_alert_intelligence(conn, rows)
         reputation_by_ip = {}
 
         items = []
@@ -729,6 +922,7 @@ def get_alerts():
                     reputation_by_ip=reputation_by_ip,
                     response_outcome=response_outcomes_by_alert.get(row[0]),
                     cooldown_by_alert_id=cooldown_by_alert_id,
+                    intelligence=intelligence_by_alert_id.get(int(row[0])),
                 )
             )
 
@@ -775,6 +969,7 @@ def get_alerts_summary():
         marker_ids = [row[0] for row in marker_rows]
         response_outcomes_by_alert = _resolve_alert_list_response_outcomes(conn, marker_ids)
         cooldown_by_alert_id = _fetch_latest_resolved_audits(cur, marker_ids)
+        intelligence_by_alert_id = _fetch_alert_intelligence(conn, [row[:20] for row in marker_rows])
         reputation_by_ip = {}
         map_markers = []
         for row in marker_rows:
@@ -784,6 +979,7 @@ def get_alerts_summary():
                 reputation_by_ip=reputation_by_ip,
                 response_outcome=response_outcomes_by_alert.get(row[0]),
                 cooldown_by_alert_id=cooldown_by_alert_id,
+                intelligence=intelligence_by_alert_id.get(int(row[0])),
             )
             alert_payload["alert_count"] = int(row[20] or 0)
             map_markers.append(alert_payload)
@@ -825,12 +1021,14 @@ def get_alert(alert_id):
 
         response_outcome = serialize_latest_outcome(conn, alert_id=alert_id)
         cooldown_by_alert_id = _fetch_latest_resolved_audits(cur, [alert_id])
+        intelligence_by_alert_id = _fetch_alert_intelligence(conn, [row])
         alert = _build_alert_payload(
             row,
             cur=cur,
             reputation_by_ip={},
             response_outcome=response_outcome,
             cooldown_by_alert_id=cooldown_by_alert_id,
+            intelligence=intelligence_by_alert_id.get(int(alert_id)),
         )
 
         cur.close()

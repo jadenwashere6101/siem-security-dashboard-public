@@ -969,6 +969,12 @@ function SocCommandCenter({
                       <div>
                         <p style={sectionLabelStyle}>Recon Activity #{valueOrFallback(reconContext.detail.id, "unknown")}</p>
                         <h4 style={incidentHeroTitleStyle}>{reconContext.detail.label}</h4>
+                        <p style={summaryDetailStyle}>
+                          {reconContext.detail.story?.headline || reconContext.detail.investigation_value?.label || "Recon activity"}
+                          {reconContext.detail.story?.disposition
+                            ? ` · ${reconContext.detail.story.disposition}`
+                            : ""}
+                        </p>
                       </div>
                       <StatusBadge tone={String(reconContext.detail.severity || "").toLowerCase() === "high" ? "warning" : "info"}>
                         {titleCase(reconContext.detail.severity)}
@@ -1001,6 +1007,14 @@ function SocCommandCenter({
                       </div>
                     </dl>
                     <p style={summaryDetailStyle}>{reconContext.detail.assessment_text}</p>
+                    {Array.isArray(reconContext.detail.investigation_value?.reasons) &&
+                    reconContext.detail.investigation_value.reasons.length > 0 ? (
+                      <ul style={{ margin: "0", paddingLeft: "18px", color: "#cbd5e1" }}>
+                        {reconContext.detail.investigation_value.reasons.map((reason) => (
+                          <li key={reason.id}>{reason.text}</li>
+                        ))}
+                      </ul>
+                    ) : null}
                   </>
                 ) : (
                   <EmptyState>Select a recon activity to inspect.</EmptyState>

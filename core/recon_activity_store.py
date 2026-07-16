@@ -6,6 +6,10 @@ from typing import Any
 
 from psycopg2.extras import Json
 
+from core.investigation_intelligence import (
+    build_campaign_intelligence,
+    build_investigation_value,
+)
 from core.pfsense_recon import (
     PFSENSE_RECON_ACTIVITY_LABEL,
     PFSENSE_RECON_ACTIVITY_TYPE,
@@ -195,6 +199,7 @@ def _aggregate_summary(conn, activity_id: int) -> dict[str, Any]:
             "underlying_event_count": total_events,
             "source_ip_count": len(source_ips),
             "destination_ip_count": len(destination_ips),
+            "distinct_service_count": len(destination_ports),
             "primary_destination_ports": primary_ports,
             "alert_types": sorted(alert_types),
             "countries": [{"value": value, "count": count} for value, count in countries.most_common(10)],
@@ -506,6 +511,27 @@ def get_recon_activity_detail(conn, activity_id: int) -> dict[str, Any] | None:
 
 def _serialize_recon_activity_row(row) -> dict[str, Any]:
     summary = row[11] if isinstance(row[11], dict) else {}
+    campaign_intelligence = build_campaign_intelligence(
+        {
+            "first_seen": row[8].isoformat() if row[8] else None,
+            "last_seen": row[9].isoformat() if row[9] else None,
+            "days_active": 0,
+            "source_count": int(summary.get("source_ip_count") or 0),
+            "destination_count": int(summary.get("destination_ip_count") or 0),
+            "service_count": int(summary.get("distinct_service_count") or 0),
+            "corroborating_alert_types": len(summary.get("alert_types") or []),
+            "progression_observed": False,
+            "relationship": f"Coordination status: {str(row[6] or 'not_established').replace('_', ' ')}",
+        }
+    )
+    investigation_value = build_investigation_value(
+        severity=row[5],
+        campaign_intelligence=campaign_intelligence,
+        progression_observed=False,
+        corroborating_detection_count=len(summary.get("alert_types") or []),
+        repeated_destination=int(summary.get("destination_ip_count") or 0) > 0,
+        persistent_activity=int(summary.get("source_ip_count") or 0) > 1,
+    )
     return {
         "id": int(row[0]),
         "label": PFSENSE_RECON_ACTIVITY_LABEL,
@@ -520,6 +546,14 @@ def _serialize_recon_activity_row(row) -> dict[str, Any]:
         "last_seen": row[9].isoformat() if row[9] else None,
         "assessment_text": row[10],
         "summary": summary,
+        "campaign_intelligence": campaign_intelligence,
+        "investigation_value": investigation_value,
+        "story": {
+            "headline": "Campaign-linked recon"
+            if campaign_intelligence.get("present")
+            else "Routine internet recon",
+            "disposition": investigation_value["label"],
+        },
         "related_incident_id": row[12],
         "created_at": row[13].isoformat() if row[13] else None,
         "updated_at": row[14].isoformat() if row[14] else None,

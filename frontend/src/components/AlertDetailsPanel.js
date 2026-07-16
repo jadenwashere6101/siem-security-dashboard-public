@@ -108,6 +108,10 @@ function AlertDetailsPanel({
   const targetContextRows = buildTargetContextRows(targetContext);
   const reconActivity = selectedAlert?.context?.recon_activity;
   const scanDescription = selectedAlert?.context?.scan_description;
+  const investigationValue = selectedAlert?.investigation_value;
+  const returningAttacker = selectedAlert?.returning_attacker;
+  const campaignIntelligence = selectedAlert?.campaign_intelligence;
+  const alertStory = selectedAlert?.alert_story;
   const operationalHistoryLabel = selectedAlert?.operational_history?.is_pre_tuning
     ? selectedAlert.operational_history.label || "Pre-Tuning"
     : "";
@@ -191,6 +195,27 @@ function AlertDetailsPanel({
       <p><strong>Type:</strong> {selectedAlert.alert_type}</p>
       <p><strong>Source IP:</strong> {selectedAlert.source_ip}</p>
       <p><strong>Severity:</strong> {selectedAlert.severity}</p>
+      {investigationValue?.label ? (
+        <div style={whyFiredPanelStyle}>
+          <strong>Why you should care</strong>
+          <div style={{ marginTop: "8px" }}>
+            <p style={{ margin: "0 0 8px 0" }}>
+              {alertStory?.headline || investigationValue.label}
+              {alertStory?.disposition ? ` · ${alertStory.disposition}` : ""}
+            </p>
+            {Array.isArray(investigationValue.reasons) && investigationValue.reasons.length > 0 ? (
+              investigationValue.reasons.map((item) => (
+                <div key={item.id} style={signalRowStyle}>
+                  <span>Reason</span>
+                  <span style={sourceTypeTextStyle}>{item.text}</span>
+                </div>
+              ))
+            ) : (
+              <div style={whyFiredMutedStyle}>No investigation reasons recorded.</div>
+            )}
+          </div>
+        </div>
+      ) : null}
       <p><strong>Status:</strong> {selectedAlert.status}</p>
       {operationalHistoryLabel ? (
         <p>
@@ -262,7 +287,7 @@ function AlertDetailsPanel({
       ) : null}
       {reconActivity ? (
         <div style={whyFiredPanelStyle}>
-          <strong>Distributed Recon Activity</strong>
+          <strong>Recon campaign context</strong>
           <div style={{ marginTop: "8px" }}>
             <div style={signalRowStyle}>
               <span>Activity</span>
@@ -276,6 +301,47 @@ function AlertDetailsPanel({
               <span>Coordination Status</span>
               <span style={sourceTypeTextStyle}>{String(reconActivity.coordination_status || "not_established").replaceAll("_", " ")}</span>
             </div>
+          </div>
+        </div>
+      ) : null}
+      {returningAttacker ? (
+        <div style={whyFiredPanelStyle}>
+          <strong>Returning attacker context</strong>
+          <div style={{ marginTop: "8px" }}>
+            <div style={signalRowStyle}>
+              <span>Status</span>
+              <span style={sourceTypeTextStyle}>{returningAttacker.headline}</span>
+            </div>
+            <div style={signalRowStyle}>
+              <span>First seen</span>
+              <span style={sourceTypeTextStyle}>{returningAttacker.first_seen || "Unknown"}</span>
+            </div>
+            <div style={signalRowStyle}>
+              <span>Last seen</span>
+              <span style={sourceTypeTextStyle}>{returningAttacker.last_seen || "Unknown"}</span>
+            </div>
+            {Array.isArray(returningAttacker.reasons)
+              ? returningAttacker.reasons.slice(0, 4).map((item) => (
+                <div key={item.id} style={signalRowStyle}>
+                  <span>Evidence</span>
+                  <span style={sourceTypeTextStyle}>{item.text}</span>
+                </div>
+              ))
+              : null}
+          </div>
+        </div>
+      ) : null}
+      {campaignIntelligence?.present ? (
+        <div style={whyFiredPanelStyle}>
+          <strong>Campaign evidence</strong>
+          <div style={{ marginTop: "8px" }}>
+            <p style={{ margin: "0 0 8px 0" }}>{campaignIntelligence.headline}</p>
+            {campaignIntelligence.reasons.map((item) => (
+              <div key={item.id} style={signalRowStyle}>
+                <span>Evidence</span>
+                <span style={sourceTypeTextStyle}>{item.text}</span>
+              </div>
+            ))}
           </div>
         </div>
       ) : null}

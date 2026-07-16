@@ -9,6 +9,7 @@ from flask_login import login_required
 
 from core.auth import analyst_or_super_admin_required
 from core.db import get_db_connection
+from core.investigation_intelligence import build_campaign_intelligence, build_returning_attacker_context
 from core.ip_helpers import get_ip_reputation
 from core.soar_response_outcomes import (
     get_outcome_count_groups,
@@ -374,6 +375,84 @@ def _fetch_playbook_execution_context(
     return {"count": len(recent), "recent": recent}
 
 
+def _fetch_returning_attacker_context(cur, source_ip: str) -> dict[str, Any]:
+    cur.execute(
+        """
+        SELECT
+            MIN(created_at),
+            MAX(created_at),
+            COUNT(DISTINCT DATE(created_at)),
+            COUNT(DISTINCT ia.incident_id),
+            COUNT(*) FILTER (WHERE response_status IS NOT NULL),
+            COUNT(DISTINCT NULLIF(COALESCE(context->'target_context'->>'primary_destination_ip', ''), '')),
+            COUNT(DISTINCT NULLIF(COALESCE(context->'target_context'->>'primary_destination_port', ''), ''))
+        FROM alerts a
+        LEFT JOIN incident_alerts ia ON ia.alert_id = a.id
+        WHERE a.source_ip = %s::inet
+        """,
+        (source_ip,),
+    )
+    row = cur.fetchone() or (None, None, 0, 0, 0, 0, 0)
+    return build_returning_attacker_context(
+        {
+            "first_seen": _iso(row[0]),
+            "last_seen": _iso(row[1]),
+            "days_observed": int(row[2] or 0),
+            "previous_incidents": int(row[3] or 0),
+            "previous_responses": int(row[4] or 0),
+            "repeated_destinations": int(row[5] or 0),
+            "repeated_services": int(row[6] or 0),
+        }
+    )
+
+
+def _fetch_campaign_memberships(cur, source_ip: str) -> dict[str, Any]:
+    cur.execute(
+        """
+        SELECT
+            ra.id,
+            ra.first_seen,
+            ra.last_seen,
+            COALESCE((ra.summary->>'source_ip_count')::integer, 0),
+            COALESCE((ra.summary->>'destination_ip_count')::integer, 0),
+            COALESCE((ra.summary->>'distinct_service_count')::integer, 0),
+            COALESCE(jsonb_array_length(COALESCE(ra.summary->'alert_types', '[]'::jsonb)), 0),
+            ra.coordination_status,
+            ra.related_incident_id
+        FROM recon_activity_alerts ral
+        JOIN recon_activities ra ON ra.id = ral.recon_activity_id
+        WHERE ral.source_ip = %s::inet
+        ORDER BY ra.last_seen DESC, ra.id DESC
+        LIMIT 10
+        """,
+        (source_ip,),
+    )
+    recent = []
+    for row in cur.fetchall():
+        intelligence = build_campaign_intelligence(
+            {
+                "first_seen": _iso(row[1]),
+                "last_seen": _iso(row[2]),
+                "source_count": int(row[3] or 0),
+                "destination_count": int(row[4] or 0),
+                "service_count": int(row[5] or 0),
+                "corroborating_alert_types": int(row[6] or 0),
+                "relationship": f"Coordination status: {str(row[7] or 'not_established').replace('_', ' ')}",
+            }
+        )
+        recent.append(
+            {
+                "id": int(row[0]),
+                "label": f"Recon activity #{row[0]}",
+                "first_seen": _iso(row[1]),
+                "last_seen": _iso(row[2]),
+                "related_incident_id": row[8],
+                "campaign_intelligence": intelligence,
+            }
+        )
+    return {"count": len(recent), "recent": recent}
+
+
 @source_ip_context_bp.route("/source-ip-context", methods=["GET"])
 @login_required
 @analyst_or_super_admin_required
@@ -395,6 +474,8 @@ def get_source_ip_context():
             behavioral = get_ip_reputation(source_ip, cur=cur)
             external = _fetch_external_reputation_snapshots(cur, source_ip)
             playbook_executions = _fetch_playbook_execution_context(cur, alert_ids, incident_ids)
+            returning_attacker = _fetch_returning_attacker_context(cur, source_ip)
+            campaigns = _fetch_campaign_memberships(cur, source_ip)
             response_outcomes = get_recent_outcomes_for_source_ip(
                 conn,
                 source_ip,
@@ -423,6 +504,8 @@ def get_source_ip_context():
                         **external,
                     },
                     "playbook_executions": playbook_executions,
+                    "returning_attacker": returning_attacker,
+                    "campaigns": campaigns,
                     "response_outcomes": response_outcomes,
                     "response_outcome_counts": response_outcome_counts,
                 }

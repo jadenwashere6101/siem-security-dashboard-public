@@ -302,7 +302,7 @@ test("AlertDetailsPanel renders aggregate pfSense target context", () => {
   expect(screen.getByText("203.0.113.20")).toBeInTheDocument();
   expect(screen.getByText("Distinct Destinations")).toBeInTheDocument();
   expect(screen.getByText("5")).toBeInTheDocument();
-  expect(screen.getByText("Distributed Recon Activity")).toBeInTheDocument();
+  expect(screen.getByText("Recon campaign context")).toBeInTheDocument();
   expect(screen.getByText("#901")).toBeInTheDocument();
 });
 

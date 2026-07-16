@@ -2,7 +2,9 @@ import pytest
 from psycopg2 import IntegrityError
 
 import siem_backend
+from core import playbook_store
 from core.incident_store import (
+    auto_close_resolved_p3_incidents_for_alert,
     create_incident,
     find_open_incident_by_source_ip,
     get_incident_detail,
@@ -42,6 +44,67 @@ def _count_escalation_audits(cur):
         "SELECT COUNT(*) FROM audit_log WHERE event_type = 'incident_severity_escalated'"
     )
     return cur.fetchone()[0]
+
+
+def _count_auto_close_audits(cur):
+    cur.execute(
+        "SELECT COUNT(*) FROM audit_log WHERE event_type = 'incident_auto_closed'"
+    )
+    return cur.fetchone()[0]
+
+
+def _insert_queue_row(cur, *, alert_id: int, source_ip: str, status: str) -> int:
+    cur.execute(
+        """
+        INSERT INTO response_actions_queue (idempotency_key, alert_id, source_ip, action, status)
+        VALUES (md5(random()::text), %s, %s::inet, 'block_ip', %s)
+        RETURNING id
+        """,
+        (alert_id, source_ip, status),
+    )
+    return cur.fetchone()[0]
+
+
+def _insert_playbook_execution(cur, *, alert_id: int, incident_id: int, status: str) -> int:
+    conn = cur.connection
+    if playbook_store.get_playbook_definition(conn, "auto_close_pb") is None:
+        playbook_store.create_playbook_definition(
+            conn,
+            "auto_close_pb",
+            "Auto Close PB",
+            steps=[{"action": "monitor", "params": {}}],
+        )
+    execution_id = playbook_store.create_playbook_execution(
+        conn,
+        "auto_close_pb",
+        alert_id=alert_id,
+        incident_id=incident_id,
+    )
+    playbook_store.update_execution_status(conn, execution_id, status)
+    return execution_id
+
+
+def _insert_pending_approval(cur, *, incident_id: int) -> int:
+    cur.execute(
+        """
+        INSERT INTO approval_requests (incident_id, status, action, expires_at)
+        VALUES (%s, 'pending', 'playbook.require_approval', NOW() + INTERVAL '1 hour')
+        RETURNING id
+        """,
+        (incident_id,),
+    )
+    return cur.fetchone()[0]
+
+
+def _insert_user(cur, *, user_id: int, username: str) -> int:
+    cur.execute(
+        """
+        INSERT INTO users (id, username, password_hash, role, is_active)
+        VALUES (%s, %s, 'test-hash', 'analyst', TRUE)
+        """,
+        (user_id, username),
+    )
+    return user_id
 
 
 class _AuditSafeConnection:
@@ -591,3 +654,130 @@ def test_update_unknown_incident_raises(postgres_db):
     conn, _cur = postgres_db
     with pytest.raises(ValueError, match="incident not found"):
         update_incident_status(conn, 999999, "investigating", "alice")
+
+
+def test_auto_close_resolved_p3_incident_closes_only_when_all_linked_alerts_resolved_and_audits(postgres_db):
+    conn, cur = postgres_db
+    audit_conn = _AuditSafeConnection(conn)
+    alert_id = _insert_alert(conn, cur, "203.0.113.210")
+    incident = create_incident(conn, "auto close", "HIGH", "203.0.113.210", priority="P3")
+    link_alert_to_incident(conn, incident["id"], alert_id)
+    cur.execute("UPDATE alerts SET status = 'resolved' WHERE id = %s", (alert_id,))
+    conn.commit()
+
+    with siem_backend.app.app_context(), pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr("core.audit_helpers.get_db_connection", lambda: audit_conn)
+        closed = auto_close_resolved_p3_incidents_for_alert(conn, alert_id)
+    conn.commit()
+
+    assert closed == [incident["id"]]
+    cur.execute("SELECT status FROM incidents WHERE id = %s", (incident["id"],))
+    assert cur.fetchone()[0] == "closed"
+    assert _count_auto_close_audits(cur) == 1
+    cur.execute(
+        """
+        SELECT details
+        FROM audit_log
+        WHERE event_type = 'incident_auto_closed'
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    )
+    details = cur.fetchone()[0]
+    assert details["incident_id"] == incident["id"]
+    assert details["closure_policy"] == "p3_resolved_autoclose"
+    assert "All linked alerts resolved" in details["reason"]
+
+
+def test_auto_close_resolved_p3_incident_skips_when_any_linked_alert_open(postgres_db):
+    conn, cur = postgres_db
+    first_alert_id = _insert_alert(conn, cur, "203.0.113.211")
+    second_alert_id = _insert_alert(conn, cur, "203.0.113.211")
+    incident = create_incident(conn, "skip open linked", "HIGH", "203.0.113.211", priority="P3")
+    link_alert_to_incident(conn, incident["id"], first_alert_id)
+    link_alert_to_incident(conn, incident["id"], second_alert_id)
+    cur.execute("UPDATE alerts SET status = 'resolved' WHERE id = %s", (first_alert_id,))
+    conn.commit()
+
+    closed = auto_close_resolved_p3_incidents_for_alert(conn, first_alert_id)
+    conn.commit()
+
+    assert closed == []
+    cur.execute("SELECT status FROM incidents WHERE id = %s", (incident["id"],))
+    assert cur.fetchone()[0] == "open"
+
+
+def test_auto_close_resolved_p3_incident_skips_pending_approval(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(conn, cur, "203.0.113.212")
+    incident = create_incident(conn, "skip approval", "HIGH", "203.0.113.212", priority="P3")
+    link_alert_to_incident(conn, incident["id"], alert_id)
+    _insert_pending_approval(cur, incident_id=incident["id"])
+    cur.execute("UPDATE alerts SET status = 'resolved' WHERE id = %s", (alert_id,))
+    conn.commit()
+
+    closed = auto_close_resolved_p3_incidents_for_alert(conn, alert_id)
+    conn.commit()
+
+    assert closed == []
+    cur.execute("SELECT status FROM incidents WHERE id = %s", (incident["id"],))
+    assert cur.fetchone()[0] == "open"
+
+
+def test_auto_close_resolved_p3_incident_skips_active_queue_or_playbook(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(conn, cur, "203.0.113.213")
+    incident = create_incident(conn, "skip active work", "HIGH", "203.0.113.213", priority="P3")
+    link_alert_to_incident(conn, incident["id"], alert_id)
+    _insert_queue_row(cur, alert_id=alert_id, source_ip="203.0.113.213", status="running")
+    _insert_playbook_execution(cur, alert_id=alert_id, incident_id=incident["id"], status="awaiting_approval")
+    cur.execute("UPDATE alerts SET status = 'resolved' WHERE id = %s", (alert_id,))
+    conn.commit()
+
+    closed = auto_close_resolved_p3_incidents_for_alert(conn, alert_id)
+    conn.commit()
+
+    assert closed == []
+    cur.execute("SELECT status FROM incidents WHERE id = %s", (incident["id"],))
+    assert cur.fetchone()[0] == "open"
+
+
+def test_auto_close_resolved_p3_incident_skips_investigating_or_assigned(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(conn, cur, "203.0.113.214")
+    incident = create_incident(conn, "skip analyst review", "HIGH", "203.0.113.214", priority="P3")
+    link_alert_to_incident(conn, incident["id"], alert_id)
+    _insert_user(cur, user_id=1, username="autoclose-analyst")
+    cur.execute(
+        "UPDATE incidents SET status = 'investigating', assigned_to = 1 WHERE id = %s",
+        (incident["id"],),
+    )
+    cur.execute("UPDATE alerts SET status = 'resolved' WHERE id = %s", (alert_id,))
+    conn.commit()
+
+    closed = auto_close_resolved_p3_incidents_for_alert(conn, alert_id)
+    conn.commit()
+
+    assert closed == []
+    cur.execute("SELECT status, assigned_to FROM incidents WHERE id = %s", (incident["id"],))
+    assert cur.fetchone() == ("investigating", 1)
+
+
+def test_auto_close_resolved_p3_incident_is_idempotent(postgres_db):
+    conn, cur = postgres_db
+    audit_conn = _AuditSafeConnection(conn)
+    alert_id = _insert_alert(conn, cur, "203.0.113.215")
+    incident = create_incident(conn, "idempotent close", "HIGH", "203.0.113.215", priority="P3")
+    link_alert_to_incident(conn, incident["id"], alert_id)
+    cur.execute("UPDATE alerts SET status = 'resolved' WHERE id = %s", (alert_id,))
+    conn.commit()
+
+    with siem_backend.app.app_context(), pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr("core.audit_helpers.get_db_connection", lambda: audit_conn)
+        first = auto_close_resolved_p3_incidents_for_alert(conn, alert_id)
+        second = auto_close_resolved_p3_incidents_for_alert(conn, alert_id)
+    conn.commit()
+
+    assert first == [incident["id"]]
+    assert second == []
+    assert _count_auto_close_audits(cur) == 1

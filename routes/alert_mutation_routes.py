@@ -5,6 +5,7 @@ from core.audit_helpers import log_audit_event
 from core.auth import analyst_or_super_admin_required
 from core.db import get_db_connection
 from core.extensions import limiter
+from core.incident_store import auto_close_resolved_p3_incidents_for_alert
 from core.response_command_contracts import (
     ORIGIN_MANUAL_ALERT,
     ResponseCommandRequest,
@@ -308,6 +309,9 @@ def update_alert_status(alert_id):
             conn.rollback()
             return jsonify({"error": "Alert not found"}), 404
 
+        auto_closed_incident_ids = []
+        if new_status == "resolved":
+            auto_closed_incident_ids = auto_close_resolved_p3_incidents_for_alert(conn, alert_id)
         conn.commit()
         log_audit_event(
             "UPDATE_ALERT_STATUS",
@@ -317,12 +321,12 @@ def update_alert_status(alert_id):
             http_method=request.method,
             request_path=request.path,
             source_ip=request.remote_addr,
-            details={"status": new_status},
+            details={"status": new_status, "auto_closed_incident_ids": auto_closed_incident_ids},
         )
         cur.close()
         conn.close()
 
-        return jsonify({"message": "Alert status updated successfully"}), 200
+        return jsonify({"message": "Alert status updated successfully", "auto_closed_incident_ids": auto_closed_incident_ids}), 200
 
     except Exception as e:
         current_app.logger.error("Error in update_alert_status: %s", e)

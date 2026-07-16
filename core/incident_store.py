@@ -10,6 +10,13 @@ from core.pfsense_operational_baseline import (
     build_pfsense_incident_scope_filter,
 )
 from core.audit_helpers import log_audit_event
+from core.investigation_intelligence import (
+    build_campaign_intelligence,
+    build_incident_intelligence,
+    build_investigation_value,
+    build_returning_attacker_context,
+    determine_incident_priority,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -61,9 +68,16 @@ def _incident_row_to_dict(
     }
 
 
-def create_incident(conn, title: str, severity: str, source_ip: str) -> dict[str, Any]:
+def create_incident(
+    conn,
+    title: str,
+    severity: str,
+    source_ip: str,
+    *,
+    priority: str | None = None,
+) -> dict[str, Any]:
     sev_upper = severity.upper()
-    priority = SEVERITY_TO_PRIORITY.get(sev_upper, "P2")
+    priority = priority or SEVERITY_TO_PRIORITY.get(sev_upper, "P2")
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -148,8 +162,51 @@ def maybe_create_or_link_incident(
         )
         return {**(upgraded or existing), "created": False}
 
+    context = context if isinstance(context, dict) else {}
+    target_context = context.get("target_context") if isinstance(context.get("target_context"), dict) else {}
+    returning_attacker = build_returning_attacker_context(
+        {
+            "first_seen": target_context.get("first_seen") or context.get("first_seen"),
+            "last_seen": target_context.get("last_seen") or context.get("last_seen"),
+            "previous_responses": 1 if context.get("response_status") else 0,
+            "repeated_destinations": 1 if target_context.get("primary_destination_ip") else 0,
+            "repeated_services": 1 if target_context.get("primary_destination_port") else 0,
+            "campaign_count": 1 if context.get("recon_activity") else 0,
+        }
+    )
+    campaign_intelligence = build_campaign_intelligence(
+        {
+            "first_seen": target_context.get("first_seen") or context.get("first_seen"),
+            "last_seen": target_context.get("last_seen") or context.get("last_seen"),
+            "source_count": int((context.get("recon_activity") or {}).get("source_ip_count") or 0),
+            "destination_count": int(target_context.get("distinct_destination_count") or 0),
+            "service_count": int(target_context.get("distinct_port_count") or 0),
+            "corroborating_alert_types": 1,
+            "progression_observed": bool(alert_type == "pfsense_firewall_allow_after_deny"),
+            "relationship": "Shared recon activity" if context.get("recon_activity") else "",
+        }
+    )
+    investigation_value = build_investigation_value(
+        severity=severity,
+        returning_attacker=returning_attacker,
+        campaign_intelligence=campaign_intelligence,
+        progression_observed=bool(alert_type == "pfsense_firewall_allow_after_deny"),
+        corroborating_detection_count=1,
+        response_history_present=bool(context.get("response_status")),
+        repeated_destination=bool(target_context.get("primary_destination_ip")),
+        persistent_activity=returning_attacker.get("days_observed", 0) > 1,
+    )
+    if not str(alert_type or "").startswith("pfsense_") and not context:
+        priority = SEVERITY_TO_PRIORITY.get(sev_upper, "P2")
+    else:
+        priority = determine_incident_priority(
+            severity=severity,
+            investigation_value_level=investigation_value["level"],
+            progression_observed=bool(alert_type == "pfsense_firewall_allow_after_deny"),
+            campaign_present=campaign_intelligence.get("present", False),
+        )
     title = f"[AUTO] {sev_upper} alert from {source_ip}"
-    new_inc = create_incident(conn, title, severity, source_ip)
+    new_inc = create_incident(conn, title, severity, source_ip, priority=priority)
     link_alert_to_incident(conn, new_inc["id"], alert_id)
     logger.info(
         "[INCIDENT CREATED] incident_id=%s for alert_id=%s",
@@ -258,13 +315,27 @@ def list_incidents(
         rows = cur.fetchall()
         incident_ids = [row[0] for row in rows]
         legacy_by_incident_id = _build_incident_legacy_map(cur, incident_ids)
-        return [
+        incidents = [
             _incident_row_to_dict(
                 row,
                 operational_history=legacy_by_incident_id.get(row[0]),
             )
             for row in rows
         ]
+        for incident in incidents:
+            incident["incident_intelligence"] = {
+                "ownership": "Source-specific investigation" if incident.get("source_ip") else "Aggregate investigation",
+                "summary": f"{incident.get('priority') or 'Unclassified'} priority assigned by incident policy",
+                "reasons": [
+                    {
+                        "id": "priority",
+                        "text": f"Priority {incident.get('priority') or 'N/A'} is reserved for actionability, not severity alone",
+                    }
+                ],
+                "auto_close_recommended": False,
+                "auto_close_reason": None,
+            }
+        return incidents
 
 
 def get_incident_detail(conn, incident_id: int) -> dict[str, Any] | None:
@@ -328,6 +399,10 @@ def get_incident_detail(conn, incident_id: int) -> dict[str, Any] | None:
         base["alerts"] = alerts
         base["operational_history"] = build_incident_operational_history(
             created_at=base["created_at"],
+            linked_alerts=alerts,
+        )
+        base["incident_intelligence"] = build_incident_intelligence(
+            incident=base,
             linked_alerts=alerts,
         )
         return base
@@ -425,3 +500,103 @@ def update_incident_status(
                 (new_status, incident_id),
             )
         return _incident_row_to_dict(cur.fetchone())
+
+
+def auto_close_resolved_p3_incidents_for_alert(conn, alert_id: int) -> list[int]:
+    closed_ids: list[int] = []
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT i.id, i.status, i.assigned_to
+            FROM incidents i
+            JOIN incident_alerts ia ON ia.incident_id = i.id
+            WHERE ia.alert_id = %s
+              AND i.priority = 'P3'
+              AND i.status IN ('open', 'investigating', 'resolved')
+            """,
+            (alert_id,),
+        )
+        incident_rows = cur.fetchall()
+        for incident_id, incident_status, assigned_to in incident_rows:
+            incident_id = int(incident_id)
+            if str(incident_status or "").lower() == "investigating" or assigned_to:
+                continue
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM incident_alerts ia
+                JOIN alerts a ON a.id = ia.alert_id
+                WHERE ia.incident_id = %s
+                  AND a.status <> 'resolved'
+                """,
+                (incident_id,),
+            )
+            unresolved_count = int(cur.fetchone()[0] or 0)
+            if unresolved_count > 0:
+                continue
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM approval_requests
+                WHERE incident_id = %s
+                  AND status = 'pending'
+                """,
+                (incident_id,),
+            )
+            pending_approvals = int(cur.fetchone()[0] or 0)
+            if pending_approvals > 0:
+                continue
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM response_actions_queue
+                WHERE alert_id IN (
+                    SELECT alert_id
+                    FROM incident_alerts
+                    WHERE incident_id = %s
+                )
+                  AND status IN ('pending', 'running', 'awaiting_approval')
+                """,
+                (incident_id,),
+            )
+            active_queue_rows = int(cur.fetchone()[0] or 0)
+            if active_queue_rows > 0:
+                continue
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM playbook_executions
+                WHERE incident_id = %s
+                  AND status IN ('pending', 'running', 'awaiting_approval')
+                """,
+                (incident_id,),
+            )
+            active_playbooks = int(cur.fetchone()[0] or 0)
+            if active_playbooks > 0:
+                continue
+            cur.execute(
+                """
+                UPDATE incidents
+                SET status = 'closed',
+                    resolved_at = COALESCE(resolved_at, NOW())
+                WHERE id = %s
+                  AND status <> 'closed'
+                  AND status <> 'investigating'
+                  AND assigned_to IS NULL
+                RETURNING id
+                """,
+                (incident_id,),
+            )
+            row = cur.fetchone()
+            if row is not None:
+                closed_ids.append(int(row[0]))
+                log_audit_event(
+                    "incident_auto_closed",
+                    target_alert_id=alert_id,
+                    details={
+                        "incident_id": incident_id,
+                        "reason": "All linked alerts resolved and no pending approvals, active response actions, active playbooks, or analyst-owned review remained",
+                        "closure_policy": "p3_resolved_autoclose",
+                    },
+                )
+    return closed_ids

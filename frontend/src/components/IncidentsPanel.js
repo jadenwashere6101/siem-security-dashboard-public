@@ -387,6 +387,11 @@ function IncidentsPanel({
                       <td style={{ ...bodyCellStyle, ...monoCellStyle }}>{incident.id}</td>
                       {visibleColumns.title && <td style={bodyCellStyle} title={incident.title || ""}>
                         <div>{truncateText(incident.title || "Untitled incident", 44)}</div>
+                        {incident.incident_intelligence?.ownership ? (
+                          <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "4px" }}>
+                            {incident.incident_intelligence.ownership}
+                          </div>
+                        ) : null}
                         {getOperationalHistoryBadge(incident) ? (
                           <div style={legacyBadgeRowStyle}>
                             <span style={legacyBadgeStyle}>{getOperationalHistoryBadge(incident)}</span>
@@ -516,6 +521,26 @@ function IncidentsPanel({
                     }
                   />
                 </div>
+                {selectedIncident.incident_intelligence ? (
+                  <div style={linkedAlertsSectionStyle}>
+                    <div style={tableMetaStyle}>
+                      <span style={tableMetaLabelStyle}>Why this incident exists</span>
+                    </div>
+                    <p style={timelineNoticeStyle}>
+                      {selectedIncident.incident_intelligence.ownership} · {selectedIncident.incident_intelligence.summary}
+                    </p>
+                    <ul style={{ margin: "0", paddingLeft: "18px", color: "#cbd5e1" }}>
+                      {(selectedIncident.incident_intelligence.reasons || []).map((reason) => (
+                        <li key={reason.id}>{reason.text}</li>
+                      ))}
+                    </ul>
+                    {selectedIncident.incident_intelligence.auto_close_reason ? (
+                      <p style={{ ...timelineNoticeStyle, marginTop: "10px" }}>
+                        Auto-close rule: {selectedIncident.incident_intelligence.auto_close_reason}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
 
                 <div style={linkedAlertsSectionStyle}>
                   <div style={tableMetaStyle}>

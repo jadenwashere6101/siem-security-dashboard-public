@@ -185,8 +185,7 @@ function SettingsPanel({
         <div>
           <h2 style={cardTitleStyle}>Settings</h2>
           <p style={cardSubtitleStyle}>
-            Configure core SIEM preferences. Additional preferences will appear here in future
-            updates.
+            Configure analyst preferences for the current SIEM workflow.
           </p>
         </div>
       </div>
@@ -212,7 +211,7 @@ function SettingsPanel({
 
         <div style={settingsFieldStyle}>
           <label htmlFor="global-auto-refresh-interval" style={filterLabelStyle}>
-            Global auto-refresh interval
+            Default refresh interval
           </label>
           <select
             id="global-auto-refresh-interval"
@@ -230,7 +229,7 @@ function SettingsPanel({
 
         <div style={settingsFieldStyle}>
           <label htmlFor="display-timezone-mode" style={filterLabelStyle}>
-            Timezone display
+            Time display
           </label>
           <select
             id="display-timezone-mode"
