@@ -8,6 +8,14 @@ from core.ip_helpers import (
     lookup_ip_reputation,
 )
 
+IMPLEMENTED_CORRELATION_RULE_IDS = (
+    "correlated_activity",
+    "web_to_app_attack_pattern",
+    "spray_then_success_pattern",
+    "cloud_app_error_pattern",
+    "azure_auth_abuse_exception_correlation",
+)
+
 
 def _dedupe_preserve_order(values):
     seen = set()

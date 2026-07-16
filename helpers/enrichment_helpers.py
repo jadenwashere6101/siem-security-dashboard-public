@@ -1,64 +1,14 @@
 import json
 
-MITRE_ATTACK_MAPPINGS = {
-    "failed_login_threshold": {
-        "mitre_technique_id": "T1110",
-        "mitre_technique_name": "Brute Force",
-        "mitre_tactic": "Credential Access",
-    },
-    "port_scan_threshold": {
-        "mitre_technique_id": "T1046",
-        "mitre_technique_name": "Network Service Discovery",
-        "mitre_tactic": "Discovery",
-    },
-    "suspicious_ip_reputation": {
-        "mitre_technique_id": "T1595",
-        "mitre_technique_name": "Active Scanning",
-        "mitre_tactic": "Reconnaissance",
-    },
-    "password_spraying_threshold": {
-        "mitre_technique_id": "T1110.003",
-        "mitre_technique_name": "Password Spraying",
-        "mitre_tactic": "Credential Access",
-    },
-    "successful_login_after_spray": {
-        "mitre_technique_id": "T1110.003",
-        "mitre_technique_name": "Password Spraying",
-        "mitre_tactic": "Credential Access",
-    },
-    "spray_then_success_pattern": {
-        "mitre_technique_id": "T1110.003",
-        "mitre_technique_name": "Password Spraying",
-        "mitre_tactic": "Credential Access",
-    },
-    "pfsense_firewall_port_scan": {
-        "mitre_technique_id": "T1046",
-        "mitre_technique_name": "Network Service Discovery",
-        "mitre_tactic": "Discovery",
-    },
-}
-
-# These alert types intentionally keep null MITRE fields. Their current
-# semantics are too broad to map to a specific ATT&CK technique confidently.
-INTENTIONALLY_UNMAPPED_MITRE_ALERT_TYPES = {
-    "http_error_threshold",
-    "application_exception_threshold",
-    "high_request_rate_threshold",
-    "correlated_activity",
-    "web_to_app_attack_pattern",
-    "cloud_app_error_pattern",
-    "pfsense_firewall_repeated_deny",
-    "pfsense_firewall_suspicious_allow",
-    "pfsense_firewall_noisy_source",
-}
+from engines.detection_rule_catalog import (
+    get_correlation_rule_catalog_records,
+    get_rule_mitre_mapping,
+)
 
 CORRELATION_ALERT_TYPES = frozenset(
-    {
-        "correlated_activity",
-        "web_to_app_attack_pattern",
-        "spray_then_success_pattern",
-        "cloud_app_error_pattern",
-    }
+    record.rule_id
+    for record in get_correlation_rule_catalog_records()
+    if record.rule_id != "azure_auth_abuse_exception_correlation"
 )
 
 CORRELATION_CONTEXT_RESPONSE_KEYS = (
@@ -76,7 +26,7 @@ CORRELATION_CONTEXT_RESPONSE_KEYS = (
 
 def enrich_alert_with_mitre(alert_dict):
     alert_type = alert_dict.get("alert_type")
-    mitre_data = MITRE_ATTACK_MAPPINGS.get(alert_type, {})
+    mitre_data = get_rule_mitre_mapping(alert_type) or {}
 
     alert_dict["mitre_technique_id"] = mitre_data.get("mitre_technique_id")
     alert_dict["mitre_technique_name"] = mitre_data.get("mitre_technique_name")

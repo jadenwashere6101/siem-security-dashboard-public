@@ -57,6 +57,7 @@ from engines.detection_config import (
     get_effective_detection_rule,
 )
 from engines.detection_engine import (
+    _generate_app_insights_unauthorized_access_alerts_core,
     _generate_admin_probe_alerts_core,
     _generate_application_exception_alerts_core,
     _generate_credential_stuffing_alerts_core,
@@ -65,6 +66,7 @@ from engines.detection_engine import (
     _generate_high_request_rate_alerts_core,
     _generate_http_error_alerts_core,
     _generate_password_spraying_alerts_core,
+    _generate_pfsense_allow_after_deny_alerts_core,
     _generate_pfsense_noisy_source_alerts_core,
     _generate_pfsense_port_scan_alerts_core,
     _generate_pfsense_repeated_deny_alerts_core,
@@ -75,8 +77,8 @@ from engines.detection_engine import (
 )
 from engines.ingest_engine import ingest_normalized_event
 from engines.playbook_engine import match_playbooks
+from engines.detection_rule_catalog import list_catalog_mitre_mappings
 from helpers.enrichment_helpers import (
-    MITRE_ATTACK_MAPPINGS,
     enrich_alert_with_correlation_context,
     enrich_alert_with_mitre,
 )
@@ -185,6 +187,7 @@ RULE_ID_TO_DETECTOR = {
     "password_spraying_threshold": _generate_password_spraying_alerts_core,
     "http_error_threshold": _generate_http_error_alerts_core,
     "application_exception_threshold": _generate_application_exception_alerts_core,
+    "app_insights_unauthorized_access_threshold": _generate_app_insights_unauthorized_access_alerts_core,
     "high_request_rate_threshold": _generate_high_request_rate_alerts_core,
     "successful_login_after_spray": _generate_successful_login_after_spray_alerts_core,
     "honeypot_env_probe_threshold": _generate_env_probe_alerts_core,
@@ -195,6 +198,7 @@ RULE_ID_TO_DETECTOR = {
     "pfsense_firewall_port_scan": _generate_pfsense_port_scan_alerts_core,
     "pfsense_firewall_noisy_source": _generate_pfsense_noisy_source_alerts_core,
     "pfsense_firewall_suspicious_allow": _generate_pfsense_suspicious_allow_alerts_core,
+    "pfsense_firewall_allow_after_deny": _generate_pfsense_allow_after_deny_alerts_core,
 }
 
 # Every detector's alerts_created dict carries these bookkeeping fields; none
@@ -309,7 +313,7 @@ SIGMA_FORBIDDEN_REQUEST_KEYS = TEMPORARY_RULE_FORBIDDEN_REQUEST_KEYS | frozenset
     {"temporary_rule", "rule_id", "persist_sigma", "save_sigma_rule", "promote_rule"}
 )
 TEMPORARY_RULE_MITRE_TECHNIQUES = {}
-for _mitre_data in MITRE_ATTACK_MAPPINGS.values():
+for _mitre_data in list_catalog_mitre_mappings():
     technique_id = _mitre_data.get("mitre_technique_id")
     if not technique_id or technique_id in TEMPORARY_RULE_MITRE_TECHNIQUES:
         continue

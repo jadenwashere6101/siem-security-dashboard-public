@@ -6,206 +6,39 @@ from core.notification_policy_service import evaluate_notification_policy
 from core.notification_policy_store import get_effective_notification_policy
 from core.playbook_store import list_enabled_playbook_definitions
 from engines.detection_config import get_all_effective_detection_rules
-
-
-_RULE_METADATA: dict[str, dict[str, Any]] = {
-    "failed_login_threshold": {
-        "default_severity": "high",
-        "maximum_severity": "high",
-        "source": "bank_app",
-        "source_type": "custom",
-        "escalation_conditions": "Fixed High detector; repeated failed logins remain an investigation signal until correlated with stronger evidence.",
-        "why": "Repeated failed authentication attempts are malicious, but they do not prove account compromise.",
-    },
-    "port_scan_threshold": {
-        "default_severity": "medium",
-        "maximum_severity": "high",
-        "source": "bank_app",
-        "source_type": "custom",
-        "escalation_conditions": "Escalates through corroborating reputation or playbook context, but does not become Critical on scan activity alone.",
-        "why": "Internet reconnaissance alone does not prove compromise.",
-    },
-    "password_spraying_threshold": {
-        "default_severity": "high",
-        "maximum_severity": "high",
-        "source": "bank_app",
-        "source_type": "custom",
-        "escalation_conditions": "Threshold-based High detector; successful authentication evidence is handled by successful_login_after_spray instead of this rule.",
-        "why": "Credential attack activity without a successful login is serious, but it is not a likely-compromise signal by itself.",
-    },
-    "http_error_threshold": {
-        "default_severity": "medium",
-        "maximum_severity": "high",
-        "source": "nginx",
-        "source_type": "web_log",
-        "escalation_conditions": "Can contribute to higher-confidence correlation rules when paired with other telemetry from the same source IP.",
-        "why": "Repeated application errors can indicate attack pressure, but errors alone do not prove a compromise path succeeded.",
-    },
-    "application_exception_threshold": {
-        "default_severity": "medium",
-        "maximum_severity": "high",
-        "source": "azure_insights",
-        "source_type": "cloud_api",
-        "escalation_conditions": "Can contribute to higher-confidence correlation rules, but standalone exceptions remain investigation-only.",
-        "why": "Application exceptions are useful attack evidence, but they do not by themselves prove successful compromise.",
-    },
-    "app_insights_unauthorized_access_threshold": {
-        "default_severity": "high",
-        "maximum_severity": "high",
-        "source": "azure_insights",
-        "source_type": "cloud_api",
-        "escalation_conditions": "Threshold-based High detector for repeated 401/403 application responses; it does not bypass the platform's successful-authentication bar for Critical.",
-        "why": "Application-tier authorization failures indicate probing or abuse, not confirmed access.",
-    },
-    "high_request_rate_threshold": {
-        "default_severity": "medium",
-        "maximum_severity": "high",
-        "source": "nginx",
-        "source_type": "web_log",
-        "escalation_conditions": "Can contribute to correlation-driven High alerts when paired with matching application signals.",
-        "why": "High request volume can be abusive or malicious, but traffic rate alone does not establish compromise.",
-    },
-    "successful_login_after_spray": {
-        "default_severity": "critical",
-        "maximum_severity": "critical",
-        "source": "bank_app",
-        "source_type": "custom",
-        "escalation_conditions": "Requires at least 5 distinct failed-login usernames before a successful login within the configured correlation windows.",
-        "why": "Successful authentication after coordinated credential attacks is a likely-compromise indicator requiring immediate human review.",
-    },
-    "honeypot_env_probe_threshold": {
-        "default_severity": "high",
-        "maximum_severity": "high",
-        "source": "honeypot",
-        "source_type": "honeypot",
-        "escalation_conditions": "Threshold-based High detector; remains investigation and containment-eligible without becoming Critical.",
-        "why": "Deliberate probing of sensitive honeypot paths is hostile, but it does not prove a production compromise occurred.",
-    },
-    "honeypot_admin_probe_threshold": {
-        "default_severity": "medium",
-        "maximum_severity": "medium",
-        "source": "honeypot",
-        "source_type": "honeypot",
-        "escalation_conditions": "Fixed Medium detector; corroborating evidence must come from other rules.",
-        "why": "Admin-path probing is suspicious, but a single probe is not enough to justify High or Critical severity on its own.",
-    },
-    "honeypot_scanner_detected": {
-        "default_severity": "medium",
-        "maximum_severity": "medium",
-        "source": "honeypot",
-        "source_type": "honeypot",
-        "escalation_conditions": "Fixed Medium detector; supports analyst review and correlation, not containment by itself.",
-        "why": "Commodity scanning is meaningful telemetry, but scanner activity alone does not imply compromise.",
-    },
-    "honeypot_credential_stuffing_threshold": {
-        "default_severity": "high",
-        "maximum_severity": "high",
-        "source": "honeypot",
-        "source_type": "honeypot",
-        "escalation_conditions": "Threshold-based High detector; no standalone Critical path without successful-authentication evidence.",
-        "why": "Credential-stuffing against the honeypot is high-confidence malicious behavior, but not a likely-compromise signal for production systems.",
-    },
-    "pfsense_firewall_repeated_deny": {
-        "default_severity": "low",
-        "maximum_severity": "high",
-        "source": "pfsense",
-        "source_type": "firewall",
-        "escalation_conditions": "Starts Low for inbound commodity denies, rises to Medium on sustained repetition, and reaches High only for outbound/internal-host behavior or stronger corroboration.",
-        "why": "Blocked activity indicates malicious intent or scanning, but blocked traffic alone does not prove successful access.",
-    },
-    "pfsense_firewall_port_scan": {
-        "default_severity": "medium",
-        "maximum_severity": "high",
-        "source": "pfsense",
-        "source_type": "firewall",
-        "escalation_conditions": "Escalates from Medium to High only on materially stronger breadth or reputation-backed stronger breadth; routine commodity scanning stays below High.",
-        "why": "Port-scanning is strong reconnaissance evidence, but reconnaissance alone is not a likely-compromise signal.",
-    },
-    "pfsense_firewall_noisy_source": {
-        "default_severity": "low",
-        "maximum_severity": "low",
-        "source": "pfsense",
-        "source_type": "firewall",
-        "escalation_conditions": "Suppression-focused detector; does not escalate beyond Low in the current design.",
-        "why": "This rule exists to track noisy sources operationally, not to represent a compromise indicator.",
-    },
-    "pfsense_firewall_suspicious_allow": {
-        "default_severity": "medium",
-        "maximum_severity": "high",
-        "source": "pfsense",
-        "source_type": "firewall",
-        "escalation_conditions": "Escalates to High only on repeated qualifying allows, multi-port corroboration, or progression-backed evidence; reputation alone is insufficient.",
-        "why": "Allowed traffic to sensitive ports is important, but it becomes High only when corroborating context suggests meaningful risk.",
-    },
-    "pfsense_firewall_allow_after_deny": {
-        "default_severity": "medium",
-        "maximum_severity": "high",
-        "source": "pfsense",
-        "source_type": "firewall",
-        "escalation_conditions": "Requires same-source inbound deny-to-allow progression within 30 minutes; High requires exact-target or sensitive-service progression.",
-        "why": "Later inbound access after repeated denies is stronger than commodity recon, but it still requires analyst review and approval-gated containment.",
-    },
-    "correlated_activity": {
-        "default_severity": "high",
-        "maximum_severity": "high",
-        "source": "legacy",
-        "source_type": "legacy",
-        "escalation_conditions": "Multi-source correlation stays High; Critical is reserved for likely-compromise evidence.",
-        "why": "Cross-source suspicious activity is high-confidence malicious behavior, but not proof that compromise succeeded.",
-    },
-    "web_to_app_attack_pattern": {
-        "default_severity": "high",
-        "maximum_severity": "high",
-        "source": "nginx",
-        "source_type": "web_log",
-        "escalation_conditions": "Requires both nginx web pressure and bank_app authentication pressure from the same IP within 10 minutes.",
-        "why": "Correlated attack-chain evidence without proof of successful compromise belongs at High, not Critical.",
-    },
-    "spray_then_success_pattern": {
-        "default_severity": "high",
-        "maximum_severity": "high",
-        "source": "bank_app",
-        "source_type": "custom",
-        "escalation_conditions": "Requires both password_spraying_threshold and successful_login_after_spray to already exist for the same IP.",
-        "why": "This rule corroborates an existing likely-compromise signal, but the canonical Critical decision belongs to successful_login_after_spray.",
-    },
-    "cloud_app_error_pattern": {
-        "default_severity": "high",
-        "maximum_severity": "high",
-        "source": "azure_insights",
-        "source_type": "cloud_api",
-        "escalation_conditions": "Requires matching cloud and nginx error activity from the same IP within the rule window.",
-        "why": "Cross-platform error correlations can be malicious, but they still require analyst validation before being treated as compromise evidence.",
-    },
-    "azure_auth_abuse_exception_correlation": {
-        "default_severity": "high",
-        "maximum_severity": "high",
-        "source": "azure_insights",
-        "source_type": "cloud_api",
-        "escalation_conditions": "Requires both Azure authentication-abuse pressure and an Application Insights exception spike from the same IP within the rule window.",
-        "why": "Correlated auth abuse and application instability is a stronger signal, but still not proof of a successful compromise.",
-    },
-}
-
-_CORRELATION_RULES: tuple[dict[str, Any], ...] = (
-    {"rule_id": "correlated_activity", "display_name": "Correlated Activity", "active": True},
-    {"rule_id": "web_to_app_attack_pattern", "display_name": "Web-to-App Attack Pattern", "active": True},
-    {"rule_id": "spray_then_success_pattern", "display_name": "Spray-Then-Success Pattern", "active": True},
-    {"rule_id": "cloud_app_error_pattern", "display_name": "Cloud/App Error Pattern", "active": True},
-    {"rule_id": "azure_auth_abuse_exception_correlation", "display_name": "Azure Auth Abuse Exception Correlation", "active": True},
+from engines.detection_rule_catalog import (
+    DetectionRuleCatalogRecord,
+    VALID_SEVERITIES,
+    get_correlation_rule_catalog_records,
+    get_detection_rule_catalog_record,
 )
 
-_SEVERITY_ORDER = ("low", "medium", "high", "critical")
+
+_SEVERITY_ORDER = VALID_SEVERITIES
 
 
 def build_severity_response_matrix(conn) -> dict[str, Any]:
     policy = get_effective_notification_policy()
     playbooks = list_enabled_playbook_definitions(conn)
-    effective_rules = list(get_all_effective_detection_rules()) + list(_CORRELATION_RULES)
-    rows = [
-        _build_rule_row(rule, playbooks=playbooks, policy=policy)
-        for rule in effective_rules
+    effective_base_rules = {
+        rule["rule_id"]: rule
+        for rule in get_all_effective_detection_rules()
         if rule.get("active", True)
+    }
+
+    records: list[DetectionRuleCatalogRecord] = [
+        get_detection_rule_catalog_record(rule_id)
+        for rule_id in effective_base_rules.keys()
+    ] + get_correlation_rule_catalog_records()
+
+    rows = [
+        _build_rule_row(
+            record,
+            runtime_rule=effective_base_rules.get(record.rule_id),
+            playbooks=playbooks,
+            policy=policy,
+        )
+        for record in records
     ]
     rows.sort(key=lambda item: (item["default_severity_rank"], item["display_name"].lower()))
 
@@ -224,39 +57,47 @@ def build_severity_response_matrix(conn) -> dict[str, Any]:
     }
 
 
-def _build_rule_row(rule: dict[str, Any], *, playbooks: list[dict[str, Any]], policy: dict[str, Any]) -> dict[str, Any]:
-    rule_id = rule["rule_id"]
-    metadata = _RULE_METADATA[rule_id]
+def _build_rule_row(
+    record: DetectionRuleCatalogRecord,
+    *,
+    runtime_rule: dict[str, Any] | None,
+    playbooks: list[dict[str, Any]],
+    policy: dict[str, Any],
+) -> dict[str, Any]:
     matched_playbooks = [
-        playbook for playbook in playbooks if playbook.get("trigger_config", {}).get("alert_type") == rule_id
+        playbook for playbook in playbooks if playbook.get("trigger_config", {}).get("alert_type") == record.rule_id
     ]
+    primary_source = record.matrix_source or (
+        record.source_applicability.allowed_sources[0].source,
+        record.source_applicability.allowed_sources[0].source_type,
+    )
     notification_decision = evaluate_notification_policy(
         policy,
         event_kind="alert",
-        severity=metadata["default_severity"],
-        source=metadata["source"],
-        source_type=metadata["source_type"],
+        severity=record.default_severity,
+        source=primary_source[0],
+        source_type=primary_source[1],
     )
     creates_incident_text = _creates_incident_text(
-        default_severity=metadata["default_severity"],
-        maximum_severity=metadata["maximum_severity"],
+        default_severity=record.default_severity,
+        maximum_severity=record.maximum_severity,
     )
     return {
-        "rule_id": rule_id,
-        "display_name": rule.get("display_name") or rule_id,
-        "default_severity": metadata["default_severity"],
-        "default_severity_rank": _severity_rank(metadata["default_severity"]),
-        "maximum_severity": metadata["maximum_severity"],
-        "source": metadata["source"],
-        "source_type": metadata["source_type"],
-        "parameters": rule.get("parameters") or {},
-        "description": rule.get("description"),
-        "escalation_conditions": metadata["escalation_conditions"],
+        "rule_id": record.rule_id,
+        "display_name": record.display_name,
+        "default_severity": record.default_severity,
+        "default_severity_rank": _severity_rank(record.default_severity),
+        "maximum_severity": record.maximum_severity,
+        "source": primary_source[0],
+        "source_type": primary_source[1],
+        "parameters": (runtime_rule or {}).get("parameters") or {},
+        "description": runtime_rule.get("description") if runtime_rule else record.description,
+        "escalation_conditions": record.escalation_conditions,
         "creates_incident": creates_incident_text,
         "notification_behavior": _notification_behavior_text(
             notification_decision,
             policy=policy,
-            default_severity=metadata["default_severity"],
+            default_severity=record.default_severity,
         ),
         "response_playbook_behavior": _playbook_behavior_text(matched_playbooks),
         "approval_required": any(
@@ -264,7 +105,9 @@ def _build_rule_row(rule: dict[str, Any], *, playbooks: list[dict[str, Any]], po
             for playbook in matched_playbooks
             for step in playbook.get("steps") or []
         ),
-        "why": metadata["why"],
+        "why": record.why,
+        "investigation_guidance": record.investigation_guidance,
+        "supported_evidence": list(record.supported_evidence),
         "playbooks": [
             {
                 "id": playbook["id"],

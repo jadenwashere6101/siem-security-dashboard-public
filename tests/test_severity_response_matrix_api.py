@@ -133,6 +133,8 @@ def test_severity_response_matrix_returns_live_backend_contract_for_analyst(clie
     assert rows["app_insights_unauthorized_access_threshold"]["maximum_severity"] == "high"
     assert rows["azure_auth_abuse_exception_correlation"]["default_severity"] == "high"
     assert rows["azure_auth_abuse_exception_correlation"]["maximum_severity"] == "high"
+    assert rows["pfsense_firewall_allow_after_deny"]["default_severity"] == "medium"
+    assert rows["pfsense_firewall_allow_after_deny"]["maximum_severity"] == "high"
     assert rows["web_to_app_attack_pattern"]["default_severity"] == "high"
     assert rows["spray_then_success_pattern"]["default_severity"] == "high"
     assert rows["successful_login_after_spray"]["default_severity"] == "critical"

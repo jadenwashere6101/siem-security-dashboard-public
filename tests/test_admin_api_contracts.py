@@ -204,7 +204,7 @@ def test_get_admin_detection_rules_as_super_admin_returns_200_stable_shape(clien
     assert resp.status_code == 200
     data = resp.get_json()
     assert isinstance(data, list)
-    assert len(data) == 16
+    assert len(data) == 17
     assert {rule["rule_id"] for rule in data} == {
         "failed_login_threshold",
         "port_scan_threshold",
@@ -222,6 +222,7 @@ def test_get_admin_detection_rules_as_super_admin_returns_200_stable_shape(clien
         "pfsense_firewall_port_scan",
         "pfsense_firewall_noisy_source",
         "pfsense_firewall_suspicious_allow",
+        "pfsense_firewall_allow_after_deny",
     }
     for rule in data:
         for key in (

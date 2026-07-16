@@ -4,68 +4,51 @@ from flask import current_app
 
 from core.db import get_db_connection
 from engines.detection_applicability import get_rule_applicability_metadata
+from engines.detection_rule_catalog import (
+    APP_INSIGHTS_UNAUTHORIZED_ACCESS_THRESHOLD,
+    APP_INSIGHTS_UNAUTHORIZED_ACCESS_WINDOW_MINUTES,
+    APPLICATION_EXCEPTION_THRESHOLD,
+    APPLICATION_EXCEPTION_WINDOW_MINUTES,
+    CORRELATION_WINDOW_MINUTES,
+    FAILED_LOGIN_THRESHOLD,
+    FAILED_LOGIN_WINDOW_MINUTES,
+    HIGH_REQUEST_RATE_THRESHOLD,
+    HIGH_REQUEST_RATE_WINDOW_MINUTES,
+    HTTP_ERROR_THRESHOLD,
+    HTTP_ERROR_WINDOW_MINUTES,
+    HONEYPOT_ADMIN_PROBE_THRESHOLD,
+    HONEYPOT_ADMIN_PROBE_WINDOW_MINUTES,
+    HONEYPOT_CREDENTIAL_STUFFING_THRESHOLD,
+    HONEYPOT_CREDENTIAL_STUFFING_WINDOW_MINUTES,
+    HONEYPOT_ENV_PROBE_THRESHOLD,
+    HONEYPOT_ENV_PROBE_WINDOW_MINUTES,
+    HONEYPOT_SCANNER_DETECTED_THRESHOLD,
+    HONEYPOT_SCANNER_DETECTED_WINDOW_MINUTES,
+    PASSWORD_SPRAY_THRESHOLD,
+    PASSWORD_SPRAY_WINDOW_MINUTES,
+    PFSENSE_ALLOW_AFTER_DENY_MIN_DENY_THRESHOLD,
+    PFSENSE_ALLOW_AFTER_DENY_WINDOW_MINUTES,
+    PFSENSE_NOISY_SOURCE_THRESHOLD,
+    PFSENSE_NOISY_SOURCE_WINDOW_MINUTES,
+    PFSENSE_PORT_SCAN_HOST_THRESHOLD,
+    PFSENSE_PORT_SCAN_THRESHOLD,
+    PFSENSE_PORT_SCAN_WINDOW_MINUTES,
+    PFSENSE_REPEATED_DENY_THRESHOLD,
+    PFSENSE_REPEATED_DENY_WINDOW_MINUTES,
+    PFSENSE_SUSPICIOUS_ALLOW_DISTINCT_PORT_ESCALATION_THRESHOLD,
+    PFSENSE_SUSPICIOUS_ALLOW_HIGH_CONFIDENCE_REPEAT_THRESHOLD,
+    PFSENSE_SUSPICIOUS_ALLOW_THRESHOLD,
+    PFSENSE_SUSPICIOUS_ALLOW_WINDOW_MINUTES,
+    PORT_SCAN_THRESHOLD,
+    PORT_SCAN_WINDOW_MINUTES,
+    SUCCESS_AFTER_SPRAY_CORRELATION_WINDOW_MINUTES,
+    SUCCESS_AFTER_SPRAY_FAILED_LOOKBACK_MINUTES,
+    SUCCESS_AFTER_SPRAY_SUCCESS_WINDOW_MINUTES,
+    SUCCESS_AFTER_SPRAY_THRESHOLD,
+    get_base_rule_catalog_records,
+    get_rule_parameter_defaults,
+)
 
-
-# Detector defaults.
-FAILED_LOGIN_THRESHOLD = 3
-FAILED_LOGIN_WINDOW_MINUTES = 15
-
-PORT_SCAN_THRESHOLD = 2
-PORT_SCAN_WINDOW_MINUTES = 15
-
-PASSWORD_SPRAY_THRESHOLD = 5
-PASSWORD_SPRAY_WINDOW_MINUTES = 15
-
-HTTP_ERROR_THRESHOLD = 5
-HTTP_ERROR_WINDOW_MINUTES = 15
-APPLICATION_EXCEPTION_THRESHOLD = 3
-APPLICATION_EXCEPTION_WINDOW_MINUTES = 10
-APP_INSIGHTS_UNAUTHORIZED_ACCESS_THRESHOLD = 5
-APP_INSIGHTS_UNAUTHORIZED_ACCESS_WINDOW_MINUTES = 10
-
-HIGH_REQUEST_RATE_THRESHOLD = 20
-HIGH_REQUEST_RATE_WINDOW_MINUTES = 5
-CORRELATION_WINDOW_MINUTES = 10
-
-SUCCESS_AFTER_SPRAY_SUCCESS_WINDOW_MINUTES = 15
-SUCCESS_AFTER_SPRAY_FAILED_LOOKBACK_MINUTES = 30
-SUCCESS_AFTER_SPRAY_CORRELATION_WINDOW_MINUTES = 15
-SUCCESS_AFTER_SPRAY_THRESHOLD = 5
-
-HONEYPOT_ENV_PROBE_THRESHOLD = 3
-HONEYPOT_ENV_PROBE_WINDOW_MINUTES = 10
-
-HONEYPOT_ADMIN_PROBE_THRESHOLD = 3
-HONEYPOT_ADMIN_PROBE_WINDOW_MINUTES = 10
-
-HONEYPOT_SCANNER_DETECTED_THRESHOLD = 1
-HONEYPOT_SCANNER_DETECTED_WINDOW_MINUTES = 10
-
-HONEYPOT_CREDENTIAL_STUFFING_THRESHOLD = 5
-HONEYPOT_CREDENTIAL_STUFFING_WINDOW_MINUTES = 15
-
-PFSENSE_REPEATED_DENY_THRESHOLD = 5
-PFSENSE_REPEATED_DENY_WINDOW_MINUTES = 15
-
-PFSENSE_PORT_SCAN_THRESHOLD = 2
-PFSENSE_PORT_SCAN_WINDOW_MINUTES = 15
-# A source sweeping this many distinct destination hosts within the window is
-# breadth-worthy even if it never reaches the distinct-port threshold above.
-PFSENSE_PORT_SCAN_HOST_THRESHOLD = 5
-
-PFSENSE_NOISY_SOURCE_THRESHOLD = 20
-PFSENSE_NOISY_SOURCE_WINDOW_MINUTES = 15
-
-PFSENSE_SUSPICIOUS_ALLOW_THRESHOLD = 1
-PFSENSE_SUSPICIOUS_ALLOW_WINDOW_MINUTES = 15
-# Event count at/above which a suspicious-allow candidate escalates to high
-# severity from repetition alone, independent of reputation or port diversity.
-PFSENSE_SUSPICIOUS_ALLOW_HIGH_CONFIDENCE_REPEAT_THRESHOLD = 3
-# Distinct sensitive destination ports touched in-window at/above which a
-# suspicious-allow candidate escalates to high severity as corroborating context.
-PFSENSE_SUSPICIOUS_ALLOW_DISTINCT_PORT_ESCALATION_THRESHOLD = 2
-PFSENSE_ALLOW_AFTER_DENY_MIN_DENY_THRESHOLD = 3
-PFSENSE_ALLOW_AFTER_DENY_WINDOW_MINUTES = 30
 
 # Minutes after a pfSense alert for a given (source_ip, alert_type) is resolved
 # during which an equal-or-lower-severity recurrence is suppressed rather than
@@ -92,182 +75,15 @@ DETECTION_WINDOW_MINUTES_MAX = 1440
 
 def get_detection_rule_defaults():
     return {
-        "failed_login_threshold": {
-            "rule_id": "failed_login_threshold",
-            "display_name": "Failed Login Threshold",
-            "parameters": {
-                "threshold": FAILED_LOGIN_THRESHOLD,
-                "window_minutes": FAILED_LOGIN_WINDOW_MINUTES,
-            },
+        record.rule_id: {
+            "rule_id": record.rule_id,
+            "display_name": record.display_name,
+            "parameters": get_rule_parameter_defaults(record.rule_id),
             "active": True,
-            "description": "Triggers when multiple failed login attempts occur within a time window.",
-        },
-        "port_scan_threshold": {
-            "rule_id": "port_scan_threshold",
-            "display_name": "Port Scan Threshold",
-            "parameters": {
-                "threshold": PORT_SCAN_THRESHOLD,
-                "window_minutes": PORT_SCAN_WINDOW_MINUTES,
-            },
-            "active": True,
-            "description": "Triggers when repeated port scan events occur from the same source within a time window.",
-        },
-        "password_spraying_threshold": {
-            "rule_id": "password_spraying_threshold",
-            "display_name": "Password Spraying Threshold",
-            "parameters": {
-                "threshold": PASSWORD_SPRAY_THRESHOLD,
-                "window_minutes": PASSWORD_SPRAY_WINDOW_MINUTES,
-            },
-            "active": True,
-            "description": "Triggers when failed logins target multiple distinct usernames from the same source within a time window.",
-        },
-        "http_error_threshold": {
-            "rule_id": "http_error_threshold",
-            "display_name": "HTTP Error Threshold",
-            "parameters": {
-                "threshold": HTTP_ERROR_THRESHOLD,
-                "window_minutes": HTTP_ERROR_WINDOW_MINUTES,
-            },
-            "active": True,
-            "description": "Triggers when repeated HTTP error events occur from the same source within a time window.",
-        },
-        "application_exception_threshold": {
-            "rule_id": "application_exception_threshold",
-            "display_name": "Application Exception Threshold",
-            "parameters": {
-                "threshold": APPLICATION_EXCEPTION_THRESHOLD,
-                "window_minutes": APPLICATION_EXCEPTION_WINDOW_MINUTES,
-            },
-            "active": True,
-            "description": "Triggers when repeated application exception events occur from the same source within a time window.",
-        },
-        "app_insights_unauthorized_access_threshold": {
-            "rule_id": "app_insights_unauthorized_access_threshold",
-            "display_name": "App Insights Unauthorized Access Threshold",
-            "parameters": {
-                "threshold": APP_INSIGHTS_UNAUTHORIZED_ACCESS_THRESHOLD,
-                "window_minutes": APP_INSIGHTS_UNAUTHORIZED_ACCESS_WINDOW_MINUTES,
-            },
-            "active": True,
-            "description": "Triggers when repeated Application Insights 401/403 events occur from the same source within a time window.",
-        },
-        "high_request_rate_threshold": {
-            "rule_id": "high_request_rate_threshold",
-            "display_name": "High Request Rate Threshold",
-            "parameters": {
-                "threshold": HIGH_REQUEST_RATE_THRESHOLD,
-                "window_minutes": HIGH_REQUEST_RATE_WINDOW_MINUTES,
-            },
-            "active": True,
-            "description": "Triggers when high request volume occurs from the same source within a time window.",
-        },
-        "successful_login_after_spray": {
-            "rule_id": "successful_login_after_spray",
-            "display_name": "Successful Login After Spray",
-            "parameters": {
-                "threshold": SUCCESS_AFTER_SPRAY_THRESHOLD,
-                "success_window_minutes": SUCCESS_AFTER_SPRAY_SUCCESS_WINDOW_MINUTES,
-                "failed_lookback_minutes": SUCCESS_AFTER_SPRAY_FAILED_LOOKBACK_MINUTES,
-                "correlation_window_minutes": SUCCESS_AFTER_SPRAY_CORRELATION_WINDOW_MINUTES,
-            },
-            "active": True,
-            "description": "Triggers when password spraying activity is followed by a successful login from the same source.",
-        },
-        "honeypot_env_probe_threshold": {
-            "rule_id": "honeypot_env_probe_threshold",
-            "display_name": "Honeypot Env Probe Threshold",
-            "parameters": {
-                "threshold": HONEYPOT_ENV_PROBE_THRESHOLD,
-                "window_minutes": HONEYPOT_ENV_PROBE_WINDOW_MINUTES,
-            },
-            "active": True,
-            "description": "Triggers when one source IP probes multiple distinct sensitive file paths within a time window.",
-        },
-        "honeypot_admin_probe_threshold": {
-            "rule_id": "honeypot_admin_probe_threshold",
-            "display_name": "Honeypot Admin Probe Threshold",
-            "parameters": {
-                "threshold": HONEYPOT_ADMIN_PROBE_THRESHOLD,
-                "window_minutes": HONEYPOT_ADMIN_PROBE_WINDOW_MINUTES,
-            },
-            "active": True,
-            "description": "Triggers when one source IP probes multiple distinct admin paths within a time window.",
-        },
-        "honeypot_scanner_detected": {
-            "rule_id": "honeypot_scanner_detected",
-            "display_name": "Honeypot Scanner Detected",
-            "parameters": {
-                "threshold": HONEYPOT_SCANNER_DETECTED_THRESHOLD,
-                "window_minutes": HONEYPOT_SCANNER_DETECTED_WINDOW_MINUTES,
-            },
-            "active": True,
-            "description": "Triggers when scanner activity from one source IP meets the configured threshold within a time window.",
-        },
-        "honeypot_credential_stuffing_threshold": {
-            "rule_id": "honeypot_credential_stuffing_threshold",
-            "display_name": "Honeypot Credential Stuffing Threshold",
-            "parameters": {
-                "threshold": HONEYPOT_CREDENTIAL_STUFFING_THRESHOLD,
-                "window_minutes": HONEYPOT_CREDENTIAL_STUFFING_WINDOW_MINUTES,
-            },
-            "active": True,
-            "description": "Triggers when one source IP attempts logins across multiple distinct usernames within a time window.",
-        },
-        "pfsense_firewall_repeated_deny": {
-            "rule_id": "pfsense_firewall_repeated_deny",
-            "display_name": "pfSense Firewall Repeated Deny",
-            "parameters": {
-                "threshold": PFSENSE_REPEATED_DENY_THRESHOLD,
-                "window_minutes": PFSENSE_REPEATED_DENY_WINDOW_MINUTES,
-            },
-            "active": True,
-            "description": "Triggers when pfSense blocks repeated equivalent traffic from the same source within a time window.",
-        },
-        "pfsense_firewall_port_scan": {
-            "rule_id": "pfsense_firewall_port_scan",
-            "display_name": "pfSense Firewall Port Scan",
-            "parameters": {
-                "threshold": PFSENSE_PORT_SCAN_THRESHOLD,
-                "window_minutes": PFSENSE_PORT_SCAN_WINDOW_MINUTES,
-                "host_threshold": PFSENSE_PORT_SCAN_HOST_THRESHOLD,
-            },
-            "active": True,
-            "description": "Triggers when pfSense firewall events show one source contacting multiple distinct destination ports, or sweeping multiple distinct destination hosts.",
-        },
-        "pfsense_firewall_noisy_source": {
-            "rule_id": "pfsense_firewall_noisy_source",
-            "display_name": "pfSense Firewall Noisy Source",
-            "parameters": {
-                "threshold": PFSENSE_NOISY_SOURCE_THRESHOLD,
-                "window_minutes": PFSENSE_NOISY_SOURCE_WINDOW_MINUTES,
-            },
-            "active": True,
-            "description": "Suppresses duplicate low-value pfSense firewall alerts while retaining source activity counters.",
-        },
-        "pfsense_firewall_suspicious_allow": {
-            "rule_id": "pfsense_firewall_suspicious_allow",
-            "display_name": "pfSense Firewall Suspicious Allow",
-            "parameters": {
-                "threshold": PFSENSE_SUSPICIOUS_ALLOW_THRESHOLD,
-                "window_minutes": PFSENSE_SUSPICIOUS_ALLOW_WINDOW_MINUTES,
-                "high_confidence_repeat_threshold": PFSENSE_SUSPICIOUS_ALLOW_HIGH_CONFIDENCE_REPEAT_THRESHOLD,
-                "distinct_port_escalation_threshold": PFSENSE_SUSPICIOUS_ALLOW_DISTINCT_PORT_ESCALATION_THRESHOLD,
-            },
-            "active": True,
-            "description": "Triggers when pfSense allows inbound traffic to a sensitive destination port; escalates to high severity only on repeated, multi-port, or progression-backed evidence.",
-        },
-        "pfsense_firewall_allow_after_deny": {
-            "rule_id": "pfsense_firewall_allow_after_deny",
-            "display_name": "pfSense Firewall Allow After Deny",
-            "parameters": {
-                "minimum_deny_threshold": PFSENSE_ALLOW_AFTER_DENY_MIN_DENY_THRESHOLD,
-                "window_minutes": PFSENSE_ALLOW_AFTER_DENY_WINDOW_MINUTES,
-                "high_confidence_deny_threshold": PFSENSE_REPEATED_DENY_THRESHOLD,
-            },
-            "active": True,
-            "description": "Triggers when the same external source first produces repeated inbound firewall denies and later reaches an inbound allow to the same protected service within the bounded progression window.",
-        },
+            "description": record.description,
+        }
+        for record in get_base_rule_catalog_records()
+        if record.implementation_state == "implemented"
     }
 
 

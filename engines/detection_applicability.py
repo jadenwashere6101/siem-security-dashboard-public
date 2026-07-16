@@ -1,76 +1,31 @@
-"""Immutable source applicability for base detection rules.
+"""Catalog-derived source applicability for implemented base detection rules."""
 
-Source coverage is code-owned, read-only policy. Runtime threshold and window
-overrides remain global per rule in ``detection_config``.
-"""
-
-from dataclasses import dataclass
 from types import MappingProxyType
 
-
-@dataclass(frozen=True, order=True)
-class SourceIdentity:
-    source: str
-    source_type: str
-
-
-HONEYPOT = SourceIdentity("honeypot", "honeypot")
-BANK_APP = SourceIdentity("bank_app", "custom")
-PFSENSE = SourceIdentity("pfsense", "firewall")
-NGINX = SourceIdentity("nginx", "web_log")
-AZURE_INSIGHTS = SourceIdentity("azure_insights", "cloud_api")
-OPENTELEMETRY = SourceIdentity("opentelemetry", "telemetry")
-
-CANONICAL_SOURCE_IDENTITIES = frozenset(
-    {HONEYPOT, BANK_APP, PFSENSE, NGINX, AZURE_INSIGHTS, OPENTELEMETRY}
+from engines.detection_rule_catalog import (
+    AZURE_INSIGHTS,
+    BANK_APP,
+    CANONICAL_SOURCE_IDENTITIES,
+    HONEYPOT,
+    NGINX,
+    OPENTELEMETRY,
+    PFSENSE,
+    SourceApplicability as RuleApplicability,
+    SourceIdentity,
+    get_base_rule_catalog_records,
+    get_detection_rule_catalog_record,
+    serialize_source_applicability,
 )
-
-
-@dataclass(frozen=True)
-class RuleApplicability:
-    classification: str
-    allowed_sources: frozenset[SourceIdentity]
 
 
 RULE_APPLICABILITY = MappingProxyType(
     {
-        "failed_login_threshold": RuleApplicability(
-            "canonical_multi_source_authentication",
-            frozenset({BANK_APP, AZURE_INSIGHTS, NGINX, OPENTELEMETRY}),
-        ),
-        "port_scan_threshold": RuleApplicability(
-            "canonical_legacy_custom_telemetry", frozenset({BANK_APP})
-        ),
-        "password_spraying_threshold": RuleApplicability(
-            "canonical_multi_source_authentication", frozenset({BANK_APP, AZURE_INSIGHTS})
-        ),
-        "http_error_threshold": RuleApplicability(
-            "canonical_multi_source_application_web",
-            frozenset({HONEYPOT, NGINX, AZURE_INSIGHTS, OPENTELEMETRY}),
-        ),
-        "application_exception_threshold": RuleApplicability(
-            "canonical_multi_source_application", frozenset({AZURE_INSIGHTS, OPENTELEMETRY})
-        ),
-        "app_insights_unauthorized_access_threshold": RuleApplicability(
-            "source_specific", frozenset({AZURE_INSIGHTS})
-        ),
-        "high_request_rate_threshold": RuleApplicability(
-            "partially_source_aware_becoming_explicit", frozenset({NGINX, OPENTELEMETRY})
-        ),
-        "successful_login_after_spray": RuleApplicability(
-            "canonical_multi_source_authentication_sequence", frozenset({BANK_APP, AZURE_INSIGHTS})
-        ),
-        "honeypot_env_probe_threshold": RuleApplicability("source_specific", frozenset({HONEYPOT})),
-        "honeypot_admin_probe_threshold": RuleApplicability("source_specific", frozenset({HONEYPOT})),
-        "honeypot_scanner_detected": RuleApplicability("source_specific", frozenset({HONEYPOT})),
-        "honeypot_credential_stuffing_threshold": RuleApplicability(
-            "source_specific", frozenset({HONEYPOT})
-        ),
-        "pfsense_firewall_repeated_deny": RuleApplicability("source_specific", frozenset({PFSENSE})),
-        "pfsense_firewall_port_scan": RuleApplicability("source_specific", frozenset({PFSENSE})),
-        "pfsense_firewall_noisy_source": RuleApplicability("source_specific", frozenset({PFSENSE})),
-        "pfsense_firewall_suspicious_allow": RuleApplicability("source_specific", frozenset({PFSENSE})),
-        "pfsense_firewall_allow_after_deny": RuleApplicability("source_specific", frozenset({PFSENSE})),
+        record.rule_id: RuleApplicability(
+            classification=record.source_applicability.classification,
+            allowed_sources=frozenset(record.source_applicability.allowed_sources),
+        )
+        for record in get_base_rule_catalog_records()
+        if record.implementation_state == "implemented"
     }
 )
 
@@ -88,17 +43,8 @@ def rule_applies_to_source(rule_id, source, source_type):
 
 
 def get_rule_applicability_metadata(rule_id):
-    """Serialize the authoritative registry for read-only API presentation."""
-    applicability = RULE_APPLICABILITY.get(rule_id)
-    if applicability is None:
-        raise ValueError("Unknown detection rule applicability")
-    return {
-        "source_applicability_category": applicability.classification,
-        "applicable_sources": [
-            {"source": identity.source, "source_type": identity.source_type}
-            for identity in sorted(applicability.allowed_sources)
-        ],
-    }
+    """Serialize the catalog-derived applicability for read-only API presentation."""
+    return serialize_source_applicability(get_detection_rule_catalog_record(rule_id))
 
 
 def validate_rule_inventory(rule_ids):

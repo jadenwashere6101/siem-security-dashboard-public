@@ -24,6 +24,26 @@ from engines.detection_engine import (
 )
 from helpers.ingest_normalizers import reject_raw_password_fields
 
+IMPLEMENTED_BASE_DETECTION_RULE_IDS = (
+    "failed_login_threshold",
+    "port_scan_threshold",
+    "password_spraying_threshold",
+    "http_error_threshold",
+    "application_exception_threshold",
+    "app_insights_unauthorized_access_threshold",
+    "high_request_rate_threshold",
+    "successful_login_after_spray",
+    "honeypot_env_probe_threshold",
+    "honeypot_admin_probe_threshold",
+    "honeypot_scanner_detected",
+    "honeypot_credential_stuffing_threshold",
+    "pfsense_firewall_repeated_deny",
+    "pfsense_firewall_port_scan",
+    "pfsense_firewall_noisy_source",
+    "pfsense_firewall_suspicious_allow",
+    "pfsense_firewall_allow_after_deny",
+)
+
 
 def _run_detector(rule_id, detector, *, cur, conn, source_ip, source, source_type):
     """Fail closed before detector SQL for unsupported or inactive rules."""
