@@ -41,8 +41,8 @@ auditability.
 
 ![SOC Command Center overview](screenshots/soc-command-center-overview.png)
 
-The Command Center gives a reviewer one screen that proves this is a real SOC
-workflow: incident pressure, approval load, automation health, notification
+The Command Center gives an analyst multiple system details: incident pressure, 
+approval load, automation health, notification
 posture, and live recon triage all in one place.
 
 ### Alert Investigation
