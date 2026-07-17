@@ -119,8 +119,23 @@ def _normalize_alert_filter_value(value):
     return text
 
 
+def _normalize_ip_filter_value(value):
+    normalized = _normalize_alert_filter_value(value)
+    if normalized is None:
+        return None
+    try:
+        return str(ipaddress.ip_address(normalized))
+    except ValueError:
+        raise ValueError("invalid IP filter")
+
+
 def _parse_alert_list_request_args(include_pagination: bool = False):
     search = _normalize_alert_filter_value(request.args.get("search"))
+    try:
+        exact_source_ip = _normalize_ip_filter_value(request.args.get("exact_source_ip"))
+        exact_target_ip = _normalize_ip_filter_value(request.args.get("exact_target_ip"))
+    except ValueError:
+        return None, (jsonify({"error": "invalid IP filter"}), 400)
     severity = _normalize_alert_filter_value(request.args.get("severity"))
     if severity is not None:
         severity = severity.lower()
@@ -140,9 +155,19 @@ def _parse_alert_list_request_args(include_pagination: bool = False):
         operational_scope = normalize_operational_scope(request.args.get("operational_scope"))
     except ValueError:
         return None, (jsonify({"error": "invalid operational scope"}), 400)
+    alert_id, alert_id_error = _parse_non_negative_int(
+        request.args.get("alert_id"),
+        None,
+        "alert_id",
+    )
+    if alert_id_error:
+        return None, (jsonify({"error": alert_id_error}), 400)
 
     args = {
         "search": search,
+        "exact_source_ip": exact_source_ip,
+        "exact_target_ip": exact_target_ip,
+        "alert_id": alert_id,
         "severity": severity,
         "status": status,
         "source": source,
@@ -182,6 +207,40 @@ def _build_alert_filter_sql(filters: dict):
         pattern = f"%{filters['search']}%"
         clauses.append("(host(source_ip) ILIKE %s OR message ILIKE %s)")
         params.extend((pattern, pattern))
+
+    if filters.get("exact_source_ip"):
+        clauses.append("host(source_ip) = %s")
+        params.append(filters["exact_source_ip"])
+
+    if filters.get("exact_target_ip"):
+        clauses.append(
+            """
+            (
+                COALESCE(context->'target_context'->>'primary_destination_ip', '') = %s
+                OR COALESCE(context->'target_context'->>'destination_ip', '') = %s
+                OR COALESCE(context->'target_context'->>'top_destination_ip', '') = %s
+                OR EXISTS (
+                    SELECT 1
+                    FROM jsonb_array_elements_text(
+                        COALESCE(context->'target_context'->'sample_destination_ips', '[]'::jsonb)
+                    ) AS sample_destination_ip(value)
+                    WHERE sample_destination_ip.value = %s
+                )
+            )
+            """
+        )
+        params.extend(
+            (
+                filters["exact_target_ip"],
+                filters["exact_target_ip"],
+                filters["exact_target_ip"],
+                filters["exact_target_ip"],
+            )
+        )
+
+    if filters.get("alert_id") is not None:
+        clauses.append("id = %s")
+        params.append(filters["alert_id"])
 
     if filters.get("severity"):
         clauses.append("severity = %s")

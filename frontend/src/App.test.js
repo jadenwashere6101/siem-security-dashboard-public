@@ -63,6 +63,7 @@ jest.mock('./components/SocCommandCenter', () => (props) => (
 jest.mock('./components/ResponseRegistryPanel', () => (props) => (
   <div data-testid="response-registry-panel">
     Response Registry Mock view:{props.initialView || 'all'} {props.navigationRequest?.q}{' '}
+    {props.navigationRequest?.exactIndicator}{' '}
     {props.navigationRequest?.relatedIncidentId} {props.navigationRequest?.relatedAlertId}
   </div>
 ));
@@ -347,7 +348,11 @@ test('related-alert deep links preserve source-IP filter and Recent Alerts desti
   main.scrollTo = jest.fn();
 
   await userEvent.click(await screen.findByRole('button', { name: 'Incident open related alerts' }));
-  expect(await screen.findByTestId('dashboard-section')).toHaveTextContent('search:203.0.113.10');
+  await waitFor(() => {
+    expect(loadAlerts).toHaveBeenLastCalledWith(
+      expect.objectContaining({ exactSourceIp: '203.0.113.10', searchTerm: '' })
+    );
+  });
   expect(screen.getByText('Recent Alerts target')).toHaveFocus();
   expect(main.scrollTo).toHaveBeenCalledWith({ top: 320, left: 0, behavior: 'smooth' });
 

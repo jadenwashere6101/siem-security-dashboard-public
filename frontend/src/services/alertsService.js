@@ -17,6 +17,9 @@ const summaryFallback = {
 
 function buildAlertQuery({
   searchTerm,
+  exactSourceIp,
+  exactTargetIp,
+  exactAlertId,
   severityFilter,
   statusFilter,
   sourceFilter,
@@ -27,6 +30,11 @@ function buildAlertQuery({
 } = {}) {
   const params = new URLSearchParams();
   if (searchTerm) params.set("search", String(searchTerm).trim());
+  if (exactSourceIp) params.set("exact_source_ip", String(exactSourceIp).trim());
+  if (exactTargetIp) params.set("exact_target_ip", String(exactTargetIp).trim());
+  if (exactAlertId !== undefined && exactAlertId !== null && exactAlertId !== "") {
+    params.set("alert_id", String(exactAlertId).trim());
+  }
   if (severityFilter && severityFilter !== "all") params.set("severity", severityFilter);
   if (statusFilter && statusFilter !== "all") params.set("status", statusFilter);
   if (sourceFilter && sourceFilter !== "all") params.set("source", sourceFilter);

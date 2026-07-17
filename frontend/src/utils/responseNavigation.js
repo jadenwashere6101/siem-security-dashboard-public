@@ -8,17 +8,20 @@ export const REGISTRY_SECTION_ID = "response-registry";
 export function buildRegistryNavigation({
   view = "all",
   q = "",
+  exactIndicator = "",
   relatedAlertId = null,
   relatedIncidentId = null,
   relatedPlaybookExecutionId = null,
   relatedApprovalRequestId = null,
   sourceIp = "",
 } = {}) {
-  const indicator = String(q || sourceIp || "").trim();
+  const indicator = String(q || "").trim();
+  const exactIndicatorValue = String(exactIndicator || sourceIp || "").trim();
   return {
     sectionId: REGISTRY_SECTION_ID,
     view,
     q: indicator,
+    exactIndicator: exactIndicatorValue,
     relatedAlertId: relatedAlertId == null || relatedAlertId === "" ? null : Number(relatedAlertId),
     relatedIncidentId:
       relatedIncidentId == null || relatedIncidentId === ""
@@ -38,7 +41,7 @@ export function buildRegistryNavigation({
 export function registryNavFromSourceIp(sourceIp, extras = {}) {
   return buildRegistryNavigation({
     view: extras.view || "all",
-    sourceIp,
+    exactIndicator: sourceIp,
     relatedAlertId: extras.relatedAlertId,
     relatedIncidentId: extras.relatedIncidentId,
     relatedPlaybookExecutionId: extras.relatedPlaybookExecutionId,
@@ -50,7 +53,7 @@ export function registryNavFromAlert(alert) {
   if (!alert) return buildRegistryNavigation();
   return buildRegistryNavigation({
     view: "all",
-    sourceIp: alert.source_ip,
+    exactIndicator: alert.source_ip,
     relatedAlertId: alert.id,
   });
 }
@@ -59,7 +62,7 @@ export function registryNavFromIncident(incident) {
   if (!incident) return buildRegistryNavigation();
   return buildRegistryNavigation({
     view: "all",
-    sourceIp: incident.source_ip,
+    exactIndicator: incident.source_ip,
     relatedIncidentId: incident.id,
   });
 }

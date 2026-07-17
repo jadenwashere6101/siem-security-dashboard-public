@@ -582,6 +582,13 @@ function EmptyState({ children }) {
 }
 
 function ReconActivityCard({ activity, selected, reviewIndicator, onSelect }) {
+  const evidenceSummary = joinDefined([
+    activity.display?.target_summary ? `same protected target ${activity.display.target_summary}` : "",
+    activity.display?.primary_service ? `service ${activity.display.primary_service}` : "",
+    activity.display?.additional_source_count != null
+      ? `${Number(activity.display.additional_source_count) + 1} contributing sources`
+      : "",
+  ]);
   return (
     <button
       type="button"
@@ -628,6 +635,7 @@ function ReconActivityCard({ activity, selected, reviewIndicator, onSelect }) {
           activity.last_seen ? `Last seen ${formatRelative(activity.last_seen)}` : "",
         ])}
       </span>
+      {evidenceSummary ? <span style={reconCardLineStyle}>Why it matters: {evidenceSummary}</span> : null}
     </button>
   );
 }
@@ -1076,6 +1084,22 @@ function SocCommandCenter({
                             ? ` · ${reconContext.detail.display.coordination_label}`
                             : ""}
                         </p>
+                        <p style={summaryDetailStyle}>
+                          {joinDefined([
+                            reconContext.detail.display?.target_summary
+                              ? `Same protected target ${reconContext.detail.display.target_summary}`
+                              : "",
+                            reconContext.detail.display?.primary_service
+                              ? `service ${reconContext.detail.display.primary_service}`
+                              : "",
+                            reconContext.detail.display?.linked_alert_count != null
+                              ? `${reconContext.detail.display.linked_alert_count} linked alerts`
+                              : "",
+                            reconContext.detail.display?.additional_source_count != null
+                              ? `${Number(reconContext.detail.display.additional_source_count) + 1} contributing sources`
+                              : "",
+                          ])}
+                        </p>
                       </div>
                       <StatusBadge tone={String(reconContext.detail.severity || "").toLowerCase() === "high" ? "warning" : "info"}>
                         {titleCase(reconContext.detail.severity)}
@@ -1143,9 +1167,26 @@ function SocCommandCenter({
                         <button
                           type="button"
                           style={linkButtonStyle}
-                          onClick={() => onViewRelatedAlerts(reconContext.detail.display.representative_source)}
+                          onClick={() =>
+                            onViewRelatedAlerts({
+                              sourceIp: reconContext.detail.display.representative_source,
+                            })
+                          }
                         >
                           View linked alerts
+                        </button>
+                      ) : null}
+                      {typeof onViewRelatedAlerts === "function" && reconContext.detail.display?.primary_target ? (
+                        <button
+                          type="button"
+                          style={linkButtonStyle}
+                          onClick={() =>
+                            onViewRelatedAlerts({
+                              targetIp: reconContext.detail.display.primary_target,
+                            })
+                          }
+                        >
+                          Open primary target
                         </button>
                       ) : null}
                       {typeof onOpenIncident === "function" && reconContext.detail.related_incident_id ? (
@@ -1751,6 +1792,8 @@ const incidentListStyle = {
   display: "flex",
   flexDirection: "column",
   gap: "8px",
+  overflowY: "auto",
+  maxHeight: "520px",
 };
 
 const incidentButtonStyle = {

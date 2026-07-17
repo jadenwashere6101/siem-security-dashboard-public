@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import ipaddress
 from typing import Any
 
 from flask import Blueprint, current_app, jsonify, request
@@ -53,6 +54,15 @@ def _parse_iso_datetime(value: Any) -> datetime | None:
 def _safe_int(value: Any) -> int | None:
     if value is None or value == "":
         return None
+
+
+def _safe_ip(value: Any) -> str | None:
+    if value is None or value == "":
+        return None
+    try:
+        return str(ipaddress.ip_address(str(value).strip()))
+    except ValueError:
+        return None
     try:
         return int(value)
     except (TypeError, ValueError):
@@ -101,6 +111,7 @@ def list_response_registry():
             dispositions=dispositions,
             indicator_type=(request.args.get("indicator_type") or "").strip() or None,
             q=(request.args.get("q") or "").strip() or None,
+            exact_indicator_value=_safe_ip(request.args.get("exact_indicator")),
             origin_surface=(request.args.get("origin") or request.args.get("origin_surface") or "").strip()
             or None,
             actor_user_id=_safe_int(request.args.get("actor_user_id")),

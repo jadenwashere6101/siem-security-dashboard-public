@@ -115,6 +115,11 @@ function AlertDetailsPanel({
   const operationalHistoryLabel = selectedAlert?.operational_history?.is_pre_tuning
     ? selectedAlert.operational_history.label || "Pre-Tuning"
     : "";
+  const recommendationLabel = investigationValue?.label || alertStory?.headline || "Review";
+  const recommendationReasons =
+    Array.isArray(investigationValue?.reasons) && investigationValue.reasons.length > 0
+      ? investigationValue.reasons
+      : [];
 
   useEffect(() => {
     let cancelled = false;
@@ -191,42 +196,65 @@ function AlertDetailsPanel({
           )}
         </div>
       )}
-      <p><strong>ID:</strong> {selectedAlert.id}</p>
-      <p><strong>Type:</strong> {selectedAlert.alert_type}</p>
-      <p><strong>Source IP:</strong> {selectedAlert.source_ip}</p>
-      <p><strong>Severity:</strong> {selectedAlert.severity}</p>
-      {investigationValue?.label ? (
-        <div style={whyFiredPanelStyle}>
-          <strong>Why you should care</strong>
-          <div style={{ marginTop: "8px" }}>
-            <p style={{ margin: "0 0 8px 0" }}>
-              {alertStory?.headline || investigationValue.label}
-              {alertStory?.disposition ? ` · ${alertStory.disposition}` : ""}
-            </p>
-            {Array.isArray(investigationValue.reasons) && investigationValue.reasons.length > 0 ? (
-              investigationValue.reasons.map((item) => (
-                <div key={item.id} style={signalRowStyle}>
-                  <span>Reason</span>
-                  <span style={sourceTypeTextStyle}>{item.text}</span>
-                </div>
-              ))
-            ) : (
-              <div style={whyFiredMutedStyle}>No investigation reasons recorded.</div>
-            )}
+      <div style={whyFiredPanelStyle}>
+        <strong>What happened</strong>
+        <div style={{ marginTop: "8px" }}>
+          <p style={{ margin: "0 0 8px 0" }}>{selectedAlert.message}</p>
+          <div style={signalRowStyle}>
+            <span>Alert</span>
+            <span style={sourceTypeTextStyle}>#{selectedAlert.id} · {selectedAlert.alert_type}</span>
           </div>
+          <div style={signalRowStyle}>
+            <span>Source IP</span>
+            <span style={sourceTypeTextStyle}>{selectedAlert.source_ip}</span>
+          </div>
+          <div style={signalRowStyle}>
+            <span>Status</span>
+            <span style={sourceTypeTextStyle}>{selectedAlert.status}</span>
+          </div>
+          {operationalHistoryLabel ? (
+            <div style={signalRowStyle}>
+              <span>Operational history</span>
+              <span style={sourceTypeTextStyle}>
+                {operationalHistoryLabel} · {getOperationalHistoryDescription(selectedAlert)}
+              </span>
+            </div>
+          ) : null}
         </div>
-      ) : null}
-      <p><strong>Status:</strong> {selectedAlert.status}</p>
-      {operationalHistoryLabel ? (
-        <p>
-          <strong>Operational History:</strong> {operationalHistoryLabel}{" "}
-          <span style={{ color: "#94a3b8" }}>{getOperationalHistoryDescription(selectedAlert)}</span>
-        </p>
-      ) : null}
-      <p><strong>Message:</strong> {selectedAlert.message}</p>
+      </div>
+      <div style={whyFiredPanelStyle}>
+        <strong>Why it matters</strong>
+        <div style={{ marginTop: "8px" }}>
+          <div style={signalRowStyle}>
+            <span>Severity</span>
+            <span style={sourceTypeTextStyle}>{selectedAlert.severity}</span>
+          </div>
+          <div style={signalRowStyle}>
+            <span>Investigation Value</span>
+            <span style={sourceTypeTextStyle}>{recommendationLabel}</span>
+          </div>
+          <p style={{ margin: "8px 0", color: "#cbd5e1" }}>
+            Severity reflects potential danger. Investigation Value reflects analyst priority.
+          </p>
+          <p style={{ margin: "0 0 8px 0" }}>
+            {alertStory?.headline || recommendationLabel}
+            {alertStory?.disposition ? ` · ${alertStory.disposition}` : ""}
+          </p>
+          {recommendationReasons.length > 0 ? (
+            recommendationReasons.map((item) => (
+              <div key={item.id} style={signalRowStyle}>
+                <span>Evidence</span>
+                <span style={sourceTypeTextStyle}>{item.text}</span>
+              </div>
+            ))
+          ) : (
+            <div style={whyFiredMutedStyle}>No investigation reasons recorded.</div>
+          )}
+        </div>
+      </div>
       {shouldLoadWhyFired ? (
         <div style={whyFiredPanelStyle}>
-          <strong>Why this fired</strong>
+          <strong>Primary evidence</strong>
           {whyFiredLoading ? (
             <div style={whyFiredMutedStyle}>Loading detection evidence...</div>
           ) : whyFiredError ? (
@@ -260,7 +288,7 @@ function AlertDetailsPanel({
       ) : null}
       {isPfsenseAlert ? (
         <div style={whyFiredPanelStyle}>
-          <strong>Target Context</strong>
+          <strong>Target context</strong>
           <div style={{ marginTop: "8px" }}>
             {targetContextRows.length > 0 ? (
               <>
@@ -287,10 +315,10 @@ function AlertDetailsPanel({
       ) : null}
       {reconActivity ? (
         <div style={whyFiredPanelStyle}>
-          <strong>Recon campaign context</strong>
+          <strong>Related objects</strong>
           <div style={{ marginTop: "8px" }}>
             <div style={signalRowStyle}>
-              <span>Activity</span>
+              <span>Recon activity</span>
               <span style={sourceTypeTextStyle}>{reconActivity.label}</span>
             </div>
             <div style={signalRowStyle}>
@@ -346,6 +374,10 @@ function AlertDetailsPanel({
         </div>
       ) : null}
       <div style={{ margin: "14px 0" }}>
+        <strong>Investigation recommendation</strong>
+        <div style={{ marginTop: "8px", marginBottom: "8px", color: "#cbd5e1" }}>
+          {recommendationLabel}
+        </div>
         <strong>Response Outcome:</strong>
         <div style={{ marginTop: "8px" }}>
           <ResponseOutcomeSummary
@@ -367,50 +399,55 @@ function AlertDetailsPanel({
           />
         </div>
       </div>
-      <p>
-        <strong>Location:</strong>{" "}
-        {selectedAlert.city && selectedAlert.country
-          ? `${selectedAlert.city}, ${selectedAlert.country}`
-          : "Unknown"}
-      </p>
-      <p>
-        <strong>External Threat Intelligence Reputation:</strong>{" "}
-        {externalReputation.label} ({externalReputation.score ?? "n/a"})
-      </p>
-      <p><strong>Threat Intel Source:</strong> {externalReputation.source}</p>
-      <p><strong>Threat Intel Summary:</strong> {externalReputation.summary}</p>
-      <p>
-        <strong>Behavioral Reputation:</strong>{" "}
-        {behavioralReputation.label} ({behavioralReputation.score})
-      </p>
-      <p><strong>Score Type:</strong> Internal SIEM-generated behavioral score</p>
-      <p><strong>Behavioral Summary:</strong> {behavioralReputation.summary}</p>
-      <div>
-        <strong>Behavioral Contributing Signals:</strong>
-        {contributingSignals.length > 0 ? (
-          contributingSignals.map((signal) => (
-            <div key={signal.signal} style={signalRowStyle}>
-              <span>{signal.label}</span>
-              <span style={sourceTypeTextStyle}>
-                count {signal.count} · weight {signal.weight} · total {signal.total}
-              </span>
-            </div>
-          ))
-        ) : (
-          <div style={{ fontSize: "12px", color: "#8b949e", marginTop: "4px" }}>
-            No contributing signals
+      <details style={whyFiredPanelStyle}>
+        <summary style={{ cursor: "pointer", fontWeight: 600 }}>Secondary technical detail</summary>
+        <div style={{ marginTop: "10px" }}>
+          <p>
+            <strong>Location:</strong>{" "}
+            {selectedAlert.city && selectedAlert.country
+              ? `${selectedAlert.city}, ${selectedAlert.country}`
+              : "Unknown"}
+          </p>
+          <p>
+            <strong>External Threat Intelligence Reputation:</strong>{" "}
+            {externalReputation.label} ({externalReputation.score ?? "n/a"})
+          </p>
+          <p><strong>Threat Intel Source:</strong> {externalReputation.source}</p>
+          <p><strong>Threat Intel Summary:</strong> {externalReputation.summary}</p>
+          <p>
+            <strong>Behavioral Reputation:</strong>{" "}
+            {behavioralReputation.label} ({behavioralReputation.score})
+          </p>
+          <p><strong>Score Type:</strong> Internal SIEM-generated behavioral score</p>
+          <p><strong>Behavioral Summary:</strong> {behavioralReputation.summary}</p>
+          <div>
+            <strong>Behavioral Contributing Signals:</strong>
+            {contributingSignals.length > 0 ? (
+              contributingSignals.map((signal) => (
+                <div key={signal.signal} style={signalRowStyle}>
+                  <span>{signal.label}</span>
+                  <span style={sourceTypeTextStyle}>
+                    count {signal.count} · weight {signal.weight} · total {signal.total}
+                  </span>
+                </div>
+              ))
+            ) : (
+              <div style={{ fontSize: "12px", color: "#8b949e", marginTop: "4px" }}>
+                No contributing signals
+              </div>
+            )}
           </div>
-        )}
-      </div>
-      <AlertTimeline
-        selectedAlert={selectedAlert}
-        selectedAlertTimeline={selectedAlertTimeline}
-        getSourceBadgeMeta={getSourceBadgeMeta}
-      />
-      <SourceIpContext
-        sourceIp={selectedAlert.source_ip}
-        onOpenResponseRegistry={onOpenResponseRegistry}
-      />
+          <AlertTimeline
+            selectedAlert={selectedAlert}
+            selectedAlertTimeline={selectedAlertTimeline}
+            getSourceBadgeMeta={getSourceBadgeMeta}
+          />
+          <SourceIpContext
+            sourceIp={selectedAlert.source_ip}
+            onOpenResponseRegistry={onOpenResponseRegistry}
+          />
+        </div>
+      </details>
     </div>
   );
 }

@@ -329,6 +329,7 @@ def list_registry_records(
     dispositions: list[str] | None = None,
     indicator_type: str | None = None,
     q: str | None = None,
+    exact_indicator_value: str | None = None,
     origin_surface: str | None = None,
     actor_user_id: int | None = None,
     outcome: str | None = None,
@@ -362,6 +363,9 @@ def list_registry_records(
     if indicator_type:
         clauses.append("r.indicator_type = %s")
         params.append(indicator_type)
+    if exact_indicator_value:
+        clauses.append("r.indicator_value = %s")
+        params.append(exact_indicator_value.strip())
     if q:
         clauses.append("r.indicator_value ILIKE %s")
         params.append(f"%{q.strip()}%")

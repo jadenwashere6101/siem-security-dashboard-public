@@ -1,5 +1,10 @@
 import React from "react";
 
+const prefersReducedMotion =
+  typeof window !== "undefined" &&
+  typeof window.matchMedia === "function" &&
+  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
 export function WorkspaceInitialState({ loading, error, loadingLabel, errorLabel, onRetry }) {
   if (loading) {
     return (
@@ -58,7 +63,7 @@ const spinnerStyle = {
   border: "2px solid rgba(201, 209, 217, 0.28)",
   borderTopColor: "#58a6ff",
   borderRadius: "999px",
-  animation: "workspace-spin 0.9s linear infinite",
+  animation: prefersReducedMotion ? "none" : "workspace-spin 0.9s linear infinite",
 };
 
 const errorStateStyle = {

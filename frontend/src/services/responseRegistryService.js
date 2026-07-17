@@ -14,6 +14,7 @@ export const REGISTRY_VIEWS = [
 export const loadRegistryRecords = async ({
   view = "all",
   q,
+  exactIndicator,
   disposition,
   dispositions,
   origin,
@@ -32,6 +33,7 @@ export const loadRegistryRecords = async ({
   const params = new URLSearchParams();
   if (view) params.set("view", view);
   if (q) params.set("q", q);
+  if (exactIndicator) params.set("exact_indicator", exactIndicator);
   if (disposition && disposition !== "all") params.set("disposition", disposition);
   if (dispositions) params.set("dispositions", dispositions);
   if (origin) params.set("origin", origin);

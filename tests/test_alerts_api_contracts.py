@@ -855,3 +855,110 @@ def test_get_recon_activities_and_detail_return_bounded_payloads(client, postgre
     assert detail["summary"]["primary_destination_ports"] == [5060]
     assert detail["alerts"][0]["id"] == alert_id
     assert detail["display"]["coordination_label"] == "Coordination not established"
+
+
+def test_get_alerts_exact_source_and_alert_id_filters_do_not_broaden_results(client, postgres_db):
+    conn, cur = postgres_db
+    cur.execute(
+        """
+        INSERT INTO alerts (
+            alert_type, severity, source_ip, source, source_type, message, status
+        )
+        VALUES
+            ('exact_source_match', 'high', '198.51.100.10', 'pfsense', 'firewall', 'source match', 'open'),
+            ('exact_source_other', 'high', '198.51.100.11', 'pfsense', 'firewall', 'source other', 'open')
+        RETURNING id, alert_type
+        """
+    )
+    inserted = cur.fetchall()
+    conn.commit()
+    exact_alert_id = inserted[0][0]
+
+    _login_as_super_admin(client)
+    resp = _fetch_alerts_response_for_path(
+        client,
+        conn,
+        "/alerts?exact_source_ip=198.51.100.10&search=198.51.100&sort=oldest",
+    )
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert [item["alert_type"] for item in payload["items"]] == ["exact_source_match"]
+
+    summary_resp = _fetch_alert_summary_response_for_path(
+        client,
+        conn,
+        f"/alerts/summary?alert_id={exact_alert_id}",
+    )
+    assert summary_resp.status_code == 200
+    summary_payload = summary_resp.get_json()
+    assert summary_payload["metrics"]["total_alerts"] == 1
+    assert summary_payload["top_source_ips"] == [{"name": "198.51.100.10", "value": 1}]
+
+
+def test_get_alerts_exact_target_filter_matches_primary_and_sample_destination_ips(client, postgres_db):
+    conn, cur = postgres_db
+    cur.execute(
+        """
+        INSERT INTO alerts (
+            alert_type, severity, source_ip, source, source_type, message, status, context
+        )
+        VALUES
+            (
+                'target_primary_match',
+                'medium',
+                '198.51.100.21',
+                'pfsense',
+                'firewall',
+                'primary target match',
+                'open',
+                %s
+            ),
+            (
+                'target_sample_match',
+                'medium',
+                '198.51.100.22',
+                'pfsense',
+                'firewall',
+                'sample target match',
+                'open',
+                %s
+            ),
+            (
+                'target_non_match',
+                'medium',
+                '198.51.100.23',
+                'pfsense',
+                'firewall',
+                'different target',
+                'open',
+                %s
+            )
+        """,
+        (
+            Json({"target_context": {"primary_destination_ip": "203.0.113.30"}}),
+            Json({"target_context": {"sample_destination_ips": ["203.0.113.30", "203.0.113.31"]}}),
+            Json({"target_context": {"primary_destination_ip": "203.0.113.40"}}),
+        ),
+    )
+    conn.commit()
+
+    _login_as_super_admin(client)
+    resp = _fetch_alerts_response_for_path(
+        client,
+        conn,
+        "/alerts?exact_target_ip=203.0.113.30&sort=oldest",
+    )
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert [item["alert_type"] for item in payload["items"]] == [
+        "target_primary_match",
+        "target_sample_match",
+    ]
+
+    summary_resp = _fetch_alert_summary_response_for_path(
+        client,
+        conn,
+        "/alerts/summary?exact_target_ip=203.0.113.30",
+    )
+    assert summary_resp.status_code == 200
+    assert summary_resp.get_json()["metrics"]["total_alerts"] == 2

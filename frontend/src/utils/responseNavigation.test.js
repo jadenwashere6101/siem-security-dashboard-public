@@ -17,13 +17,13 @@ describe("responseNavigation", () => {
     expect(registryNavFromSourceIp("8.8.8.8")).toEqual(
       expect.objectContaining({
         sectionId: "response-registry",
-        q: "8.8.8.8",
+        exactIndicator: "8.8.8.8",
       })
     );
     expect(registryNavFromAlert({ id: 12, source_ip: "1.1.1.1" })).toEqual(
       expect.objectContaining({
         relatedAlertId: 12,
-        q: "1.1.1.1",
+        exactIndicator: "1.1.1.1",
       })
     );
     expect(registryNavFromIncident({ id: 9, source_ip: "9.9.9.9" }).relatedIncidentId).toBe(9);

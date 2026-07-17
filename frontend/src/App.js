@@ -52,6 +52,19 @@ import packageJson from "../package.json";
 const DEFAULT_ALERT_PAGE_SIZE = 50;
 const MAX_ALERT_PAGE_SIZE = 100;
 
+const createAlertViewState = () => ({
+  searchTerm: "",
+  exactSourceIp: "",
+  exactTargetIp: "",
+  exactAlertId: null,
+  sourceFilter: "all",
+  severityFilter: "",
+  statusFilter: "",
+  operationalScope: OPERATIONAL_SCOPE_SINCE_TUNING,
+  sortOption: "newest",
+  offset: 0,
+});
+
 const createAlertRowsState = () => ({
   items: [],
   total: 0,
@@ -88,14 +101,8 @@ function resolveAlertPageSize(rowsPerPage) {
 function AppInner() {
   const [alertsState, setAlertsState] = useState(createAlertRowsState);
   const [alertSummaryState, setAlertSummaryState] = useState(createAlertSummaryState);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [sourceFilter, setSourceFilter] = useState("all");
-  const [severityFilter, setSeverityFilter] = useState("");
+  const [alertView, setAlertView] = useState(createAlertViewState);
   const [selectedAlertId, setSelectedAlertId] = useState(null);
-  const [statusFilter, setStatusFilter] = useState("");
-  const [operationalScope, setOperationalScope] = useState(OPERATIONAL_SCOPE_SINCE_TUNING);
-  const [sortOption, setSortOption] = useState("newest");
-  const [alertOffset, setAlertOffset] = useState(0);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUsername, setCurrentUsername] = useState(null);
   const [userRole, setUserRole] = useState(null);
@@ -113,6 +120,7 @@ function AppInner() {
   const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState("");
   const [sessionNotice, setSessionNotice] = useState("");
+  const latestAlertRequestRef = useRef(0);
   const previousSessionRef = useRef({
     authenticated: false,
     username: null,
@@ -121,27 +129,71 @@ function AppInner() {
   const hasCheckedAuthRef = useRef(false);
   const hasAppliedLandingRef = useRef(false);
   const alertsTableRef = useRef(null);
+  const applyAlertViewPatch = useCallback((patchOrUpdater, options = {}) => {
+    const { resetOffset = true, clearExactPivots = true } = options;
+    setAlertView((current) => {
+      const patch =
+        typeof patchOrUpdater === "function" ? patchOrUpdater(current) : patchOrUpdater || {};
+      return {
+        ...current,
+        ...patch,
+        ...(clearExactPivots
+          ? {
+              exactSourceIp: "",
+              exactTargetIp: "",
+              exactAlertId: null,
+            }
+          : null),
+        offset:
+          Object.prototype.hasOwnProperty.call(patch, "offset") || !resetOffset
+            ? patch.offset ?? current.offset
+            : 0,
+      };
+    });
+  }, []);
+
+  const setSearchTerm = useCallback((value) => {
+    applyAlertViewPatch({ searchTerm: value });
+  }, [applyAlertViewPatch]);
+
+  const setSourceFilter = useCallback((value) => {
+    applyAlertViewPatch({ sourceFilter: value });
+  }, [applyAlertViewPatch]);
+
+  const setSeverityFilter = useCallback((value) => {
+    applyAlertViewPatch({ severityFilter: value });
+  }, [applyAlertViewPatch]);
+
+  const setStatusFilter = useCallback((value) => {
+    applyAlertViewPatch({ statusFilter: value });
+  }, [applyAlertViewPatch]);
+
+  const setOperationalScope = useCallback((value) => {
+    applyAlertViewPatch({ operationalScope: value });
+  }, [applyAlertViewPatch]);
+
+  const setSortOption = useCallback((value) => {
+    applyAlertViewPatch({ sortOption: value });
+  }, [applyAlertViewPatch]);
+
   const alertPageSize = resolveAlertPageSize(settings.display?.rowsPerPage);
   const alertQuery = useMemo(
     () => ({
-      searchTerm,
-      severityFilter,
-      statusFilter,
-      sourceFilter,
-      sortOption,
-      operationalScope,
+      searchTerm: alertView.searchTerm,
+      exactSourceIp: alertView.exactSourceIp,
+      exactTargetIp: alertView.exactTargetIp,
+      exactAlertId: alertView.exactAlertId,
+      severityFilter: alertView.severityFilter,
+      statusFilter: alertView.statusFilter,
+      sourceFilter: alertView.sourceFilter,
+      sortOption: alertView.sortOption,
+      operationalScope: alertView.operationalScope,
       limit: alertPageSize,
-      offset: alertOffset,
+      offset: alertView.offset,
     }),
     [
-      alertOffset,
       alertPageSize,
-      operationalScope,
-      searchTerm,
-      severityFilter,
-      sourceFilter,
-      sortOption,
-      statusFilter,
+      alertView,
     ]
   );
 
@@ -183,6 +235,7 @@ function AppInner() {
       setIsAuthenticated(false);
       setCurrentUsername(null);
       setUserRole(null);
+      setAlertView(createAlertViewState());
       setAlertsState(createAlertRowsState());
       setAlertSummaryState(createAlertSummaryState());
       writeStoredSessionIdentity(null);
@@ -193,6 +246,8 @@ function AppInner() {
 
   const fetchAlerts = useCallback(async ({ quiet = false } = {}) => {
     if (!isAuthenticated) return;
+    const requestId = latestAlertRequestRef.current + 1;
+    latestAlertRequestRef.current = requestId;
 
     if (quiet) {
       setAlertsState((current) => ({ ...current, refreshing: true, error: "" }));
@@ -207,6 +262,9 @@ function AppInner() {
         loadAlerts(alertQuery),
         loadAlertDashboardSummary(alertQuery),
       ]);
+      if (latestAlertRequestRef.current !== requestId) {
+        return;
+      }
 
       setAlertsState({
         items: Array.isArray(rowData?.items) ? rowData.items : [],
@@ -229,6 +287,9 @@ function AppInner() {
         hasLoadedOnce: true,
       });
     } catch (err) {
+      if (latestAlertRequestRef.current !== requestId) {
+        return;
+      }
       console.error("Error fetching alerts:", err);
       const message = err.message || "Unable to load dashboard alerts";
       setAlertsState((current) => ({
@@ -265,6 +326,7 @@ function AppInner() {
       setIsAuthenticated(false);
       setCurrentUsername(null);
       setUserRole(null);
+      setAlertView(createAlertViewState());
       writeStoredSessionIdentity(null);
     }
   };
@@ -280,6 +342,7 @@ function AppInner() {
       setUserRole(null);
       setActiveSection("dashboard");
       setSessionNotice("");
+      setAlertView(createAlertViewState());
       setAlertsState(createAlertRowsState());
       setAlertSummaryState(createAlertSummaryState());
       writeStoredSessionIdentity(null);
@@ -304,10 +367,6 @@ function AppInner() {
 
     return () => clearInterval(interval);
   }, [isAuthenticated, fetchAlerts, settings.autoRefreshIntervalMs]);
-
-  useEffect(() => {
-    setAlertOffset(0);
-  }, [alertPageSize, operationalScope, searchTerm, severityFilter, sourceFilter, sortOption, statusFilter]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -437,7 +496,14 @@ function AppInner() {
 
   const handleOpenAlert = useCallback((alertId, sourceIp = "") => {
     if (alertId == null) return;
-    setSearchTerm(sourceIp || String(alertId));
+    setAlertView((current) => ({
+      ...current,
+      searchTerm: "",
+      exactSourceIp: "",
+      exactTargetIp: "",
+      exactAlertId: Number(alertId),
+      offset: 0,
+    }));
     setSelectedAlertId(Number(alertId));
     navigateWorkspace("dashboard", {
       destination: NAVIGATION_DESTINATIONS.element,
@@ -446,15 +512,38 @@ function AppInner() {
     });
   }, [navigateWorkspace]);
 
-  const handleViewRelatedAlerts = (sourceIp) => {
-    setSearchTerm(sourceIp || "");
+  const handleViewRelatedAlerts = useCallback((pivot) => {
+    const nextPivot =
+      typeof pivot === "string"
+        ? { sourceIp: pivot }
+        : pivot && typeof pivot === "object"
+        ? pivot
+        : {};
+    const normalizedSourceIp = String(nextPivot.sourceIp || "").trim();
+    const normalizedTargetIp = String(nextPivot.targetIp || "").trim();
+    const normalizedAlertId =
+      nextPivot.alertId == null || nextPivot.alertId === ""
+        ? null
+        : Number(nextPivot.alertId);
+    setAlertView((current) => ({
+      ...current,
+      searchTerm: "",
+      exactSourceIp: normalizedSourceIp,
+      exactTargetIp: normalizedTargetIp,
+      exactAlertId: Number.isFinite(normalizedAlertId) ? normalizedAlertId : null,
+      offset: 0,
+    }));
     setSelectedAlertId(null);
     navigateWorkspace("dashboard", {
       destination: NAVIGATION_DESTINATIONS.element,
       targetKey: WORKSPACE_TARGETS.recentAlerts,
-      context: { sourceIp: sourceIp || "" },
+      context: {
+        sourceIp: normalizedSourceIp,
+        targetIp: normalizedTargetIp,
+        alertId: Number.isFinite(normalizedAlertId) ? normalizedAlertId : null,
+      },
     });
-  };
+  }, [navigateWorkspace]);
 
   const handleOpenIncidentWorkspace = useCallback(() => {
     handleNavigate("soar-incidents");
@@ -549,13 +638,19 @@ function AppInner() {
 
   const handleNextAlertPage = useCallback(() => {
     if (!canGoToNextAlertPage) return;
-    setAlertOffset((current) => current + alertPageSize);
-  }, [alertPageSize, canGoToNextAlertPage]);
+    applyAlertViewPatch((current) => ({ offset: current.offset + alertPageSize }), {
+      resetOffset: false,
+      clearExactPivots: false,
+    });
+  }, [alertPageSize, applyAlertViewPatch, canGoToNextAlertPage]);
 
   const handlePreviousAlertPage = useCallback(() => {
     if (!canGoToPreviousAlertPage) return;
-    setAlertOffset((current) => Math.max(0, current - alertPageSize));
-  }, [alertPageSize, canGoToPreviousAlertPage]);
+    applyAlertViewPatch((current) => ({ offset: Math.max(0, current.offset - alertPageSize) }), {
+      resetOffset: false,
+      clearExactPivots: false,
+    });
+  }, [alertPageSize, applyAlertViewPatch, canGoToPreviousAlertPage]);
 
   if (authLoading) {
     return (
@@ -733,15 +828,15 @@ function AppInner() {
             alerts={alertsState.items}
             alertsTableRef={alertsTableRef}
             canTakeAlertActions={canTakeAlertActions}
-            searchTerm={searchTerm}
+            searchTerm={alertView.searchTerm}
             setSearchTerm={setSearchTerm}
-            sortOption={sortOption}
+            sortOption={alertView.sortOption}
             setSortOption={setSortOption}
-            operationalScope={operationalScope}
+            operationalScope={alertView.operationalScope}
             setOperationalScope={setOperationalScope}
-            severityFilter={severityFilter}
+            severityFilter={alertView.severityFilter}
             setSeverityFilter={setSeverityFilter}
-            sourceFilter={sourceFilter}
+            sourceFilter={alertView.sourceFilter}
             setSourceFilter={setSourceFilter}
             selectedAlertId={selectedAlertId}
             setSelectedAlertId={setSelectedAlertId}
@@ -750,7 +845,7 @@ function AppInner() {
               ...getSeverityBadgeStyle(severity, settings.display?.severityColorPreset),
             })}
             onUpdateStatus={handleUpdateStatus}
-            statusFilter={statusFilter}
+            statusFilter={alertView.statusFilter}
             setStatusFilter={setStatusFilter}
             metricsGridStyle={metricsGridStyle}
             metricCardStyle={metricCardStyle}

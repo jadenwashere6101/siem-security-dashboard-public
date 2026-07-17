@@ -175,6 +175,7 @@ function ResponseRegistryPanel({
 
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
+  const [exactIndicator, setExactIndicator] = useState("");
   const [dispositionFilter, setDispositionFilter] = useState("all");
   const [originFilter, setOriginFilter] = useState("");
   const [outcomeFilter, setOutcomeFilter] = useState("");
@@ -203,11 +204,25 @@ function ResponseRegistryPanel({
     if (navigationRequest.view) {
       setView(navigationRequest.view);
     }
+    const nextExactIndicator = String(navigationRequest.exactIndicator || "").trim();
     if (navigationRequest.q != null) {
       const nextQ = String(navigationRequest.q || "").trim();
       setSearch(nextQ);
-      setSearchInput(nextQ);
+      setSearchInput(nextQ || nextExactIndicator);
+    } else {
+      setSearch("");
+      setSearchInput(nextExactIndicator);
     }
+    setExactIndicator(nextExactIndicator);
+    setDispositionFilter("all");
+    setOriginFilter("");
+    setOutcomeFilter("");
+    setEnforcementFilter("");
+    setSort("updated_at_desc");
+    setOffset(0);
+    setRecords([]);
+    setTotal(0);
+    setError("");
     setRelatedAlertId(navigationRequest.relatedAlertId || null);
     setRelatedIncidentId(navigationRequest.relatedIncidentId || null);
     setRelatedPlaybookExecutionId(navigationRequest.relatedPlaybookExecutionId || null);
@@ -229,6 +244,7 @@ function ResponseRegistryPanel({
         const data = await loadRegistryRecords({
           view,
           q: search || undefined,
+          exactIndicator: exactIndicator || undefined,
           disposition: dispositionFilter,
           origin: originFilter || undefined,
           outcome: outcomeFilter || undefined,
@@ -256,6 +272,7 @@ function ResponseRegistryPanel({
     [
       view,
       search,
+      exactIndicator,
       dispositionFilter,
       originFilter,
       outcomeFilter,
@@ -288,6 +305,7 @@ function ResponseRegistryPanel({
   }, [
     view,
     search,
+    exactIndicator,
     dispositionFilter,
     originFilter,
     outcomeFilter,
@@ -604,6 +622,7 @@ function ResponseRegistryPanel({
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 setSearch(searchInput.trim());
+                setExactIndicator("");
               }
             }}
             placeholder="IP address"
@@ -673,7 +692,10 @@ function ResponseRegistryPanel({
         <div style={{ display: "flex", alignItems: "end", gap: "8px" }}>
           <button
             type="button"
-            onClick={() => setSearch(searchInput.trim())}
+            onClick={() => {
+              setSearch(searchInput.trim());
+              setExactIndicator("");
+            }}
             style={buttonStyle(false)}
           >
             Apply search
@@ -771,7 +793,11 @@ function ResponseRegistryPanel({
           {loading ? (
             <p aria-live="polite">Loading response registry…</p>
           ) : records.length === 0 ? (
-            <p aria-live="polite">No registry records match the current filters.</p>
+            <p aria-live="polite">
+              {exactIndicator || relatedAlertId || relatedIncidentId
+                ? "No response registry records match the requested context."
+                : "No registry records match the current filters."}
+            </p>
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>

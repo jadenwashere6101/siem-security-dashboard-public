@@ -192,7 +192,7 @@ test("AlertDetailsPanel renders pfSense why-fired evidence from the backend", as
     />
   );
 
-  expect(await screen.findByText("Why this fired")).toBeInTheDocument();
+  expect(await screen.findByText("Primary evidence")).toBeInTheDocument();
   expect(await screen.findByText("Repeated deny threshold exceeded")).toBeInTheDocument();
   expect(screen.getByText("Matching events")).toBeInTheDocument();
   expect(screen.getByText("6")).toBeInTheDocument();
@@ -243,7 +243,7 @@ test("AlertDetailsPanel renders single-target pfSense target context", () => {
     />
   );
 
-  expect(screen.getByText("Target Context")).toBeInTheDocument();
+  expect(screen.getByText("Target context")).toBeInTheDocument();
   expect(screen.getByText("Exact destination evidence captured for this alert.")).toBeInTheDocument();
   expect(screen.getByText("Primary Destination IP")).toBeInTheDocument();
   expect(screen.getAllByText("203.0.113.10").length).toBeGreaterThan(0);
@@ -302,7 +302,7 @@ test("AlertDetailsPanel renders aggregate pfSense target context", () => {
   expect(screen.getByText("203.0.113.20")).toBeInTheDocument();
   expect(screen.getByText("Distinct Destinations")).toBeInTheDocument();
   expect(screen.getByText("5")).toBeInTheDocument();
-  expect(screen.getByText("Recon campaign context")).toBeInTheDocument();
+  expect(screen.getByText("Related objects")).toBeInTheDocument();
   expect(screen.getByText("#901")).toBeInTheDocument();
 });
 
@@ -330,7 +330,7 @@ test("AlertDetailsPanel renders unavailable when pfSense target evidence is miss
     />
   );
 
-  expect(screen.getByText("Target Context")).toBeInTheDocument();
+  expect(screen.getByText("Target context")).toBeInTheDocument();
   expect(screen.getByText("Unavailable")).toBeInTheDocument();
 });
 
@@ -354,5 +354,5 @@ test("AlertDetailsPanel does not render target context for non-pfSense alerts", 
     />
   );
 
-  expect(screen.queryByText("Target Context")).not.toBeInTheDocument();
+  expect(screen.queryByText("Target context")).not.toBeInTheDocument();
 });
