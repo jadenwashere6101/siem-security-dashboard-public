@@ -35,7 +35,7 @@ auditability.
   worker daemon, approval workflow, notification policy service
 - Development process: OpenSpec-driven design and implementation
 
-## Recommended Screenshots
+## Screenshots
 
 ### SOC Command Center
 
