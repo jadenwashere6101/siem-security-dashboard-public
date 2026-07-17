@@ -25,6 +25,8 @@ auditability.
   idempotency, dead-letter handling, and guarded integrations.
 - pfSense support goes beyond basic port-scan alerts with target evidence,
   distributed recon aggregation, and allow-after-deny progression tracking.
+- Detection Sources: pfsense firewall logs, honeypot logs, Azure Application Insights,
+  Bank of a Vibe Code Project, Open Telemetry, and NGINX Web Logs.
 
 ## Tech Stack
 
