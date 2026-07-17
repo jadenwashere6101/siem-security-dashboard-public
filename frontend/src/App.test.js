@@ -20,12 +20,27 @@ jest.mock('./components/DashboardSection', () => (props) => (
   <div data-testid="dashboard-section">
     <h2>Dashboard workspace</h2>
     Dashboard Section Mock search:{props.searchTerm || ''}
+    <div>severity:{props.severityFilter || ''}</div>
+    <div>status:{props.statusFilter || ''}</div>
+    <div>source:{props.sourceFilter || ''}</div>
     <div>scope:{props.operationalScope}</div>
     <div>loading:{String(Boolean(props.loading))}</div>
     <div>refreshing:{String(Boolean(props.refreshing))}</div>
     <div>error:{props.error || ''}</div>
     <button type="button" onClick={() => props.setOperationalScope('all_history')}>
       Dashboard show all history
+    </button>
+    <button type="button" onClick={() => props.setSeverityFilter('high')}>
+      Dashboard set severity
+    </button>
+    <button type="button" onClick={() => props.setStatusFilter('resolved')}>
+      Dashboard set status
+    </button>
+    <button type="button" onClick={() => props.setSourceFilter('pfsense')}>
+      Dashboard set source
+    </button>
+    <button type="button" onClick={() => props.setSearchTerm('manual search')}>
+      Dashboard set search
     </button>
     <button type="button" onClick={() => props.onOpenResponseRegistry({ sourceIp: '8.8.8.8', relatedAlertId: 12 })}>
       Dashboard open registry
@@ -357,6 +372,44 @@ test('related-alert deep links preserve source-IP filter and Recent Alerts desti
   expect(main.scrollTo).toHaveBeenCalledWith({ top: 320, left: 0, behavior: 'smooth' });
 
   HTMLElement.prototype.getBoundingClientRect = originalGetBoundingClientRect;
+});
+
+test('contextual alert pivots clear incompatible local filters while manual filters remain preserved', async () => {
+  loadCurrentSession.mockResolvedValue({ authenticated: true, user: 'analyst1', role: 'analyst' });
+  render(<App />);
+  const dashboard = await screen.findByTestId('dashboard-section');
+
+  await userEvent.click(screen.getByRole('button', { name: 'Dashboard set severity' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Dashboard set status' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Dashboard set source' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Dashboard set search' }));
+
+  expect(dashboard).toHaveTextContent('search:manual search');
+  expect(dashboard).toHaveTextContent('severity:high');
+  expect(dashboard).toHaveTextContent('status:resolved');
+  expect(dashboard).toHaveTextContent('source:pfsense');
+
+  await userEvent.click(screen.getByRole('button', { name: /soar incidents/i }));
+  await userEvent.click(await screen.findByRole('button', { name: 'Incident open related alerts' }));
+
+  await waitFor(() => {
+    expect(loadAlerts).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        exactSourceIp: '203.0.113.10',
+        searchTerm: '',
+        severityFilter: '',
+        statusFilter: '',
+        sourceFilter: 'all',
+        offset: 0,
+      })
+    );
+  });
+
+  await userEvent.click(screen.getByRole('button', { name: /^dashboard$/i }));
+  expect(await screen.findByTestId('dashboard-section')).toHaveTextContent('search:');
+  expect(screen.getByTestId('dashboard-section')).toHaveTextContent('severity:');
+  expect(screen.getByTestId('dashboard-section')).toHaveTextContent('status:');
+  expect(screen.getByTestId('dashboard-section')).toHaveTextContent('source:all');
 });
 
 test('dashboard deep links preserve registry and incident destinations', async () => {

@@ -98,6 +98,20 @@ function resolveAlertPageSize(rowsPerPage) {
   return Math.min(parsed, MAX_ALERT_PAGE_SIZE);
 }
 
+function buildContextualAlertView(current, { sourceIp = "", targetIp = "", alertId = null } = {}) {
+  return {
+    ...current,
+    searchTerm: "",
+    exactSourceIp: sourceIp,
+    exactTargetIp: targetIp,
+    exactAlertId: alertId,
+    sourceFilter: "all",
+    severityFilter: "",
+    statusFilter: "",
+    offset: 0,
+  };
+}
+
 function AppInner() {
   const [alertsState, setAlertsState] = useState(createAlertRowsState);
   const [alertSummaryState, setAlertSummaryState] = useState(createAlertSummaryState);
@@ -496,14 +510,11 @@ function AppInner() {
 
   const handleOpenAlert = useCallback((alertId, sourceIp = "") => {
     if (alertId == null) return;
-    setAlertView((current) => ({
-      ...current,
-      searchTerm: "",
-      exactSourceIp: "",
-      exactTargetIp: "",
-      exactAlertId: Number(alertId),
-      offset: 0,
-    }));
+    setAlertView((current) =>
+      buildContextualAlertView(current, {
+        alertId: Number(alertId),
+      })
+    );
     setSelectedAlertId(Number(alertId));
     navigateWorkspace("dashboard", {
       destination: NAVIGATION_DESTINATIONS.element,
@@ -525,14 +536,13 @@ function AppInner() {
       nextPivot.alertId == null || nextPivot.alertId === ""
         ? null
         : Number(nextPivot.alertId);
-    setAlertView((current) => ({
-      ...current,
-      searchTerm: "",
-      exactSourceIp: normalizedSourceIp,
-      exactTargetIp: normalizedTargetIp,
-      exactAlertId: Number.isFinite(normalizedAlertId) ? normalizedAlertId : null,
-      offset: 0,
-    }));
+    setAlertView((current) =>
+      buildContextualAlertView(current, {
+        sourceIp: normalizedSourceIp,
+        targetIp: normalizedTargetIp,
+        alertId: Number.isFinite(normalizedAlertId) ? normalizedAlertId : null,
+      })
+    );
     setSelectedAlertId(null);
     navigateWorkspace("dashboard", {
       destination: NAVIGATION_DESTINATIONS.element,

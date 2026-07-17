@@ -214,6 +214,44 @@ test("list retry preserves the last requested page offset", async () => {
   });
 });
 
+test("contextual navigation clears stale filters and applies exact related targeting", async () => {
+  const { rerender } = renderRegistry(<ResponseRegistryPanel {...styleProps} canTakeAlertActions />);
+  await screen.findByRole("row", { name: /Registry record 8\.8\.8\.8/i });
+
+  await userEvent.type(screen.getByLabelText("Origin filter"), "response_registry");
+  await userEvent.type(screen.getByLabelText("Outcome filter"), "succeeded");
+
+  rerender(
+    <ResponseSyncProvider>
+      <ResponseRegistryPanel
+        {...styleProps}
+        canTakeAlertActions
+        navigationRequest={{
+          nonce: 1,
+          view: "all",
+          exactIndicator: "9.9.9.9",
+          relatedAlertId: 42,
+          relatedIncidentId: 77,
+        }}
+      />
+    </ResponseSyncProvider>
+  );
+
+  await waitFor(() => {
+    expect(loadRegistryRecords).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        exactIndicator: "9.9.9.9",
+        relatedAlertId: 42,
+        relatedIncidentId: 77,
+        origin: undefined,
+        outcome: undefined,
+        offset: 0,
+      })
+    );
+  });
+  expect(screen.getByLabelText("Search indicator")).toHaveValue("9.9.9.9");
+});
+
 test("opens detail with response summary, relationships, and recommended next step", async () => {
   renderRegistry(<ResponseRegistryPanel {...styleProps} canTakeAlertActions />);
   const detail = await openFirstRow();

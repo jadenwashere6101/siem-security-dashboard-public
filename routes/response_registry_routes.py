@@ -54,6 +54,10 @@ def _parse_iso_datetime(value: Any) -> datetime | None:
 def _safe_int(value: Any) -> int | None:
     if value is None or value == "":
         return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _safe_ip(value: Any) -> str | None:
@@ -62,10 +66,6 @@ def _safe_ip(value: Any) -> str | None:
     try:
         return str(ipaddress.ip_address(str(value).strip()))
     except ValueError:
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
         return None
 
 

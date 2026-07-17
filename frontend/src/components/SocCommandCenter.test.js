@@ -520,6 +520,10 @@ describe("SocCommandCenter", () => {
     expect(await screen.findByText("Repeated VPN recon")).toBeInTheDocument();
     expect(screen.getAllByText(/203\.0\.113\.20/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/VPN service \(1194\)/).length).toBeGreaterThan(0);
+    expect(screen.getByTestId("recon-activity-list")).toHaveStyle({
+      overflowY: "auto",
+      maxHeight: "520px",
+    });
   });
 
   test("persists recon review state and distinguishes new from updated cards", async () => {

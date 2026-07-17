@@ -246,3 +246,129 @@ def test_registry_add_note_requires_reason(postgres_db, client):
         )
         assert resp.status_code == 400
         assert resp.get_json()["success"] is False
+
+
+def test_registry_list_limit_offset_and_exact_related_filters(postgres_db, client):
+    conn, _cur = postgres_db
+    with _patched_app_db(conn):
+        _login_super_admin(client)
+        cur = conn.cursor()
+
+        first_alert_id = _insert_alert(cur, "8.8.4.4", "registry_related_first")
+        first_incident_id = _insert_incident(cur, "8.8.4.4")
+        second_alert_id = _insert_alert(cur, "9.9.9.9", "registry_related_second")
+        second_incident_id = _insert_incident(cur, "9.9.9.9")
+
+        first_registry = upsert_indicator_identity(
+            conn, indicator_type="ip", indicator_value="8.8.4.4"
+        )
+        second_registry = upsert_indicator_identity(
+            conn, indicator_type="ip", indicator_value="9.9.9.9"
+        )
+
+        append_registry_event(
+            conn,
+            registry_id=first_registry["id"],
+            event_type="monitor_started",
+            requested_action="monitor",
+            outcome="succeeded",
+            disposition_after=DISPOSITION_MONITORED,
+            origin_surface=ORIGIN_RESPONSE_REGISTRY,
+            reason="first",
+            alert_id=first_alert_id,
+            incident_id=first_incident_id,
+            idempotency_key="registry-list-first",
+        )
+        append_registry_event(
+            conn,
+            registry_id=second_registry["id"],
+            event_type="monitor_started",
+            requested_action="monitor",
+            outcome="succeeded",
+            disposition_after=DISPOSITION_MONITORED,
+            origin_surface=ORIGIN_RESPONSE_REGISTRY,
+            reason="second",
+            alert_id=second_alert_id,
+            incident_id=second_incident_id,
+            idempotency_key="registry-list-second",
+        )
+        conn.commit()
+
+        paged = client.get("/response-registry?view=monitoring&limit=1&offset=1&sort=indicator_value_asc")
+        assert paged.status_code == 200
+        paged_body = paged.get_json()
+        assert paged_body["total"] >= 2
+        assert len(paged_body["items"]) == 1
+        assert paged_body["items"][0]["indicator_value"] == "9.9.9.9"
+
+        by_alert = client.get(f"/response-registry?view=monitoring&related_alert_id={first_alert_id}")
+        assert by_alert.status_code == 200
+        by_alert_body = by_alert.get_json()
+        assert [item["indicator_value"] for item in by_alert_body["items"]] == ["8.8.4.4"]
+
+        by_incident = client.get(
+            f"/response-registry?view=monitoring&related_incident_id={second_incident_id}"
+        )
+        assert by_incident.status_code == 200
+        by_incident_body = by_incident.get_json()
+        assert [item["indicator_value"] for item in by_incident_body["items"]] == ["9.9.9.9"]
+
+
+def test_registry_invalid_integer_inputs_fail_safely_and_valid_command_ids_are_preserved(postgres_db, client):
+    conn, _cur = postgres_db
+    with _patched_app_db(conn):
+        _login_super_admin(client)
+        cur = conn.cursor()
+
+        alert_id = _insert_alert(cur, "1.1.1.1", "registry-valid-provenance")
+        incident_id = _insert_incident(cur, "1.1.1.1")
+        playbook_execution_id = _insert_playbook_execution(cur, alert_id=alert_id, incident_id=incident_id)
+        approval_request_id = _insert_approval(cur, incident_id)
+        conn.commit()
+
+        malformed = client.get(
+            "/response-registry?limit=bad&offset=bad&actor_user_id=bad"
+            "&related_alert_id=bad&related_incident_id=bad&exact_indicator=not-an-ip"
+        )
+        assert malformed.status_code == 200
+        malformed_body = malformed.get_json()
+        assert "items" in malformed_body
+        assert "total" in malformed_body
+
+        created = client.post(
+            "/response-registry/commands",
+            json={
+                "action": "monitor",
+                "indicator_value": "1.1.1.1",
+                "reason": "watch from api",
+                "alert_id": alert_id,
+                "incident_id": incident_id,
+                "playbook_execution_id": playbook_execution_id,
+                "approval_request_id": approval_request_id,
+                "idempotency_key": "registry-cmd-valid-provenance",
+            },
+        )
+        assert created.status_code in {200, 201}
+        registry_id = created.get_json()["registry_record_id"]
+
+        detail = client.get(f"/response-registry/{registry_id}")
+        assert detail.status_code == 200
+        payload = detail.get_json()
+        assert payload["events"][0]["alert_id"] == alert_id
+        assert payload["events"][0]["incident_id"] == incident_id
+        assert payload["events"][0]["playbook_execution_id"] == playbook_execution_id
+
+        ignored_bad_ids = client.post(
+            "/response-registry/commands",
+            json={
+                "action": "add_note",
+                "indicator_value": "1.1.1.1",
+                "reason": "note with ignored bad ids",
+                "alert_id": "bad",
+                "incident_id": "bad",
+                "playbook_execution_id": "bad",
+                "approval_request_id": "bad",
+                "idempotency_key": "registry-cmd-ignored-bad-ids",
+            },
+        )
+        assert ignored_bad_ids.status_code in {200, 201}

@@ -1042,10 +1042,13 @@ function SocCommandCenter({
               }}
             >
               <div
+                data-testid="recon-activity-list"
                 style={{
                   ...incidentListStyle,
                   borderRight: useCompactWorkspace ? "none" : incidentListStyle.borderRight,
                   borderBottom: useCompactWorkspace ? "1px solid #30363d" : "none",
+                  overflowY: "auto",
+                  maxHeight: useCompactWorkspace ? "320px" : "520px",
                 }}
               >
                 {loading && data.reconActivities.length === 0 ? (
@@ -1792,8 +1795,6 @@ const incidentListStyle = {
   display: "flex",
   flexDirection: "column",
   gap: "8px",
-  overflowY: "auto",
-  maxHeight: "520px",
 };
 
 const incidentButtonStyle = {
