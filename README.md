@@ -1,7 +1,7 @@
 # SIEM Security Dashboard
 
-Full-stack SIEM/SOAR platform focused on detection engineering, analyst workflow,
-and realistic security operations architecture.
+A full-stack SIEM/SOAR platform built around detection engineering, analyst
+workflow, and realistic security operations behavior.
 
 This project ingests telemetry from web apps, Azure Application Insights,
 honeypot services, OpenTelemetry sources, and pfSense firewall logs; detects and
@@ -9,23 +9,22 @@ correlates suspicious behavior; creates alerts and incidents; runs approval-gate
 SOAR playbooks; tracks notification delivery and response outcomes; and exposes a
 React analyst console built around real SOC workflows.
 
-It is not a toy dashboard with static detections. The repository models how a
-small SOC platform actually behaves: bounded ingest pipelines, operational
-severity philosophy, analyst-facing evidence, campaign-style recon aggregation,
-approval gates, guarded integrations, failure handling, and auditability.
+It is built to show how a small SOC platform should actually behave, not just how
+it should look in a dashboard demo. The repository models bounded ingest
+pipelines, explainable detections, analyst-facing evidence, recon aggregation,
+incident gating, approval boundaries, guarded integrations, failure handling, and
+auditability.
 
 ## Why This Project Stands Out
 
-- Detection engineering is treated as product behavior, not just a pile of rules.
-- Analyst experience is a first-class concern: alerts, incidents, recon
-  activities, approvals, playbooks, source context, and command-center views all
-  reflect the same backend contracts.
-- SOAR behavior is realistic and safety-aware: approvals, dead letters,
-  idempotency, delivery tracking, stale recovery, and guarded adapters are all
-  part of the architecture.
-- pfSense support goes beyond simple port-scan alerts and now includes target
-  evidence, distributed reconnaissance aggregation, and allow-after-deny
-  progression detection.
+- Detection logic is treated as product behavior, not just a list of rules.
+- The analyst experience is coherent end to end: alerts, incidents, recon
+  activities, approvals, playbooks, and source context all share the same backend
+  evidence model.
+- The SOAR layer is intentionally safety-aware, with approvals, retry paths,
+  idempotency, dead-letter handling, and guarded integrations.
+- pfSense support goes beyond basic port-scan alerts with target evidence,
+  distributed recon aggregation, and allow-after-deny progression tracking.
 
 ## Tech Stack
 
@@ -40,237 +39,85 @@ approval gates, guarded integrations, failure handling, and auditability.
 
 ### SOC Command Center
 
-📸 SCREENSHOT PLACEHOLDER
+![SOC Command Center overview](screenshots/soc-command-center-overview.png)
 
-Filename suggestion:
-`soc-command-center-overview.png`
-
-Capture:
-
-- SOC Command Center summary cards
-- recon activity summary
-- incident pressure
-- pending approvals
-- operational activity feed
-
-Why it matters:
-
-Show the reviewer that this is a workflow-oriented SOC product, not just a raw
-alert table.
-
-What the recruiter should notice:
-
-- unified operational view
-- analyst-facing recon summary
-- approvals, automations, and notification health in one screen
-
-Annotations/arrows:
-
-- Yes, lightly highlight recon activity, approvals, and worker/notification status
-
-Preferred mode:
-
-- Dark mode
+The Command Center gives a reviewer one screen that proves this is a real SOC
+workflow: incident pressure, approval load, automation health, notification
+posture, and live recon triage all in one place.
 
 ### Alert Investigation
 
-📸 SCREENSHOT PLACEHOLDER
+![Alert investigation with target context](screenshots/alert-investigation-target-context.png)
 
-Filename suggestion:
-`alert-investigation-target-context.png`
-
-Capture:
-
-- alert detail panel
-- target context
-- canonical scan description
-- MITRE mapping
-- reputation context
-- distributed recon linkage when present
-
-Why it matters:
-
-This is where detection engineering becomes analyst experience.
-
-What the recruiter should notice:
-
-- bounded evidence instead of vague alert text
-- readable scan wording
-- structured investigation context
-
-Annotations/arrows:
-
-- Yes, point to Target Context and recon linkage
-
-Preferred mode:
-
-- Dark mode
+This alert view shows that detections are written for analysts, not just engines:
+plain-English reasoning, target evidence, reputation context, and a concrete
+progression story are all visible without reading backend logic.
 
 ### Distributed Internet Reconnaissance Activity
 
-📸 SCREENSHOT PLACEHOLDER
+![Distributed reconnaissance activity detail](screenshots/distributed-recon-activity-detail.png)
 
-Filename suggestion:
-`distributed-recon-activity-detail.png`
-
-Capture:
-
-- recon activity list and selected detail
-- source IP count
-- destination IP count
-- primary ports
-- coordination status
-- assessment text
-
-Why it matters:
-
-This is one of the most differentiated capabilities in the repository and shows
-that the platform handles commodity scanning as an analyst problem, not just a
-rule-counting problem.
-
-What the recruiter should notice:
-
-- aggregate-level analysis
-- one operational object for many-source recon
-- coordination is not overstated
-
-Annotations/arrows:
-
-- Yes, call out coordination status and bounded summary fields
-
-Preferred mode:
-
-- Dark mode
+This recon workspace shows the platform turning noisy internet scanning into a
+single investigation object, with compact triage on the left and a bounded
+campaign-style summary on the right.
 
 ### Incident Workspace
 
-📸 SCREENSHOT PLACEHOLDER
+<table>
+  <tr>
+    <td width="50%">
+      <img src="screenshots/incident-workspace-response-context-incident.png" alt="Incident workspace detail" />
+    </td>
+    <td width="50%">
+      <img src="screenshots/incident-workspace-response-context-playbook.png" alt="Incident-linked playbook execution detail" />
+    </td>
+  </tr>
+</table>
 
-Filename suggestion:
-`incident-workspace-response-context.png`
-
-Capture:
-
-- incident detail
-- linked alerts
-- timeline
-- response/approval context
-- notification history if visible
-
-Why it matters:
-
-Demonstrates that the SIEM is case-oriented and not limited to alert generation.
-
-What the recruiter should notice:
-
-- incident lifecycle
-- linked evidence
-- workflow continuity into SOAR
-
-Annotations/arrows:
-
-- Optional
-
-Preferred mode:
-
-- Dark mode
+Together these panels show the handoff from detection to action: the incident
+explains why the case matters, and the paired response view shows the guarded
+playbook execution path behind that investigation.
 
 ### Approval Workflow
 
-📸 SCREENSHOT PLACEHOLDER
+![Approval workflow detail](screenshots/approval-workflow-detail.png)
 
-Filename suggestion:
-`approval-workflow-detail.png`
-
-Capture:
-
-- approvals list
-- selected approval detail
-- linked source IP / incident / queue item context
-- decision controls
-
-Why it matters:
-
-Shows that potentially disruptive actions remain human-gated and operationally
+This approval detail makes the safety model obvious: disruptive actions stay
+human-gated, reviewers get the operational context they need, and every outcome is
 auditable.
-
-What the recruiter should notice:
-
-- explicit approval boundary
-- linked operational context
-- reviewer-oriented safety model
-
-Annotations/arrows:
-
-- Yes, highlight linked incident/queue/source fields
-
-Preferred mode:
-
-- Dark mode
 
 ### Playbook Execution Timeline
 
-📸 SCREENSHOT PLACEHOLDER
+<table>
+  <tr>
+    <td width="50%">
+      <img src="screenshots/playbook-execution-timeline-detail.png" alt="Playbook execution outcome detail" />
+    </td>
+    <td width="50%">
+      <img src="screenshots/playbook-execution-timeline-steps.png" alt="Playbook execution step timeline" />
+    </td>
+  </tr>
+</table>
 
-Filename suggestion:
-`playbook-execution-timeline.png`
-
-Capture:
-
-- playbook execution detail
-- step timeline
-- approval pause or notification step evidence
-- execution outcome summary
-
-Why it matters:
-
-Demonstrates real orchestration behavior rather than a static “SOAR” label.
-
-What the recruiter should notice:
-
-- step-by-step execution model
-- paused/awaiting-approval behavior
-- explicit outcome reporting
-
-Annotations/arrows:
-
-- Optional
-
-Preferred mode:
-
-- Dark mode
+These execution views show that SOAR behavior is real and inspectable, with both a
+clear outcome summary and the step-by-step path the system followed to get there.
 
 ### Detection Rules And Severity Philosophy
 
-📸 SCREENSHOT PLACEHOLDER
+<table>
+  <tr>
+    <td width="50%">
+      <img src="screenshots/detection-rules-and-severity-matrix.png" alt="Severity and response matrix" />
+    </td>
+    <td width="50%">
+      <img src="screenshots/detection-rules-runtime-table.png" alt="Runtime detection rules table" />
+    </td>
+  </tr>
+</table>
 
-Filename suggestion:
-`detection-rules-and-severity-matrix.png`
-
-Capture:
-
-- runtime detection rules panel
-- Severity & Response Matrix
-- pfSense severity wording if practical
-
-Why it matters:
-
-Shows that detections, severity, and operational response are documented and
-runtime-visible rather than buried in code.
-
-What the recruiter should notice:
-
-- operational severity philosophy
-- runtime-tunable detections
-- analyst-facing documentation of response behavior
-
-Annotations/arrows:
-
-- Yes, point to severity wording and rule metadata
-
-Preferred mode:
-
-- Dark mode
+These views make the detection philosophy visible in the product itself: severity
+means something operationally, incident behavior is documented, and rule metadata
+is available without digging through source code.
 
 ## What It Does
 
@@ -280,7 +127,7 @@ At a high level, the platform:
 2. Stores events in PostgreSQL and evaluates detections and correlations.
 3. Creates enriched alerts with MITRE, reputation, target evidence, and
    workflow metadata.
-4. Creates incidents only when severity and operational flags justify them.
+4. Creates incidents only when the activity is operationally actionable.
 5. Starts SOAR playbooks after commit, outside the ingest transaction.
 6. Routes notification attempts through a centralized notification policy.
 7. Tracks approvals, queue state, execution outcomes, dead letters, and audit
@@ -304,12 +151,12 @@ Telemetry sources
 
 ### Backend
 
-- `Flask` backend with route modules for ingest, alerts, incidents, approvals,
-  playbooks, notifications, metrics, source context, and admin workflows
+- `Flask` backend exposing ingest, alerting, incident, approval, playbook,
+  notification, metrics, source-context, and admin workflows
 - `PostgreSQL` as the system of record for events, alerts, incidents,
   approvals, playbook executions, notification attempts, response outcomes, and
   recon aggregates
-- additive migrations and schema snapshot in `schema.sql`
+- additive migrations plus a schema snapshot in `schema.sql`
 
 ### Frontend
 
@@ -329,21 +176,20 @@ Telemetry sources
 
 ### Detection Pipeline
 
-- source-specific normalization and ingest filtering where required
-- event persistence before alerting logic depends on it
+- source-specific normalization and ingest filtering where needed
+- durable event persistence before downstream alerting depends on it
 - detector families in `engines/detection_engine.py`
-- cross-source and targeted correlation in `engines/correlation_engine.py`
-- backend-owned enrichment for MITRE, reputation, target evidence, and safe
+- targeted and cross-source correlation in `engines/correlation_engine.py`
+- backend-owned enrichment for MITRE, reputation, target evidence, and bounded
   correlation context
 
 ### Incident Workflow
 
-- alerts carry operational flags that determine incident eligibility,
-  containment eligibility, aggregate eligibility, and immediate notification
-  eligibility
-- incidents are created only for operationally actionable cases, not for every
-  medium or commodity scan
-- alert and incident lifecycles remain distinct but linked
+- alerts carry operational flags that determine incident, containment, aggregate,
+  and notification eligibility
+- incidents are created for actionable work, not for every medium alert or
+  commodity scan
+- alert and incident lifecycles stay distinct but linked
 
 ### SOAR
 
@@ -397,7 +243,7 @@ important part is the detection model.
   many-source commodity scanning
 - membership based on protected-range overlap, service-signature overlap, and
   bounded time overlap
-- preserved underlying alerts plus one analyst-facing summary object
+- preserved underlying alerts plus one analyst-facing investigation object
 - aggregate-level notification deduplication and material-change handling
 
 ### Allow-After-Deny Progression
@@ -436,16 +282,16 @@ important part is the detection model.
 
 - approvals are first-class operational objects
 - queue items, approvals, incidents, and outcomes stay linked but distinct
-- analysts and administrators can review decision state instead of inferring it
-  from alert status alone
+- reviewers can inspect decision state directly instead of inferring it from
+  alert status alone
 
 ### Response Outcomes
 
 - response actions produce canonical outcome records
 - the platform distinguishes real execution, simulation, tracking-only,
   blocked, pending, and failed outcomes
-- this matters because “a playbook ran” is not the same thing as “a real
-  containment step executed”
+- that matters because "a playbook ran" is not the same thing as "a real
+  containment action executed"
 
 ### Notification Routing
 
@@ -468,7 +314,7 @@ important part is the detection model.
   `block_ip` workflows are represented in the platform
 - firewall-style blocking remains intentionally guarded and dry-run oriented in
   this public repository
-- the project demonstrates response orchestration discipline, not reckless
+- the project is designed to demonstrate response discipline, not reckless
   autonomous enforcement
 
 ## Azure Architecture
@@ -509,11 +355,11 @@ repository.
 
 - searchable alert list
 - alert details with severity, MITRE, reputation, and response context
-- additive pfSense Target Context instead of forcing analysts to parse raw text
+- additive pfSense target context instead of forcing analysts to parse raw text
 
 ### Recon Activities
 
-- bounded list/detail experience for distributed commodity recon
+- compact list/detail workflow for distributed commodity recon
 - source counts, destination counts, primary ports, coordination status, and
   assessment text
 
@@ -629,10 +475,10 @@ npm run build
 The project uses spec-driven development through OpenSpec artifacts stored under
 `openspec/`.
 
-That matters here because the repository was not grown as an undisciplined demo.
-Major workflow changes such as notification policy routing, pfSense recon
-analysis, Azure ingestion, SOAR reliability, and analyst workspace behavior were
-designed before implementation and verified afterward.
+That matters because the repository was not grown as an ad hoc demo. Major
+workflow changes such as notification policy routing, pfSense recon analysis,
+Azure ingestion, SOAR reliability, and analyst workspace behavior were designed
+before implementation and verified afterward.
 
 ## Security And Scope Notes
 
