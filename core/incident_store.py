@@ -68,6 +68,219 @@ def _incident_row_to_dict(
     }
 
 
+def _reason(reason_id: str, text: str) -> dict[str, str]:
+    return {"id": reason_id, "text": text}
+
+
+def _priority_summary(priority: str | None) -> tuple[str, str]:
+    normalized = str(priority or "").upper()
+    if normalized == "P1":
+        return (
+            "Immediate action is required",
+            "Priority P1 is reserved for immediate action and likely-compromise handling",
+        )
+    if normalized == "P2":
+        return (
+            "Prompt analyst action is required",
+            "Priority P2 is used for progression or containment decisions that should be reviewed promptly",
+        )
+    return (
+        "This case is valid but not urgent",
+        "Priority P3 is used for case-worthy activity that does not require immediate action",
+    )
+
+
+def _load_recon_activity_incident(conn, recon_activity_id: int) -> dict[str, Any] | None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT i.id, i.title, i.severity, i.priority, i.status, host(i.source_ip),
+                   i.assigned_to, i.created_at, i.resolved_at
+            FROM recon_activities ra
+            JOIN incidents i ON i.id = ra.related_incident_id
+            WHERE ra.id = %s
+              AND i.status IN ('open', 'investigating')
+            """,
+            (recon_activity_id,),
+        )
+        row = cur.fetchone()
+    if row is None:
+        return None
+    return _incident_row_to_dict(row)
+
+
+def _set_recon_activity_incident(conn, recon_activity_id: int, incident_id: int) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE recon_activities
+            SET related_incident_id = %s,
+                updated_at = NOW()
+            WHERE id = %s
+            """,
+            (incident_id, recon_activity_id),
+        )
+
+
+def _build_incident_policy(
+    *,
+    severity: str | None,
+    alert_type: str | None,
+    context: dict[str, Any] | None,
+    source_ip: str,
+) -> dict[str, Any]:
+    context = context if isinstance(context, dict) else {}
+    flags = context.get("operational_flags") if isinstance(context.get("operational_flags"), dict) else {}
+    target_context = context.get("target_context") if isinstance(context.get("target_context"), dict) else {}
+    recon_activity = context.get("recon_activity") if isinstance(context.get("recon_activity"), dict) else {}
+    sev_upper = str(severity or "").upper()
+    alert_type = str(alert_type or "")
+    progression_observed = bool(
+        alert_type == "pfsense_firewall_allow_after_deny"
+        or flags.get("progression_observed")
+        or context.get("progression_observed")
+    )
+    campaign_present = bool(recon_activity.get("id"))
+    returning_attacker = build_returning_attacker_context(
+        {
+            "first_seen": target_context.get("first_seen") or context.get("first_seen"),
+            "last_seen": target_context.get("last_seen") or context.get("last_seen"),
+            "previous_incidents": context.get("previous_incidents"),
+            "previous_responses": context.get("previous_responses"),
+            "repeated_destinations": context.get("repeated_destinations")
+            or (1 if target_context.get("primary_destination_ip") else 0),
+            "repeated_services": context.get("repeated_services")
+            or (1 if target_context.get("primary_destination_port") else 0),
+            "campaign_count": 1 if campaign_present else 0,
+        }
+    )
+    campaign_intelligence = build_campaign_intelligence(
+        {
+            "first_seen": target_context.get("first_seen") or context.get("first_seen"),
+            "last_seen": target_context.get("last_seen") or context.get("last_seen"),
+            "source_count": int(recon_activity.get("source_ip_count") or context.get("source_count") or 0),
+            "destination_count": int(target_context.get("distinct_destination_count") or 0),
+            "service_count": int(target_context.get("distinct_port_count") or 0),
+            "corroborating_alert_types": int(context.get("corroborating_detection_count") or 1),
+            "progression_observed": progression_observed,
+            "relationship": "Shared recon activity" if campaign_present else "",
+        }
+    )
+    investigation_value = build_investigation_value(
+        severity=severity,
+        returning_attacker=returning_attacker,
+        campaign_intelligence=campaign_intelligence,
+        progression_observed=progression_observed,
+        corroborating_detection_count=int(context.get("corroborating_detection_count") or 1),
+        response_history_present=bool(context.get("response_status") or context.get("response_history_present")),
+        repeated_destination=bool(
+            context.get("repeated_destination") or target_context.get("primary_destination_ip")
+        ),
+        persistent_activity=returning_attacker.get("days_observed", 0) > 1,
+    )
+
+    policy = {
+        "eligible": False,
+        "priority": "P3",
+        "ownership": "Source-specific investigation",
+        "group_by_recon_activity": False,
+        "recon_activity_id": None,
+        "title": f"[AUTO] {sev_upper or 'UNKNOWN'} alert from {source_ip}",
+        "investigation_value": investigation_value,
+        "campaign_intelligence": campaign_intelligence,
+        "reasons": [],
+    }
+
+    if sev_upper == "CRITICAL":
+        policy["eligible"] = True
+        policy["priority"] = "P1"
+        policy["reasons"] = [
+            _reason("critical", "Critical behavior requires immediate incident handling"),
+        ]
+        return policy
+
+    if alert_type == "honeypot_scanner_detected":
+        policy["reasons"] = [_reason("scanner_visibility", "Scanner detections stay alert-only unless stronger evidence appears")]
+        return policy
+
+    if alert_type == "honeypot_admin_probe_threshold":
+        policy["reasons"] = [_reason("admin_probe_visibility", "Admin-path probing is a review signal, not a case by itself")]
+        return policy
+
+    if alert_type == "honeypot_env_probe_threshold":
+        stronger_env_evidence = bool(
+            progression_observed
+            or campaign_present
+            or context.get("incident_escalation_approved")
+            or context.get("repeated_sensitive_path_probe")
+            or context.get("protected_service_retargeted")
+            or int(context.get("corroborating_detection_count") or 0) > 1
+            or int(context.get("previous_incidents") or 0) > 0
+        )
+        if not stronger_env_evidence:
+            policy["reasons"] = [
+                _reason("env_probe_alert_first", "Sensitive-path probing remains alert-first until stronger evidence is present"),
+            ]
+            return policy
+        policy["eligible"] = True
+        policy["priority"] = "P2" if progression_observed or campaign_present else "P3"
+        policy["reasons"] = [
+            _reason("env_probe_escalated", "Sensitive-path probing is backed by stronger recurrence or corroboration"),
+        ]
+        return policy
+
+    if alert_type == "honeypot_credential_stuffing_threshold":
+        policy["eligible"] = True
+        policy["priority"] = "P2" if progression_observed or campaign_present else "P3"
+        policy["reasons"] = [
+            _reason("credential_stuffing", "Credential stuffing is case-worthy malicious behavior"),
+        ]
+        return policy
+
+    if alert_type.startswith("pfsense_"):
+        if not bool(flags.get("incident_eligible")):
+            policy["reasons"] = [
+                _reason("routine_recon", "Routine pfSense reconnaissance remains visible without opening an incident"),
+            ]
+            return policy
+        policy["eligible"] = True
+        policy["priority"] = determine_incident_priority(
+            severity=severity,
+            investigation_value_level=investigation_value["level"],
+            progression_observed=progression_observed,
+            campaign_present=campaign_present,
+        )
+        if campaign_present and not progression_observed:
+            policy["ownership"] = "Recon-activity investigation"
+            policy["group_by_recon_activity"] = True
+            policy["recon_activity_id"] = int(recon_activity["id"])
+            policy["title"] = f"[AUTO] Recon Activity {recon_activity['id']} requires review"
+            policy["reasons"] = [
+                _reason("grouped_recon", "This source belongs to a grouped recon investigation"),
+            ]
+        else:
+            policy["reasons"] = [
+                _reason("actionable_pfsense", "Progression-backed or source-specific pfSense behavior is case-worthy"),
+            ]
+        return policy
+
+    if sev_upper not in {"HIGH", "CRITICAL"}:
+        policy["reasons"] = [_reason("severity_gate", "This alert does not meet incident policy thresholds")]
+        return policy
+
+    policy["eligible"] = True
+    policy["priority"] = determine_incident_priority(
+        severity=severity,
+        investigation_value_level=investigation_value["level"],
+        progression_observed=progression_observed,
+        campaign_present=campaign_present,
+    )
+    policy["reasons"] = [
+        _reason("actionable_review", "This alert is case-worthy, but priority depends on actionability rather than severity alone"),
+    ]
+    return policy
+
+
 def create_incident(
     conn,
     title: str,
@@ -142,19 +355,24 @@ def find_open_incident_by_source_ip(
 def maybe_create_or_link_incident(
     conn, alert_id: int, severity: str, source_ip: str, *, alert_type: str | None = None, context: dict[str, Any] | None = None
 ) -> dict[str, Any] | None:
-    sev_upper = (severity or "").upper()
-    if sev_upper not in {"HIGH", "CRITICAL"}:
+    policy = _build_incident_policy(
+        severity=severity,
+        alert_type=alert_type,
+        context=context,
+        source_ip=source_ip,
+    )
+    if not policy["eligible"]:
         return None
-    if str(alert_type or "").startswith("pfsense_"):
-        flags = context.get("operational_flags") if isinstance(context, dict) else {}
-        if not bool(flags.get("incident_eligible")):
-            return None
 
-    existing = find_open_incident_by_source_ip(conn, source_ip)
+    existing = None
+    if policy["group_by_recon_activity"] and policy["recon_activity_id"] is not None:
+        existing = _load_recon_activity_incident(conn, int(policy["recon_activity_id"]))
+    if existing is None:
+        existing = find_open_incident_by_source_ip(conn, source_ip)
     if existing is not None:
         iid = existing["id"]
         link_alert_to_incident(conn, iid, alert_id)
-        upgraded = _maybe_upgrade_incident_severity(conn, existing, sev_upper, alert_id)
+        upgraded = _maybe_upgrade_incident_severity(conn, existing, str(severity or "").upper(), alert_id)
         logger.info(
             "[INCIDENT LINKED] alert_id=%s to existing incident_id=%s",
             alert_id,
@@ -162,52 +380,16 @@ def maybe_create_or_link_incident(
         )
         return {**(upgraded or existing), "created": False}
 
-    context = context if isinstance(context, dict) else {}
-    target_context = context.get("target_context") if isinstance(context.get("target_context"), dict) else {}
-    returning_attacker = build_returning_attacker_context(
-        {
-            "first_seen": target_context.get("first_seen") or context.get("first_seen"),
-            "last_seen": target_context.get("last_seen") or context.get("last_seen"),
-            "previous_responses": 1 if context.get("response_status") else 0,
-            "repeated_destinations": 1 if target_context.get("primary_destination_ip") else 0,
-            "repeated_services": 1 if target_context.get("primary_destination_port") else 0,
-            "campaign_count": 1 if context.get("recon_activity") else 0,
-        }
+    new_inc = create_incident(
+        conn,
+        policy["title"],
+        severity,
+        source_ip,
+        priority=policy["priority"],
     )
-    campaign_intelligence = build_campaign_intelligence(
-        {
-            "first_seen": target_context.get("first_seen") or context.get("first_seen"),
-            "last_seen": target_context.get("last_seen") or context.get("last_seen"),
-            "source_count": int((context.get("recon_activity") or {}).get("source_ip_count") or 0),
-            "destination_count": int(target_context.get("distinct_destination_count") or 0),
-            "service_count": int(target_context.get("distinct_port_count") or 0),
-            "corroborating_alert_types": 1,
-            "progression_observed": bool(alert_type == "pfsense_firewall_allow_after_deny"),
-            "relationship": "Shared recon activity" if context.get("recon_activity") else "",
-        }
-    )
-    investigation_value = build_investigation_value(
-        severity=severity,
-        returning_attacker=returning_attacker,
-        campaign_intelligence=campaign_intelligence,
-        progression_observed=bool(alert_type == "pfsense_firewall_allow_after_deny"),
-        corroborating_detection_count=1,
-        response_history_present=bool(context.get("response_status")),
-        repeated_destination=bool(target_context.get("primary_destination_ip")),
-        persistent_activity=returning_attacker.get("days_observed", 0) > 1,
-    )
-    if not str(alert_type or "").startswith("pfsense_") and not context:
-        priority = SEVERITY_TO_PRIORITY.get(sev_upper, "P2")
-    else:
-        priority = determine_incident_priority(
-            severity=severity,
-            investigation_value_level=investigation_value["level"],
-            progression_observed=bool(alert_type == "pfsense_firewall_allow_after_deny"),
-            campaign_present=campaign_intelligence.get("present", False),
-        )
-    title = f"[AUTO] {sev_upper} alert from {source_ip}"
-    new_inc = create_incident(conn, title, severity, source_ip, priority=priority)
     link_alert_to_incident(conn, new_inc["id"], alert_id)
+    if policy["group_by_recon_activity"] and policy["recon_activity_id"] is not None:
+        _set_recon_activity_incident(conn, int(policy["recon_activity_id"]), int(new_inc["id"]))
     logger.info(
         "[INCIDENT CREATED] incident_id=%s for alert_id=%s",
         new_inc["id"],
@@ -323,13 +505,14 @@ def list_incidents(
             for row in rows
         ]
         for incident in incidents:
+            summary, reason = _priority_summary(incident.get("priority"))
             incident["incident_intelligence"] = {
                 "ownership": "Source-specific investigation" if incident.get("source_ip") else "Aggregate investigation",
-                "summary": f"{incident.get('priority') or 'Unclassified'} priority assigned by incident policy",
+                "summary": summary,
                 "reasons": [
                     {
                         "id": "priority",
-                        "text": f"Priority {incident.get('priority') or 'N/A'} is reserved for actionability, not severity alone",
+                        "text": reason,
                     }
                 ],
                 "auto_close_recommended": False,

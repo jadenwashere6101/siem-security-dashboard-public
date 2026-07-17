@@ -18,6 +18,8 @@ from core.pfsense_recon import (
     summarize_reputation_bucket,
 )
 
+VPN_PORTS = frozenset({500, 1194, 1197, 1701, 4500, 51820})
+
 
 def _normalize_alert_context(row: tuple[Any, ...]) -> dict[str, Any]:
     context = row[10] if isinstance(row[10], dict) else {}
@@ -228,6 +230,134 @@ def _build_assessment_text(summary: dict[str, Any]) -> str:
             f"Primary ports observed: {port_text}. Coordination is not established."
         )
     return "Distributed commodity scanning against public services. Coordination is not established."
+
+
+def _format_service_label(port_value: Any) -> str | None:
+    try:
+        port = int(port_value)
+    except (TypeError, ValueError):
+        return None
+    if port in VPN_PORTS:
+        return f"VPN service ({port})"
+    return f"Port {port}"
+
+
+def _build_coordination_assessment(summary: dict[str, Any], coordination_status: str | None) -> dict[str, Any]:
+    status = str(coordination_status or "not_established").lower()
+    if status == "supported":
+        label = "Campaign evidence present"
+    elif status == "possible":
+        label = "Coordination may be developing"
+    else:
+        label = "Coordination not established"
+
+    reasons: list[dict[str, str]] = []
+    if int(summary.get("destination_ip_count") or 0) > 0:
+        reasons.append({"id": "target", "text": "The same target range was observed"})
+    if int(summary.get("distinct_service_count") or 0) > 0:
+        reasons.append({"id": "service", "text": "The same service pattern was observed"})
+    if status == "not_established":
+        reasons.append({"id": "timing", "text": "Timing evidence is not strong enough yet"})
+    if not reasons:
+        reasons.append({"id": "limited", "text": "Only limited recon evidence is available"})
+    return {"label": label, "reasons": reasons[:3]}
+
+
+def _build_recon_story(
+    summary: dict[str, Any],
+    campaign_intelligence: dict[str, Any],
+    investigation_value: dict[str, Any],
+) -> dict[str, str]:
+    primary_port = ((summary.get("primary_destination_ports") or [None]) or [None])[0]
+    service_label = _format_service_label(primary_port)
+    source_count = int(summary.get("source_ip_count") or 0)
+
+    if campaign_intelligence.get("present") and service_label and "VPN" in service_label:
+        headline = "Campaign-linked VPN recon"
+    elif campaign_intelligence.get("present"):
+        headline = "Campaign-linked recon"
+    elif source_count > 1 and service_label and "VPN" in service_label:
+        headline = "Repeated VPN recon"
+    elif source_count > 1:
+        headline = "Routine internet recon"
+    else:
+        headline = "Source-specific recon"
+
+    disposition = (
+        "Investigation recommended"
+        if investigation_value.get("level") == "high"
+        else "Review soon"
+        if investigation_value.get("level") == "medium"
+        else "No immediate investigation recommended"
+    )
+    return {
+        "headline": headline,
+        "disposition": disposition,
+    }
+
+
+def _build_display_projection(
+    *,
+    summary: dict[str, Any],
+    protected_range_key: str | None,
+    status: str | None,
+    last_seen: datetime | None,
+    related_incident_id: Any,
+    investigation_value: dict[str, Any],
+    coordination_assessment: dict[str, Any],
+    story: dict[str, Any],
+) -> dict[str, Any]:
+    target_context = summary.get("target_context") if isinstance(summary.get("target_context"), dict) else {}
+    primary_target = target_context.get("primary_destination_ip") or protected_range_key
+    representative_sources = list(summary.get("representative_sources") or [])
+    representative_source = representative_sources[0] if representative_sources else None
+    source_count = int(summary.get("source_ip_count") or 0)
+    destination_count = int(summary.get("destination_ip_count") or 0)
+    alert_count = int(summary.get("underlying_alert_count") or 0)
+    primary_port = target_context.get("primary_destination_port")
+    primary_service = _format_service_label(primary_port)
+    if primary_service is None:
+        primary_ports = summary.get("primary_destination_ports") or []
+        if primary_ports:
+            primary_service = ", ".join(filter(None, (_format_service_label(value) for value in primary_ports[:2])))
+
+    target_summary = primary_target or "Target unavailable"
+    if protected_range_key and primary_target and primary_target != protected_range_key:
+        target_summary = f"{primary_target} ({protected_range_key})"
+
+    scope_bits: list[str] = []
+    if source_count > 0:
+        scope_bits.append(f"{source_count} source" if source_count == 1 else f"{source_count} sources")
+    if destination_count > 0:
+        scope_bits.append(
+            f"{destination_count} destination" if destination_count == 1 else f"{destination_count} destinations"
+        )
+    scope_summary = " • ".join(scope_bits)
+
+    version_parts = [
+        str(status or ""),
+        str(related_incident_id or ""),
+        str(investigation_value.get("level") or ""),
+        str(target_summary),
+        str(primary_service or ""),
+        str(alert_count),
+        str(last_seen.isoformat() if last_seen else ""),
+    ]
+    return {
+        "headline": story.get("headline") or "Recon activity",
+        "target_summary": target_summary,
+        "primary_target": primary_target,
+        "representative_source": representative_source,
+        "additional_source_count": max(source_count - 1, 0) if representative_source else source_count,
+        "primary_service": primary_service,
+        "scope_summary": scope_summary,
+        "linked_alert_count": alert_count,
+        "status_label": str(status or "").replace("_", " ").title(),
+        "investigation_label": investigation_value.get("label") or "Monitor",
+        "coordination_label": coordination_assessment.get("label") or "Current assessment unavailable",
+        "action_recommendation": story.get("disposition") or "No immediate investigation recommended",
+        "review_state_version": "|".join(version_parts),
+    }
 
 
 def _update_activity_summary(conn, activity_id: int) -> None:
@@ -532,6 +662,18 @@ def _serialize_recon_activity_row(row) -> dict[str, Any]:
         repeated_destination=int(summary.get("destination_ip_count") or 0) > 0,
         persistent_activity=int(summary.get("source_ip_count") or 0) > 1,
     )
+    coordination_assessment = _build_coordination_assessment(summary, row[6])
+    story = _build_recon_story(summary, campaign_intelligence, investigation_value)
+    display = _build_display_projection(
+        summary=summary,
+        protected_range_key=row[7],
+        status=row[4],
+        last_seen=row[9],
+        related_incident_id=row[12],
+        investigation_value=investigation_value,
+        coordination_assessment=coordination_assessment,
+        story=story,
+    )
     return {
         "id": int(row[0]),
         "label": PFSENSE_RECON_ACTIVITY_LABEL,
@@ -548,12 +690,9 @@ def _serialize_recon_activity_row(row) -> dict[str, Any]:
         "summary": summary,
         "campaign_intelligence": campaign_intelligence,
         "investigation_value": investigation_value,
-        "story": {
-            "headline": "Campaign-linked recon"
-            if campaign_intelligence.get("present")
-            else "Routine internet recon",
-            "disposition": investigation_value["label"],
-        },
+        "story": story,
+        "coordination_assessment": coordination_assessment,
+        "display": display,
         "related_incident_id": row[12],
         "created_at": row[13].isoformat() if row[13] else None,
         "updated_at": row[14].isoformat() if row[14] else None,

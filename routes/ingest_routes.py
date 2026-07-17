@@ -74,7 +74,6 @@ HONEYPOT_SEVERITY_BY_EVENT_TYPE = {
     "credential_stuffing": "high",
     "http_error": "medium",
 }
-INCIDENT_SEVERITIES = {"HIGH", "CRITICAL"}
 AZURE_CHECKPOINT_CONNECTOR = "azure_insights"
 AZURE_CHECKPOINT_DEFAULT_LOOKBACK = timedelta(hours=1)
 AZURE_CHECKPOINT_MIN_LOOKBACK = timedelta(minutes=15)
@@ -115,9 +114,6 @@ def _create_incidents_for_alerts(alerts_created, conn):
                 source_ip,
                 severity,
             )
-            continue
-
-        if str(severity).upper() not in INCIDENT_SEVERITIES:
             continue
 
         try:

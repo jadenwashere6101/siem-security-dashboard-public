@@ -43,6 +43,7 @@ const ACTION_ROLES = new Set(["analyst", "super_admin"]);
 const FAILURE_STATUS = new Set(["failed", "timeout", "blocked", "skipped"]);
 const ACTIVE_EXECUTION_STATUS = new Set(["pending", "running", "awaiting_approval"]);
 const ACTIVE_DEAD_LETTER_STATUS = new Set(["open", "retrying", "retry_requested"]);
+const RECON_REVIEW_STORAGE_PREFIX = "siem.recon.review.v1";
 
 const emptyCommandData = {
   incidents: [],
@@ -506,6 +507,48 @@ function StatusBadge({ tone = "info", children }) {
   return <span style={{ ...badgeStyle, ...badgeToneStyles[tone] }}>{children}</span>;
 }
 
+function reconReviewStorageKey(username) {
+  return `${RECON_REVIEW_STORAGE_PREFIX}:${username || "anonymous"}`;
+}
+
+function loadReconReviewState(username) {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return {};
+  }
+  try {
+    const raw = window.localStorage.getItem(reconReviewStorageKey(username));
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (_error) {
+    return {};
+  }
+}
+
+function persistReconReviewState(username, value) {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return;
+  }
+  try {
+    window.localStorage.setItem(reconReviewStorageKey(username), JSON.stringify(value));
+  } catch (_error) {
+    // Review-state indicators are additive only.
+  }
+}
+
+function getReconReviewIndicator(activity, reviewState) {
+  const activityId = String(activity?.id || "");
+  const version = activity?.display?.review_state_version || "";
+  const viewedVersion = reviewState?.[activityId]?.version || "";
+  if (!version) return null;
+  if (!viewedVersion) {
+    return { label: "New", tone: "info" };
+  }
+  if (viewedVersion !== version) {
+    return { label: "Updated", tone: "warning" };
+  }
+  return null;
+}
+
 function useViewportWidth() {
   const getWidth = () =>
     typeof window === "undefined" ? 1200 : window.innerWidth || 1200;
@@ -538,6 +581,57 @@ function EmptyState({ children }) {
   return <p style={emptyTextStyle}>{children}</p>;
 }
 
+function ReconActivityCard({ activity, selected, reviewIndicator, onSelect }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(activity.id)}
+      style={{
+        ...incidentButtonStyle,
+        ...(selected ? incidentButtonActiveStyle : {}),
+      }}
+    >
+      <div style={reconCardHeaderStyle}>
+        <span style={incidentTitleStyle}>
+          {activity.display?.headline || activity.story?.headline || activity.label}
+        </span>
+        <div style={reconCardBadgeRowStyle}>
+          {reviewIndicator ? <StatusBadge tone={reviewIndicator.tone}>{reviewIndicator.label}</StatusBadge> : null}
+          <StatusBadge
+            tone={
+              activity.investigation_value?.level === "high"
+                ? "danger"
+                : activity.investigation_value?.level === "medium"
+                ? "warning"
+                : "info"
+            }
+          >
+            {activity.display?.investigation_label || activity.investigation_value?.label || "Monitor"}
+          </StatusBadge>
+        </div>
+      </div>
+      <span style={reconCardLineStyle}>
+        {joinDefined([
+          activity.display?.target_summary ? `Target: ${activity.display.target_summary}` : "",
+          activity.display?.primary_service ? `Service: ${activity.display.primary_service}` : "",
+        ])}
+      </span>
+      <span style={reconCardLineStyle}>
+        {joinDefined([
+          activity.display?.representative_source ? `Source: ${activity.display.representative_source}` : "",
+          activity.display?.scope_summary || "",
+        ])}
+      </span>
+      <span style={incidentMetaStyle}>
+        {joinDefined([
+          activity.display?.status_label || titleCase(activity.status),
+          activity.last_seen ? `Last seen ${formatRelative(activity.last_seen)}` : "",
+        ])}
+      </span>
+    </button>
+  );
+}
+
 function SocCommandCenter({
   alerts = [],
   userRole,
@@ -545,6 +639,8 @@ function SocCommandCenter({
   onNavigate,
   onOpenAttentionItem = null,
   onOpenResponseRegistry = null,
+  onOpenIncident = null,
+  onViewRelatedAlerts = null,
 }) {
   const canOperate = ACTION_ROLES.has(userRole);
   const [data, setData] = useState(emptyCommandData);
@@ -568,6 +664,7 @@ function SocCommandCenter({
     error: "",
   });
   const [selectedSourceIp, setSelectedSourceIp] = useState(null);
+  const [reconReviewState, setReconReviewState] = useState(() => loadReconReviewState(currentUsername));
   const viewportWidth = useViewportWidth();
   const useSingleColumn = viewportWidth < 980;
   const useCompactWorkspace = viewportWidth < 760;
@@ -687,6 +784,14 @@ function SocCommandCenter({
   }, [loadCommandData]);
 
   useEffect(() => {
+    setReconReviewState(loadReconReviewState(currentUsername));
+  }, [currentUsername]);
+
+  useEffect(() => {
+    persistReconReviewState(currentUsername, reconReviewState);
+  }, [currentUsername, reconReviewState]);
+
+  useEffect(() => {
     setSelectedReconActivityId((current) => {
       if (current && data.reconActivities.some((item) => String(item.id) === String(current))) {
         return current;
@@ -710,6 +815,13 @@ function SocCommandCenter({
     loadReconActivity(selectedReconActivityId)
       .then((detail) => {
         if (!isCurrent) return;
+        setReconReviewState((current) => ({
+          ...current,
+          [String(detail.id)]: {
+            version: detail.display?.review_state_version || "",
+            viewedAt: new Date().toISOString(),
+          },
+        }));
         setReconContext({ detail, loading: false, error: "" });
       })
       .catch((error) => {
@@ -934,26 +1046,13 @@ function SocCommandCenter({
                   <EmptyState>No active distributed recon activities.</EmptyState>
                 ) : (
                   data.reconActivities.slice(0, 8).map((activity) => (
-                    <button
-                      type="button"
+                    <ReconActivityCard
                       key={activity.id}
-                      onClick={() => setSelectedReconActivityId(activity.id)}
-                      style={{
-                        ...incidentButtonStyle,
-                        ...(String(selectedReconActivityId) === String(activity.id)
-                          ? incidentButtonActiveStyle
-                          : {}),
-                      }}
-                    >
-                      <span style={incidentTitleStyle}>{activity.label}</span>
-                      <span style={incidentMetaStyle}>
-                        {joinDefined([
-                          titleCase(activity.severity),
-                          titleCase(activity.status),
-                          activity.protected_range_key,
-                        ])}
-                      </span>
-                    </button>
+                      activity={activity}
+                      selected={String(selectedReconActivityId) === String(activity.id)}
+                      reviewIndicator={getReconReviewIndicator(activity, reconReviewState)}
+                      onSelect={setSelectedReconActivityId}
+                    />
                   ))
                 )}
               </div>
@@ -968,11 +1067,13 @@ function SocCommandCenter({
                     <div style={incidentHeroStyle}>
                       <div>
                         <p style={sectionLabelStyle}>Recon Activity #{valueOrFallback(reconContext.detail.id, "unknown")}</p>
-                        <h4 style={incidentHeroTitleStyle}>{reconContext.detail.label}</h4>
+                        <h4 style={incidentHeroTitleStyle}>
+                          {reconContext.detail.display?.headline || reconContext.detail.story?.headline || reconContext.detail.label}
+                        </h4>
                         <p style={summaryDetailStyle}>
-                          {reconContext.detail.story?.headline || reconContext.detail.investigation_value?.label || "Recon activity"}
-                          {reconContext.detail.story?.disposition
-                            ? ` · ${reconContext.detail.story.disposition}`
+                          {reconContext.detail.display?.action_recommendation || reconContext.detail.story?.disposition || reconContext.detail.investigation_value?.label || "Recon activity"}
+                          {reconContext.detail.display?.coordination_label
+                            ? ` · ${reconContext.detail.display.coordination_label}`
                             : ""}
                         </p>
                       </div>
@@ -982,31 +1083,99 @@ function SocCommandCenter({
                     </div>
                     <dl style={detailGridStyle}>
                       <div>
-                        <dt style={detailTermStyle}>Coordination status</dt>
-                        <dd style={detailValueStyle}>{titleCase(reconContext.detail.coordination_status)}</dd>
+                        <dt style={detailTermStyle}>Primary target</dt>
+                        <dd style={detailValueStyle}>{valueOrFallback(reconContext.detail.display?.target_summary)}</dd>
                       </div>
                       <div>
-                        <dt style={detailTermStyle}>Source IP count</dt>
-                        <dd style={detailValueStyle}>{valueOrFallback(reconContext.detail.summary?.source_ip_count, "0")}</dd>
+                        <dt style={detailTermStyle}>Representative source</dt>
+                        <dd style={detailValueStyle}>
+                          {reconContext.detail.display?.representative_source ? (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedSourceIp(reconContext.detail.display.representative_source)}
+                              style={sourceIpButtonStyle}
+                              aria-label={`Open source-IP context for ${reconContext.detail.display.representative_source}`}
+                            >
+                              {reconContext.detail.display.representative_source}
+                            </button>
+                          ) : (
+                            "Unavailable"
+                          )}
+                        </dd>
                       </div>
                       <div>
-                        <dt style={detailTermStyle}>Destination IP count</dt>
-                        <dd style={detailValueStyle}>{valueOrFallback(reconContext.detail.summary?.destination_ip_count, "0")}</dd>
+                        <dt style={detailTermStyle}>Additional sources</dt>
+                        <dd style={detailValueStyle}>{valueOrFallback(reconContext.detail.display?.additional_source_count, "0")}</dd>
                       </div>
                       <div>
-                        <dt style={detailTermStyle}>Primary ports</dt>
-                        <dd style={detailValueStyle}>{(reconContext.detail.summary?.primary_destination_ports || []).join(", ") || "Unavailable"}</dd>
+                        <dt style={detailTermStyle}>Primary service</dt>
+                        <dd style={detailValueStyle}>{valueOrFallback(reconContext.detail.display?.primary_service)}</dd>
                       </div>
                       <div>
-                        <dt style={detailTermStyle}>Alert types</dt>
-                        <dd style={detailValueStyle}>{(reconContext.detail.summary?.alert_types || []).join(", ") || "Unavailable"}</dd>
+                        <dt style={detailTermStyle}>First seen</dt>
+                        <dd style={detailValueStyle}>{reconContext.detail.first_seen ? formatRelative(reconContext.detail.first_seen) : "Unavailable"}</dd>
                       </div>
                       <div>
-                        <dt style={detailTermStyle}>Underlying alerts</dt>
-                        <dd style={detailValueStyle}>{valueOrFallback(reconContext.detail.summary?.underlying_alert_count, "0")}</dd>
+                        <dt style={detailTermStyle}>Last seen</dt>
+                        <dd style={detailValueStyle}>{reconContext.detail.last_seen ? formatRelative(reconContext.detail.last_seen) : "Unavailable"}</dd>
+                      </div>
+                      <div>
+                        <dt style={detailTermStyle}>Linked alerts</dt>
+                        <dd style={detailValueStyle}>{valueOrFallback(reconContext.detail.display?.linked_alert_count, "0")}</dd>
+                      </div>
+                      <div>
+                        <dt style={detailTermStyle}>Related incident</dt>
+                        <dd style={detailValueStyle}>
+                          {reconContext.detail.related_incident_id ? `Incident ${reconContext.detail.related_incident_id}` : "None"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt style={detailTermStyle}>Investigation value</dt>
+                        <dd style={detailValueStyle}>{valueOrFallback(reconContext.detail.display?.investigation_label)}</dd>
+                      </div>
+                      <div>
+                        <dt style={detailTermStyle}>Current assessment</dt>
+                        <dd style={detailValueStyle}>{valueOrFallback(reconContext.detail.display?.coordination_label)}</dd>
                       </div>
                     </dl>
+                    <div style={reconActionRowStyle}>
+                      {typeof onViewRelatedAlerts === "function" && reconContext.detail.display?.representative_source ? (
+                        <button
+                          type="button"
+                          style={linkButtonStyle}
+                          onClick={() => onViewRelatedAlerts(reconContext.detail.display.representative_source)}
+                        >
+                          View linked alerts
+                        </button>
+                      ) : null}
+                      {typeof onOpenIncident === "function" && reconContext.detail.related_incident_id ? (
+                        <button
+                          type="button"
+                          style={linkButtonStyle}
+                          onClick={() => onOpenIncident(reconContext.detail.related_incident_id)}
+                        >
+                          Open related incident
+                        </button>
+                      ) : null}
+                      {reconContext.detail.display?.representative_source ? (
+                        <button
+                          type="button"
+                          style={linkButtonStyle}
+                          onClick={() => setSelectedSourceIp(reconContext.detail.display.representative_source)}
+                        >
+                          Open representative source
+                        </button>
+                      ) : null}
+                    </div>
                     <p style={summaryDetailStyle}>{reconContext.detail.assessment_text}</p>
+                    {Array.isArray(reconContext.detail.coordination_assessment?.reasons) &&
+                    reconContext.detail.coordination_assessment.reasons.length > 0 ? (
+                      <ul style={{ margin: "0 0 10px 0", paddingLeft: "18px", color: "#9fb3c8" }}>
+                        {reconContext.detail.coordination_assessment.reasons.map((reason) => (
+                          <li key={reason.id}>{reason.text}</li>
+                        ))}
+                      </ul>
+                    ) : null}
                     {Array.isArray(reconContext.detail.investigation_value?.reasons) &&
                     reconContext.detail.investigation_value.reasons.length > 0 ? (
                       <ul style={{ margin: "0", paddingLeft: "18px", color: "#cbd5e1" }}>
@@ -1425,6 +1594,13 @@ const linkButtonStyle = {
   color: "#93c5fd",
 };
 
+const reconActionRowStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "8px",
+  marginBottom: "12px",
+};
+
 const warningBannerStyle = {
   padding: "12px 14px",
   border: "1px solid rgba(217, 164, 65, 0.36)",
@@ -1588,6 +1764,20 @@ const incidentButtonStyle = {
   cursor: "pointer",
 };
 
+const reconCardHeaderStyle = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "flex-start",
+  gap: "8px",
+};
+
+const reconCardBadgeRowStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  justifyContent: "flex-end",
+  gap: "6px",
+};
+
 const incidentLegacyBadgeStyle = {
   display: "inline-flex",
   alignItems: "center",
@@ -1619,6 +1809,14 @@ const incidentMetaStyle = {
   marginTop: "5px",
   color: "#8b949e",
   fontSize: "12px",
+};
+
+const reconCardLineStyle = {
+  display: "block",
+  marginTop: "4px",
+  color: "#cbd5e1",
+  fontSize: "12px",
+  lineHeight: 1.45,
 };
 
 const incidentDetailStyle = {

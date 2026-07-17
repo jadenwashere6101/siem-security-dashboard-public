@@ -256,7 +256,10 @@ def build_incident_intelligence(
         for alert in linked_alerts
     )
     all_resolved = bool(linked_alerts) and all(str(alert.get("status") or "").lower() == "resolved" for alert in linked_alerts)
-    if progression:
+    incident_title = str(incident.get("title") or "").lower()
+    if "recon activity" in incident_title:
+        ownership = "Recon-activity investigation"
+    elif progression:
         ownership = "Campaign-owned investigation"
     elif len(linked_alerts) > 1:
         ownership = "Aggregate investigation"
@@ -264,6 +267,13 @@ def build_incident_intelligence(
         ownership = "Source-specific investigation"
 
     reasons = []
+    priority = str(incident.get("priority") or "").upper()
+    if priority == "P1":
+        reasons.append(_reason("priority", "Priority P1 is reserved for immediate action"))
+    elif priority == "P2":
+        reasons.append(_reason("priority", "Priority P2 reflects actionable progression or a prompt containment decision"))
+    else:
+        reasons.append(_reason("priority", "Priority P3 tracks valid case work that is not immediately urgent"))
     if progression:
         reasons.append(_reason("progression", "Linked alerts show campaign or progression evidence"))
     if priorities.get("critical", 0) > 0:

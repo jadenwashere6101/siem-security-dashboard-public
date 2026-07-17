@@ -847,9 +847,11 @@ def test_get_recon_activities_and_detail_return_bounded_payloads(client, postgre
     payload = list_resp.get_json()
     assert payload["count"] == 1
     assert payload["items"][0]["label"] == "Distributed Internet Reconnaissance Activity"
+    assert payload["items"][0]["display"]["target_summary"] == "203.0.113.20 (203.0.113.0/24)"
 
     detail_resp = _fetch_recon_activities_response(client, conn, f"/recon-activities/{activity_id}")
     assert detail_resp.status_code == 200
     detail = detail_resp.get_json()
     assert detail["summary"]["primary_destination_ports"] == [5060]
     assert detail["alerts"][0]["id"] == alert_id
+    assert detail["display"]["coordination_label"] == "Coordination not established"

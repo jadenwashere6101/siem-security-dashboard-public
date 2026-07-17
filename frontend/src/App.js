@@ -833,6 +833,8 @@ function AppInner() {
             onNavigate={handleNavigate}
             onOpenAttentionItem={handleOpenAttentionTarget}
             onOpenResponseRegistry={handleOpenResponseRegistry}
+            onOpenIncident={handleOpenIncident}
+            onViewRelatedAlerts={handleViewRelatedAlerts}
           />
         )}
 

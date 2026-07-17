@@ -272,6 +272,8 @@ function renderPanel(props = {}) {
       alerts={[]}
       userRole="analyst"
       currentUsername="analyst1"
+      onOpenIncident={jest.fn()}
+      onViewRelatedAlerts={jest.fn()}
       {...props}
     />
   );
@@ -280,6 +282,7 @@ function renderPanel(props = {}) {
 describe("SocCommandCenter", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    window.localStorage.clear();
     mockResolvedData();
   });
 
@@ -454,6 +457,17 @@ describe("SocCommandCenter", () => {
           severity: "medium",
           status: "monitoring",
           protected_range_key: "203.0.113.0/24",
+          investigation_value: { level: "medium", label: "Review Soon" },
+          display: {
+            headline: "Repeated VPN recon",
+            target_summary: "203.0.113.20 (203.0.113.0/24)",
+            representative_source: "198.51.100.77",
+            primary_service: "VPN service (1194)",
+            scope_summary: "3 sources • 2 destinations",
+            status_label: "Monitoring",
+            investigation_label: "Review Soon",
+            review_state_version: "version-a",
+          },
         },
       ],
       count: 1,
@@ -463,12 +477,38 @@ describe("SocCommandCenter", () => {
       label: "Distributed Internet Reconnaissance Activity",
       severity: "medium",
       coordination_status: "not_established",
+      first_seen: "2026-05-18T11:40:00Z",
+      last_seen: "2026-05-18T11:58:00Z",
+      related_incident_id: 7,
       summary: {
         source_ip_count: 12,
         destination_ip_count: 34,
         primary_destination_ports: [5060, 22],
         alert_types: ["pfsense_firewall_port_scan", "pfsense_firewall_repeated_deny"],
         underlying_alert_count: 14,
+      },
+      display: {
+        headline: "Repeated VPN recon",
+        action_recommendation: "Review soon",
+        coordination_label: "Coordination not established",
+        target_summary: "203.0.113.20 (203.0.113.0/24)",
+        representative_source: "198.51.100.77",
+        additional_source_count: 2,
+        primary_service: "VPN service (1194)",
+        linked_alert_count: 14,
+        investigation_label: "Review Soon",
+        review_state_version: "version-a",
+      },
+      coordination_assessment: {
+        reasons: [
+          { id: "target", text: "The same target range was observed" },
+          { id: "timing", text: "Timing evidence is not strong enough yet" },
+        ],
+      },
+      investigation_value: {
+        level: "medium",
+        label: "Review Soon",
+        reasons: [{ id: "campaign", text: "Observed across multiple sources" }],
       },
       assessment_text:
         "Distributed commodity scanning against public services. Coordination is not established.",
@@ -477,10 +517,78 @@ describe("SocCommandCenter", () => {
     renderPanel();
 
     expect(await screen.findByRole("heading", { name: "Distributed Internet Reconnaissance Activity" })).toBeInTheDocument();
-    expect(await screen.findByText("Coordination status")).toBeInTheDocument();
-    expect(screen.getByText("Not Established")).toBeInTheDocument();
-    expect(screen.getByText("5060, 22")).toBeInTheDocument();
-    expect(screen.getByText("Distributed commodity scanning against public services. Coordination is not established.")).toBeInTheDocument();
+    expect(await screen.findByText("Repeated VPN recon")).toBeInTheDocument();
+    expect(screen.getAllByText(/203\.0\.113\.20/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/VPN service \(1194\)/).length).toBeGreaterThan(0);
+  });
+
+  test("persists recon review state and distinguishes new from updated cards", async () => {
+    loadReconActivities.mockResolvedValue({
+      items: [
+        {
+          id: 90,
+          label: "Distributed Internet Reconnaissance Activity",
+          severity: "medium",
+          status: "monitoring",
+          investigation_value: { level: "medium", label: "Review Soon" },
+          display: {
+            headline: "Routine internet recon",
+            target_summary: "203.0.113.20",
+            status_label: "Monitoring",
+            investigation_label: "Review Soon",
+            review_state_version: "version-a",
+          },
+        },
+      ],
+      count: 1,
+    });
+    loadReconActivity.mockResolvedValue({
+      id: 90,
+      label: "Distributed Internet Reconnaissance Activity",
+      severity: "medium",
+      display: {
+        headline: "Routine internet recon",
+        target_summary: "203.0.113.20",
+        investigation_label: "Review Soon",
+        review_state_version: "version-a",
+      },
+      investigation_value: { level: "medium", label: "Review Soon", reasons: [] },
+      coordination_assessment: { reasons: [] },
+      assessment_text: "Routine background scanning.",
+    });
+
+    const firstRender = renderPanel();
+
+    expect(await screen.findByText("New")).toBeInTheDocument();
+    window.localStorage.setItem(
+      "siem.recon.review.v1:analyst1",
+      JSON.stringify({ 90: { version: "version-a", viewedAt: "2026-05-18T12:00:00Z" } })
+    );
+    firstRender.unmount();
+
+    loadReconActivities.mockResolvedValue({
+      items: [
+        {
+          id: 90,
+          label: "Distributed Internet Reconnaissance Activity",
+          severity: "medium",
+          status: "monitoring",
+          investigation_value: { level: "medium", label: "Review Soon" },
+          display: {
+            headline: "Routine internet recon",
+            target_summary: "203.0.113.20",
+            status_label: "Monitoring",
+            investigation_label: "Review Soon",
+            review_state_version: "version-b",
+          },
+        },
+      ],
+      count: 1,
+    });
+
+    renderPanel();
+
+    expect(await screen.findByText("Updated")).toBeInTheDocument();
   });
 
   test("renders recon activity source failures without breaking the workspace", async () => {

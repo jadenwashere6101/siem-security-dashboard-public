@@ -1,5 +1,6 @@
 import pytest
 from psycopg2 import IntegrityError
+from psycopg2.extras import Json
 
 import siem_backend
 from core import playbook_store
@@ -23,6 +24,31 @@ def _insert_alert(conn, cur, source_ip: str = "203.0.113.10") -> int:
         RETURNING id
         """,
         (source_ip,),
+    )
+    (aid,) = cur.fetchone()
+    conn.commit()
+    return aid
+
+
+def _insert_custom_alert(
+    conn,
+    cur,
+    *,
+    source_ip: str,
+    alert_type: str,
+    severity: str = "HIGH",
+    source: str = "bank_app",
+    source_type: str = "custom",
+    message: str = "test message",
+    context=None,
+) -> int:
+    cur.execute(
+        """
+        INSERT INTO alerts (alert_type, severity, source_ip, source, source_type, message, status, context)
+        VALUES (%s, %s, %s::inet, %s, %s, %s, 'open', %s)
+        RETURNING id
+        """,
+        (alert_type, severity, source_ip, source, source_type, message, Json(context or {})),
     )
     (aid,) = cur.fetchone()
     conn.commit()
@@ -327,6 +353,7 @@ def test_maybe_create_high_creates_and_links(postgres_db):
         (aid,),
     )
     assert cur.fetchone()[0] == inc["id"]
+    assert inc["priority"] == "P3"
 
 
 def test_maybe_create_links_existing_open_in_window(postgres_db):
@@ -384,6 +411,221 @@ def test_maybe_create_critical_dedup_same_as_high(postgres_db):
     assert two["id"] == one["id"]
 
 
+def test_honeypot_scanner_detected_stays_alert_only(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_custom_alert(
+        conn,
+        cur,
+        source_ip="203.0.113.70",
+        alert_type="honeypot_scanner_detected",
+        severity="MEDIUM",
+        source="honeypot",
+        source_type="honeypot",
+    )
+
+    incident = maybe_create_or_link_incident(
+        conn,
+        alert_id,
+        "MEDIUM",
+        "203.0.113.70",
+        alert_type="honeypot_scanner_detected",
+        context={},
+    )
+    conn.commit()
+
+    assert incident is None
+    assert _count_incidents(cur) == 0
+
+
+def test_honeypot_admin_probe_stays_alert_only(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_custom_alert(
+        conn,
+        cur,
+        source_ip="203.0.113.71",
+        alert_type="honeypot_admin_probe_threshold",
+        severity="MEDIUM",
+        source="honeypot",
+        source_type="honeypot",
+    )
+
+    incident = maybe_create_or_link_incident(
+        conn,
+        alert_id,
+        "MEDIUM",
+        "203.0.113.71",
+        alert_type="honeypot_admin_probe_threshold",
+        context={},
+    )
+    conn.commit()
+
+    assert incident is None
+    assert _count_incidents(cur) == 0
+
+
+def test_honeypot_env_probe_is_alert_first_without_stronger_evidence(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_custom_alert(
+        conn,
+        cur,
+        source_ip="203.0.113.72",
+        alert_type="honeypot_env_probe_threshold",
+        severity="HIGH",
+        source="honeypot",
+        source_type="honeypot",
+    )
+
+    incident = maybe_create_or_link_incident(
+        conn,
+        alert_id,
+        "HIGH",
+        "203.0.113.72",
+        alert_type="honeypot_env_probe_threshold",
+        context={},
+    )
+    conn.commit()
+
+    assert incident is None
+    assert _count_incidents(cur) == 0
+
+
+def test_honeypot_env_probe_can_escalate_with_stronger_evidence(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_custom_alert(
+        conn,
+        cur,
+        source_ip="203.0.113.73",
+        alert_type="honeypot_env_probe_threshold",
+        severity="HIGH",
+        source="honeypot",
+        source_type="honeypot",
+    )
+
+    incident = maybe_create_or_link_incident(
+        conn,
+        alert_id,
+        "HIGH",
+        "203.0.113.73",
+        alert_type="honeypot_env_probe_threshold",
+        context={"corroborating_detection_count": 2, "repeated_sensitive_path_probe": True},
+    )
+    conn.commit()
+
+    assert incident is not None
+    assert incident["priority"] == "P3"
+    assert _count_incidents(cur) == 1
+
+
+def test_honeypot_credential_stuffing_remains_incident_eligible_as_p3(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_custom_alert(
+        conn,
+        cur,
+        source_ip="203.0.113.74",
+        alert_type="honeypot_credential_stuffing_threshold",
+        severity="HIGH",
+        source="honeypot",
+        source_type="honeypot",
+    )
+
+    incident = maybe_create_or_link_incident(
+        conn,
+        alert_id,
+        "HIGH",
+        "203.0.113.74",
+        alert_type="honeypot_credential_stuffing_threshold",
+        context={},
+    )
+    conn.commit()
+
+    assert incident is not None
+    assert incident["priority"] == "P3"
+
+
+def test_grouped_recon_incident_reuses_recon_activity_owner(postgres_db):
+    conn, cur = postgres_db
+    cur.execute(
+        """
+        INSERT INTO recon_activities (
+            activity_type, source, source_type, status, severity, coordination_status,
+            protected_range_key, service_signature, first_seen, last_seen, assessment_text, membership_evidence, summary
+        )
+        VALUES (
+            'distributed_internet_reconnaissance', 'pfsense', 'firewall', 'monitoring', 'high', 'possible',
+            '203.0.113.0/24', '[1194]'::jsonb, NOW() - INTERVAL '10 minutes', NOW(),
+            'Repeated VPN recon', '{}'::jsonb, '{"source_ip_count": 3, "destination_ip_count": 1, "distinct_service_count": 1}'
+        )
+        RETURNING id
+        """
+    )
+    recon_activity_id = cur.fetchone()[0]
+    conn.commit()
+
+    first_alert_id = _insert_custom_alert(
+        conn,
+        cur,
+        source_ip="198.51.100.90",
+        alert_type="pfsense_firewall_port_scan",
+        severity="HIGH",
+        source="pfsense",
+        source_type="firewall",
+        context={
+            "operational_flags": {"incident_eligible": True},
+            "recon_activity": {"id": recon_activity_id, "source_ip_count": 3},
+            "target_context": {"primary_destination_ip": "203.0.113.20", "distinct_destination_count": 1, "distinct_port_count": 1},
+        },
+    )
+    second_alert_id = _insert_custom_alert(
+        conn,
+        cur,
+        source_ip="198.51.100.91",
+        alert_type="pfsense_firewall_port_scan",
+        severity="HIGH",
+        source="pfsense",
+        source_type="firewall",
+        context={
+            "operational_flags": {"incident_eligible": True},
+            "recon_activity": {"id": recon_activity_id, "source_ip_count": 3},
+            "target_context": {"primary_destination_ip": "203.0.113.20", "distinct_destination_count": 1, "distinct_port_count": 1},
+        },
+    )
+
+    first = maybe_create_or_link_incident(
+        conn,
+        first_alert_id,
+        "HIGH",
+        "198.51.100.90",
+        alert_type="pfsense_firewall_port_scan",
+        context={
+            "operational_flags": {"incident_eligible": True},
+            "recon_activity": {"id": recon_activity_id, "source_ip_count": 3},
+            "target_context": {"primary_destination_ip": "203.0.113.20", "distinct_destination_count": 1, "distinct_port_count": 1},
+        },
+    )
+    second = maybe_create_or_link_incident(
+        conn,
+        second_alert_id,
+        "HIGH",
+        "198.51.100.91",
+        alert_type="pfsense_firewall_port_scan",
+        context={
+            "operational_flags": {"incident_eligible": True},
+            "recon_activity": {"id": recon_activity_id, "source_ip_count": 3},
+            "target_context": {"primary_destination_ip": "203.0.113.20", "distinct_destination_count": 1, "distinct_port_count": 1},
+        },
+    )
+    conn.commit()
+
+    assert first is not None
+    assert second is not None
+    assert first["id"] == second["id"]
+    assert first["priority"] == "P3"
+    cur.execute("SELECT related_incident_id FROM recon_activities WHERE id = %s", (recon_activity_id,))
+    assert cur.fetchone()[0] == first["id"]
+    assert _count_incidents(cur) == 1
+    assert _count_links(cur) == 2
+
+
 def test_critical_alert_upgrades_existing_high_incident_and_audits(postgres_db):
     conn, cur = postgres_db
     audit_conn = _AuditSafeConnection(conn)
@@ -417,7 +659,7 @@ def test_critical_alert_upgrades_existing_high_incident_and_audits(postgres_db):
     assert audit["incident_id"] == incident["id"]
     assert audit["from_severity"] == "HIGH"
     assert audit["to_severity"] == "CRITICAL"
-    assert audit["from_priority"] == "P2"
+    assert audit["from_priority"] == "P3"
     assert audit["to_priority"] == "P1"
 
 
