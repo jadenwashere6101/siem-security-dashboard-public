@@ -9,7 +9,12 @@ from flask_login import login_required
 
 from core.auth import analyst_or_super_admin_required
 from core.db import get_db_connection
-from core.investigation_intelligence import build_campaign_intelligence, build_returning_attacker_context
+from core.internet_noise import build_internet_noise_decision, get_internet_noise_assessment
+from core.investigation_intelligence import (
+    build_campaign_intelligence,
+    build_local_evidence_override_reasons,
+    build_returning_attacker_context,
+)
 from core.ip_helpers import get_ip_reputation
 from core.soar_response_outcomes import (
     get_outcome_count_groups,
@@ -478,6 +483,21 @@ def get_source_ip_context():
             playbook_executions = _fetch_playbook_execution_context(cur, alert_ids, incident_ids)
             returning_attacker = _fetch_returning_attacker_context(cur, source_ip)
             campaigns = _fetch_campaign_memberships(cur, source_ip)
+            internet_noise = build_internet_noise_decision(
+                get_internet_noise_assessment(source_ip),
+                override_reasons=build_local_evidence_override_reasons(
+                    returning_attacker=returning_attacker,
+                    campaign_intelligence=(
+                    campaigns["recent"][0]["campaign_intelligence"]
+                        if campaigns.get("recent")
+                        else {}
+                    ),
+                    corroborating_detection_count=max(campaigns.get("count") or 0, 1),
+                    response_history_present=returning_attacker.get("previous_responses", 0) > 0,
+                    repeated_destination=returning_attacker.get("repeated_destinations", 0) > 0,
+                    persistent_activity=returning_attacker.get("days_observed", 0) > 1,
+                ),
+            )
             response_outcomes = get_recent_outcomes_for_source_ip(
                 conn,
                 source_ip,
@@ -505,6 +525,7 @@ def get_source_ip_context():
                         },
                         **external,
                     },
+                    "internet_noise": internet_noise,
                     "playbook_executions": playbook_executions,
                     "returning_attacker": returning_attacker,
                     "campaigns": campaigns,

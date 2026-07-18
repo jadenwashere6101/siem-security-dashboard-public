@@ -10,10 +10,12 @@ from core.pfsense_operational_baseline import (
     build_pfsense_incident_scope_filter,
 )
 from core.audit_helpers import log_audit_event
+from core.internet_noise import get_internet_noise_assessment, record_internet_noise_outcome
 from core.investigation_intelligence import (
     build_campaign_intelligence,
     build_incident_intelligence,
     build_investigation_value,
+    build_local_evidence_override_reasons,
     build_returning_attacker_context,
     determine_incident_priority,
 )
@@ -167,17 +169,32 @@ def _build_incident_policy(
         }
     )
     investigation_value = build_investigation_value(
+        alert_type=alert_type,
         severity=severity,
         returning_attacker=returning_attacker,
         campaign_intelligence=campaign_intelligence,
         progression_observed=progression_observed,
         corroborating_detection_count=int(context.get("corroborating_detection_count") or 1),
         response_history_present=bool(context.get("response_status") or context.get("response_history_present")),
-        repeated_destination=bool(
-            context.get("repeated_destination") or target_context.get("primary_destination_ip")
-        ),
+        repeated_destination=bool(context.get("repeated_destination") or returning_attacker.get("repeated_destinations", 0) > 0),
         persistent_activity=returning_attacker.get("days_observed", 0) > 1,
+        internet_noise_assessment=get_internet_noise_assessment(source_ip, allow_enqueue=False),
+        internet_noise_override_reasons=build_local_evidence_override_reasons(
+            alert_type=alert_type,
+            context=context,
+            returning_attacker=returning_attacker,
+            campaign_intelligence=campaign_intelligence,
+            progression_observed=progression_observed,
+            corroborating_detection_count=int(context.get("corroborating_detection_count") or 1),
+            destination_important=bool(context.get("destination_important")),
+            response_history_present=bool(context.get("response_status") or context.get("response_history_present")),
+            repeated_destination=bool(
+                context.get("repeated_destination") or returning_attacker.get("repeated_destinations", 0) > 0
+            ),
+            persistent_activity=returning_attacker.get("days_observed", 0) > 1,
+        ),
     )
+    internet_noise = investigation_value.get("internet_noise") if isinstance(investigation_value, dict) else {}
 
     policy = {
         "eligible": False,
@@ -188,6 +205,7 @@ def _build_incident_policy(
         "title": f"[AUTO] {sev_upper or 'UNKNOWN'} alert from {source_ip}",
         "investigation_value": investigation_value,
         "campaign_intelligence": campaign_intelligence,
+        "internet_noise": internet_noise,
         "reasons": [],
     }
 
@@ -243,6 +261,17 @@ def _build_incident_policy(
                 _reason("routine_recon", "Routine pfSense reconnaissance remains visible without opening an incident"),
             ]
             return policy
+        if internet_noise.get("effect") == "shadow_observation":
+            record_internet_noise_outcome("shadow_incidents_would_prevent")
+        elif internet_noise.get("applied_to_incident"):
+            record_internet_noise_outcome("incidents_prevented")
+            policy["reasons"] = [
+                _reason(
+                    "internet_noise",
+                    "Known commodity internet scanner remains alert-visible, but local evidence does not justify a new incident",
+                ),
+            ]
+            return policy
         policy["eligible"] = True
         policy["priority"] = determine_incident_priority(
             severity=severity,
@@ -266,6 +295,18 @@ def _build_incident_policy(
 
     if sev_upper not in {"HIGH", "CRITICAL"}:
         policy["reasons"] = [_reason("severity_gate", "This alert does not meet incident policy thresholds")]
+        return policy
+
+    if internet_noise.get("effect") == "shadow_observation":
+        record_internet_noise_outcome("shadow_incidents_would_prevent")
+    elif internet_noise.get("applied_to_incident"):
+        record_internet_noise_outcome("incidents_prevented")
+        policy["reasons"] = [
+            _reason(
+                "internet_noise",
+                "Known commodity internet scanner remains visible, but local evidence does not justify a new incident",
+            ),
+        ]
         return policy
 
     policy["eligible"] = True

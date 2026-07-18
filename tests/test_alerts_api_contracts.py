@@ -18,6 +18,26 @@ EXTERNAL_REPUTATION = {
     "reputation_source": "contract-threat-intel",
     "reputation_summary": "Stored external reputation snapshot",
 }
+NEUTRAL_INTERNET_NOISE = {
+    "provider": "GreyNoise",
+    "assessment": "neutral",
+    "explanation": "Internet-noise assessment is unavailable.",
+    "confidence": None,
+    "last_checked": None,
+    "cached": False,
+    "lookup_status": "unknown",
+    "provider_metadata": {},
+    "policy_mode": "shadow",
+    "effect": "neutral",
+    "result": "No internet-noise adjustment applied.",
+    "deprioritized": False,
+    "override_reasons": [],
+    "would_reduce_urgency": False,
+    "applied_to_investigation": False,
+    "would_affect_incident": False,
+    "applied_to_incident": False,
+    "local_evidence_override": False,
+}
 
 
 class _RouteSafeConnection:
@@ -86,6 +106,8 @@ def _login_as_super_admin(client):
 def _fetch_alerts_response(client, conn):
     with patch("routes.alerts_events_routes.get_db_connection", return_value=_RouteSafeConnection(conn)), patch(
         "routes.alerts_events_routes.get_ip_reputation", return_value=BEHAVIORAL_REPUTATION
+    ), patch(
+        "routes.alerts_events_routes.get_internet_noise_assessment", return_value=NEUTRAL_INTERNET_NOISE
     ):
         return client.get("/alerts")
 
@@ -93,6 +115,8 @@ def _fetch_alerts_response(client, conn):
 def _fetch_alerts_response_for_path(client, conn, path):
     with patch("routes.alerts_events_routes.get_db_connection", return_value=_RouteSafeConnection(conn)), patch(
         "routes.alerts_events_routes.get_ip_reputation", return_value=BEHAVIORAL_REPUTATION
+    ), patch(
+        "routes.alerts_events_routes.get_internet_noise_assessment", return_value=NEUTRAL_INTERNET_NOISE
     ):
         return client.get(path)
 
@@ -100,6 +124,8 @@ def _fetch_alerts_response_for_path(client, conn, path):
 def _fetch_alert_summary_response(client, conn):
     with patch("routes.alerts_events_routes.get_db_connection", return_value=_RouteSafeConnection(conn)), patch(
         "routes.alerts_events_routes.get_ip_reputation", return_value=BEHAVIORAL_REPUTATION
+    ), patch(
+        "routes.alerts_events_routes.get_internet_noise_assessment", return_value=NEUTRAL_INTERNET_NOISE
     ):
         return client.get("/alerts/summary")
 
@@ -107,6 +133,8 @@ def _fetch_alert_summary_response(client, conn):
 def _fetch_alert_summary_response_for_path(client, conn, path):
     with patch("routes.alerts_events_routes.get_db_connection", return_value=_RouteSafeConnection(conn)), patch(
         "routes.alerts_events_routes.get_ip_reputation", return_value=BEHAVIORAL_REPUTATION
+    ), patch(
+        "routes.alerts_events_routes.get_internet_noise_assessment", return_value=NEUTRAL_INTERNET_NOISE
     ):
         return client.get(path)
 
@@ -118,6 +146,8 @@ def _alert_items(payload):
 def _fetch_why_fired_response(client, conn, alert_id):
     with patch("routes.alerts_events_routes.get_db_connection", return_value=_RouteSafeConnection(conn)), patch(
         "routes.alerts_events_routes.get_ip_reputation", return_value=BEHAVIORAL_REPUTATION
+    ), patch(
+        "routes.alerts_events_routes.get_internet_noise_assessment", return_value=NEUTRAL_INTERNET_NOISE
     ):
         return client.get(f"/alerts/{alert_id}/why-fired")
 
@@ -125,6 +155,8 @@ def _fetch_why_fired_response(client, conn, alert_id):
 def _fetch_recon_activities_response(client, conn, path="/recon-activities"):
     with patch("routes.alerts_events_routes.get_db_connection", return_value=_RouteSafeConnection(conn)), patch(
         "routes.alerts_events_routes.get_ip_reputation", return_value=BEHAVIORAL_REPUTATION
+    ), patch(
+        "routes.alerts_events_routes.get_internet_noise_assessment", return_value=NEUTRAL_INTERNET_NOISE
     ):
         return client.get(path)
 
@@ -429,6 +461,47 @@ def test_get_alerts_behavioral_reputation_shape_always_present(client, postgres_
     assert set(behavioral) == {"score", "label", "source", "summary", "contributing_signals"}
     assert behavioral["source"] == "siem_internal"
     assert isinstance(behavioral["contributing_signals"], list)
+
+
+def test_get_alerts_internet_noise_section_remains_separate_from_reputation(client, postgres_db):
+    conn, cur = postgres_db
+    _insert_alert(
+        cur,
+        alert_type="port_scan_threshold",
+        source_ip="198.51.100.222",
+        message="Port scan threshold exceeded",
+    )
+    conn.commit()
+
+    commodity_noise = {
+        "provider": "GreyNoise",
+        "assessment": "commodity",
+        "explanation": "Known commodity internet scanner.",
+        "confidence": "high",
+        "last_checked": "2026-07-18T12:00:00+00:00",
+        "cached": True,
+        "lookup_status": "succeeded",
+        "provider_metadata": {"raw_classification": "benign"},
+    }
+
+    _login_as_super_admin(client)
+    with patch("routes.alerts_events_routes.get_db_connection", return_value=_RouteSafeConnection(conn)), patch(
+        "routes.alerts_events_routes.get_ip_reputation", return_value=BEHAVIORAL_REPUTATION
+    ), patch(
+        "routes.alerts_events_routes.get_internet_noise_assessment", return_value=commodity_noise
+    ):
+        resp = client.get("/alerts")
+
+    assert resp.status_code == 200
+    alert = _alert_by_type(_alert_items(resp.get_json()), "port_scan_threshold")
+    assert alert["reputation_source"] == EXTERNAL_REPUTATION["reputation_source"]
+    assert alert["behavioral_reputation"]["source"] == "siem_internal"
+    assert alert["internet_noise"]["provider"] == "GreyNoise"
+    assert alert["internet_noise"]["assessment"] == "commodity"
+    assert alert["internet_noise"]["policy_mode"] == "shadow"
+    assert alert["internet_noise"]["effect"] == "shadow_observation"
+    assert alert["internet_noise"]["would_reduce_urgency"] is True
+    assert alert["internet_noise"]["applied_to_investigation"] is False
 
 
 def test_get_alerts_correlation_alerts_include_correlation_contract_fields(client, postgres_db):

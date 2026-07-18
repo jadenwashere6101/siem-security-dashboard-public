@@ -32,6 +32,26 @@ const selectedAlert = {
     summary: "No elevated behavioral signals observed in SIEM history.",
     contributing_signals: [],
   },
+  internet_noise: {
+    provider: "GreyNoise",
+    assessment: "commodity",
+    explanation: "Known internet-wide research scanner.",
+    confidence: "high",
+    last_checked: "2026-07-18T12:00:00+00:00",
+    cached: true,
+    lookup_status: "succeeded",
+    provider_metadata: {},
+    policy_mode: "shadow",
+    effect: "shadow_observation",
+    result: "Shadow mode recorded a potential urgency reduction.",
+    deprioritized: false,
+    override_reasons: [],
+    would_reduce_urgency: true,
+    applied_to_investigation: false,
+    would_affect_incident: true,
+    applied_to_incident: false,
+    local_evidence_override: false,
+  },
 };
 
 const trackingOutcome = {
@@ -106,6 +126,9 @@ test("AlertDetailsPanel includes source-IP context for selected alert", async ()
   );
 
   expect(screen.getByText("Source-IP Context")).toBeInTheDocument();
+  expect(screen.getByText("Internet Noise")).toBeInTheDocument();
+  expect(screen.getByText("Known commodity scanner")).toBeInTheDocument();
+  expect(screen.getByText("Shadow mode: would reduce investigation priority.")).toBeInTheDocument();
   expect(await screen.findByText("Alerts")).toBeInTheDocument();
   expect(loadSourceIpContext).toHaveBeenCalledWith("8.8.8.8");
 });

@@ -10,9 +10,11 @@ from flask_login import login_required
 
 from core.auth import admin_required, analyst_or_super_admin_required
 from core.db import get_db_connection
+from core.internet_noise import get_internet_noise_assessment
 from core.investigation_intelligence import (
     build_campaign_intelligence,
     build_investigation_value,
+    build_local_evidence_override_reasons,
     build_port_scan_story,
     build_returning_attacker_context,
 )
@@ -944,7 +946,20 @@ def _fetch_alert_intelligence(conn, rows) -> dict[int, dict[str, Any]]:
         )
         repeated_destination = returning_attacker.get("repeated_destinations", 0) > 0
         persistent_activity = returning_attacker.get("days_observed", 0) > 1
+        override_reasons = build_local_evidence_override_reasons(
+            alert_type=row[1],
+            context=context,
+            returning_attacker=returning_attacker,
+            campaign_intelligence=campaign_intelligence,
+            progression_observed=progression_observed,
+            corroborating_detection_count=max(int(campaign_seed.get("corroborating_alert_types") or 0), 1),
+            destination_important=_is_important_destination(target_context),
+            response_history_present=returning_attacker.get("previous_responses", 0) > 0,
+            repeated_destination=repeated_destination,
+            persistent_activity=persistent_activity,
+        )
         investigation_value = build_investigation_value(
+            alert_type=row[1],
             severity=row[2],
             returning_attacker=returning_attacker,
             campaign_intelligence=campaign_intelligence,
@@ -954,6 +969,8 @@ def _fetch_alert_intelligence(conn, rows) -> dict[int, dict[str, Any]]:
             response_history_present=returning_attacker.get("previous_responses", 0) > 0,
             repeated_destination=repeated_destination,
             persistent_activity=persistent_activity,
+            internet_noise_assessment=get_internet_noise_assessment(source_ip),
+            internet_noise_override_reasons=override_reasons,
         )
 
         alert_story = None
@@ -979,6 +996,7 @@ def _fetch_alert_intelligence(conn, rows) -> dict[int, dict[str, Any]]:
             "returning_attacker": returning_attacker,
             "campaign_intelligence": campaign_intelligence,
             "investigation_value": investigation_value,
+            "internet_noise": investigation_value.get("internet_noise"),
             "alert_story": alert_story,
             "progression_observed": progression_observed,
         }
@@ -1035,6 +1053,7 @@ def _build_alert_payload(
                 "source_type": row[18] or "legacy",
                 "context": row[19] if row[19] is not None else {},
                 "investigation_value": intelligence.get("investigation_value"),
+                "internet_noise": intelligence.get("internet_noise"),
                 "returning_attacker": intelligence.get("returning_attacker"),
                 "campaign_intelligence": intelligence.get("campaign_intelligence"),
                 "alert_story": intelligence.get("alert_story"),

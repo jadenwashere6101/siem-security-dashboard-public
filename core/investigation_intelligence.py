@@ -4,6 +4,8 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
+from core.internet_noise import build_internet_noise_decision, record_internet_noise_outcome
+
 
 INVESTIGATION_LABELS = {
     "high": "Investigate Now",
@@ -53,6 +55,51 @@ def _days_observed(first_seen: Any, last_seen: Any) -> int:
 
 def _reason(reason_id: str, text: str) -> dict[str, str]:
     return {"id": reason_id, "text": text}
+
+
+def build_local_evidence_override_reasons(
+    *,
+    alert_type: str | None = None,
+    context: dict[str, Any] | None = None,
+    returning_attacker: dict[str, Any] | None = None,
+    campaign_intelligence: dict[str, Any] | None = None,
+    progression_observed: bool = False,
+    corroborating_detection_count: int = 0,
+    destination_important: bool = False,
+    response_history_present: bool = False,
+    repeated_destination: bool = False,
+    persistent_activity: bool = False,
+) -> list[dict[str, str]]:
+    context = context or {}
+    returning_attacker = returning_attacker or {}
+    campaign_intelligence = campaign_intelligence or {}
+    alert_type = str(alert_type or "")
+    reasons: list[dict[str, str]] = []
+    seen_ids: set[str] = set()
+
+    def add(reason_id: str, text: str) -> None:
+        if reason_id in seen_ids:
+            return
+        seen_ids.add(reason_id)
+        reasons.append(_reason(reason_id, text))
+
+    if alert_type in {"successful_login_after_spray", "spray_then_success_pattern", "web_to_app_attack_pattern"}:
+        add("successful_attack", "Successful-attack progression was observed locally")
+    if progression_observed:
+        add("progression", "Attack progression was observed locally")
+    if bool(context.get("successful_authentication")) or bool(context.get("likely_compromise")):
+        add("successful_authentication", "Successful authentication or likely compromise evidence was observed")
+    if campaign_intelligence.get("present"):
+        add("campaign_progression", campaign_intelligence.get("summary") or "Campaign progression was observed")
+    if corroborating_detection_count > 1:
+        add("corroboration", f"{corroborating_detection_count} corroborating detections were observed")
+    if destination_important and repeated_destination:
+        add("protected_target_repetition", "Repeated protected-target activity was detected")
+    if bool(context.get("repeated_sensitive_path_probe")):
+        add("sensitive_path", "Repeated sensitive-path probing was observed")
+    if returning_attacker.get("is_returning") and persistent_activity:
+        add("returning_attacker", returning_attacker.get("summary") or "Confirmed returning attacker history was observed")
+    return reasons
 
 
 def _normalize_observed_timestamps(values: Any) -> list[datetime]:
@@ -206,6 +253,7 @@ def build_campaign_intelligence(campaign: dict[str, Any] | None) -> dict[str, An
 
 def build_investigation_value(
     *,
+    alert_type: str | None = None,
     severity: str | None,
     returning_attacker: dict[str, Any] | None = None,
     campaign_intelligence: dict[str, Any] | None = None,
@@ -215,6 +263,8 @@ def build_investigation_value(
     response_history_present: bool = False,
     repeated_destination: bool = False,
     persistent_activity: bool = False,
+    internet_noise_assessment: dict[str, Any] | None = None,
+    internet_noise_override_reasons: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     severity_value = str(severity or "").lower()
     returning_attacker = returning_attacker or {}
@@ -254,6 +304,41 @@ def build_investigation_value(
         points += 1
         reasons.append(_reason("persistent_activity", "Activity persisted over time"))
 
+    internet_noise = build_internet_noise_decision(
+        internet_noise_assessment,
+        override_reasons=internet_noise_override_reasons,
+    )
+    if internet_noise["applied_to_investigation"]:
+        points = max(points - 2, 0)
+        reasons.insert(
+            0,
+            _reason(
+                "internet_noise",
+                "Known commodity internet scanner; current local evidence does not exceed normal internet noise",
+            ),
+        )
+        record_internet_noise_outcome("alerts_deprioritized")
+    elif internet_noise["effect"] == "shadow_observation":
+        reasons.insert(
+            0,
+            _reason(
+                "internet_noise_shadow",
+                "Known commodity internet scanner; shadow mode recorded a lower-priority recommendation, but current policy kept Investigation Value unchanged",
+            ),
+        )
+        record_internet_noise_outcome("shadow_alerts_would_deprioritize")
+    elif internet_noise["effect"] == "local_evidence_override":
+        reasons.insert(
+            0,
+            _reason(
+                "internet_noise_override",
+                "Known commodity internet scanner, but local evidence overrides the internet-noise assessment",
+            ),
+        )
+        record_internet_noise_outcome("local_override")
+        if internet_noise["policy_mode"] == "shadow":
+            record_internet_noise_outcome("shadow_local_override")
+
     if points >= 6:
         level = "high"
     elif points >= 3:
@@ -269,6 +354,7 @@ def build_investigation_value(
         "label": INVESTIGATION_LABELS[level],
         "summary": reasons[0]["text"],
         "reasons": reasons[:5],
+        "internet_noise": internet_noise,
     }
 
 

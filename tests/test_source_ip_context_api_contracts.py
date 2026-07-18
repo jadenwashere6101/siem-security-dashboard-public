@@ -11,6 +11,26 @@ from core import soar_response_outcomes as outcomes
 ADMIN_USER = "testadmin"
 ADMIN_PASS = "testpassword123!"
 SOURCE_IP = "8.8.8.8"
+NEUTRAL_INTERNET_NOISE = {
+    "provider": "GreyNoise",
+    "assessment": "neutral",
+    "explanation": "Internet-noise assessment is unavailable.",
+    "confidence": None,
+    "last_checked": None,
+    "cached": False,
+    "lookup_status": "unknown",
+    "provider_metadata": {},
+    "policy_mode": "shadow",
+    "effect": "neutral",
+    "result": "No internet-noise adjustment applied.",
+    "deprioritized": False,
+    "override_reasons": [],
+    "would_reduce_urgency": False,
+    "applied_to_investigation": False,
+    "would_affect_incident": False,
+    "applied_to_incident": False,
+    "local_evidence_override": False,
+}
 
 
 class _RouteSafeConnection:
@@ -37,6 +57,8 @@ def _patched_app_db(conn):
     wrapper = _RouteSafeConnection(conn)
     with patch("routes.source_ip_context_routes.get_db_connection", return_value=wrapper), patch(
         "core.audit_helpers.get_db_connection", return_value=wrapper
+    ), patch(
+        "routes.source_ip_context_routes.get_internet_noise_assessment", return_value=NEUTRAL_INTERNET_NOISE
     ):
         yield
 
@@ -258,6 +280,7 @@ def test_source_ip_context_response_shape_sections_and_no_unified_status(client,
         "queue",
         "blocklist",
         "reputation",
+        "internet_noise",
         "playbook_executions",
         "response_outcomes",
         "response_outcome_counts",
@@ -274,6 +297,8 @@ def test_source_ip_context_response_shape_sections_and_no_unified_status(client,
     assert "behavioral" in data["reputation"]
     assert "latest_external" in data["reputation"]
     assert "external_snapshots" in data["reputation"]
+    assert data["internet_noise"]["assessment"] == "neutral"
+    assert data["internet_noise"]["policy_mode"] == "shadow"
 
 
 def test_source_ip_context_caps_recent_collections(client, postgres_db):
@@ -338,6 +363,7 @@ def test_source_ip_context_populates_linked_context_and_separate_reputation(clie
     assert data["reputation"]["latest_external"]["score"] == 91
     assert data["reputation"]["latest_external"]["label"] == "known_bad"
     assert data["reputation"]["external_snapshots"][0]["alert_id"] == alert_id
+    assert data["internet_noise"]["provider"] == "GreyNoise"
 
     assert data["playbook_executions"]["recent"][0]["id"] == execution_id
     assert data["playbook_executions"]["recent"][0]["status"] == "pending"

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 
+import InternetNoiseSummary, { shouldShowInternetNoise } from "./InternetNoiseSummary";
 import { loadSourceIpContext } from "../services/sourceIpContextService";
 import { CanonicalOutcomeBreakdown, ResponseOutcomeBadge, ResponseOutcomeSummary } from "./ResponseOutcome";
 import ResponseStateSummary from "./ResponseStateSummary";
@@ -54,6 +55,7 @@ function SourceIpContext({ sourceIp, compact = false, onOpenResponseRegistry = n
         context.blocklist?.entries?.length ||
         context.reputation?.latest_external ||
         context.reputation?.external_snapshots?.length ||
+        shouldShowInternetNoise(context.internet_noise) ||
         context.playbook_executions?.recent?.length ||
         context.returning_attacker ||
         context.campaigns?.recent?.length ||
@@ -305,6 +307,12 @@ function SourceIpContext({ sourceIp, compact = false, onOpenResponseRegistry = n
               )}
             />
           </ContextSection>
+
+          {shouldShowInternetNoise(context.internet_noise) ? (
+            <ContextSection title="Internet Noise">
+              <InternetNoiseSummary internetNoise={context.internet_noise} compact />
+            </ContextSection>
+          ) : null}
 
           <ContextSection title="Playbook Executions">
             <SummaryLine label="Recent executions" value={context.playbook_executions?.count ?? 0} />

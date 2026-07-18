@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import AlertTimeline from "./AlertTimeline";
+import InternetNoiseSummary, { shouldShowInternetNoise } from "./InternetNoiseSummary";
 import { ResponseOutcomeSummary } from "./ResponseOutcome";
 import SourceIpContext from "./SourceIpContext";
 import { getBehavioralReputation, getExternalReputation } from "../utils/alertDisplay";
@@ -109,6 +110,7 @@ function AlertDetailsPanel({
   const reconActivity = selectedAlert?.context?.recon_activity;
   const scanDescription = selectedAlert?.context?.scan_description;
   const investigationValue = selectedAlert?.investigation_value;
+  const internetNoise = selectedAlert?.internet_noise;
   const returningAttacker = selectedAlert?.returning_attacker;
   const campaignIntelligence = selectedAlert?.campaign_intelligence;
   const alertStory = selectedAlert?.alert_story;
@@ -252,6 +254,11 @@ function AlertDetailsPanel({
           )}
         </div>
       </div>
+      {shouldShowInternetNoise(internetNoise) ? (
+        <div style={whyFiredPanelStyle}>
+          <InternetNoiseSummary internetNoise={internetNoise} />
+        </div>
+      ) : null}
       {shouldLoadWhyFired ? (
         <div style={whyFiredPanelStyle}>
           <strong>Primary evidence</strong>

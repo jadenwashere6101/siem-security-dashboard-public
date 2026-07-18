@@ -87,6 +87,26 @@ const contextResponse = {
       },
     ],
   },
+  internet_noise: {
+    provider: "GreyNoise",
+    assessment: "commodity",
+    explanation: "Known commodity internet scanner.",
+    confidence: "high",
+    last_checked: "2026-07-18T12:00:00+00:00",
+    cached: true,
+    lookup_status: "succeeded",
+    provider_metadata: {},
+    policy_mode: "shadow",
+    effect: "shadow_observation",
+    result: "Shadow mode recorded a potential urgency reduction.",
+    deprioritized: false,
+    override_reasons: [],
+    would_reduce_urgency: true,
+    applied_to_investigation: false,
+    would_affect_incident: true,
+    applied_to_incident: false,
+    local_evidence_override: false,
+  },
   playbook_executions: {
     count: 1,
     recent: [
@@ -115,6 +135,9 @@ test("SourceIpContext renders normalized response sections", async () => {
   expect(screen.getByText("SOAR Queue")).toBeInTheDocument();
   expect(screen.getByText("Blocklist")).toBeInTheDocument();
   expect(screen.getByText("Reputation")).toBeInTheDocument();
+  expect(screen.getAllByText("Internet Noise").length).toBeGreaterThan(0);
+  expect(screen.getByText("Known commodity scanner")).toBeInTheDocument();
+  expect(screen.getByText("Shadow mode: would reduce investigation priority.")).toBeInTheDocument();
   expect(screen.getByText("Playbook Executions")).toBeInTheDocument();
   expect(screen.getByText("Alert status: open")).toBeInTheDocument();
   expect(

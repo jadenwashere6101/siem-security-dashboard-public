@@ -356,6 +356,141 @@ def test_maybe_create_high_creates_and_links(postgres_db):
     assert inc["priority"] == "P3"
 
 
+def test_shadow_mode_is_default_and_keeps_incident_policy_neutral(
+    postgres_db, monkeypatch
+):
+    monkeypatch.delenv("INTERNET_NOISE_POLICY_MODE", raising=False)
+    conn, cur = postgres_db
+    alert_id = _insert_custom_alert(
+        conn,
+        cur,
+        source_ip="203.0.113.132",
+        alert_type="port_scan_threshold",
+        severity="HIGH",
+        context={},
+    )
+    monkeypatch.setattr(
+        "core.incident_store.get_internet_noise_assessment",
+        lambda *_args, **_kwargs: {
+            "provider": "GreyNoise",
+            "assessment": "commodity",
+            "explanation": "Known commodity internet scanner.",
+            "confidence": "high",
+            "last_checked": "2026-07-18T12:00:00+00:00",
+            "cached": True,
+            "lookup_status": "succeeded",
+            "provider_metadata": {},
+        },
+    )
+
+    incident = maybe_create_or_link_incident(
+        conn,
+        alert_id,
+        "HIGH",
+        "203.0.113.132",
+        alert_type="port_scan_threshold",
+        context={},
+    )
+    conn.commit()
+
+    assert incident is not None
+    assert incident["severity"] == "HIGH"
+    assert _count_incidents(cur) == 1
+
+
+def test_policy_mode_can_keep_high_alert_visible_without_incident(
+    postgres_db, monkeypatch
+):
+    monkeypatch.setenv("INTERNET_NOISE_POLICY_MODE", "policy")
+    conn, cur = postgres_db
+    alert_id = _insert_custom_alert(
+        conn,
+        cur,
+        source_ip="203.0.113.134",
+        alert_type="port_scan_threshold",
+        severity="HIGH",
+        context={},
+    )
+    monkeypatch.setattr(
+        "core.incident_store.get_internet_noise_assessment",
+        lambda *_args, **_kwargs: {
+            "provider": "GreyNoise",
+            "assessment": "commodity",
+            "explanation": "Known commodity internet scanner.",
+            "confidence": "high",
+            "last_checked": "2026-07-18T12:00:00+00:00",
+            "cached": True,
+            "lookup_status": "succeeded",
+            "provider_metadata": {},
+        },
+    )
+
+    incident = maybe_create_or_link_incident(
+        conn,
+        alert_id,
+        "HIGH",
+        "203.0.113.134",
+        alert_type="port_scan_threshold",
+        context={},
+    )
+    conn.commit()
+
+    assert incident is None
+    assert _count_incidents(cur) == 0
+
+
+def test_local_progression_overrides_commodity_internet_noise_for_incident_creation(
+    postgres_db, monkeypatch
+):
+    conn, cur = postgres_db
+    alert_id = _insert_custom_alert(
+        conn,
+        cur,
+        source_ip="203.0.113.133",
+        alert_type="pfsense_firewall_allow_after_deny",
+        severity="HIGH",
+        source="pfsense",
+        source_type="firewall",
+        context={
+            "progression_observed": True,
+            "corroborating_detection_count": 2,
+            "operational_flags": {"incident_eligible": True},
+            "target_context": {"distinct_destination_count": 1, "distinct_port_count": 1},
+        },
+    )
+    monkeypatch.setattr(
+        "core.incident_store.get_internet_noise_assessment",
+        lambda *_args, **_kwargs: {
+            "provider": "GreyNoise",
+            "assessment": "commodity",
+            "explanation": "Known commodity internet scanner.",
+            "confidence": "high",
+            "last_checked": "2026-07-18T12:00:00+00:00",
+            "cached": True,
+            "lookup_status": "succeeded",
+            "provider_metadata": {},
+        },
+    )
+
+    incident = maybe_create_or_link_incident(
+        conn,
+        alert_id,
+        "HIGH",
+        "203.0.113.133",
+        alert_type="pfsense_firewall_allow_after_deny",
+        context={
+            "progression_observed": True,
+            "corroborating_detection_count": 2,
+            "operational_flags": {"incident_eligible": True},
+            "target_context": {"distinct_destination_count": 1, "distinct_port_count": 1},
+        },
+    )
+    conn.commit()
+
+    assert incident is not None
+    assert incident["priority"] in {"P2", "P3"}
+
+
 def test_maybe_create_links_existing_open_in_window(postgres_db):
     conn, cur = postgres_db
     aid1 = _insert_alert(conn, cur, "203.0.113.33")
