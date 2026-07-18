@@ -75,11 +75,6 @@ def parse_args(argv=None):
         action="store_true",
         help="Write idempotent canonical decisions/events for eligible legacy rows.",
     )
-    parser.add_argument(
-        "--db-url",
-        default=None,
-        help="PostgreSQL DSN. Defaults to DATABASE_URL.",
-    )
     return parser.parse_args(argv)
 
 
@@ -525,9 +520,9 @@ def apply_backfill(conn) -> BackfillApplyResult:
 
 def main(argv=None) -> int:
     args = parse_args(argv)
-    db_url = args.db_url or os.getenv("DATABASE_URL")
+    db_url = os.getenv("DATABASE_URL")
     if not db_url:
-        print("ERROR: DATABASE_URL or --db-url is required.", file=sys.stderr)
+        print("ERROR: DATABASE_URL is required.", file=sys.stderr)
         return 1
 
     conn = psycopg2.connect(db_url)

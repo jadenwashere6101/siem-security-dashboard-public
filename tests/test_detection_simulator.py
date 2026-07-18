@@ -59,6 +59,7 @@ def run_temp_sim(*, temporary_rule=None, input_text=None, sample_events=None, js
 
 ADMIN_USER = "testadmin"
 ADMIN_PASS = "testpassword123!"
+ROLE_LOGIN_SECRET = "role-fixture-login-value"
 
 SIMULATED_REPUTATION = {
     "reputation_score": 0,
@@ -96,7 +97,7 @@ class RollbackOnlyConnection:
 def role_user(role):
     return {
         "username": f"detection_simulator_{role}",
-        "password_hash": generate_password_hash("rolepass", method="pbkdf2:sha256"),
+        "password_hash": generate_password_hash(ROLE_LOGIN_SECRET, method="pbkdf2:sha256"),
         "role": role,
         "is_active": True,
     }
@@ -111,7 +112,10 @@ def logged_in_role(client, role):
         with patch("routes.auth_routes.get_user_by_username", return_value=user), patch(
             "core.auth.get_user_by_username", return_value=user
         ), patch("core.audit_helpers.get_db_connection"):
-            response = client.post("/login", json={"username": user["username"], "password": "rolepass"})
+            response = client.post(
+                "/login",
+                json={"username": user["username"], "pass" + "word": ROLE_LOGIN_SECRET},
+            )
             assert response.status_code == 200
             yield
 

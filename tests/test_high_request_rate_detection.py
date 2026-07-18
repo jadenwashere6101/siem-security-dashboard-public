@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+import pytest
 from psycopg2.extras import Json
 
 import siem_backend
@@ -150,8 +151,8 @@ def test_high_request_rate_threshold_boundary_and_alert_field_fidelity(postgres_
     assert alert[9] == "pending"
     assert alert[10] == "United States"
     assert alert[11] == "New York"
-    assert float(alert[12]) == 40.7128
-    assert float(alert[13]) == -74.0060
+    assert float(alert[12]) == pytest.approx(40.7128)
+    assert float(alert[13]) == pytest.approx(-74.0060)
     assert alert[14] == 65
     assert alert[15] == "medium-risk"
     assert alert[16] == "test-reputation"

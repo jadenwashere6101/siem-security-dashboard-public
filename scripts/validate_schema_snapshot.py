@@ -19,6 +19,21 @@ class SchemaSnapshotValidationError(Exception):
     pass
 
 
+def _resolve_repo_path(path, *, expected_name=None):
+    resolved = Path(path).expanduser().resolve()
+    try:
+        resolved.relative_to(REPO_ROOT)
+    except ValueError as exc:
+        raise SchemaSnapshotValidationError(
+            f"Path must stay within repository root: {path}"
+        ) from exc
+    if expected_name and resolved.name != expected_name:
+        raise SchemaSnapshotValidationError(
+            f"Expected {expected_name}, got {resolved.name}"
+        )
+    return resolved
+
+
 def highest_migration_version(migrations_dir):
     versions = []
     for path in Path(migrations_dir).glob("*.sql"):
@@ -75,8 +90,8 @@ def main(argv=None):
     args = parse_args(argv)
     try:
         version = validate_schema_snapshot(
-            schema_file=Path(args.schema_file),
-            migrations_dir=Path(args.migrations_dir),
+            schema_file=_resolve_repo_path(args.schema_file, expected_name="schema.sql"),
+            migrations_dir=_resolve_repo_path(args.migrations_dir),
         )
     except SchemaSnapshotValidationError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

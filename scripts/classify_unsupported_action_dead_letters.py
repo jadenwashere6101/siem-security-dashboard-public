@@ -62,15 +62,15 @@ def classify_action(action: str | None) -> dict:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db-url", default=os.getenv("DATABASE_URL"))
     parser.add_argument("--report", action="store_true", help="Print JSON report to stdout")
     parser.add_argument("--limit", type=int, default=500)
     args = parser.parse_args(argv)
-    if not args.db_url:
-        print("DATABASE_URL / --db-url is required", file=sys.stderr)
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        print("DATABASE_URL is required", file=sys.stderr)
         return 2
 
-    conn = psycopg2.connect(args.db_url)
+    conn = psycopg2.connect(db_url)
     try:
         cur = conn.cursor()
         # Prefer dead-letter table when present; fall back to queue skipped rows.

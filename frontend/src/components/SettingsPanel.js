@@ -211,7 +211,7 @@ function SettingsPanel({
 
         <div style={settingsFieldStyle}>
           <label htmlFor="global-auto-refresh-interval" style={filterLabelStyle}>
-            Default refresh interval
+            Global auto-refresh interval
           </label>
           <select
             id="global-auto-refresh-interval"

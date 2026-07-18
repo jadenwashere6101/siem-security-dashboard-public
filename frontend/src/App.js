@@ -186,7 +186,7 @@ function AppInner() {
             }
           : null),
         offset:
-          Object.prototype.hasOwnProperty.call(patch, "offset") || !resetOffset
+          Object.hasOwn(patch, "offset") || !resetOffset
             ? patch.offset ?? current.offset
             : 0,
       };
@@ -640,27 +640,27 @@ function AppInner() {
   }, [navigateWorkspace]);
 
   const handleViewRelatedAlerts = useCallback((pivot) => {
-    const nextPivot =
-      typeof pivot === "string"
-        ? { sourceIp: pivot }
-        : pivot && typeof pivot === "object"
-        ? pivot
-        : {};
+    let nextPivot = {};
+    if (typeof pivot === "string") {
+      nextPivot = { sourceIp: pivot };
+    } else if (pivot && typeof pivot === "object") {
+      nextPivot = pivot;
+    }
     const normalizedSourceIp = String(nextPivot.sourceIp || "").trim();
     const normalizedTargetIp = String(nextPivot.targetIp || "").trim();
     const normalizedAlertId =
       nextPivot.alertId == null || nextPivot.alertId === ""
         ? null
         : Number(nextPivot.alertId);
-    setAlertsPendingLabel(
-      normalizedTargetIp
-        ? `Opening alerts for ${normalizedTargetIp}…`
-        : normalizedSourceIp
-        ? `Opening alerts for ${normalizedSourceIp}…`
-        : normalizedAlertId != null
-        ? `Opening linked alert #${normalizedAlertId}…`
-        : "Updating recent alerts…"
-    );
+    let pendingLabel = "Updating recent alerts…";
+    if (normalizedTargetIp) {
+      pendingLabel = `Opening alerts for ${normalizedTargetIp}…`;
+    } else if (normalizedSourceIp) {
+      pendingLabel = `Opening alerts for ${normalizedSourceIp}…`;
+    } else if (normalizedAlertId != null) {
+      pendingLabel = `Opening linked alert #${normalizedAlertId}…`;
+    }
+    setAlertsPendingLabel(pendingLabel);
     setSummaryPendingLabel("Updating dashboard summary…");
     setAlertView((current) =>
       buildContextualAlertView(current, {

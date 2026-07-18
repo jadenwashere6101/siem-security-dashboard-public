@@ -206,14 +206,14 @@ print_preflight() {
 
 run_migration_dry_run() {
   log "Running migration dry-run (no DDL, no ledger writes)..."
-  log "Command: venv/bin/python ${MIGRATE_SCRIPT} --db-url [REDACTED] --dry-run"
-  venv/bin/python "$MIGRATE_SCRIPT" --db-url "$DATABASE_URL" --dry-run
+  log "Command: DATABASE_URL=[REDACTED] venv/bin/python ${MIGRATE_SCRIPT} --dry-run"
+  venv/bin/python "$MIGRATE_SCRIPT" --dry-run
 }
 
 run_migration_apply() {
   log "Applying pending schema migrations..."
-  log "Command: venv/bin/python ${MIGRATE_SCRIPT} --db-url [REDACTED]"
-  if ! venv/bin/python "$MIGRATE_SCRIPT" --db-url "$DATABASE_URL"; then
+  log "Command: DATABASE_URL=[REDACTED] venv/bin/python ${MIGRATE_SCRIPT}"
+  if ! venv/bin/python "$MIGRATE_SCRIPT"; then
     die "Migration apply failed. Backend was not restarted. Inspect schema_migrations and migration logs."
   fi
 }

@@ -279,7 +279,7 @@ Backfill uses `scripts/soar_outcome_backfill.py`.
 Dry-run mode:
 
 ```bash
-python3 scripts/soar_outcome_backfill.py --dry-run --db-url "$DATABASE_URL"
+python3 scripts/soar_outcome_backfill.py --dry-run
 ```
 
 Dry-run prints a summary dictionary covering:
@@ -306,7 +306,7 @@ Review before write mode:
 Write mode:
 
 ```bash
-python3 scripts/soar_outcome_backfill.py --apply --db-url "$DATABASE_URL"
+python3 scripts/soar_outcome_backfill.py --apply
 ```
 
 Write mode is idempotent:

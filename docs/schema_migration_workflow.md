@@ -98,7 +98,7 @@ Use a **local or disposable** database only. Do not use production or shared VM 
 2. **Dry-run** — lists pending migrations and previews the first lines of each file; does **not** create `schema_migrations` or run migration SQL:
 
    ```bash
-   python3 scripts/migrate.py --db-url "$DATABASE_URL" --dry-run
+   python3 scripts/migrate.py --dry-run
    ```
 
    Expected when fully up to date:
@@ -112,13 +112,13 @@ Use a **local or disposable** database only. Do not use production or shared VM 
 4. **Apply** (local only):
 
    ```bash
-   python3 scripts/migrate.py --db-url "$DATABASE_URL"
+   python3 scripts/migrate.py
    ```
 
 5. **Re-run dry-run** — confirms idempotency:
 
    ```bash
-   python3 scripts/migrate.py --db-url "$DATABASE_URL" --dry-run
+   python3 scripts/migrate.py --dry-run
    ```
 
 ### Partial apply (optional)
@@ -126,7 +126,7 @@ Use a **local or disposable** database only. Do not use production or shared VM 
 Stop after a specific version (numeric, with or without leading zeros):
 
 ```bash
-python3 scripts/migrate.py --db-url "$DATABASE_URL" --target 3
+python3 scripts/migrate.py --target 3
 ```
 
 ### Run framework tests (no live DB required)
@@ -156,7 +156,7 @@ Many VMs already have tables from earlier additive SQL or `schema.sql` guards. T
 
    ```bash
    cd /path/to/siem-security-dashboard-public
-   python3 scripts/migrate.py --db-url "$DATABASE_URL" --dry-run
+   python3 scripts/migrate.py --dry-run
    ```
 
 2. If pending migrations use only `IF NOT EXISTS` / safe guards, objects that already exist are no-ops; only missing objects are created.
@@ -164,7 +164,7 @@ Many VMs already have tables from earlier additive SQL or `schema.sql` guards. T
 3. Apply:
 
    ```bash
-   python3 scripts/migrate.py --db-url "$DATABASE_URL"
+   python3 scripts/migrate.py
    ```
 
 4. Run verification (section 8).
@@ -179,7 +179,7 @@ Many VMs already have tables from earlier additive SQL or `schema.sql` guards. T
 ### Fresh database on the VM
 
 1. Create an empty database.
-2. Run `python3 scripts/migrate.py --db-url "$DATABASE_URL"` once (applies all files from `0001` upward).
+2. Run `python3 scripts/migrate.py` once (applies all files from `0001` upward).
 3. Verify (section 8).
 
 ### If apply fails
@@ -213,9 +213,9 @@ Many VMs already have tables from earlier additive SQL or `schema.sql` guards. T
 4. **Test locally** on a DB that has all prior migrations applied:
 
    ```bash
-   python3 scripts/migrate.py --db-url "$LOCAL_DATABASE_URL" --dry-run
-   python3 scripts/migrate.py --db-url "$LOCAL_DATABASE_URL"
-   python3 scripts/migrate.py --db-url "$LOCAL_DATABASE_URL" --dry-run
+   DATABASE_URL="$LOCAL_DATABASE_URL" python3 scripts/migrate.py --dry-run
+   DATABASE_URL="$LOCAL_DATABASE_URL" python3 scripts/migrate.py
+   DATABASE_URL="$LOCAL_DATABASE_URL" python3 scripts/migrate.py --dry-run
    ```
 
 5. **Add or extend tests** if application code depends on the new tables/columns.
@@ -291,7 +291,7 @@ psql "$DATABASE_URL" -c "\dt"
 ### Idempotency (nothing pending)
 
 ```bash
-python3 scripts/migrate.py --db-url "$DATABASE_URL" --dry-run
+python3 scripts/migrate.py --dry-run
 ```
 
 Expected when caught up: `Nothing to apply. DB at version NNNN.`
@@ -364,22 +364,19 @@ export REPO_ROOT='/path/to/siem-security-dashboard-public'
 cd "$REPO_ROOT"
 
 # --- Dry-run before VM or staging apply ---
-python3 scripts/migrate.py --db-url "$DATABASE_URL" --dry-run
+python3 scripts/migrate.py --dry-run
 
 # --- Apply all pending migrations ---
-python3 scripts/migrate.py --db-url "$DATABASE_URL"
+python3 scripts/migrate.py
 
 # --- Apply only through version 3 ---
-python3 scripts/migrate.py --db-url "$DATABASE_URL" --target 3
-
-# --- Explicit DSN flag (same as DATABASE_URL) ---
-python3 scripts/migrate.py --db-url 'postgresql://USER:PASSWORD@HOST:5432/DBNAME'
+python3 scripts/migrate.py --target 3
 
 # --- Inspect ledger ---
 psql "$DATABASE_URL" -c "SELECT version, name, applied_at FROM schema_migrations ORDER BY version;"
 
 # --- Confirm no pending work ---
-python3 scripts/migrate.py --db-url "$DATABASE_URL" --dry-run
+python3 scripts/migrate.py --dry-run
 
 # --- WRONG: do not use on live DB ---
 # psql "$DATABASE_URL" -f schema.sql

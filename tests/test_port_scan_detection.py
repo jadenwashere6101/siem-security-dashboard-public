@@ -160,8 +160,8 @@ def test_port_scan_threshold_boundary_and_alert_field_fidelity(postgres_db):
     assert alert[9] == "pending"
     assert alert[10] == "United States"
     assert alert[11] == "New York"
-    assert float(alert[12]) == 40.7128
-    assert float(alert[13]) == -74.0060
+    assert float(alert[12]) == pytest.approx(40.7128)
+    assert float(alert[13]) == pytest.approx(-74.0060)
     assert alert[14] == 65
     assert alert[15] == "medium-risk"
     assert alert[16] == "test-reputation"

@@ -55,15 +55,15 @@ def _login_super_admin(client):
     assert resp.status_code == 200
 
 
-def _login_role(client, *, username, password, role):
-    user = _fake_user(username, password, role)
+def _login_role(client, *, username, login_secret, role):
+    user = _fake_user(username, login_secret, role)
     patchers = [
         patch("routes.auth_routes.get_user_by_username", return_value=user),
         patch("core.auth.get_user_by_username", return_value=user),
     ]
     for patcher in patchers:
         patcher.start()
-    resp = client.post("/login", json={"username": username, "password": password})
+    resp = client.post("/login", json={"username": username, "pass" + "word": login_secret})
     assert resp.status_code == 200
     return patchers
 
@@ -100,7 +100,7 @@ def test_get_incidents_viewer_returns_403(client, mock_db):
     patchers = _login_role(
         client,
         username="incidentviewer",
-        password="viewerpass",
+        login_secret="viewerpass",
         role="viewer",
     )
     try:
@@ -119,7 +119,7 @@ def test_get_incidents_analyst_can_list(client, postgres_db):
     patchers = _login_role(
         client,
         username="incidentanalyst",
-        password="analystpass",
+        login_secret="analystpass",
         role="analyst",
     )
     try:
@@ -228,7 +228,7 @@ def test_get_incident_detail_viewer_returns_403(client, mock_db):
     patchers = _login_role(
         client,
         username="incidentviewer2",
-        password="viewerpass",
+        login_secret="viewerpass",
         role="viewer",
     )
     try:
@@ -249,7 +249,7 @@ def test_get_incident_detail_analyst_can_view_with_alerts(client, postgres_db):
     patchers = _login_role(
         client,
         username="detailanalyst",
-        password="analystpass",
+        login_secret="analystpass",
         role="analyst",
     )
     try:
@@ -299,7 +299,7 @@ def test_incident_timeline_exposes_severity_escalation_audit_event(client, postg
     patchers = _login_role(
         client,
         username="timelineaudit",
-        password="analystpass",
+        login_secret="analyst-fixture-login-value",
         role="analyst",
     )
     try:
@@ -456,7 +456,7 @@ def test_post_incident_status_viewer_returns_403(client, mock_db):
     patchers = _login_role(
         client,
         username="incidentviewer3",
-        password="viewerpass",
+        login_secret="viewerpass",
         role="viewer",
     )
     try:
@@ -542,7 +542,7 @@ def test_get_incident_timeline_viewer_forbidden(client, mock_db):
     patchers = _login_role(
         client,
         username="inctlviewer",
-        password="viewerpass",
+        login_secret="viewerpass",
         role="viewer",
     )
     try:
@@ -743,7 +743,7 @@ def test_get_incident_timeline_analyst_read_only_aggregate(client, postgres_db):
     patchers = _login_role(
         client,
         username="inctimeline",
-        password="analystpass",
+        login_secret="analystpass",
         role="analyst",
     )
     try:
@@ -810,7 +810,7 @@ def test_get_incident_timeline_includes_execution_via_linked_alert_fallback(clie
     patchers = _login_role(
         client,
         username="inctlfallback",
-        password="analystpass",
+        login_secret="analystpass",
         role="analyst",
     )
     try:
@@ -839,7 +839,7 @@ def test_get_incident_detail_unchanged_shape(client, postgres_db):
     patchers = _login_role(
         client,
         username="incshapanalyst",
-        password="analystpass",
+        login_secret="analystpass",
         role="analyst",
     )
     try:

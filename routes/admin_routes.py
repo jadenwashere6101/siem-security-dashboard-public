@@ -131,10 +131,10 @@ def update_pfsense_ingest_filter(category):
             },
         )
         return jsonify(updated_entry), 200
-    except Exception as error:
+    except Exception:
         if conn:
             conn.rollback()
-        current_app.logger.error("Unable to update pfSense ingest filter category=%s: %s", category, error)
+        current_app.logger.exception("Unable to update pfSense ingest filter")
         return jsonify({"error": "Unable to update pfSense ingest filter"}), 500
     finally:
         if cur:
@@ -857,10 +857,10 @@ def update_detection_rule(rule_id):
         )
 
         return jsonify(updated_effective_rule), 200
-    except Exception as error:
+    except Exception:
         if conn:
             conn.rollback()
-        current_app.logger.error("Unable to update detection rule rule_id=%s: %s", rule_id, error)
+        current_app.logger.exception("Unable to update detection rule")
         return jsonify({"error": "Unable to update detection rule"}), 500
     finally:
         if cur:

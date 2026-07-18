@@ -66,7 +66,7 @@ const buttonStyle = (disabled) => ({
 
 const secondaryButtonStyle = (disabled) => ({
   ...buttonStyle(disabled),
-  background: disabled ? "#21262d" : "#21262d",
+  background: "#21262d",
   color: disabled ? "#8b949e" : "#c9d1d9",
 });
 
@@ -78,6 +78,24 @@ const inputStyle = {
   background: "#0d1117",
   color: "#c9d1d9",
   fontSize: "13px",
+};
+
+const feedbackStyles = {
+  error: {
+    border: "#f85149",
+    color: "#ffa198",
+    background: "#3d1214",
+  },
+  info: {
+    border: "#388bfd",
+    color: "#93c5fd",
+    background: "#0d1b2a",
+  },
+  success: {
+    border: "#238636",
+    color: "#3fb950",
+    background: "#0d2818",
+  },
 };
 
 const outcomeToneStyles = {
@@ -521,6 +539,8 @@ function ResponseRegistryPanel({
     [detail, onOpenAlert, onOpenApproval, onOpenIncident, onOpenPlaybookExecution, record?.indicator_value]
   );
 
+  const feedbackStyle = feedbackStyles[feedback.type] || feedbackStyles.success;
+
   return (
     <section
       style={{ ...cardStyle, color: "#e6edf3" }}
@@ -733,29 +753,14 @@ function ResponseRegistryPanel({
             marginBottom: "12px",
             padding: "10px 12px",
             borderRadius: "6px",
-            border: `1px solid ${
-              feedback.type === "error"
-                ? "#f85149"
-                : feedback.type === "info"
-                ? "#388bfd"
-                : "#238636"
-            }`,
-            color:
-              feedback.type === "error"
-                ? "#ffa198"
-                : feedback.type === "info"
-                ? "#93c5fd"
-                : "#3fb950",
-            background:
-              feedback.type === "error"
-                ? "#3d1214"
-                : feedback.type === "info"
-                ? "#0d1b2a"
-                : "#0d2818",
+            border: `1px solid ${feedbackStyle.border}`,
+            color: feedbackStyle.color,
+            background: feedbackStyle.background,
           }}
         >
           {feedback.message}
         </div>
+      )}
       )}
 
       <div style={{ display: "grid", gridTemplateColumns: selectedId ? "1.2fr 1fr" : "1fr", gap: "16px" }}>

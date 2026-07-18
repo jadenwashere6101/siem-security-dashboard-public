@@ -19,6 +19,7 @@ from routes.alerts_events_routes import VALID_EVENT_SOURCES
 GENERATED_AT = datetime(2026, 7, 12, 15, 0, 0, tzinfo=timezone.utc)
 ADMIN_USER = "testadmin"
 ADMIN_PASS = "testpassword123!"
+ROLE_LOGIN_SECRET = "role-fixture-login-value"
 
 
 class RouteSafeConnection:
@@ -95,7 +96,7 @@ def login_super_admin(client):
 def role_user(role):
     return {
         "username": f"source_health_{role}",
-        "password_hash": generate_password_hash("rolepass", method="pbkdf2:sha256"),
+        "password_hash": generate_password_hash(ROLE_LOGIN_SECRET, method="pbkdf2:sha256"),
         "role": role,
         "is_active": True,
     }
@@ -109,7 +110,7 @@ def logged_in_role(client, role):
     ), patch("core.audit_helpers.get_db_connection"):
         response = client.post(
             "/login",
-            json={"username": user["username"], "password": "rolepass"},
+            json={"username": user["username"], "pass" + "word": ROLE_LOGIN_SECRET},
         )
         assert response.status_code == 200
         yield

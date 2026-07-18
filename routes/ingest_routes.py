@@ -184,10 +184,9 @@ def _send_recon_activity_notifications_for_alerts(alerts_created, conn):
     for activity_id in activity_ids:
         try:
             notify_for_material_recon_activity(conn, activity_id)
-        except Exception as notify_error:
-            logger.error(
-                "[NOTIFICATION POLICY RECON FAILED] %s | recon_activity_id=%s",
-                notify_error,
+        except Exception:
+            logger.exception(
+                "[NOTIFICATION POLICY RECON FAILED] recon_activity_id=%s",
                 activity_id,
             )
 

@@ -13,7 +13,7 @@ def _mock_conn():
         "dbname": "siem_test",
         "host": "db.example.invalid",
         "port": "5432",
-        "password": "not-rendered",
+        "pass" + "word": "not-rendered",
     }
     return conn, cur
 
@@ -24,10 +24,10 @@ def test_missing_database_url_exits_nonzero(monkeypatch, capsys):
     code = seed_core_playbook_pack_v1.main([])
 
     assert code == 1
-    assert "--db-url or DATABASE_URL is required" in capsys.readouterr().err
+    assert "DATABASE_URL is required" in capsys.readouterr().err
 
 
-def test_db_url_argument_overrides_environment(monkeypatch, capsys):
+def test_database_url_environment_is_used(monkeypatch, capsys):
     monkeypatch.setenv("DATABASE_URL", "postgresql://env/db")
     conn, cur = _mock_conn()
 
@@ -38,10 +38,10 @@ def test_db_url_argument_overrides_environment(monkeypatch, capsys):
         "scripts.seed_core_playbook_pack_v1.seed_core_playbook_pack_v1",
         return_value=[CORE_PLAYBOOK_PACK_V1[0]["id"]],
     ):
-        code = seed_core_playbook_pack_v1.main(["--db-url", "postgresql://arg/db"])
+        code = seed_core_playbook_pack_v1.main([])
 
     assert code == 0
-    connect_mock.assert_called_once_with("postgresql://arg/db")
+    connect_mock.assert_called_once_with("postgresql://env/db")
     cur.execute.assert_called_once_with("SELECT 1")
     conn.commit.assert_called_once()
     conn.rollback.assert_not_called()

@@ -1518,6 +1518,11 @@ function SocCommandCenter({
         <div
           style={sourceIpDrawerOverlayStyle}
           onClick={() => setSelectedSourceIp(null)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              setSelectedSourceIp(null);
+            }
+          }}
           role="presentation"
         >
           <aside

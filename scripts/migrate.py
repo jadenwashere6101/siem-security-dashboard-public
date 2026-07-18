@@ -46,11 +46,6 @@ class MigrationError(Exception):
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Apply numbered SQL schema migrations.")
     parser.add_argument(
-        "--db-url",
-        default=None,
-        help="PostgreSQL DSN. Defaults to DATABASE_URL.",
-    )
-    parser.add_argument(
         "--dry-run",
         action="store_true",
         default=False,
@@ -237,9 +232,9 @@ def run(conn, migrations_dir=DEFAULT_MIGRATIONS_DIR, dry_run=False, target=None)
 
 def main(argv=None):
     args = parse_args(argv)
-    db_url = args.db_url or os.getenv("DATABASE_URL", "").strip()
+    db_url = os.getenv("DATABASE_URL", "").strip()
     if not db_url:
-        print("ERROR: --db-url or DATABASE_URL is required.", file=sys.stderr)
+        print("ERROR: DATABASE_URL is required.", file=sys.stderr)
         return 1
 
     conn = None

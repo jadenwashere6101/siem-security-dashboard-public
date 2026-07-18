@@ -1,5 +1,7 @@
 from unittest.mock import patch
 
+import pytest
+
 import siem_backend
 import engines.correlation_engine as backend_correlation_engine
 from core.core_playbook_pack_v1 import seed_core_playbook_pack_v1
@@ -191,8 +193,8 @@ def test_targeted_correlation_web_to_app_attack_pattern(postgres_db):
     assert alert[9] == "pending"
     assert alert[10] == "United States"
     assert alert[11] == "New York"
-    assert float(alert[12]) == 40.7128
-    assert float(alert[13]) == -74.0060
+    assert float(alert[12]) == pytest.approx(40.7128)
+    assert float(alert[13]) == pytest.approx(-74.0060)
     assert alert[14] == 65
     assert alert[15] == "medium-risk"
     assert alert[16] == "test-reputation"

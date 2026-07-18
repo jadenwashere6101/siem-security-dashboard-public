@@ -35,13 +35,14 @@ function AlertsToolbar({
   filterLabelStyle,
   selectStyle,
 }) {
-  const activeContextLabel = exactTargetIp
-    ? `Showing alerts targeting ${exactTargetIp}`
-    : exactSourceIp
-    ? `Showing alerts from source ${exactSourceIp}`
-    : exactAlertId
-    ? `Showing linked alert #${exactAlertId}`
-    : "";
+  let activeContextLabel = "";
+  if (exactTargetIp) {
+    activeContextLabel = `Showing alerts targeting ${exactTargetIp}`;
+  } else if (exactSourceIp) {
+    activeContextLabel = `Showing alerts from source ${exactSourceIp}`;
+  } else if (exactAlertId) {
+    activeContextLabel = `Showing linked alert #${exactAlertId}`;
+  }
   return (
     <div style={cardHeaderStyle}>
       <div>
@@ -200,7 +201,7 @@ function AlertsToolbar({
         </select>
       </div>
       <div style={filterWrapperStyle}>
-        <label style={filterLabelStyle}>Filters</label>
+        <span style={filterLabelStyle}>Filters</span>
         <button
           type="button"
           onClick={onResetFilters}

@@ -22,10 +22,6 @@ def _parse_args(argv=None):
         description="Backfill missing honeypot geolocation on events and alerts."
     )
     parser.add_argument(
-        "--db-url",
-        help="PostgreSQL DSN. Defaults to DATABASE_URL.",
-    )
-    parser.add_argument(
         "--apply",
         action="store_true",
         help="Write updates. Without this flag, only prints a dry-run plan.",
@@ -208,9 +204,9 @@ def _format_summary(summary, *, apply):
 
 def main(argv=None):
     args = _parse_args(argv)
-    db_url = args.db_url or os.getenv("DATABASE_URL")
+    db_url = os.getenv("DATABASE_URL")
     if not db_url:
-        print("ERROR: DATABASE_URL or --db-url is required.", file=sys.stderr)
+        print("ERROR: DATABASE_URL is required.", file=sys.stderr)
         return 1
 
     conn = None

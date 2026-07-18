@@ -32,7 +32,9 @@ class FakeCursor:
         return list(self._rows)
 
     def fetchone(self):
-        return self._rows[0] if self._rows else None
+        for row in self._rows:
+            return row
+        return None
 
 
 class FakeConnection:

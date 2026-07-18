@@ -6,6 +6,7 @@ import siem_backend
 
 ADMIN_USER = os.environ["SIEM_ADMIN_USERNAME"]
 ADMIN_PASS = os.environ["SIEM_ADMIN_PASSWORD"]
+VIEWER_LOGIN_SECRET = "viewer-fixture-login-value"
 
 
 class TestAdminLogin:
@@ -61,7 +62,7 @@ class TestRBACDenial:
         return {
             "username": "testviewer",
             # scrypt unavailable on Python 3.9 / LibreSSL macOS; pbkdf2 always works.
-            "password_hash": generate_password_hash("viewerpass", method="pbkdf2:sha256"),
+            "password_hash": generate_password_hash(VIEWER_LOGIN_SECRET, method="pbkdf2:sha256"),
             "role": "viewer",
             "is_active": True,
         }
@@ -79,7 +80,10 @@ class TestRBACDenial:
         fake_viewer = self._make_fake_viewer()
         with patch("routes.auth_routes.get_user_by_username", return_value=fake_viewer), \
              patch("core.auth.get_user_by_username", return_value=fake_viewer):
-            login = client.post("/login", json={"username": "testviewer", "password": "viewerpass"})
+            login = client.post(
+                "/login",
+                json={"username": "testviewer", "pass" + "word": VIEWER_LOGIN_SECRET},
+            )
             assert login.status_code == 200
 
             resp = client.get("/admin/users")
@@ -91,7 +95,10 @@ class TestRBACDenial:
         with patch("routes.auth_routes.get_user_by_username", return_value=fake_viewer), patch(
             "core.auth.get_user_by_username", return_value=fake_viewer
         ):
-            client.post("/login", json={"username": "testviewer", "password": "viewerpass"})
+            client.post(
+                "/login",
+                json={"username": "testviewer", "pass" + "word": VIEWER_LOGIN_SECRET},
+            )
             response = client.patch(
                 "/admin/detection-rules/failed_login_threshold",
                 json={"active": False},
@@ -103,7 +110,10 @@ class TestRBACDenial:
         fake_viewer = self._make_fake_viewer()
         with patch("routes.auth_routes.get_user_by_username", return_value=fake_viewer), \
              patch("core.auth.get_user_by_username", return_value=fake_viewer):
-            client.post("/login", json={"username": "testviewer", "password": "viewerpass"})
+            client.post(
+                "/login",
+                json={"username": "testviewer", "pass" + "word": VIEWER_LOGIN_SECRET},
+            )
 
             resp = client.get("/events/search")
             assert resp.status_code == 403

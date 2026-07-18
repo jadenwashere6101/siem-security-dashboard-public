@@ -152,11 +152,13 @@ def test_runner_aggregate_counts():
 
 
 def test_runner_aggregate_invalid_shape_raises():
+    failed_as_expected = False
     try:
         soar_worker_run._aggregate_results([{"no_outcome": "x"}])
-        assert False, "Expected aggregate shape validation failure"
     except Exception as error:
+        failed_as_expected = True
         assert "outcome" in str(error)
+    assert failed_as_expected, "Expected aggregate shape validation failure"
 
 
 def test_runner_process_batch_uncaught_exception_exits_2(monkeypatch):

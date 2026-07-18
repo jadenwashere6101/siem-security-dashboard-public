@@ -1288,8 +1288,8 @@ def get_alert_related_events(alert_id):
         related_filter = context.get("related_event_filter") if isinstance(context.get("related_event_filter"), dict) else {}
         events = _query_related_pfsense_events(cur, related_filter, limit=request.args.get("limit", 25))
         return jsonify({"alert_id": alert_id, "events": events, "count": len(events)}), 200
-    except Exception as error:
-        current_app.logger.error("Error in get_alert_related_events: %s", error)
+    except Exception:
+        current_app.logger.exception("Error in get_alert_related_events")
         return jsonify({"error": "Internal server error"}), 500
     finally:
         if cur:
@@ -1310,8 +1310,8 @@ def get_recon_activities():
             return jsonify({"error": limit_error}), 400
         items = list_recon_activities(conn, status=status, limit=limit or 20)
         return jsonify({"items": items, "count": len(items)}), 200
-    except Exception as error:
-        current_app.logger.error("Error in get_recon_activities: %s", error)
+    except Exception:
+        current_app.logger.exception("Error in get_recon_activities")
         return jsonify({"error": "Internal server error"}), 500
     finally:
         if conn:
@@ -1328,8 +1328,8 @@ def get_recon_activity(activity_id):
         if payload is None:
             return jsonify({"error": "Recon activity not found"}), 404
         return jsonify(payload), 200
-    except Exception as error:
-        current_app.logger.error("Error in get_recon_activity: %s", error)
+    except Exception:
+        current_app.logger.exception("Error in get_recon_activity")
         return jsonify({"error": "Internal server error"}), 500
     finally:
         if conn:
@@ -1362,8 +1362,8 @@ def get_recon_activity_related_events(activity_id):
         }
         events = _query_related_pfsense_events(cur, related_filter, limit=request.args.get("limit", 25))
         return jsonify({"activity_id": activity_id, "events": events, "count": len(events)}), 200
-    except Exception as error:
-        current_app.logger.error("Error in get_recon_activity_related_events: %s", error)
+    except Exception:
+        current_app.logger.exception("Error in get_recon_activity_related_events")
         return jsonify({"error": "Internal server error"}), 500
     finally:
         if cur:

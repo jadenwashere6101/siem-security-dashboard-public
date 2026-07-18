@@ -258,7 +258,7 @@ def test_worker_run_once_admin_batch_summary_is_mode_aware_for_mixed_batch(clien
         VALUES (%s, 'mixed_batch_approver', %s, 'super_admin', TRUE)
         ON CONFLICT (id) DO NOTHING
         """,
-        (approver_id, generate_password_hash("approverpass", method="pbkdf2:sha256")),
+        (approver_id, generate_password_hash("approver-fixture-login-value", method="pbkdf2:sha256")),
     )
     approval = create_approval_request(conn, queue_id=block_ip_queue_id, action="block_ip")
     approve_request(conn, approval["id"], actor_user_id=approver_id)

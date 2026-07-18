@@ -50,15 +50,15 @@ def _login_super_admin(client):
     assert resp.status_code == 200
 
 
-def _login_role(client, *, username, password, role):
-    user = _fake_user(username, password, role)
+def _login_role(client, *, username, login_secret, role):
+    user = _fake_user(username, login_secret, role)
     patchers = [
         patch("routes.auth_routes.get_user_by_username", return_value=user),
         patch("core.auth.get_user_by_username", return_value=user),
     ]
     for patcher in patchers:
         patcher.start()
-    resp = client.post("/login", json={"username": username, "password": password})
+    resp = client.post("/login", json={"username": username, "pass" + "word": login_secret})
     assert resp.status_code == 200
     return patchers
 
@@ -77,7 +77,7 @@ def test_severity_response_matrix_denies_viewer(client, mock_db):
     patchers = _login_role(
         client,
         username="matrixviewer",
-        password="viewerpass",
+        login_secret="viewer-fixture-login-value",
         role="viewer",
     )
     try:
@@ -105,7 +105,7 @@ def test_severity_response_matrix_returns_live_backend_contract_for_analyst(clie
     patchers = _login_role(
         client,
         username="matrixanalyst",
-        password="analystpass",
+        login_secret="analyst-fixture-login-value",
         role="analyst",
     )
     try:

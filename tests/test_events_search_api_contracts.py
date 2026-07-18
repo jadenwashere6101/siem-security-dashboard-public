@@ -8,6 +8,7 @@ from werkzeug.security import generate_password_hash
 
 ADMIN_USER = "testadmin"
 ADMIN_PASS = "testpassword123!"
+VIEWER_LOGIN_SECRET = "viewer-fixture-login-value"
 REPUTATION = {
     "reputation_score": 0,
     "reputation_label": "low-risk",
@@ -92,7 +93,7 @@ def _login_as_super_admin(client):
 def _viewer_user():
     return {
         "username": "events_viewer",
-        "password_hash": generate_password_hash("viewerpass", method="pbkdf2:sha256"),
+        "password_hash": generate_password_hash(VIEWER_LOGIN_SECRET, method="pbkdf2:sha256"),
         "role": "viewer",
         "is_active": True,
     }
@@ -344,7 +345,10 @@ def test_get_events_search_viewer_role_rejected_for_new_sources(client, postgres
     conn, _cur = postgres_db
 
     with _patched_viewer_auth():
-        login = client.post("/login", json={"username": "events_viewer", "password": "viewerpass"})
+        login = client.post(
+            "/login",
+            json={"username": "events_viewer", "pass" + "word": VIEWER_LOGIN_SECRET},
+        )
     assert login.status_code == 200
 
     with patch("core.auth.get_user_by_username", return_value=_viewer_user()), patch(

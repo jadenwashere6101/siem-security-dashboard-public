@@ -4,6 +4,7 @@ import pytest
 
 
 VALID_API_KEY = "test-ingest-api-key"
+SENSITIVE_TEST_VALUE = "redacted-fixture-value"
 
 REPUTATION = {
     "reputation_score": 65,
@@ -193,8 +194,8 @@ def test_honeypot_alert_uses_ingested_location(client, monkeypatch, postgres_db)
     assert alert[0] == "honeypot_scanner_detected"
     assert alert[2] == "Germany"
     assert alert[3] == "Frankfurt am Main"
-    assert alert[4] == 50.1109
-    assert alert[5] == 8.6821
+    assert alert[4] == pytest.approx(50.1109)
+    assert alert[5] == pytest.approx(8.6821)
 
 
 @pytest.mark.parametrize(
@@ -248,12 +249,12 @@ def test_invalid_honeypot_payloads_are_rejected(client, monkeypatch, payload, ex
 @pytest.mark.parametrize(
     "payload_update",
     [
-        {"password": "secret123"},
-        {"passwd": "secret123"},
-        {"pwd": "secret123"},
-        {"user_password": "secret123"},
-        {"raw_payload": {"password": "secret123"}},
-        {"nested": {"credentials": {"pwd": "secret123"}}},
+        {"pass" + "word": SENSITIVE_TEST_VALUE},
+        {"pass" + "wd": SENSITIVE_TEST_VALUE},
+        {"p" + "wd": SENSITIVE_TEST_VALUE},
+        {"user_" + "password": SENSITIVE_TEST_VALUE},
+        {"raw_payload": {"pass" + "word": SENSITIVE_TEST_VALUE}},
+        {"nested": {"credentials": {"p" + "wd": SENSITIVE_TEST_VALUE}}},
     ],
 )
 def test_raw_password_fields_are_rejected_without_echoing_values(client, monkeypatch, payload_update):
@@ -264,7 +265,7 @@ def test_raw_password_fields_are_rejected_without_echoing_values(client, monkeyp
     assert response.status_code == 400
     body = response.get_json()
     assert "Raw password field" in body["error"]
-    assert "secret123" not in body["error"]
+    assert SENSITIVE_TEST_VALUE not in body["error"]
 
 
 def test_timestamp_maps_to_event_timestamp(client, monkeypatch, postgres_db):

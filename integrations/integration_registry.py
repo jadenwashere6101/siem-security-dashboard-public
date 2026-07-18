@@ -88,7 +88,7 @@ def _log_adapter_registry_startup(adapter_name: str, configured_mode: str, mode_
     _LOGGER.info(
         "integration_adapter_startup adapter=%s mode_decision=%s missing_guards=%s "
         "credential_envs=%s circuit_breaker_reset_to=%s",
-        adapter_name,
+        adapter_name if adapter_name in _ADAPTERS else "unknown",
         mode_decision,
         ",".join(readiness["missing_guards"]) or "none",
         ",".join(readiness["credential_envs"]) or "none",

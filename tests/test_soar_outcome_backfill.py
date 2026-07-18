@@ -19,12 +19,13 @@ class _ConnWrapper:
         return None
 
 
-def _run_backfill_cli(conn, args):
+def _run_backfill_cli(conn, args, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://example/db")
     with patch(
         "scripts.soar_outcome_backfill.psycopg2.connect",
         return_value=_ConnWrapper(conn),
     ):
-        return soar_outcome_backfill.main([*args, "--db-url", "postgresql://example/db"])
+        return soar_outcome_backfill.main(args)
 
 
 def _insert_alert(cur, source_ip="198.51.100.20", response_action=None):
@@ -118,7 +119,7 @@ def test_plan_backfill_dry_run_produces_summary(postgres_db):
 
 
 @pytest.mark.usefixtures("postgres_db")
-def test_script_defaults_to_dry_run_without_writes(postgres_db, capsys):
+def test_script_defaults_to_dry_run_without_writes(postgres_db, capsys, monkeypatch):
     conn, cur = postgres_db
     _insert_alert(cur, response_action="monitor")
     conn.commit()
@@ -126,7 +127,7 @@ def test_script_defaults_to_dry_run_without_writes(postgres_db, capsys):
     before_decisions = _count_table(cur, "soar_response_decisions")
     before_events = _count_table(cur, "soar_response_outcome_events")
 
-    code = _run_backfill_cli(conn, [])
+    code = _run_backfill_cli(conn, [], monkeypatch)
     output = capsys.readouterr().out
 
     after_decisions = _count_table(cur, "soar_response_decisions")
@@ -140,7 +141,7 @@ def test_script_defaults_to_dry_run_without_writes(postgres_db, capsys):
 
 
 @pytest.mark.usefixtures("postgres_db")
-def test_dry_run_script_prints_summary_without_writes(postgres_db, capsys):
+def test_dry_run_script_prints_summary_without_writes(postgres_db, capsys, monkeypatch):
     conn, cur = postgres_db
     _insert_alert(cur)
     conn.commit()
@@ -148,7 +149,7 @@ def test_dry_run_script_prints_summary_without_writes(postgres_db, capsys):
     before_decisions = _count_table(cur, "soar_response_decisions")
     before_events = _count_table(cur, "soar_response_outcome_events")
 
-    code = _run_backfill_cli(conn, ["--dry-run"])
+    code = _run_backfill_cli(conn, ["--dry-run"], monkeypatch)
 
     output = capsys.readouterr().out
 
@@ -225,13 +226,13 @@ def test_dry_run_does_not_double_count_playbook_real_notification(postgres_db):
 
 
 @pytest.mark.usefixtures("postgres_db")
-def test_apply_writes_expected_decision_event_and_links_legacy_row(postgres_db, capsys):
+def test_apply_writes_expected_decision_event_and_links_legacy_row(postgres_db, capsys, monkeypatch):
     conn, cur = postgres_db
     alert_id = _insert_alert(cur, response_action="block_ip")
     queue_id = _insert_queue_action(cur, alert_id, action="block_ip", status="pending")
     conn.commit()
 
-    code = _run_backfill_cli(conn, ["--apply"])
+    code = _run_backfill_cli(conn, ["--apply"], monkeypatch)
     output = capsys.readouterr().out
 
     cur.execute(
@@ -266,17 +267,17 @@ def test_apply_writes_expected_decision_event_and_links_legacy_row(postgres_db, 
 
 
 @pytest.mark.usefixtures("postgres_db")
-def test_repeated_apply_is_idempotent(postgres_db):
+def test_repeated_apply_is_idempotent(postgres_db, monkeypatch):
     conn, cur = postgres_db
     alert_id = _insert_alert(cur, response_action="block_ip")
     _insert_queue_action(cur, alert_id, action="block_ip", status="pending")
     conn.commit()
 
-    assert _run_backfill_cli(conn, ["--apply"]) == 0
+    assert _run_backfill_cli(conn, ["--apply"], monkeypatch) == 0
     first_decisions = _count_table(cur, "soar_response_decisions")
     first_events = _count_table(cur, "soar_response_outcome_events")
 
-    assert _run_backfill_cli(conn, ["--apply"]) == 0
+    assert _run_backfill_cli(conn, ["--apply"], monkeypatch) == 0
     second_decisions = _count_table(cur, "soar_response_decisions")
     second_events = _count_table(cur, "soar_response_outcome_events")
 
@@ -285,7 +286,7 @@ def test_repeated_apply_is_idempotent(postgres_db):
 
 
 @pytest.mark.usefixtures("postgres_db")
-def test_apply_keeps_ambiguous_legacy_records_conservative(postgres_db):
+def test_apply_keeps_ambiguous_legacy_records_conservative(postgres_db, monkeypatch):
     conn, cur = postgres_db
     alert_id = _insert_alert(cur, response_action="notify_slack")
     cur.execute(
@@ -308,7 +309,7 @@ def test_apply_keeps_ambiguous_legacy_records_conservative(postgres_db):
     )
     conn.commit()
 
-    assert _run_backfill_cli(conn, ["--apply"]) == 0
+    assert _run_backfill_cli(conn, ["--apply"], monkeypatch) == 0
 
     cur.execute(
         """
@@ -329,7 +330,7 @@ def test_apply_keeps_ambiguous_legacy_records_conservative(postgres_db):
 
 
 @pytest.mark.usefixtures("postgres_db")
-def test_apply_links_relevant_audit_log_rows_to_canonical_outcome(postgres_db):
+def test_apply_links_relevant_audit_log_rows_to_canonical_outcome(postgres_db, monkeypatch):
     conn, cur = postgres_db
     alert_id = _insert_alert(cur)
     execution_id = _insert_playbook_execution(
@@ -351,7 +352,7 @@ def test_apply_links_relevant_audit_log_rows_to_canonical_outcome(postgres_db):
     audit_id = cur.fetchone()[0]
     conn.commit()
 
-    assert _run_backfill_cli(conn, ["--apply"]) == 0
+    assert _run_backfill_cli(conn, ["--apply"], monkeypatch) == 0
 
     cur.execute("SELECT details FROM audit_log WHERE id = %s", (audit_id,))
     details = cur.fetchone()[0]

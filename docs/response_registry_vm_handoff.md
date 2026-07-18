@@ -25,11 +25,11 @@ Do **not** edit feature source on the VM. Do **not** merge on a dirty VM.
    - Never force-push; never rewrite applied migration files.
 
 3. **Migration dry-run**
-   - `python3 scripts/migrate.py --db-url "$DATABASE_URL" --dry-run`
+   - `python3 scripts/migrate.py --dry-run`
    - Confirm `0015_indicator_response_registry` is pending (or already applied).
 
 4. **Apply migration 0015**
-   - `python3 scripts/migrate.py --db-url "$DATABASE_URL"`
+   - `python3 scripts/migrate.py`
    - Re-run dry-run; expect `Nothing to apply`.
 
 5. **Registry backfill (safe, evidence-only)**
@@ -68,7 +68,7 @@ Do **not** edit feature source on the VM. Do **not** merge on a dirty VM.
 ## Classifier / report helper
 
 ```bash
-python3 scripts/classify_unsupported_action_dead_letters.py --db-url "$DATABASE_URL" --report
+python3 scripts/classify_unsupported_action_dead_letters.py --report
 ```
 
 Produces a sanitized classification report only. It does **not** retry or dismiss records.

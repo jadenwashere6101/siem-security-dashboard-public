@@ -126,8 +126,9 @@ def test_failed_migration_rolls_back_and_exits_nonzero(tmp_path, capsys):
     conn.rollback.assert_called_once()
 
 
-def test_main_uses_db_url_argument_and_closes_connection(tmp_path):
+def test_main_uses_database_url_environment_and_closes_connection(tmp_path, monkeypatch):
     _write_migration(tmp_path, "0001_first.sql")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://example/db")
     conn = MagicMock()
     cur = MagicMock()
     conn.cursor.return_value.__enter__.return_value = cur
@@ -136,8 +137,6 @@ def test_main_uses_db_url_argument_and_closes_connection(tmp_path):
     with patch("scripts.migrate.psycopg2.connect", return_value=conn) as connect_mock:
         code = migrate.main(
             [
-                "--db-url",
-                "postgresql://example/db",
                 "--migrations-dir",
                 str(tmp_path),
             ]

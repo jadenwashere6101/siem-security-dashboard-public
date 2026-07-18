@@ -26,15 +26,14 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="Reconcile seeded Core Playbook Pack v1 definitions in a PostgreSQL database."
     )
-    parser.add_argument("--db-url", default=None, help="PostgreSQL DSN. Defaults to DATABASE_URL.")
     return parser.parse_args(argv)
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
-    db_url = args.db_url or os.getenv("DATABASE_URL", "").strip()
+    db_url = os.getenv("DATABASE_URL", "").strip()
     if not db_url:
-        print("ERROR: --db-url or DATABASE_URL is required.", file=sys.stderr)
+        print("ERROR: DATABASE_URL is required.", file=sys.stderr)
         return 1
 
     errors = validate_core_playbook_pack_v1()
