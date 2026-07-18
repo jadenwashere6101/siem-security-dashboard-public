@@ -223,6 +223,7 @@ def parse_filterlog_fields(fields, *, byte_length=None, summary=None):
 
     source_port = None
     destination_port = None
+    tcp_flags = None
     icmp_type = None
     icmp_code = None
     if protocol in {"tcp", "udp"}:
@@ -230,6 +231,8 @@ def parse_filterlog_fields(fields, *, byte_length=None, summary=None):
         destination_port = _optional_port(_field(fields, 21))
         if source_port is None or destination_port is None:
             return _parse_failure("filterlog", "invalid_port", byte_length=byte_length, summary=summary)
+        if protocol == "tcp":
+            tcp_flags = _clean(_field(fields, 23)).upper() or None
     elif protocol == "icmp":
         icmp_result = _parse_icmp_fields(fields)
         if not icmp_result["ok"]:
@@ -256,6 +259,7 @@ def parse_filterlog_fields(fields, *, byte_length=None, summary=None):
             "destination_ip": destination_ip,
             "source_port": source_port,
             "destination_port": destination_port,
+            "tcp_flags": tcp_flags,
             "icmp_type": icmp_type,
             "icmp_code": icmp_code,
         },
@@ -293,7 +297,7 @@ def normalize_pfsense_filterlog_event(
     if timestamp_reason:
         raw_payload["timestamp_parse_reason"] = timestamp_reason
 
-    for key in ("source_port", "destination_port", "icmp_type", "icmp_code", "rule_id", "tracker"):
+    for key in ("source_port", "destination_port", "tcp_flags", "icmp_type", "icmp_code", "rule_id", "tracker"):
         value = parsed.get(key)
         if value not in (None, ""):
             raw_payload[key] = value

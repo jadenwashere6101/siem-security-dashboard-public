@@ -59,12 +59,16 @@ PFSENSE_WHY_FIRED_LABELS = {
     "event_count": "Matching events",
     "destination_ip": "Destination IP",
     "destination_port": "Destination port",
+    "source_port": "Source port",
+    "tcp_flags": "TCP flags",
     "protocol": "Protocol",
     "interface": "Interface",
     "distinct_port_count": "Distinct destination ports",
     "distinct_destination_count": "Distinct destination hosts",
     "distinct_sensitive_port_count": "Distinct sensitive ports",
     "scan_description": "Scan description",
+    "traffic_role": "Traffic role",
+    "traffic_role_reason": "Traffic role assessment",
     "first_seen": "First seen",
     "last_seen": "Last seen",
 }
@@ -621,6 +625,13 @@ def _format_pfsense_context_value(field_name, value):
         return "LAN → WAN (outbound)" if value == "out" else "WAN → LAN (inbound)" if value == "in" else value
     if field_name == "action":
         return "pass" if value == "pass" else "block" if value == "block" else value
+    if field_name == "traffic_role":
+        return {
+            "initiation_like": "Initiation-like traffic",
+            "reply_or_teardown_like": "Reply or teardown traffic",
+            "ambiguous": "Ambiguous initiator evidence",
+            "not_applicable": "Not applicable",
+        }.get(value, value)
     return value
 
 
@@ -642,8 +653,12 @@ def _build_pfsense_why_fired_payload(row, cooldown_by_alert_id: dict[int, dict])
             "event_count",
             "destination_ip",
             "destination_port",
+            "source_port",
+            "tcp_flags",
             "protocol",
             "interface",
+            "traffic_role",
+            "traffic_role_reason",
             "first_seen",
             "last_seen",
         ),
@@ -652,6 +667,8 @@ def _build_pfsense_why_fired_payload(row, cooldown_by_alert_id: dict[int, dict])
             "scan_description",
             "distinct_port_count",
             "distinct_destination_count",
+            "traffic_role",
+            "traffic_role_reason",
             "first_seen",
             "last_seen",
         ),
@@ -686,7 +703,13 @@ def _build_pfsense_why_fired_payload(row, cooldown_by_alert_id: dict[int, dict])
     }
     evidence = []
     for field_name in evidence_fields_by_type.get(alert_type, ()):
-        formatted_value = _format_pfsense_context_value(field_name, context.get(field_name))
+        if field_name == "traffic_role":
+            value = context.get("traffic_role", {}).get("classification")
+        elif field_name == "traffic_role_reason":
+            value = context.get("traffic_role", {}).get("reason")
+        else:
+            value = context.get(field_name)
+        formatted_value = _format_pfsense_context_value(field_name, value)
         if formatted_value in (None, "", []):
             continue
         evidence.append(

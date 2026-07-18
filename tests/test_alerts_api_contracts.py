@@ -644,10 +644,16 @@ def test_get_alerts_pfsense_quality_metadata_and_why_fired_use_persisted_context
         "event_count": 6,
         "destination_ip": "203.0.113.10",
         "destination_port": 22,
+        "source_port": 443,
+        "tcp_flags": "RA",
         "protocol": "tcp",
         "interface": "wan",
         "first_seen": "2026-07-13T13:00:00Z",
         "last_seen": "2026-07-13T13:09:00Z",
+        "traffic_role": {
+            "classification": "reply_or_teardown_like",
+            "reason": "Protected-host service traffic replied to a remote ephemeral port without a new SYN",
+        },
         "target_context": {
             "mode": "exact_target",
             "destination_ip": "203.0.113.10",
@@ -746,6 +752,10 @@ def test_get_alerts_pfsense_quality_metadata_and_why_fired_use_persisted_context
     assert evidence["event_count"] == 6
     assert evidence["destination_ip"] == "203.0.113.10"
     assert evidence["destination_port"] == 22
+    assert evidence["source_port"] == 443
+    assert evidence["tcp_flags"] == "RA"
+    assert evidence["traffic_role"] == "Reply or teardown traffic"
+    assert "ephemeral port" in evidence["traffic_role_reason"]
 
 
 def test_get_alert_why_fired_rejects_non_pfsense_alerts(client, postgres_db):

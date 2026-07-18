@@ -21,7 +21,9 @@ from core.pfsense_recon import (
     build_related_event_filter,
     build_scan_description,
     build_service_signature,
+    classify_pfsense_tcp_traffic_role,
     classify_target_mode,
+    extract_pfsense_tcp_flags,
     is_public_ip,
     normalize_action,
     normalize_direction,
@@ -158,7 +160,24 @@ def _pfsense_port_scan_severity(
     return "medium"
 
 
-def _pfsense_repeated_deny_severity(*, count, threshold, reputation_score, direction=None):
+def _pfsense_repeated_deny_severity(
+    *,
+    count,
+    threshold,
+    reputation_score,
+    direction=None,
+    protected_source=False,
+    initiation_event_count=0,
+    reply_or_teardown_event_count=0,
+):
+    if direction == "out" and protected_source:
+        if threshold and initiation_event_count >= threshold:
+            return "high"
+        if initiation_event_count > 0:
+            return "medium"
+        if reply_or_teardown_event_count > 0:
+            return "low"
+        return "low"
     if direction == "out":
         return "high" if threshold and count >= threshold else "medium"
     if threshold and count >= threshold * PFSENSE_SEVERITY_ESCALATION_MULTIPLIER:
@@ -221,6 +240,67 @@ def _build_pfsense_operational_flags(
         "containment_eligible": containment_eligible,
         "aggregate_eligible": aggregate_eligible,
         "immediate_alert_eligible": severity == "high" and not aggregate_eligible,
+    }
+
+
+def _classify_pfsense_event_traffic_role(raw_payload):
+    raw_payload = raw_payload if isinstance(raw_payload, dict) else {}
+    return classify_pfsense_tcp_traffic_role(
+        source_ip=raw_payload.get("source_ip"),
+        destination_ip=raw_payload.get("destination_ip"),
+        protocol=raw_payload.get("protocol"),
+        direction=raw_payload.get("direction"),
+        source_port=raw_payload.get("source_port"),
+        destination_port=raw_payload.get("destination_port"),
+        tcp_flags=extract_pfsense_tcp_flags(raw_payload),
+    )
+
+
+def _summarize_pfsense_traffic_roles(classifications, *, sample_payload=None):
+    counts = {
+        "initiation_like": 0,
+        "reply_or_teardown_like": 0,
+        "ambiguous": 0,
+        "not_applicable": 0,
+    }
+    reasons = []
+    for item in classifications:
+        classification = item.get("classification") or "ambiguous"
+        counts[classification] = counts.get(classification, 0) + 1
+        reason = item.get("reason")
+        if reason and reason not in reasons:
+            reasons.append(reason)
+
+    if counts["initiation_like"] and not counts["reply_or_teardown_like"] and not counts["ambiguous"]:
+        classification = "initiation_like"
+        reason = reasons[0] if reasons else "Observed connection-initiation traffic"
+    elif counts["reply_or_teardown_like"] and not counts["initiation_like"] and not counts["ambiguous"]:
+        classification = "reply_or_teardown_like"
+        reason = reasons[0] if reasons else "Observed reply or teardown traffic"
+    else:
+        classification = "ambiguous"
+        reason = (
+            "Observed mixed or incomplete packet-role evidence"
+            if counts["initiation_like"] or counts["reply_or_teardown_like"]
+            else "Observed packet-role evidence was not sufficient to determine initiator role"
+        )
+
+    sample_payload = sample_payload if isinstance(sample_payload, dict) else {}
+    sample_source_port = parse_port(sample_payload.get("source_port"))
+    sample_destination_port = parse_port(sample_payload.get("destination_port"))
+    sample_tcp_flags = extract_pfsense_tcp_flags(sample_payload)
+    return {
+        "classification": classification,
+        "reason": reason,
+        "initiation_event_count": counts["initiation_like"],
+        "reply_or_teardown_event_count": counts["reply_or_teardown_like"],
+        "ambiguous_event_count": counts["ambiguous"],
+        "sample_source_port": sample_source_port,
+        "sample_destination_port": sample_destination_port,
+        "sample_tcp_flags": sample_tcp_flags,
+        "source_is_protected": bool(
+            sample_payload and _classify_pfsense_event_traffic_role(sample_payload)["evidence"].get("source_is_protected")
+        ),
     }
 
 
@@ -1989,25 +2069,41 @@ def _generate_pfsense_repeated_deny_alerts_core(cur, conn, source=None, source_t
             raw_payload->>'protocol' AS protocol,
             raw_payload->>'interface' AS interface,
             raw_payload->>'direction' AS direction,
-            COUNT(*) AS event_count,
-            MIN(created_at) AS first_seen,
-            MAX(created_at) AS last_seen
+            raw_payload,
+            created_at
         FROM events
         WHERE event_type = 'firewall_block'
           AND (%s::inet IS NULL OR source_ip = %s)
           AND source = %s
           AND source_type = %s
           AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
-        GROUP BY source_ip, destination_ip, destination_port, protocol, interface, direction
-        HAVING COUNT(*) >= %s
+        ORDER BY created_at ASC
         """,
-        (source_ip, source_ip, source, source_type, threshold,),
+        (source_ip, source_ip, source, source_type),
     )
 
-    rows = cur.fetchall()
+    grouped_events = {}
+    for row in cur.fetchall():
+        key = row[:6]
+        payload = row[6] if isinstance(row[6], dict) else {}
+        created_at = row[7]
+        bucket = grouped_events.setdefault(
+            key,
+            {
+                "event_count": 0,
+                "first_seen": created_at,
+                "last_seen": created_at,
+                "classifications": [],
+                "sample_payload": payload,
+            },
+        )
+        bucket["event_count"] += 1
+        bucket["last_seen"] = created_at
+        bucket["classifications"].append(_classify_pfsense_event_traffic_role(payload))
+
     alerts_created = []
 
-    for row in rows:
+    for row, bucket in grouped_events.items():
         (
             source_ip,
             destination_ip,
@@ -2015,10 +2111,12 @@ def _generate_pfsense_repeated_deny_alerts_core(cur, conn, source=None, source_t
             protocol,
             interface,
             direction,
-            event_count,
-            first_seen,
-            last_seen,
         ) = row
+        event_count = bucket["event_count"]
+        first_seen = bucket["first_seen"]
+        last_seen = bucket["last_seen"]
+        if event_count < threshold:
+            continue
 
         cur.execute(
             """
@@ -2037,25 +2135,39 @@ def _generate_pfsense_repeated_deny_alerts_core(cur, conn, source=None, source_t
         reputation_label = reputation["reputation_label"]
         reputation_source = reputation["reputation_source"]
         reputation_summary = reputation["reputation_summary"]
+        traffic_role = _summarize_pfsense_traffic_roles(
+            bucket["classifications"],
+            sample_payload=bucket["sample_payload"],
+        )
+        protected_source = bool(traffic_role.get("source_is_protected"))
 
         severity = _pfsense_repeated_deny_severity(
             count=event_count,
             threshold=threshold,
             reputation_score=reputation_score,
             direction=direction,
+            protected_source=protected_source,
+            initiation_event_count=int(traffic_role.get("initiation_event_count") or 0),
+            reply_or_teardown_event_count=int(traffic_role.get("reply_or_teardown_event_count") or 0),
         )
 
         if _pfsense_cooldown_suppresses(cur, source_ip, "pfsense_firewall_repeated_deny", severity):
             continue
 
+        reply_only_outbound_protected = (
+            direction == "out"
+            and protected_source
+            and traffic_role["classification"] == "reply_or_teardown_like"
+        )
         operational_flags = _build_pfsense_operational_flags(
             alert_type="pfsense_firewall_repeated_deny",
             severity=severity,
             direction=direction,
-            containment_eligible=severity == "high" and direction == "out",
+            containment_eligible=severity == "high" and direction == "out" and not reply_only_outbound_protected,
             aggregate_eligible=direction != "out",
         )
         destination_port_int = parse_port(destination_port)
+        source_port_int = traffic_role.get("sample_source_port")
         sample_destination_ips = [destination_ip] if destination_ip else []
         sample_destination_ports = [destination_port_int] if destination_port_int is not None else []
         protected_range = protected_range_key(sample_destination_ips)
@@ -2073,7 +2185,13 @@ def _generate_pfsense_repeated_deny_alerts_core(cur, conn, source=None, source_t
         destination_text = destination_ip or "unknown destination"
         if destination_port:
             destination_text = f"{destination_text}:{destination_port}"
-        if direction == "out":
+        if reply_only_outbound_protected:
+            message = (
+                f"pfSense blocked {event_count} outbound response packets from protected host "
+                f"{source_ip} to {destination_text} ({protocol or 'unknown protocol'}) "
+                "— host compromise is not established"
+            )
+        elif direction == "out":
             message = (
                 f"pfSense blocked {event_count} outbound connections from internal host "
                 f"{source_ip} to {destination_text} ({protocol or 'unknown protocol'}) "
@@ -2093,8 +2211,11 @@ def _generate_pfsense_repeated_deny_alerts_core(cur, conn, source=None, source_t
             "interface": interface,
             "direction": direction,
             "event_count": event_count,
+            "source_port": source_port_int,
+            "tcp_flags": traffic_role.get("sample_tcp_flags"),
             "first_seen": to_iso(first_seen),
             "last_seen": to_iso(last_seen),
+            "traffic_role": traffic_role,
             "protected_range_key": protected_range,
             "service_signature_ports": service_signature_ports,
             "notification_policy": {
@@ -2210,83 +2331,79 @@ def _generate_pfsense_port_scan_alerts_core(cur, conn, source=None, source_type=
 
     cur.execute(
         f"""
-        WITH scan_events AS (
-            SELECT
-                source_ip,
-                raw_payload->>'destination_ip' AS destination_ip,
-                raw_payload->>'destination_port' AS destination_port_text,
-                created_at
-            FROM events
-            WHERE event_type = 'firewall_block'
-              AND (%s::inet IS NULL OR source_ip = %s)
-              AND source = %s
-              AND source_type = %s
-              AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
-        ),
-        normalized_ports AS (
-            SELECT
-                source_ip,
-                destination_ip,
-                created_at,
-                CASE
-                    WHEN destination_port_text ~ '^\\d{{1,5}}$'
-                    THEN destination_port_text::integer
-                    ELSE NULL
-                END AS destination_port
-            FROM scan_events
-        ),
-        filtered_ports AS (
-            SELECT
-                source_ip,
-                destination_ip,
-                destination_port,
-                created_at,
-                COUNT(*) OVER (PARTITION BY source_ip, destination_ip) AS destination_event_count,
-                COUNT(*) OVER (PARTITION BY source_ip, destination_port) AS port_event_count
-            FROM normalized_ports
-            WHERE destination_port BETWEEN 1 AND 65535
-        )
         SELECT
             source_ip,
-            COUNT(DISTINCT destination_port) AS distinct_port_count,
-            COUNT(DISTINCT destination_ip) AS distinct_destination_count,
-            COUNT(*) AS event_count,
-            MIN(created_at) AS first_seen,
-            MAX(created_at) AS last_seen,
-            CASE
-                WHEN COUNT(DISTINCT destination_ip) = 1 THEN MIN(destination_ip)
-                ELSE (
-                    ARRAY_AGG(destination_ip ORDER BY destination_event_count DESC, destination_ip ASC)
-                )[1]
-            END AS top_destination_ip,
-            (
-                ARRAY_AGG(destination_port ORDER BY port_event_count DESC, destination_port ASC)
-            )[1] AS top_destination_port,
-            ARRAY_AGG(DISTINCT destination_ip ORDER BY destination_ip ASC) AS destination_ips,
-            ARRAY_AGG(DISTINCT destination_port ORDER BY destination_port ASC) AS destination_ports
-        FROM filtered_ports
-        GROUP BY source_ip
-        HAVING COUNT(DISTINCT destination_port) >= %s OR COUNT(DISTINCT destination_ip) >= %s
+            raw_payload->>'destination_ip' AS destination_ip,
+            raw_payload->>'destination_port' AS destination_port_text,
+            raw_payload->>'direction' AS direction,
+            raw_payload,
+            created_at
+        FROM events
+        WHERE event_type = 'firewall_block'
+          AND (%s::inet IS NULL OR source_ip = %s)
+          AND source = %s
+          AND source_type = %s
+          AND created_at >= NOW() - INTERVAL '{window_minutes} minutes'
+        ORDER BY created_at ASC
         """,
-        (source_ip, source_ip, source, source_type, threshold, host_threshold),
+        (source_ip, source_ip, source, source_type),
     )
 
-    rows = cur.fetchall()
+    grouped_events = {}
+    for row in cur.fetchall():
+        row_source_ip, destination_ip, destination_port_text, direction, raw_payload, created_at = row
+        destination_port = parse_port(destination_port_text)
+        if destination_port is None:
+            continue
+        raw_payload = raw_payload if isinstance(raw_payload, dict) else {}
+        traffic_role = _classify_pfsense_event_traffic_role(raw_payload)
+        source_is_protected = bool(traffic_role["evidence"].get("source_is_protected"))
+        if (
+            direction == "out"
+            and source_is_protected
+            and traffic_role["classification"] in {"reply_or_teardown_like", "ambiguous"}
+        ):
+            continue
+        bucket = grouped_events.setdefault(
+            row_source_ip,
+            {
+                "events": [],
+                "destination_counts": {},
+                "port_counts": {},
+                "classifications": [],
+                "first_seen": created_at,
+                "last_seen": created_at,
+                "sample_payload": raw_payload,
+            },
+        )
+        bucket["events"].append((destination_ip, destination_port, created_at))
+        bucket["destination_counts"][destination_ip] = bucket["destination_counts"].get(destination_ip, 0) + 1
+        bucket["port_counts"][destination_port] = bucket["port_counts"].get(destination_port, 0) + 1
+        bucket["classifications"].append(traffic_role)
+        bucket["last_seen"] = created_at
+
     alerts_created = []
 
-    for row in rows:
-        (
-            source_ip,
-            distinct_port_count,
-            distinct_destination_count,
-            event_count,
-            first_seen,
-            last_seen,
-            top_destination_ip,
-            top_destination_port,
-            destination_ips,
-            destination_ports,
-        ) = row
+    for source_ip, bucket in grouped_events.items():
+        destination_counts = bucket["destination_counts"]
+        port_counts = bucket["port_counts"]
+        distinct_port_count = len(port_counts)
+        distinct_destination_count = len(destination_counts)
+        if distinct_port_count < threshold and distinct_destination_count < host_threshold:
+            continue
+        event_count = len(bucket["events"])
+        first_seen = bucket["first_seen"]
+        last_seen = bucket["last_seen"]
+        top_destination_ip = min(
+            destination_counts,
+            key=lambda value: (-destination_counts[value], str(value)),
+        )
+        top_destination_port = min(
+            port_counts,
+            key=lambda value: (-port_counts[value], int(value)),
+        )
+        destination_ips = sorted(destination_counts)
+        destination_ports = sorted(port_counts)
 
         cur.execute(
             """
@@ -2305,6 +2422,10 @@ def _generate_pfsense_port_scan_alerts_core(cur, conn, source=None, source_type=
         reputation_label = reputation["reputation_label"]
         reputation_source = reputation["reputation_source"]
         reputation_summary = reputation["reputation_summary"]
+        traffic_role = _summarize_pfsense_traffic_roles(
+            bucket["classifications"],
+            sample_payload=bucket["sample_payload"],
+        )
 
         # Breadth is measured on two independent axes: many ports on one host
         # (port breadth) and one/few ports swept across many hosts (host
@@ -2365,6 +2486,7 @@ def _generate_pfsense_port_scan_alerts_core(cur, conn, source=None, source_type=
             "scan_description": scan_description,
             "protected_range_key": protected_range,
             "service_signature_ports": build_service_signature(destination_ports or []),
+            "traffic_role": traffic_role,
             "notification_policy": {
                 "immediate_alert_eligible": operational_flags["immediate_alert_eligible"],
             },

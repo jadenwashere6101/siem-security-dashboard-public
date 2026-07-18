@@ -60,6 +60,7 @@ def test_valid_ipv4_tcp_block_line_parses_and_normalizes():
     assert parsed["destination_ip"] == "203.0.113.20"
     assert parsed["source_port"] == 54321
     assert parsed["destination_port"] == 443
+    assert parsed["tcp_flags"] == "S"
     assert parsed["rule_id"] == "1000000103"
     assert parsed["tracker"] == "1777758297"
 
@@ -74,6 +75,7 @@ def test_valid_ipv4_tcp_block_line_parses_and_normalizes():
     assert event["event_timestamp"] == "2026-07-07T12:00:01-04:00"
     assert event["raw_payload"]["event_type_candidate"] == "firewall_block"
     assert event["raw_payload"]["destination_port"] == 443
+    assert event["raw_payload"]["tcp_flags"] == "S"
     assert event["raw_payload"]["raw_syslog"] == TCP_BLOCK
 
 

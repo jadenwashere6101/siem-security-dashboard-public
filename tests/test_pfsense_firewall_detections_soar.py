@@ -48,12 +48,14 @@ def insert_pfsense_event(
     event_type,
     source_ip,
     destination_ip="203.0.113.10",
+    source_port=None,
     destination_port=443,
     protocol="tcp",
     interface="igb1",
     direction="in",
     seconds_ago=1,
     action=None,
+    tcp_flags=None,
 ):
     raw_payload = {
         "action": action or ("block" if event_type == "firewall_block" else "pass"),
@@ -65,6 +67,10 @@ def insert_pfsense_event(
         "destination_ip": destination_ip,
         "destination_port": destination_port,
     }
+    if source_port is not None:
+        raw_payload["source_port"] = source_port
+    if tcp_flags is not None:
+        raw_payload["tcp_flags"] = tcp_flags
     cur.execute(
         """
         INSERT INTO events (
@@ -93,11 +99,13 @@ def make_pfsense_event(
     event_type="firewall_block",
     source_ip="198.51.100.20",
     destination_ip="203.0.113.10",
+    source_port=None,
     destination_port=443,
     protocol="tcp",
     interface="igb1",
     direction="in",
     action=None,
+    tcp_flags=None,
 ):
     return {
         "event_type": event_type,
@@ -118,6 +126,8 @@ def make_pfsense_event(
             "source_ip": source_ip,
             "destination_ip": destination_ip,
             "destination_port": destination_port,
+            **({"source_port": source_port} if source_port is not None else {}),
+            **({"tcp_flags": tcp_flags} if tcp_flags is not None else {}),
         },
     }
 
@@ -386,6 +396,96 @@ def test_repeated_deny_inbound_direction_stays_low_at_base_threshold(postgres_db
     assert alerts_created[0]["response_action"] == "monitor_only"
 
 
+def test_repeated_deny_reply_style_outbound_protected_host_stays_low_and_non_incident_eligible(
+    postgres_db, monkeypatch
+):
+    conn, cur = postgres_db
+    source_ip = "8.14.136.151"
+    monkeypatch.setenv("SOAR_PROTECTED_IPS", "8.14.136.0/24")
+
+    for seconds_ago, tcp_flags in zip(range(5, 0, -1), ("A", "FA", "RA", "PA", "A")):
+        insert_pfsense_event(
+            cur,
+            event_type="firewall_block",
+            source_ip=source_ip,
+            destination_ip="216.226.76.10",
+            source_port=443,
+            destination_port=52420,
+            direction="out",
+            tcp_flags=tcp_flags,
+            seconds_ago=seconds_ago,
+        )
+
+    with siem_backend.app.app_context(), patch(
+        "engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION_LOW
+    ):
+        alerts_created = backend_detection_engine._generate_pfsense_repeated_deny_alerts_core(
+            cur, conn, source="pfsense", source_type="firewall"
+        )
+
+    assert len(alerts_created) == 1
+    assert alerts_created[0]["severity"] == "low"
+    assert alerts_created[0]["response_action"] == "monitor_only"
+
+    alert = fetch_alert_by_type(cur, source_ip, "pfsense_firewall_repeated_deny")
+    assert alert is not None
+    _, _, severity, response_action, _, context = alert
+    assert severity == "low"
+    assert response_action == "monitor_only"
+    assert context["traffic_role"]["classification"] == "reply_or_teardown_like"
+    assert context["traffic_role"]["reply_or_teardown_event_count"] == 5
+    assert context["operational_flags"]["incident_eligible"] is False
+    assert context["operational_flags"]["containment_eligible"] is False
+
+    from core.incident_store import maybe_create_or_link_incident
+
+    incident = maybe_create_or_link_incident(
+        conn,
+        alert[0],
+        severity.upper(),
+        source_ip,
+        alert_type="pfsense_firewall_repeated_deny",
+        context=context,
+    )
+    assert incident is None
+
+
+def test_repeated_deny_outbound_syn_like_protected_host_remains_high(postgres_db, monkeypatch):
+    conn, cur = postgres_db
+    source_ip = "8.14.136.154"
+    monkeypatch.setenv("SOAR_PROTECTED_IPS", "8.14.136.0/24")
+
+    for seconds_ago in range(5, 0, -1):
+        insert_pfsense_event(
+            cur,
+            event_type="firewall_block",
+            source_ip=source_ip,
+            destination_ip="203.0.113.60",
+            source_port=51514,
+            destination_port=22,
+            direction="out",
+            tcp_flags="S",
+            seconds_ago=seconds_ago,
+        )
+
+    with siem_backend.app.app_context(), patch(
+        "engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION_LOW
+    ):
+        alerts_created = backend_detection_engine._generate_pfsense_repeated_deny_alerts_core(
+            cur, conn, source="pfsense", source_type="firewall"
+        )
+
+    assert len(alerts_created) == 1
+    assert alerts_created[0]["severity"] == "high"
+    assert alerts_created[0]["response_action"] == "block_ip"
+
+    alert = fetch_alert_by_type(cur, source_ip, "pfsense_firewall_repeated_deny")
+    assert alert is not None
+    assert alert[5]["traffic_role"]["classification"] == "initiation_like"
+    assert alert[5]["operational_flags"]["incident_eligible"] is True
+    assert alert[5]["operational_flags"]["containment_eligible"] is True
+
+
 def test_repeated_deny_cooldown_suppresses_equal_severity_recurrence_after_close(postgres_db):
     conn, cur = postgres_db
     source_ip = "198.51.100.37"
@@ -616,6 +716,88 @@ def test_port_scan_host_breadth_sweep_triggers_alert_with_few_ports(postgres_db)
     assert_target_context_mode(context, "aggregate_sample")
     assert context["target_context"]["top_destination_port"] == 443
     assert context["target_context"]["distinct_destination_count"] == 5
+
+
+def test_port_scan_reply_style_outbound_protected_host_does_not_alert(postgres_db, monkeypatch):
+    conn, cur = postgres_db
+    source_ip = "8.14.136.158"
+    monkeypatch.setenv("SOAR_PROTECTED_IPS", "8.14.136.0/24")
+
+    for index, tcp_flags in enumerate(("RA", "FA", "A", "PA", "RA"), start=1):
+        insert_pfsense_event(
+            cur,
+            event_type="firewall_block",
+            source_ip=source_ip,
+            destination_ip=f"203.0.113.{20 + index}",
+            source_port=443,
+            destination_port=50000 + index,
+            direction="out",
+            tcp_flags=tcp_flags,
+            seconds_ago=6 - index,
+        )
+
+    with siem_backend.app.app_context(), patch(
+        "engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION_LOW
+    ):
+        result = backend_detection_engine._generate_pfsense_port_scan_alerts_core(
+            cur, conn, source="pfsense", source_type="firewall"
+        )
+
+    assert result == []
+    assert fetch_alert_by_type(cur, source_ip, "pfsense_firewall_port_scan") is None
+
+
+def test_port_scan_mixed_outbound_protected_host_counts_only_initiation_evidence(
+    postgres_db, monkeypatch
+):
+    conn, cur = postgres_db
+    source_ip = "8.14.136.232"
+    monkeypatch.setenv("SOAR_PROTECTED_IPS", "8.14.136.0/24")
+
+    for seconds_ago, destination_port in ((5, 22), (4, 3389)):
+        insert_pfsense_event(
+            cur,
+            event_type="firewall_block",
+            source_ip=source_ip,
+            destination_ip="203.0.113.90",
+            source_port=51514,
+            destination_port=destination_port,
+            direction="out",
+            tcp_flags="S",
+            seconds_ago=seconds_ago,
+        )
+    for seconds_ago, destination_port, tcp_flags in (
+        (3, 50001, "RA"),
+        (2, 50002, "FA"),
+        (1, 50003, "A"),
+    ):
+        insert_pfsense_event(
+            cur,
+            event_type="firewall_block",
+            source_ip=source_ip,
+            destination_ip="203.0.113.90",
+            source_port=443,
+            destination_port=destination_port,
+            direction="out",
+            tcp_flags=tcp_flags,
+            seconds_ago=seconds_ago,
+        )
+
+    with siem_backend.app.app_context(), patch(
+        "engines.detection_engine.lookup_ip_reputation", return_value=REPUTATION_LOW
+    ):
+        alerts_created = backend_detection_engine._generate_pfsense_port_scan_alerts_core(
+            cur, conn, source="pfsense", source_type="firewall"
+        )
+
+    assert len(alerts_created) == 1
+    alert = fetch_alert_by_type(cur, source_ip, "pfsense_firewall_port_scan")
+    assert alert is not None
+    context = alert[5]
+    assert context["distinct_port_count"] == 2
+    assert context["event_count"] == 2
+    assert context["traffic_role"]["initiation_event_count"] == 2
+    assert context["traffic_role"]["reply_or_teardown_event_count"] == 0
 
 
 # ---------------------------------------------------------------------------
