@@ -302,16 +302,8 @@ def _try_create_and_link_playbook_execution_decision(
                     cur.execute(f"ROLLBACK TO SAVEPOINT {sp_decision}")
                     cur.execute(f"RELEASE SAVEPOINT {sp_decision}")
             except Exception:
-                logger.exception(
-                    "[PLAYBOOK ORCHESTRATION] savepoint rollback failed execution_id=%s",
-                    execution_id,
-                )
-        logger.exception(
-            "[PLAYBOOK ORCHESTRATION] failed to create canonical decision "
-            "execution_id=%s playbook_id=%s",
-            execution_id,
-            playbook_id,
-        )
+                logger.exception("[PLAYBOOK ORCHESTRATION] savepoint rollback failed")
+        logger.exception("[PLAYBOOK ORCHESTRATION] failed to create canonical decision")
         return None
 
     # Phase 2: append initial lifecycle event (independent savepoint)
