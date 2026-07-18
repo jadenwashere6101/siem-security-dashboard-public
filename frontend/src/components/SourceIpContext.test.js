@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 import SourceIpContext from "./SourceIpContext";
 import { loadSourceIpContext } from "../services/sourceIpContextService";
@@ -148,6 +149,40 @@ test("SourceIpContext renders normalized response sections", async () => {
   expect(screen.getByText("Blocklist effective status")).toBeInTheDocument();
   expect(screen.getByText("Execution status: pending")).toBeInTheDocument();
   expect(loadSourceIpContext).toHaveBeenCalledWith("8.8.8.8");
+});
+
+test("SourceIpContext exposes source-IP AI entry points", async () => {
+  const onAskAi = jest.fn();
+  loadSourceIpContext.mockResolvedValue(contextResponse);
+
+  render(<SourceIpContext sourceIp="8.8.8.8" onAskAi={onAskAi} aiEnabled />);
+
+  await screen.findByText("Alerts");
+  await userEvent.click(screen.getByRole("button", { name: "Explain this IP" }));
+  await userEvent.click(screen.getByRole("button", { name: "Is this reconnaissance?" }));
+  await userEvent.click(screen.getByRole("button", { name: "Summarize activity" }));
+
+  expect(onAskAi).toHaveBeenCalledWith(
+    expect.objectContaining({
+      contextType: "source_ip",
+      action: "explain_ip",
+      context: { source_ip: "8.8.8.8" },
+    })
+  );
+  expect(onAskAi).toHaveBeenCalledWith(
+    expect.objectContaining({
+      contextType: "source_ip",
+      action: "assess_reconnaissance",
+      context: { source_ip: "8.8.8.8" },
+    })
+  );
+  expect(onAskAi).toHaveBeenCalledWith(
+    expect.objectContaining({
+      contextType: "source_ip",
+      action: "summarize_activity",
+      context: { source_ip: "8.8.8.8" },
+    })
+  );
 });
 
 test("SourceIpContext handles empty source IP", () => {

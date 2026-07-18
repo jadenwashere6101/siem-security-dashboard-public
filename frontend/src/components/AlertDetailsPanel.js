@@ -3,6 +3,7 @@ import AlertTimeline from "./AlertTimeline";
 import InternetNoiseSummary, { shouldShowInternetNoise } from "./InternetNoiseSummary";
 import { ResponseOutcomeSummary } from "./ResponseOutcome";
 import SourceIpContext from "./SourceIpContext";
+import AiAssistantButton from "./AiAssistantButton";
 import { getBehavioralReputation, getExternalReputation } from "../utils/alertDisplay";
 import { getOperationalHistoryDescription } from "../utils/operationalHistory";
 import { loadPfsenseWhyFired } from "../services/pfsenseAlertInvestigationService";
@@ -96,6 +97,8 @@ function AlertDetailsPanel({
   signalRowStyle,
   sourceTypeTextStyle,
   onOpenResponseRegistry = null,
+  onAskAi = null,
+  aiEnabled = false,
 }) {
   const externalReputation = getExternalReputation(selectedAlert);
   const behavioralReputation = getBehavioralReputation(selectedAlert);
@@ -161,6 +164,62 @@ function AlertDetailsPanel({
 
   return (
     <div style={{ fontSize: "14px", lineHeight: "1.7", color: "#e6edf3" }}>
+      {aiEnabled && typeof onAskAi === "function" ? (
+        <div style={aiButtonRowStyle}>
+          <AiAssistantButton
+            onClick={() =>
+              onAskAi({
+                contextType: "alert",
+                action: "explain_alert",
+                title: `Alert #${selectedAlert.id}`,
+                question: "Explain this alert and the strongest evidence behind it.",
+                context: { alert_id: selectedAlert.id, source_ip: selectedAlert.source_ip },
+              })
+            }
+          >
+            Explain this alert
+          </AiAssistantButton>
+          <AiAssistantButton
+            onClick={() =>
+              onAskAi({
+                contextType: "alert",
+                action: "recommend_investigation",
+                title: `Investigation for alert #${selectedAlert.id}`,
+                question: "Recommend read-only investigation next steps for this alert.",
+                context: { alert_id: selectedAlert.id, source_ip: selectedAlert.source_ip },
+              })
+            }
+          >
+            Recommend investigation
+          </AiAssistantButton>
+          <AiAssistantButton
+            onClick={() =>
+              onAskAi({
+                contextType: "alert",
+                action: "why_important",
+                title: `Importance for alert #${selectedAlert.id}`,
+                question: "Explain why this alert is important for an analyst.",
+                context: { alert_id: selectedAlert.id, source_ip: selectedAlert.source_ip },
+              })
+            }
+          >
+            Why is this important?
+          </AiAssistantButton>
+          <AiAssistantButton
+            onClick={() =>
+              onAskAi({
+                contextType: "detection",
+                action: "explain_detection",
+                title: `Detection for alert #${selectedAlert.id}`,
+                question: "Explain why this detection fired using the available detection evidence.",
+                context: { alert_id: selectedAlert.id },
+              })
+            }
+          >
+            Explain detection
+          </AiAssistantButton>
+        </div>
+      ) : null}
       {getTargetedAlertMeta(selectedAlert.alert_type) && (
         <div
           style={
@@ -452,6 +511,8 @@ function AlertDetailsPanel({
           <SourceIpContext
             sourceIp={selectedAlert.source_ip}
             onOpenResponseRegistry={onOpenResponseRegistry}
+            onAskAi={onAskAi}
+            aiEnabled={aiEnabled}
           />
         </div>
       </details>
@@ -465,6 +526,13 @@ const whyFiredPanelStyle = {
   border: "1px solid #223449",
   borderRadius: "10px",
   backgroundColor: "#0f1720",
+};
+
+const aiButtonRowStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "8px",
+  marginBottom: "14px",
 };
 
 const whyFiredMutedStyle = {

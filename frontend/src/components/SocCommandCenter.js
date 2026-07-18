@@ -34,6 +34,7 @@ import SourceIpContext from "./SourceIpContext";
 import { CanonicalOutcomeBreakdown, ResponseOutcomeSummary } from "./ResponseOutcome";
 import { mergeCanonicalOutcomeCounts } from "../utils/responseOutcomeDisplay";
 import { WorkspaceInitialState, WorkspaceRefreshState } from "./WorkspaceAsyncState";
+import AiAssistantButton from "./AiAssistantButton";
 
 // spec: SPEC-UI-004 - SOC safety model wording separates real workflows from guarded integrations.
 const SOURCE_LIMIT = 12;
@@ -649,6 +650,8 @@ function SocCommandCenter({
   onOpenResponseRegistry = null,
   onOpenIncident = null,
   onViewRelatedAlerts = null,
+  onAskAi = null,
+  aiEnabled = false,
 }) {
   const canOperate = ACTION_ROLES.has(userRole);
   const [data, setData] = useState(emptyCommandData);
@@ -1104,9 +1107,41 @@ function SocCommandCenter({
                           ])}
                         </p>
                       </div>
-                      <StatusBadge tone={String(reconContext.detail.severity || "").toLowerCase() === "high" ? "warning" : "info"}>
-                        {titleCase(reconContext.detail.severity)}
-                      </StatusBadge>
+                      <div style={reconHeroActionsStyle}>
+                        {aiEnabled && typeof onAskAi === "function" ? (
+                          <>
+                            <AiAssistantButton
+                              onClick={() =>
+                                onAskAi({
+                                  contextType: "recon_activity",
+                                  action: "explain_campaign",
+                                  title: `Recon activity #${reconContext.detail.id}`,
+                                  question: "Explain this recon campaign or cluster using SIEM evidence.",
+                                  context: { activity_id: reconContext.detail.id },
+                                })
+                              }
+                            >
+                              Explain campaign
+                            </AiAssistantButton>
+                            <AiAssistantButton
+                              onClick={() =>
+                                onAskAi({
+                                  contextType: "recon_activity",
+                                  action: "investigate_cluster",
+                                  title: `Investigate recon #${reconContext.detail.id}`,
+                                  question: "Recommend read-only investigation steps for this recon cluster.",
+                                  context: { activity_id: reconContext.detail.id },
+                                })
+                              }
+                            >
+                              Investigate cluster
+                            </AiAssistantButton>
+                          </>
+                        ) : null}
+                        <StatusBadge tone={String(reconContext.detail.severity || "").toLowerCase() === "high" ? "warning" : "info"}>
+                          {titleCase(reconContext.detail.severity)}
+                        </StatusBadge>
+                      </div>
                     </div>
                     <dl style={detailGridStyle}>
                       <div>
@@ -1549,7 +1584,11 @@ function SocCommandCenter({
               </button>
             </div>
             <div style={sourceIpDrawerBodyStyle}>
-              <SourceIpContext sourceIp={selectedSourceIp} />
+              <SourceIpContext
+                sourceIp={selectedSourceIp}
+                onAskAi={onAskAi}
+                aiEnabled={aiEnabled}
+              />
             </div>
           </aside>
         </div>
@@ -1879,6 +1918,14 @@ const incidentHeroStyle = {
   gap: "12px",
   alignItems: "flex-start",
   marginBottom: "14px",
+};
+
+const reconHeroActionsStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "flex-end",
+  gap: "8px",
+  flexWrap: "wrap",
 };
 
 const incidentHeroTitleStyle = {

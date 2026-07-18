@@ -100,6 +100,8 @@ function AlertsTable({
   onPreviousPage = null,
   onNextPage = null,
   onRefreshAlerts = null,
+  onAskAi = null,
+  aiEnabled = false,
 }) {
   // ==========================================================================
   // Component State / Derived Values
@@ -760,6 +762,8 @@ function AlertsTable({
               signalRowStyle={signalRowStyle}
               sourceTypeTextStyle={sourceTypeTextStyle}
               onOpenResponseRegistry={onOpenResponseRegistry}
+              onAskAi={onAskAi}
+              aiEnabled={aiEnabled}
             />
             <p><strong>Response Action:</strong> {latestSelectedAlert.response_action || "N/A"}</p>
 

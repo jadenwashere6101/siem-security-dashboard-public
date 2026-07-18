@@ -204,6 +204,34 @@ describe("IncidentsPanel", () => {
     expect(screen.getAllByText("203.0.113.10").length).toBeGreaterThan(0);
   });
 
+  test("renders incident AI entry points in the selected detail pane", async () => {
+    const onAskAi = jest.fn();
+    loadIncidents.mockResolvedValue({ incidents: [incidentFixture], count: 1 });
+    loadIncidentDetail.mockResolvedValue({ incident: incidentDetailFixture });
+
+    renderPanel({ onAskAi, aiEnabled: true });
+    await screen.findByText(incidentFixture.title);
+    await userEvent.click(screen.getByText(incidentFixture.title));
+
+    await userEvent.click(await screen.findByRole("button", { name: "Summarize incident" }));
+    await userEvent.click(screen.getByRole("button", { name: "Recommend next steps" }));
+
+    expect(onAskAi).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextType: "incident",
+        action: "summarize_incident",
+        context: { incident_id: 7 },
+      })
+    );
+    expect(onAskAi).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextType: "incident",
+        action: "recommend_next_steps",
+        context: { incident_id: 7 },
+      })
+    );
+  });
+
   test("renders timeline loading state", async () => {
     const pendingTimeline = deferred();
     loadIncidents.mockResolvedValue({ incidents: [incidentFixture], count: 1 });

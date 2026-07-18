@@ -1,13 +1,20 @@
 import React, { useEffect, useMemo, useState } from "react";
 
 import InternetNoiseSummary, { shouldShowInternetNoise } from "./InternetNoiseSummary";
+import AiAssistantButton from "./AiAssistantButton";
 import { loadSourceIpContext } from "../services/sourceIpContextService";
 import { CanonicalOutcomeBreakdown, ResponseOutcomeBadge, ResponseOutcomeSummary } from "./ResponseOutcome";
 import ResponseStateSummary from "./ResponseStateSummary";
 import { outcomeLabel } from "../utils/responseOutcomeDisplay";
 import { registryNavFromSourceIp } from "../utils/responseNavigation";
 
-function SourceIpContext({ sourceIp, compact = false, onOpenResponseRegistry = null }) {
+function SourceIpContext({
+  sourceIp,
+  compact = false,
+  onOpenResponseRegistry = null,
+  onAskAi = null,
+  aiEnabled = false,
+}) {
   const [context, setContext] = useState(null);
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState(null);
@@ -110,7 +117,12 @@ function SourceIpContext({ sourceIp, compact = false, onOpenResponseRegistry = n
 
   return (
     <section style={panelStyle} data-testid="source-ip-context">
-      <PanelHeader sourceIp={context.source_ip || sourceIp} compact={compact} />
+      <PanelHeader
+        sourceIp={context.source_ip || sourceIp}
+        compact={compact}
+        onAskAi={onAskAi}
+        aiEnabled={aiEnabled}
+      />
       <ResponseStateSummary
         lastAction={latestOutcome ? outcomeLabel(latestOutcome) : null}
         compact={compact}
@@ -334,7 +346,7 @@ function SourceIpContext({ sourceIp, compact = false, onOpenResponseRegistry = n
   );
 }
 
-function PanelHeader({ sourceIp, compact }) {
+function PanelHeader({ sourceIp, compact, onAskAi = null, aiEnabled = false }) {
   return (
     <div style={headerStyle}>
       <div>
@@ -343,7 +355,52 @@ function PanelHeader({ sourceIp, compact }) {
           <p style={subtitleStyle}>Recent history, campaign context, and response activity for this source IP</p>
         )}
       </div>
-      <span style={ipPillStyle}>{sourceIp || "none"}</span>
+      <div style={headerActionsStyle}>
+        {aiEnabled && sourceIp && typeof onAskAi === "function" ? (
+          <>
+            <AiAssistantButton
+              onClick={() =>
+                onAskAi({
+                  contextType: "source_ip",
+                  action: "explain_ip",
+                  title: `Source IP ${sourceIp}`,
+                  question: "Explain this source IP using SIEM context.",
+                  context: { source_ip: sourceIp },
+                })
+              }
+            >
+              Explain this IP
+            </AiAssistantButton>
+            <AiAssistantButton
+              onClick={() =>
+                onAskAi({
+                  contextType: "source_ip",
+                  action: "assess_reconnaissance",
+                  title: `Recon assessment for ${sourceIp}`,
+                  question: "Assess whether this source IP looks like reconnaissance.",
+                  context: { source_ip: sourceIp },
+                })
+              }
+            >
+              Is this reconnaissance?
+            </AiAssistantButton>
+            <AiAssistantButton
+              onClick={() =>
+                onAskAi({
+                  contextType: "source_ip",
+                  action: "summarize_activity",
+                  title: `Activity summary for ${sourceIp}`,
+                  question: "Summarize recent SIEM activity for this source IP.",
+                  context: { source_ip: sourceIp },
+                })
+              }
+            >
+              Summarize activity
+            </AiAssistantButton>
+          </>
+        ) : null}
+        <span style={ipPillStyle}>{sourceIp || "none"}</span>
+      </div>
     </div>
   );
 }
@@ -397,6 +454,14 @@ const headerStyle = {
   justifyContent: "space-between",
   gap: "12px",
   marginBottom: "12px",
+};
+
+const headerActionsStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "flex-end",
+  gap: "8px",
+  flexWrap: "wrap",
 };
 
 const titleStyle = {

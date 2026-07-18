@@ -526,6 +526,76 @@ describe("SocCommandCenter", () => {
     });
   });
 
+  test("renders recon activity AI entry points", async () => {
+    const onAskAi = jest.fn();
+    loadReconActivities.mockResolvedValue({
+      items: [
+        {
+          id: 90,
+          label: "Distributed Internet Reconnaissance Activity",
+          severity: "medium",
+          status: "monitoring",
+          investigation_value: { level: "medium", label: "Review Soon" },
+          display: {
+            headline: "Repeated VPN recon",
+            target_summary: "203.0.113.20 (203.0.113.0/24)",
+            representative_source: "198.51.100.77",
+            primary_service: "VPN service (1194)",
+            scope_summary: "3 sources",
+            status_label: "Monitoring",
+            investigation_label: "Review Soon",
+            review_state_version: "version-a",
+          },
+        },
+      ],
+      count: 1,
+    });
+    loadReconActivity.mockResolvedValue({
+      id: 90,
+      label: "Distributed Internet Reconnaissance Activity",
+      severity: "medium",
+      related_incident_id: 7,
+      first_seen: "2026-05-18T11:40:00Z",
+      last_seen: "2026-05-18T11:58:00Z",
+      summary: {},
+      display: {
+        headline: "Repeated VPN recon",
+        action_recommendation: "Review soon",
+        target_summary: "203.0.113.20 (203.0.113.0/24)",
+        representative_source: "198.51.100.77",
+        primary_service: "VPN service (1194)",
+        linked_alert_count: 14,
+        investigation_label: "Review Soon",
+      },
+      coordination_assessment: { reasons: [] },
+      investigation_value: { level: "medium", label: "Review Soon", reasons: [] },
+      assessment_text: "Distributed commodity scanning.",
+    });
+
+    renderPanel({ onAskAi, aiEnabled: true });
+
+    expect(await screen.findByText("Repeated VPN recon")).toBeInTheDocument();
+    await waitFor(() => expect(loadReconActivity).toHaveBeenCalledWith(90));
+    expect(await screen.findByText("Distributed commodity scanning.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Explain campaign" }));
+    await userEvent.click(screen.getByRole("button", { name: "Investigate cluster" }));
+
+    expect(onAskAi).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextType: "recon_activity",
+        action: "explain_campaign",
+        context: { activity_id: 90 },
+      })
+    );
+    expect(onAskAi).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextType: "recon_activity",
+        action: "investigate_cluster",
+        context: { activity_id: 90 },
+      })
+    );
+  });
+
   test("persists recon review state and distinguishes new from updated cards", async () => {
     loadReconActivities.mockResolvedValue({
       items: [

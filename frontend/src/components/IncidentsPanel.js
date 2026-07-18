@@ -18,6 +18,7 @@ import {
   MasterDetailPane,
   useMasterDetailFocus,
 } from "./MasterDetailLayout";
+import AiAssistantButton from "./AiAssistantButton";
 
 const INCIDENT_STATUS_FILTERS = ["all", "open", "investigating", "resolved", "closed"];
 const INCIDENT_SEVERITY_FILTERS = ["all", "LOW", "MEDIUM", "HIGH", "CRITICAL"];
@@ -70,6 +71,8 @@ function IncidentsPanel({
   onOpenResponseRegistry = null,
   initialIncidentRequest = null,
   onViewRelatedAlerts = null,
+  onAskAi = null,
+  aiEnabled = false,
 }) {
   const [incidents, setIncidents] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -444,9 +447,41 @@ function IncidentsPanel({
                   ? `Incident #${selectedIncident.id} - ${selectedIncident.title}`
                   : "Incident Detail"}
               </h3>
-              <button type="button" style={detailCloseButtonStyle} onClick={handleCloseDetail}>
-                Close
-              </button>
+              <div style={detailHeaderActionsStyle}>
+                {aiEnabled && selectedIncident && typeof onAskAi === "function" ? (
+                  <>
+                    <AiAssistantButton
+                      onClick={() =>
+                        onAskAi({
+                          contextType: "incident",
+                          action: "summarize_incident",
+                          title: `Incident #${selectedIncident.id}`,
+                          question: "Summarize this incident using SIEM evidence.",
+                          context: { incident_id: selectedIncident.id },
+                        })
+                      }
+                    >
+                      Summarize incident
+                    </AiAssistantButton>
+                    <AiAssistantButton
+                      onClick={() =>
+                        onAskAi({
+                          contextType: "incident",
+                          action: "recommend_next_steps",
+                          title: `Next steps for incident #${selectedIncident.id}`,
+                          question: "Recommend read-only next investigation steps for this incident.",
+                          context: { incident_id: selectedIncident.id },
+                        })
+                      }
+                    >
+                      Recommend next steps
+                    </AiAssistantButton>
+                  </>
+                ) : null}
+                <button type="button" style={detailCloseButtonStyle} onClick={handleCloseDetail}>
+                  Close
+                </button>
+              </div>
             </div>
 
             {detailLoading ? (
@@ -1004,6 +1039,14 @@ const detailHeaderStyle = {
   justifyContent: "space-between",
   gap: "12px",
   marginBottom: "12px",
+};
+
+const detailHeaderActionsStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "flex-end",
+  gap: "8px",
+  flexWrap: "wrap",
 };
 
 const detailTitleStyle = {

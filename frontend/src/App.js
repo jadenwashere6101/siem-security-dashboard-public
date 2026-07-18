@@ -22,6 +22,8 @@ import SourceHealthPanel from "./components/SourceHealthPanel";
 import DetectionSimulatorPanel from "./components/DetectionSimulatorPanel";
 import SettingsPanel from "./components/SettingsPanel";
 import SidebarLayout from "./components/SidebarLayout";
+import AiResponsePanel from "./components/AiResponsePanel";
+import FloatingSiemChat from "./components/FloatingSiemChat";
 import { UiSettingsProvider, useUiSettings } from "./context/UiSettingsContext";
 import { ResponseSyncProvider } from "./context/ResponseSyncContext";
 import {
@@ -34,6 +36,7 @@ import {
 } from "./utils/sessionIdentity";
 import { updateAlertStatusRequest } from "./services/alertStatusService";
 import { loadAlertDashboardSummary, loadAlerts } from "./services/alertsService";
+import { requestAiChat, requestAiExplanation } from "./services/aiService";
 import {
   loadCurrentSession,
   loginToDashboard,
@@ -162,6 +165,7 @@ function AppInner() {
   const [sessionNotice, setSessionNotice] = useState("");
   const latestAlertRowsRequestRef = useRef(0);
   const latestAlertSummaryRequestRef = useRef(0);
+  const aiRequestRef = useRef({ id: 0, controller: null, contextKey: "" });
   const previousSessionRef = useRef({
     authenticated: false,
     username: null,
@@ -170,6 +174,15 @@ function AppInner() {
   const hasCheckedAuthRef = useRef(false);
   const hasAppliedLandingRef = useRef(false);
   const alertsTableRef = useRef(null);
+  const [aiPanelState, setAiPanelState] = useState({
+    status: "idle",
+    title: "",
+    response: null,
+    error: "",
+    stale: false,
+    request: null,
+  });
+  const [aiChatHistory, setAiChatHistory] = useState([]);
   const applyAlertViewPatch = useCallback((patchOrUpdater, options = {}) => {
     const { resetOffset = true, clearExactPivots = true } = options;
     setAlertView((current) => {
@@ -798,6 +811,174 @@ function AppInner() {
     });
   }, [alertPageSize, alertsBusy, applyAlertViewPatch, canGoToPreviousAlertPage]);
 
+  const buildVisibleAiContext = useCallback(
+    () => ({
+      active_section: activeSection,
+      visible_filters: {
+        search: alertView.searchTerm,
+        source: alertView.sourceFilter,
+        severity: alertView.severityFilter,
+        status: alertView.statusFilter,
+        operational_scope: alertView.operationalScope,
+        timeline_range: alertView.timelineRange,
+        exact_source_ip: alertView.exactSourceIp,
+        exact_target_ip: alertView.exactTargetIp,
+        exact_alert_id: alertView.exactAlertId,
+      },
+      dashboard_summary: metrics,
+      timeline: alertTimelineData.slice(0, 30),
+      top_source_ips: topIPChartData.slice(0, 10),
+      map_markers: alertMapMarkers.slice(0, 10),
+      recent_alerts: alertsState.items.slice(0, 10).map((alert) => ({
+        id: alert.id,
+        alert_type: alert.alert_type,
+        severity: alert.severity,
+        status: alert.status,
+        source_ip: alert.source_ip,
+        message: alert.message,
+        created_at: alert.created_at,
+      })),
+    }),
+    [activeSection, alertMapMarkers, alertTimelineData, alertView, alertsState.items, metrics, topIPChartData]
+  );
+
+  const cancelAiRequest = useCallback(() => {
+    if (aiRequestRef.current.controller) {
+      aiRequestRef.current.controller.abort();
+    }
+  }, []);
+
+  const runAiRequest = useCallback(async ({ title, request, executor, contextKey }) => {
+    if (!canTakeAlertActions) return;
+    cancelAiRequest();
+    const controller = new AbortController();
+    const requestId = aiRequestRef.current.id + 1;
+    aiRequestRef.current = { id: requestId, controller, contextKey };
+    setAiPanelState({
+      status: "loading",
+      title,
+      response: null,
+      error: "",
+      stale: false,
+      request: { title, request, executor, contextKey },
+    });
+
+    try {
+      const response = await executor(request, { signal: controller.signal });
+      if (aiRequestRef.current.id !== requestId) return;
+      setAiPanelState({
+        status: "success",
+        title,
+        response,
+        error: "",
+        stale: aiRequestRef.current.contextKey !== contextKey,
+        request: { title, request, executor, contextKey },
+      });
+      if (request.message) {
+        setAiChatHistory((current) =>
+          [
+            ...current,
+            { role: "user", content: request.message },
+            { role: "assistant", content: response.answer || response.error || "" },
+          ].slice(-8)
+        );
+      }
+    } catch (error) {
+      if (error.name === "AbortError") {
+        setAiPanelState((current) => ({
+          ...current,
+          status: "idle",
+          error: "",
+          response: null,
+        }));
+        return;
+      }
+      if (aiRequestRef.current.id !== requestId) return;
+      setAiPanelState({
+        status: "error",
+        title,
+        response: error.payload || null,
+        error: error.message || "AI request failed.",
+        stale: false,
+        request: { title, request, executor, contextKey },
+      });
+    } finally {
+      if (aiRequestRef.current.id === requestId) {
+        aiRequestRef.current.controller = null;
+      }
+    }
+  }, [canTakeAlertActions, cancelAiRequest]);
+
+  const handleAskAi = useCallback(
+    (options) => {
+      if (!options) return;
+      const visibleContext = buildVisibleAiContext();
+      const contextKey = JSON.stringify({
+        section: activeSection,
+        selectedAlertId,
+        filters: visibleContext.visible_filters,
+      });
+      const payload = {
+        context_type: options.contextType,
+        action: options.action,
+        question: options.question || "",
+        context: {
+          ...visibleContext,
+          ...(options.context || {}),
+        },
+      };
+      runAiRequest({
+        title: options.title || "AI explanation",
+        request: payload,
+        executor: requestAiExplanation,
+        contextKey,
+      });
+    },
+    [activeSection, buildVisibleAiContext, runAiRequest, selectedAlertId]
+  );
+
+  const handleAskAiChat = useCallback(
+    (message) => {
+      const visibleContext = buildVisibleAiContext();
+      runAiRequest({
+        title: "General SIEM question",
+        request: {
+          message,
+          visible_context: visibleContext,
+          client_history: aiChatHistory,
+        },
+        executor: requestAiChat,
+        contextKey: JSON.stringify({ section: activeSection, filters: visibleContext.visible_filters }),
+      });
+    },
+    [activeSection, aiChatHistory, buildVisibleAiContext, runAiRequest]
+  );
+
+  const retryAiRequest = useCallback(() => {
+    if (aiPanelState.request) {
+      runAiRequest(aiPanelState.request);
+    }
+  }, [aiPanelState.request, runAiRequest]);
+
+  const dismissAiPanel = useCallback(() => {
+    cancelAiRequest();
+    setAiPanelState({
+      status: "idle",
+      title: "",
+      response: null,
+      error: "",
+      stale: false,
+      request: null,
+    });
+  }, [cancelAiRequest]);
+
+  useEffect(() => {
+    setAiPanelState((current) => {
+      if (current.status !== "success" || current.stale) return current;
+      return { ...current, stale: true };
+    });
+  }, [activeSection, alertView, selectedAlertId]);
+
   if (authLoading) {
     return (
       <div
@@ -1052,6 +1233,8 @@ function AppInner() {
             exactAlertId={alertView.exactAlertId}
             canResetFilters={canResetAlertView}
             onResetFilters={resetAlertView}
+            onAskAi={handleAskAi}
+            aiEnabled={canTakeAlertActions}
           />
         )}
 
@@ -1091,6 +1274,8 @@ function AppInner() {
             onOpenResponseRegistry={handleOpenResponseRegistry}
             onOpenIncident={handleOpenIncident}
             onViewRelatedAlerts={handleViewRelatedAlerts}
+            onAskAi={handleAskAi}
+            aiEnabled={canTakeAlertActions}
           />
         )}
 
@@ -1126,6 +1311,8 @@ function AppInner() {
             onOpenPlaybookExecution={handleOpenPlaybookExecution}
             onOpenApproval={handleOpenApproval}
             onOpenSourceContext={handleViewRelatedAlerts}
+            onAskAi={handleAskAi}
+            aiEnabled={canTakeAlertActions}
           />
         </div>
       )}
@@ -1257,6 +1444,8 @@ function AppInner() {
             onOpenResponseRegistry={handleOpenResponseRegistry}
             initialIncidentRequest={incidentsInitialRequest}
             onViewRelatedAlerts={handleViewRelatedAlerts}
+            onAskAi={handleAskAi}
+            aiEnabled={canTakeAlertActions}
           />
         )}
 
@@ -1331,6 +1520,17 @@ function AppInner() {
             onOpenPlaybooks={() => handleNavigate("soar-playbooks")}
           />
         )}
+        {canTakeAlertActions ? (
+          <>
+            <AiResponsePanel
+              state={aiPanelState}
+              onDismiss={dismissAiPanel}
+              onRetry={retryAiRequest}
+              onCancel={cancelAiRequest}
+            />
+            <FloatingSiemChat onAsk={handleAskAiChat} disabled={aiPanelState.status === "loading"} />
+          </>
+        ) : null}
     </SidebarLayout>
   );
 }

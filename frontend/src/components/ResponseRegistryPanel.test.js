@@ -179,6 +179,29 @@ test("shows loading then registry rows", async () => {
   expect(screen.getAllByText("Monitoring").length).toBeGreaterThan(0);
 });
 
+test("renders response registry AI entry point for selected detail", async () => {
+  const onAskAi = jest.fn();
+  renderRegistry(
+    <ResponseRegistryPanel
+      {...styleProps}
+      canTakeAlertActions
+      onAskAi={onAskAi}
+      aiEnabled
+    />
+  );
+  const detail = await openFirstRow();
+
+  await userEvent.click(within(detail).getByRole("button", { name: "Explain this response" }));
+
+  expect(onAskAi).toHaveBeenCalledWith(
+    expect.objectContaining({
+      contextType: "response_registry",
+      action: "explain_response",
+      context: { registry_id: 11 },
+    })
+  );
+});
+
 test("shows empty state when no records", async () => {
   loadRegistryRecords.mockResolvedValue({ items: [], total: 0 });
   renderRegistry(<ResponseRegistryPanel {...styleProps} canTakeAlertActions />);

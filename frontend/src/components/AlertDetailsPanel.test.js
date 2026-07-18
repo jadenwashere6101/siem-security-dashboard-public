@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 import AlertDetailsPanel from "./AlertDetailsPanel";
 import { loadPfsenseWhyFired } from "../services/pfsenseAlertInvestigationService";
@@ -131,6 +132,64 @@ test("AlertDetailsPanel includes source-IP context for selected alert", async ()
   expect(screen.getByText("Shadow mode: would reduce investigation priority.")).toBeInTheDocument();
   expect(await screen.findByText("Alerts")).toBeInTheDocument();
   expect(loadSourceIpContext).toHaveBeenCalledWith("8.8.8.8");
+});
+
+test("AlertDetailsPanel exposes alert and detection AI entry points", async () => {
+  const onAskAi = jest.fn();
+  render(
+    <AlertDetailsPanel
+      selectedAlert={selectedAlert}
+      selectedAlertTimeline={[]}
+      getSourceBadgeMeta={() => ({ label: "Bank App", style: {} })}
+      getTargetedAlertMeta={() => null}
+      isCorrelationAlert={() => false}
+      getCorrelationAlertTypes={() => []}
+      correlationPanelStyle={{}}
+      targetedAlertPanelStyle={{}}
+      expandedLabelStyle={{}}
+      expandedTextStyle={{}}
+      monoCellStyle={{}}
+      correlationListStyle={{}}
+      signalRowStyle={{}}
+      sourceTypeTextStyle={{}}
+      onAskAi={onAskAi}
+      aiEnabled
+    />
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: "Explain this alert" }));
+  await userEvent.click(screen.getByRole("button", { name: "Recommend investigation" }));
+  await userEvent.click(screen.getByRole("button", { name: "Why is this important?" }));
+  await userEvent.click(screen.getByRole("button", { name: "Explain detection" }));
+
+  expect(onAskAi).toHaveBeenCalledWith(
+    expect.objectContaining({
+      contextType: "alert",
+      action: "explain_alert",
+      context: { alert_id: 101, source_ip: "8.8.8.8" },
+    })
+  );
+  expect(onAskAi).toHaveBeenCalledWith(
+    expect.objectContaining({
+      contextType: "alert",
+      action: "recommend_investigation",
+      context: { alert_id: 101, source_ip: "8.8.8.8" },
+    })
+  );
+  expect(onAskAi).toHaveBeenCalledWith(
+    expect.objectContaining({
+      contextType: "alert",
+      action: "why_important",
+      context: { alert_id: 101, source_ip: "8.8.8.8" },
+    })
+  );
+  expect(onAskAi).toHaveBeenCalledWith(
+    expect.objectContaining({
+      contextType: "detection",
+      action: "explain_detection",
+      context: { alert_id: 101 },
+    })
+  );
 });
 
 test("AlertDetailsPanel renders canonical response outcome summary", async () => {

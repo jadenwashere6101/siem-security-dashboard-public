@@ -20,6 +20,7 @@ import {
   registryRecommendedNextStep,
 } from "../utils/responseRegistryPresentation";
 import { keysOverlap, useResponseSync } from "../context/ResponseSyncContext";
+import AiAssistantButton from "./AiAssistantButton";
 
 const PAGE_SIZE = 50;
 
@@ -176,6 +177,8 @@ function ResponseRegistryPanel({
   onOpenPlaybookExecution = null,
   onOpenApproval = null,
   onOpenSourceContext = null,
+  onAskAi = null,
+  aiEnabled = false,
 }) {
   const { publishMutation, subscribe } = useResponseSync();
   const [view, setView] = useState(initialView || "all");
@@ -894,11 +897,28 @@ function ResponseRegistryPanel({
               minHeight: "320px",
             }}
           >
-            <div style={{ display: "flex", justifyContent: "space-between", gap: "8px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: "8px", flexWrap: "wrap" }}>
               <h3 style={{ margin: 0, fontSize: "16px" }}>Indicator detail</h3>
-              <button type="button" onClick={handleCloseDetail} style={secondaryButtonStyle(false)}>
-                Close
-              </button>
+              <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                {aiEnabled && record && typeof onAskAi === "function" ? (
+                  <AiAssistantButton
+                    onClick={() =>
+                      onAskAi({
+                        contextType: "response_registry",
+                        action: "explain_response",
+                        title: `Response registry #${record.id}`,
+                        question: "Explain this response registry record and its current response state.",
+                        context: { registry_id: record.id },
+                      })
+                    }
+                  >
+                    Explain this response
+                  </AiAssistantButton>
+                ) : null}
+                <button type="button" onClick={handleCloseDetail} style={secondaryButtonStyle(false)}>
+                  Close
+                </button>
+              </div>
             </div>
 
             {detailLoading && <p aria-live="polite">Loading detail…</p>}

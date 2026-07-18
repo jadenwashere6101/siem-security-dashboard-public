@@ -3,6 +3,7 @@ import MapView from "./MapView";
 import SeverityChart from "./SeverityChart";
 import TimelineChart from "./TimelineChart";
 import TopIPChart from "./TopIPChart";
+import AiAssistantButton from "./AiAssistantButton";
 
 function DashboardVisuals({
   metrics,
@@ -24,9 +25,27 @@ function DashboardVisuals({
   summaryBusy,
   displaySettings,
   onOpenResponseRegistry = null,
+  onAskAi = null,
+  aiEnabled = false,
 }) {
   return (
     <>
+      {aiEnabled && typeof onAskAi === "function" ? (
+        <div style={aiBarStyle}>
+          <AiAssistantButton
+            onClick={() =>
+              onAskAi({
+                contextType: "dashboard",
+                action: "explain_anomaly",
+                title: "Dashboard graph explanation",
+                question: "Explain notable patterns, spikes, or anomalies in the visible dashboard graphs.",
+              })
+            }
+          >
+            Explain graph/anomaly
+          </AiAssistantButton>
+        </div>
+      ) : null}
       <div style={chartsGridStyle}>
         <SeverityChart
           metrics={metrics}
@@ -78,5 +97,11 @@ function DashboardVisuals({
     </>
   );
 }
+
+const aiBarStyle = {
+  display: "flex",
+  justifyContent: "flex-end",
+  margin: "0 0 12px",
+};
 
 export default DashboardVisuals;

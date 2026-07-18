@@ -84,6 +84,8 @@ function DashboardSection({
   exactAlertId,
   canResetFilters,
   onResetFilters,
+  onAskAi = null,
+  aiEnabled = false,
 }) {
   if (loading || error) {
     return (
@@ -106,6 +108,8 @@ function DashboardSection({
         metricCardStyle={metricCardStyle}
         metricLabelStyle={metricLabelStyle}
         metricValueStyle={metricValueStyle}
+        onAskAi={onAskAi}
+        aiEnabled={aiEnabled}
       />
 
       <DashboardVisuals
@@ -128,6 +132,8 @@ function DashboardSection({
         summaryBusy={summaryBusy}
         displaySettings={displaySettings}
         onOpenResponseRegistry={onOpenResponseRegistry}
+        onAskAi={onAskAi}
+        aiEnabled={aiEnabled}
       />
       <div ref={alertsTableRef} data-navigation-target="recent-alerts" aria-label="Recent Alerts">
         <AlertsTable
@@ -187,6 +193,8 @@ function DashboardSection({
           onPreviousPage={onPreviousPage}
           onNextPage={onNextPage}
           onRefreshAlerts={onRefreshAlerts}
+          onAskAi={onAskAi}
+          aiEnabled={aiEnabled}
         />
       </div>
     </>

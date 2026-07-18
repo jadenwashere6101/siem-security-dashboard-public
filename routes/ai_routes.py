@@ -1,8 +1,14 @@
 from __future__ import annotations
 
-from flask import Blueprint, current_app, jsonify
+from flask import Blueprint, current_app, jsonify, request
 from flask_login import login_required
 
+from core.ai.explainer_service import (
+    AiContextError,
+    chat_about_siem,
+    explain_context,
+    service_error_response,
+)
 from core.ai.readiness import get_ai_gateway_status
 from core.auth import analyst_or_super_admin_required
 
@@ -17,4 +23,42 @@ def ai_status_route():
         return jsonify(get_ai_gateway_status()), 200
     except Exception as error:
         current_app.logger.error("Error in ai_status_route: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@ai_bp.route("/ai/explain", methods=["POST"])
+@login_required
+@analyst_or_super_admin_required
+def ai_explain_route():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "JSON object body is required."}), 400
+
+    try:
+        result = explain_context(payload)
+        return jsonify(result.payload), result.status_code
+    except AiContextError as error:
+        result = service_error_response(error)
+        return jsonify(result.payload), result.status_code
+    except Exception as error:
+        current_app.logger.error("Error in ai_explain_route: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@ai_bp.route("/ai/chat", methods=["POST"])
+@login_required
+@analyst_or_super_admin_required
+def ai_chat_route():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "JSON object body is required."}), 400
+
+    try:
+        result = chat_about_siem(payload)
+        return jsonify(result.payload), result.status_code
+    except AiContextError as error:
+        result = service_error_response(error)
+        return jsonify(result.payload), result.status_code
+    except Exception as error:
+        current_app.logger.error("Error in ai_chat_route: %s", error)
         return jsonify({"error": "Internal server error"}), 500
