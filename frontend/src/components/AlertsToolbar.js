@@ -17,6 +17,13 @@ function AlertsToolbar({
   setSourceFilter,
   statusFilter,
   setStatusFilter,
+  exactSourceIp,
+  exactTargetIp,
+  exactAlertId,
+  canResetFilters,
+  onResetFilters,
+  alertsPendingLabel,
+  alertsBusy,
   multiAlertCsvExportHref,
   multiAlertReportHref,
   multiAlertPdfReportHref,
@@ -28,6 +35,13 @@ function AlertsToolbar({
   filterLabelStyle,
   selectStyle,
 }) {
+  const activeContextLabel = exactTargetIp
+    ? `Showing alerts targeting ${exactTargetIp}`
+    : exactSourceIp
+    ? `Showing alerts from source ${exactSourceIp}`
+    : exactAlertId
+    ? `Showing linked alert #${exactAlertId}`
+    : "";
   return (
     <div style={cardHeaderStyle}>
       <div>
@@ -37,6 +51,25 @@ function AlertsToolbar({
           Showing {filteredAlertsCount} alerts ({resolvedAlertsCount}{" "}
           resolved total)
         </p>
+        {activeContextLabel ? (
+          <div style={activeContextBannerStyle}>
+            <span>{activeContextLabel}</span>
+            <button
+              type="button"
+              onClick={onResetFilters}
+              style={clearContextButtonStyle}
+              disabled={!canResetFilters}
+            >
+              Clear context
+            </button>
+          </div>
+        ) : null}
+        {alertsPendingLabel ? (
+          <div role="status" aria-live="polite" style={alertsStatusStyle}>
+            <span style={alertsSpinnerStyle} aria-hidden="true" />
+            <span>{alertsPendingLabel}</span>
+          </div>
+        ) : null}
 
         <details style={exportMenuStyle}>
           <summary style={exportMenuTriggerStyle}>Export</summary>
@@ -85,6 +118,7 @@ function AlertsToolbar({
           type="text"
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
+          disabled={alertsBusy}
           placeholder="Search IP or message"
           style={{
             ...selectStyle,
@@ -104,6 +138,7 @@ function AlertsToolbar({
           id="sortAlerts"
           value={sortOption}
           onChange={(e) => setSortOption(e.target.value)}
+          disabled={alertsBusy}
           style={selectStyle}
         >
           <option value="newest">Newest</option>
@@ -120,6 +155,7 @@ function AlertsToolbar({
           id="severityFilter"
           value={severityFilter}
           onChange={(e) => setSeverityFilter(e.target.value)}
+          disabled={alertsBusy}
           style={selectStyle}
         >
           <option value="all">ALL</option>
@@ -137,6 +173,7 @@ function AlertsToolbar({
           id="sourceFilter"
           value={sourceFilter}
           onChange={(e) => setSourceFilter(e.target.value)}
+          disabled={alertsBusy}
           style={selectStyle}
         >
           <option value="all">All Sources</option>
@@ -154,12 +191,28 @@ function AlertsToolbar({
           id="statusFilter"
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
+          disabled={alertsBusy}
           style={selectStyle}
         >
           <option value="all">All</option>
           <option value="open">Open</option>
           <option value="resolved">Resolved</option>
         </select>
+      </div>
+      <div style={filterWrapperStyle}>
+        <label style={filterLabelStyle}>Filters</label>
+        <button
+          type="button"
+          onClick={onResetFilters}
+          disabled={!canResetFilters || alertsBusy}
+          style={{
+            ...resetButtonStyle,
+            opacity: !canResetFilters ? 0.55 : 1,
+            cursor: !canResetFilters || alertsBusy ? "default" : "pointer",
+          }}
+        >
+          Reset Filters
+        </button>
       </div>
     </div>
   );
@@ -211,6 +264,56 @@ const exportMenuOptionStyle = {
   fontWeight: "600",
   whiteSpace: "nowrap",
   backgroundColor: "transparent",
+};
+const activeContextBannerStyle = {
+  display: "flex",
+  alignItems: "center",
+  gap: "10px",
+  flexWrap: "wrap",
+  marginTop: "12px",
+  padding: "10px 12px",
+  borderRadius: "12px",
+  border: "1px solid rgba(217, 164, 65, 0.35)",
+  backgroundColor: "rgba(217, 164, 65, 0.12)",
+  color: "#f5d487",
+  fontSize: "13px",
+  fontWeight: "600",
+};
+const clearContextButtonStyle = {
+  border: "1px solid rgba(245, 212, 135, 0.4)",
+  backgroundColor: "transparent",
+  color: "#f8e3a1",
+  borderRadius: "999px",
+  padding: "6px 10px",
+  fontSize: "12px",
+  fontWeight: "700",
+};
+const alertsStatusStyle = {
+  display: "flex",
+  alignItems: "center",
+  gap: "8px",
+  marginTop: "10px",
+  color: "#c9d1d9",
+  fontSize: "13px",
+};
+const alertsSpinnerStyle = {
+  width: "14px",
+  height: "14px",
+  borderRadius: "999px",
+  border: "2px solid rgba(201, 209, 217, 0.24)",
+  borderTopColor: "#58a6ff",
+  borderRightColor: "transparent",
+  animation: "workspace-spin 0.8s linear infinite",
+};
+const resetButtonStyle = {
+  minWidth: "160px",
+  padding: "10px 14px",
+  borderRadius: "10px",
+  border: "1px solid #30363d",
+  backgroundColor: "#0d1117",
+  color: "#f0f6fc",
+  fontSize: "13px",
+  fontWeight: "700",
 };
 
 export default AlertsToolbar;

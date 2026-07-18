@@ -962,3 +962,61 @@ def test_get_alerts_exact_target_filter_matches_primary_and_sample_destination_i
     )
     assert summary_resp.status_code == 200
     assert summary_resp.get_json()["metrics"]["total_alerts"] == 2
+
+
+def test_get_alerts_summary_honors_timeline_range_and_reports_bucket_metadata(client, postgres_db):
+    conn, cur = postgres_db
+    cur.execute(
+        """
+        INSERT INTO alerts (
+            alert_type, severity, source_ip, source, source_type, message, status, created_at
+        )
+        VALUES
+            ('range_recent', 'high', '198.51.100.30', 'pfsense', 'firewall', 'recent alert', 'open', NOW() - INTERVAL '2 hours'),
+            ('range_old', 'high', '198.51.100.31', 'pfsense', 'firewall', 'old alert', 'open', NOW() - INTERVAL '40 days')
+        """
+    )
+    conn.commit()
+
+    _login_as_super_admin(client)
+    summary_resp = _fetch_alert_summary_response_for_path(
+        client,
+        conn,
+        "/alerts/summary?timeline_range=24h",
+    )
+
+    assert summary_resp.status_code == 200
+    payload = summary_resp.get_json()
+    assert payload["timeline_meta"]["range"] == "24h"
+    assert payload["timeline_meta"]["bucket"] == "hour"
+    assert payload["timeline"] == [
+        {
+            "bucketStart": payload["timeline"][0]["bucketStart"],
+            "count": 1,
+        }
+    ]
+
+
+def test_get_alerts_summary_excludes_configured_synthetic_ips_from_visuals(client, postgres_db, monkeypatch):
+    conn, cur = postgres_db
+    cur.execute(
+        """
+        INSERT INTO alerts (
+            alert_type, severity, source_ip, source, source_type, message, status
+        )
+        VALUES
+            ('synthetic_source', 'medium', '198.51.100.40', 'pfsense', 'firewall', 'synthetic top ip', 'open'),
+            ('legit_source', 'medium', '198.51.100.41', 'pfsense', 'firewall', 'legit top ip', 'open'),
+            ('legit_source_repeat', 'medium', '198.51.100.41', 'pfsense', 'firewall', 'legit top ip 2', 'open')
+        """
+    )
+    conn.commit()
+    monkeypatch.setenv("SIEM_SYNTHETIC_SOURCE_IP_EXCLUSIONS", "198.51.100.40")
+
+    _login_as_super_admin(client)
+    summary_resp = _fetch_alert_summary_response(client, conn)
+
+    assert summary_resp.status_code == 200
+    payload = summary_resp.get_json()
+    assert payload["top_source_ips"] == [{"name": "198.51.100.41", "value": 2}]
+    assert all(marker["source_ip"] != "198.51.100.40" for marker in payload["map_markers"])

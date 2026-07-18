@@ -42,6 +42,11 @@ function DashboardSection({
   cardHeaderStyle,
   cardTitleStyle,
   cardSubtitleStyle,
+  timelineRange,
+  onTimelineRangeChange,
+  timelineMeta,
+  summaryPendingLabel,
+  summaryBusy,
   filterWrapperStyle,
   filterLabelStyle,
   selectStyle,
@@ -72,6 +77,13 @@ function DashboardSection({
   onPreviousPage,
   onNextPage,
   onRefreshAlerts,
+  alertsPendingLabel,
+  alertsBusy,
+  exactSourceIp,
+  exactTargetIp,
+  exactAlertId,
+  canResetFilters,
+  onResetFilters,
 }) {
   if (loading || error) {
     return (
@@ -109,6 +121,11 @@ function DashboardSection({
         cardHeaderStyle={cardHeaderStyle}
         cardTitleStyle={cardTitleStyle}
         cardSubtitleStyle={cardSubtitleStyle}
+        timelineRange={timelineRange}
+        onTimelineRangeChange={onTimelineRangeChange}
+        timelineMeta={timelineMeta}
+        summaryPendingLabel={summaryPendingLabel}
+        summaryBusy={summaryBusy}
         displaySettings={displaySettings}
         onOpenResponseRegistry={onOpenResponseRegistry}
       />
@@ -133,6 +150,13 @@ function DashboardSection({
           cardHeaderStyle={cardHeaderStyle}
           cardTitleStyle={cardTitleStyle}
           cardSubtitleStyle={cardSubtitleStyle}
+          exactSourceIp={exactSourceIp}
+          exactTargetIp={exactTargetIp}
+          exactAlertId={exactAlertId}
+          canResetFilters={canResetFilters}
+          onResetFilters={onResetFilters}
+          alertsPendingLabel={alertsPendingLabel}
+          alertsBusy={alertsBusy}
           filterWrapperStyle={filterWrapperStyle}
           filterLabelStyle={filterLabelStyle}
           selectStyle={selectStyle}

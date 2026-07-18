@@ -51,6 +51,7 @@ import packageJson from "../package.json";
 
 const DEFAULT_ALERT_PAGE_SIZE = 50;
 const MAX_ALERT_PAGE_SIZE = 100;
+const DEFAULT_ALERT_TIMELINE_RANGE = "7d";
 
 const createAlertViewState = () => ({
   searchTerm: "",
@@ -62,6 +63,7 @@ const createAlertViewState = () => ({
   statusFilter: "",
   operationalScope: OPERATIONAL_SCOPE_SINCE_TUNING,
   sortOption: "newest",
+  timelineRange: DEFAULT_ALERT_TIMELINE_RANGE,
   offset: 0,
 });
 
@@ -80,12 +82,34 @@ const createAlertSummaryState = () => ({
   metrics: null,
   topSourceIps: [],
   timeline: [],
+  timelineMeta: {
+    range: DEFAULT_ALERT_TIMELINE_RANGE,
+    bucket: "6 hours",
+    windowStart: null,
+  },
   mapMarkers: [],
   loading: true,
   refreshing: false,
   error: "",
   hasLoadedOnce: false,
 });
+
+function isAlertViewAtDefault(view) {
+  const baseline = createAlertViewState();
+  return (
+    view.searchTerm === baseline.searchTerm &&
+    view.exactSourceIp === baseline.exactSourceIp &&
+    view.exactTargetIp === baseline.exactTargetIp &&
+    view.exactAlertId === baseline.exactAlertId &&
+    view.sourceFilter === baseline.sourceFilter &&
+    view.severityFilter === baseline.severityFilter &&
+    view.statusFilter === baseline.statusFilter &&
+    view.operationalScope === baseline.operationalScope &&
+    view.sortOption === baseline.sortOption &&
+    view.timelineRange === baseline.timelineRange &&
+    view.offset === baseline.offset
+  );
+}
 
 function resolveAlertPageSize(rowsPerPage) {
   if (rowsPerPage === "all" || rowsPerPage === undefined || rowsPerPage === null) {
@@ -116,6 +140,8 @@ function AppInner() {
   const [alertsState, setAlertsState] = useState(createAlertRowsState);
   const [alertSummaryState, setAlertSummaryState] = useState(createAlertSummaryState);
   const [alertView, setAlertView] = useState(createAlertViewState);
+  const [alertsPendingLabel, setAlertsPendingLabel] = useState("");
+  const [summaryPendingLabel, setSummaryPendingLabel] = useState("");
   const [selectedAlertId, setSelectedAlertId] = useState(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUsername, setCurrentUsername] = useState(null);
@@ -134,7 +160,8 @@ function AppInner() {
   const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState("");
   const [sessionNotice, setSessionNotice] = useState("");
-  const latestAlertRequestRef = useRef(0);
+  const latestAlertRowsRequestRef = useRef(0);
+  const latestAlertSummaryRequestRef = useRef(0);
   const previousSessionRef = useRef({
     authenticated: false,
     username: null,
@@ -167,28 +194,51 @@ function AppInner() {
   }, []);
 
   const setSearchTerm = useCallback((value) => {
-    applyAlertViewPatch({ searchTerm: value });
+    setAlertsPendingLabel("Updating recent alerts…");
+    setSummaryPendingLabel("Updating dashboard summary…");
+    applyAlertViewPatch({ searchTerm: value }, { clearExactPivots: false });
   }, [applyAlertViewPatch]);
 
   const setSourceFilter = useCallback((value) => {
-    applyAlertViewPatch({ sourceFilter: value });
+    setAlertsPendingLabel("Updating recent alerts…");
+    setSummaryPendingLabel("Updating dashboard summary…");
+    applyAlertViewPatch({ sourceFilter: value }, { clearExactPivots: false });
   }, [applyAlertViewPatch]);
 
   const setSeverityFilter = useCallback((value) => {
-    applyAlertViewPatch({ severityFilter: value });
+    setAlertsPendingLabel("Updating recent alerts…");
+    setSummaryPendingLabel("Updating dashboard summary…");
+    applyAlertViewPatch({ severityFilter: value }, { clearExactPivots: false });
   }, [applyAlertViewPatch]);
 
   const setStatusFilter = useCallback((value) => {
-    applyAlertViewPatch({ statusFilter: value });
+    setAlertsPendingLabel("Updating recent alerts…");
+    setSummaryPendingLabel("Updating dashboard summary…");
+    applyAlertViewPatch({ statusFilter: value }, { clearExactPivots: false });
   }, [applyAlertViewPatch]);
 
   const setOperationalScope = useCallback((value) => {
-    applyAlertViewPatch({ operationalScope: value });
+    setAlertsPendingLabel("Updating recent alerts…");
+    setSummaryPendingLabel("Updating dashboard summary…");
+    applyAlertViewPatch({ operationalScope: value }, { clearExactPivots: false });
   }, [applyAlertViewPatch]);
 
   const setSortOption = useCallback((value) => {
-    applyAlertViewPatch({ sortOption: value });
+    setAlertsPendingLabel("Updating recent alerts…");
+    applyAlertViewPatch({ sortOption: value }, { clearExactPivots: false });
   }, [applyAlertViewPatch]);
+
+  const setTimelineRange = useCallback((value) => {
+    setSummaryPendingLabel("Updating chart…");
+    applyAlertViewPatch({ timelineRange: value }, { clearExactPivots: false });
+  }, [applyAlertViewPatch]);
+
+  const resetAlertView = useCallback(() => {
+    setAlertsPendingLabel("Resetting filters…");
+    setSummaryPendingLabel("Resetting dashboard summary…");
+    setAlertView(createAlertViewState());
+    setSelectedAlertId(null);
+  }, []);
 
   const alertPageSize = resolveAlertPageSize(settings.display?.rowsPerPage);
   const alertQuery = useMemo(
@@ -205,10 +255,23 @@ function AppInner() {
       limit: alertPageSize,
       offset: alertView.offset,
     }),
-    [
-      alertPageSize,
-      alertView,
-    ]
+    [alertPageSize, alertView]
+  );
+
+  const alertSummaryQuery = useMemo(
+    () => ({
+      searchTerm: alertView.searchTerm,
+      exactSourceIp: alertView.exactSourceIp,
+      exactTargetIp: alertView.exactTargetIp,
+      exactAlertId: alertView.exactAlertId,
+      severityFilter: alertView.severityFilter,
+      statusFilter: alertView.statusFilter,
+      sourceFilter: alertView.sourceFilter,
+      sortOption: alertView.sortOption,
+      operationalScope: alertView.operationalScope,
+      timelineRange: alertView.timelineRange,
+    }),
+    [alertView]
   );
 
   const checkAuth = async () => {
@@ -258,25 +321,25 @@ function AppInner() {
     }
   };
 
-  const fetchAlerts = useCallback(async ({ quiet = false } = {}) => {
+  const fetchAlertRows = useCallback(async ({ quiet = false } = {}) => {
     if (!isAuthenticated) return;
-    const requestId = latestAlertRequestRef.current + 1;
-    latestAlertRequestRef.current = requestId;
+    const requestId = latestAlertRowsRequestRef.current + 1;
+    latestAlertRowsRequestRef.current = requestId;
 
     if (quiet) {
       setAlertsState((current) => ({ ...current, refreshing: true, error: "" }));
-      setAlertSummaryState((current) => ({ ...current, refreshing: true, error: "" }));
     } else {
-      setAlertsState((current) => ({ ...current, loading: !current.hasLoadedOnce, error: "" }));
-      setAlertSummaryState((current) => ({ ...current, loading: !current.hasLoadedOnce, error: "" }));
+      setAlertsState((current) => ({
+        ...current,
+        loading: !current.hasLoadedOnce,
+        refreshing: current.hasLoadedOnce,
+        error: "",
+      }));
     }
 
     try {
-      const [rowData, summaryData] = await Promise.all([
-        loadAlerts(alertQuery),
-        loadAlertDashboardSummary(alertQuery),
-      ]);
-      if (latestAlertRequestRef.current !== requestId) {
+      const rowData = await loadAlerts(alertQuery);
+      if (latestAlertRowsRequestRef.current !== requestId) {
         return;
       }
 
@@ -290,21 +353,12 @@ function AppInner() {
         error: "",
         hasLoadedOnce: true,
       });
-      setAlertSummaryState({
-        metrics: summaryData?.metrics || null,
-        topSourceIps: Array.isArray(summaryData?.top_source_ips) ? summaryData.top_source_ips : [],
-        timeline: Array.isArray(summaryData?.timeline) ? summaryData.timeline : [],
-        mapMarkers: Array.isArray(summaryData?.map_markers) ? summaryData.map_markers : [],
-        loading: false,
-        refreshing: false,
-        error: "",
-        hasLoadedOnce: true,
-      });
+      setAlertsPendingLabel("");
     } catch (err) {
-      if (latestAlertRequestRef.current !== requestId) {
+      if (latestAlertRowsRequestRef.current !== requestId) {
         return;
       }
-      console.error("Error fetching alerts:", err);
+      console.error("Error fetching alert rows:", err);
       const message = err.message || "Unable to load dashboard alerts";
       setAlertsState((current) => ({
         ...current,
@@ -314,6 +368,54 @@ function AppInner() {
         refreshing: false,
         error: message,
       }));
+      setAlertsPendingLabel("");
+    }
+  }, [alertPageSize, alertQuery, isAuthenticated]);
+
+  const fetchAlertSummary = useCallback(async ({ quiet = false } = {}) => {
+    if (!isAuthenticated) return;
+    const requestId = latestAlertSummaryRequestRef.current + 1;
+    latestAlertSummaryRequestRef.current = requestId;
+
+    if (quiet) {
+      setAlertSummaryState((current) => ({ ...current, refreshing: true, error: "" }));
+    } else {
+      setAlertSummaryState((current) => ({
+        ...current,
+        loading: !current.hasLoadedOnce,
+        refreshing: current.hasLoadedOnce,
+        error: "",
+      }));
+    }
+
+    try {
+      const summaryData = await loadAlertDashboardSummary(alertSummaryQuery);
+      if (latestAlertSummaryRequestRef.current !== requestId) {
+        return;
+      }
+
+      setAlertSummaryState({
+        metrics: summaryData?.metrics || null,
+        topSourceIps: Array.isArray(summaryData?.top_source_ips) ? summaryData.top_source_ips : [],
+        timeline: Array.isArray(summaryData?.timeline) ? summaryData.timeline : [],
+        timelineMeta: {
+          range: summaryData?.timeline_meta?.range || alertView.timelineRange,
+          bucket: summaryData?.timeline_meta?.bucket || "6 hours",
+          windowStart: summaryData?.timeline_meta?.window_start || null,
+        },
+        mapMarkers: Array.isArray(summaryData?.map_markers) ? summaryData.map_markers : [],
+        loading: false,
+        refreshing: false,
+        error: "",
+        hasLoadedOnce: true,
+      });
+      setSummaryPendingLabel("");
+    } catch (err) {
+      if (latestAlertSummaryRequestRef.current !== requestId) {
+        return;
+      }
+      console.error("Error fetching alert dashboard summary:", err);
+      const message = err.message || "Unable to load dashboard summary";
       setAlertSummaryState((current) => ({
         ...current,
         metrics: current.hasLoadedOnce ? current.metrics : null,
@@ -324,8 +426,9 @@ function AppInner() {
         refreshing: false,
         error: message,
       }));
+      setSummaryPendingLabel("");
     }
-  }, [alertPageSize, alertQuery, isAuthenticated]);
+  }, [alertSummaryQuery, alertView.timelineRange, isAuthenticated]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -369,18 +472,29 @@ function AppInner() {
 
   useEffect(() => {
     if (!isAuthenticated) return;
+    fetchAlertRows();
+  }, [fetchAlertRows, isAuthenticated]);
 
-    fetchAlerts();
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    fetchAlertSummary();
+  }, [fetchAlertSummary, isAuthenticated]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
     if (settings.autoRefreshIntervalMs === 0) {
       return undefined;
     }
 
     const interval = setInterval(() => {
-      fetchAlerts({ quiet: true });
+      fetchAlertRows({ quiet: true });
+      fetchAlertSummary({ quiet: true });
     }, settings.autoRefreshIntervalMs);
 
     return () => clearInterval(interval);
-  }, [isAuthenticated, fetchAlerts, settings.autoRefreshIntervalMs]);
+  }, [fetchAlertRows, fetchAlertSummary, isAuthenticated, settings.autoRefreshIntervalMs]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -510,6 +624,8 @@ function AppInner() {
 
   const handleOpenAlert = useCallback((alertId, sourceIp = "") => {
     if (alertId == null) return;
+    setAlertsPendingLabel("Opening alert context…");
+    setSummaryPendingLabel("Updating dashboard summary…");
     setAlertView((current) =>
       buildContextualAlertView(current, {
         alertId: Number(alertId),
@@ -536,6 +652,16 @@ function AppInner() {
       nextPivot.alertId == null || nextPivot.alertId === ""
         ? null
         : Number(nextPivot.alertId);
+    setAlertsPendingLabel(
+      normalizedTargetIp
+        ? `Opening alerts for ${normalizedTargetIp}…`
+        : normalizedSourceIp
+        ? `Opening alerts for ${normalizedSourceIp}…`
+        : normalizedAlertId != null
+        ? `Opening linked alert #${normalizedAlertId}…`
+        : "Updating recent alerts…"
+    );
+    setSummaryPendingLabel("Updating dashboard summary…");
     setAlertView((current) =>
       buildContextualAlertView(current, {
         sourceIp: normalizedSourceIp,
@@ -581,7 +707,7 @@ function AppInner() {
   const handleUpdateStatus = useCallback(async (id, status) => {
     try {
       await updateAlertStatusRequest(id, status);
-      await fetchAlerts({ quiet: true });
+      await Promise.all([fetchAlertRows({ quiet: true }), fetchAlertSummary({ quiet: true })]);
 
       return { ok: true };
     } catch (err) {
@@ -591,7 +717,7 @@ function AppInner() {
         message: err.message || "Failed to update alert status",
       };
     }
-  }, [fetchAlerts]);
+  }, [fetchAlertRows, fetchAlertSummary]);
 
   const metrics = useMemo(() => {
     if (!alertSummaryState.metrics) {
@@ -622,11 +748,19 @@ function AppInner() {
     () => alertSummaryState.timeline,
     [alertSummaryState.timeline]
   );
+  const alertTimelineMeta = useMemo(
+    () => alertSummaryState.timelineMeta,
+    [alertSummaryState.timelineMeta]
+  );
 
   const alertMapMarkers = useMemo(
     () => alertSummaryState.mapMarkers,
     [alertSummaryState.mapMarkers]
   );
+
+  const alertsBusy = alertsState.loading || alertsState.refreshing;
+  const summaryBusy = alertSummaryState.loading || alertSummaryState.refreshing;
+  const canResetAlertView = !isAlertViewAtDefault(alertView);
 
   const dashboardInitialLoading =
     (alertsState.loading || alertSummaryState.loading) &&
@@ -647,20 +781,22 @@ function AppInner() {
   const canGoToNextAlertPage = alertsState.offset + alertsState.limit < alertsState.total;
 
   const handleNextAlertPage = useCallback(() => {
-    if (!canGoToNextAlertPage) return;
+    if (!canGoToNextAlertPage || alertsBusy) return;
+    setAlertsPendingLabel("Loading next page…");
     applyAlertViewPatch((current) => ({ offset: current.offset + alertPageSize }), {
       resetOffset: false,
       clearExactPivots: false,
     });
-  }, [alertPageSize, applyAlertViewPatch, canGoToNextAlertPage]);
+  }, [alertPageSize, alertsBusy, applyAlertViewPatch, canGoToNextAlertPage]);
 
   const handlePreviousAlertPage = useCallback(() => {
-    if (!canGoToPreviousAlertPage) return;
+    if (!canGoToPreviousAlertPage || alertsBusy) return;
+    setAlertsPendingLabel("Loading previous page…");
     applyAlertViewPatch((current) => ({ offset: Math.max(0, current.offset - alertPageSize) }), {
       resetOffset: false,
       clearExactPivots: false,
     });
-  }, [alertPageSize, applyAlertViewPatch, canGoToPreviousAlertPage]);
+  }, [alertPageSize, alertsBusy, applyAlertViewPatch, canGoToPreviousAlertPage]);
 
   if (authLoading) {
     return (
@@ -869,6 +1005,11 @@ function AppInner() {
             cardHeaderStyle={cardHeaderStyle}
             cardTitleStyle={cardTitleStyle}
             cardSubtitleStyle={cardSubtitleStyle}
+            timelineRange={alertView.timelineRange}
+            onTimelineRangeChange={setTimelineRange}
+            timelineMeta={alertTimelineMeta}
+            summaryPendingLabel={summaryPendingLabel}
+            summaryBusy={summaryBusy}
             filterWrapperStyle={filterWrapperStyle}
             filterLabelStyle={filterLabelStyle}
             selectStyle={selectStyle}
@@ -891,7 +1032,10 @@ function AppInner() {
             error={dashboardInitialError}
             refreshing={dashboardRefreshing}
             refreshError={dashboardRefreshError}
-            onRetry={() => fetchAlerts({ quiet: false })}
+            onRetry={() => {
+              fetchAlertRows({ quiet: false });
+              fetchAlertSummary({ quiet: false });
+            }}
             totalAlerts={alertsState.total}
             pageOffset={alertsState.offset}
             pageLimit={alertsState.limit}
@@ -900,7 +1044,14 @@ function AppInner() {
             canGoToNextPage={canGoToNextAlertPage}
             onPreviousPage={handlePreviousAlertPage}
             onNextPage={handleNextAlertPage}
-            onRefreshAlerts={() => fetchAlerts({ quiet: true })}
+            onRefreshAlerts={() => fetchAlertRows({ quiet: true })}
+            alertsPendingLabel={alertsPendingLabel}
+            alertsBusy={alertsBusy}
+            exactSourceIp={alertView.exactSourceIp}
+            exactTargetIp={alertView.exactTargetIp}
+            exactAlertId={alertView.exactAlertId}
+            canResetFilters={canResetAlertView}
+            onResetFilters={resetAlertView}
           />
         )}
 

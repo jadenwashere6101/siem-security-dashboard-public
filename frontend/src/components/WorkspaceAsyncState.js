@@ -1,15 +1,19 @@
 import React from "react";
 
-const prefersReducedMotion =
-  typeof window !== "undefined" &&
-  typeof window.matchMedia === "function" &&
-  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+function prefersReducedMotion() {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
 
 export function WorkspaceInitialState({ loading, error, loadingLabel, errorLabel, onRetry }) {
   if (loading) {
+    const reducedMotion = prefersReducedMotion();
     return (
       <div role="status" aria-live="polite" style={initialStateStyle}>
-        <div style={spinnerStyle} aria-hidden="true" />
+        <div style={buildSpinnerStyle(reducedMotion)} aria-hidden="true" />
         <span>{loadingLabel}</span>
       </div>
     );
@@ -57,14 +61,15 @@ const initialStateStyle = {
   padding: "12px 0",
 };
 
-const spinnerStyle = {
+const buildSpinnerStyle = (reducedMotion) => ({
   width: "16px",
   height: "16px",
   border: "2px solid rgba(201, 209, 217, 0.28)",
   borderTopColor: "#58a6ff",
+  borderRightColor: "transparent",
   borderRadius: "999px",
-  animation: prefersReducedMotion ? "none" : "workspace-spin 0.9s linear infinite",
-};
+  animation: reducedMotion ? "none" : "workspace-spin 0.85s linear infinite",
+});
 
 const errorStateStyle = {
   display: "flex",

@@ -385,14 +385,15 @@ def _fetch_returning_attacker_context(cur, source_ip: str) -> dict[str, Any]:
             COUNT(DISTINCT ia.incident_id),
             COUNT(*) FILTER (WHERE response_status IS NOT NULL),
             COUNT(DISTINCT NULLIF(COALESCE(context->'target_context'->>'primary_destination_ip', ''), '')),
-            COUNT(DISTINCT NULLIF(COALESCE(context->'target_context'->>'primary_destination_port', ''), ''))
+            COUNT(DISTINCT NULLIF(COALESCE(context->'target_context'->>'primary_destination_port', ''), '')),
+            ARRAY_AGG(created_at ORDER BY created_at)
         FROM alerts a
         LEFT JOIN incident_alerts ia ON ia.alert_id = a.id
         WHERE a.source_ip = %s::inet
         """,
         (source_ip,),
     )
-    row = cur.fetchone() or (None, None, 0, 0, 0, 0, 0)
+    row = cur.fetchone() or (None, None, 0, 0, 0, 0, 0, [])
     return build_returning_attacker_context(
         {
             "first_seen": _iso(row[0]),
@@ -402,6 +403,7 @@ def _fetch_returning_attacker_context(cur, source_ip: str) -> dict[str, Any]:
             "previous_responses": int(row[4] or 0),
             "repeated_destinations": int(row[5] or 0),
             "repeated_services": int(row[6] or 0),
+            "observed_at": [_iso(value) for value in (row[7] or []) if value is not None],
         }
     )
 

@@ -17,6 +17,11 @@ function DashboardVisuals({
   cardHeaderStyle,
   cardTitleStyle,
   cardSubtitleStyle,
+  timelineRange,
+  onTimelineRangeChange,
+  timelineMeta,
+  summaryPendingLabel,
+  summaryBusy,
   displaySettings,
   onOpenResponseRegistry = null,
 }) {
@@ -52,6 +57,11 @@ function DashboardVisuals({
         cardStyle={cardStyle}
         cardHeaderStyle={cardHeaderStyle}
         cardTitleStyle={cardTitleStyle}
+        timelineRange={timelineRange}
+        onTimelineRangeChange={onTimelineRangeChange}
+        timelineMeta={timelineMeta}
+        summaryPendingLabel={summaryPendingLabel}
+        summaryBusy={summaryBusy}
         displaySettings={displaySettings}
       />
       <div style={cardStyle}>

@@ -1176,7 +1176,7 @@ function SocCommandCenter({
                             })
                           }
                         >
-                          View linked alerts
+                          View Alerts for This Source
                         </button>
                       ) : null}
                       {typeof onViewRelatedAlerts === "function" && reconContext.detail.display?.primary_target ? (
@@ -1189,7 +1189,7 @@ function SocCommandCenter({
                             })
                           }
                         >
-                          Open primary target
+                          View Alerts for This Target
                         </button>
                       ) : null}
                       {typeof onOpenIncident === "function" && reconContext.detail.related_incident_id ? (
@@ -1207,7 +1207,7 @@ function SocCommandCenter({
                           style={linkButtonStyle}
                           onClick={() => setSelectedSourceIp(reconContext.detail.display.representative_source)}
                         >
-                          Open representative source
+                          Open Source-IP Context
                         </button>
                       ) : null}
                     </div>

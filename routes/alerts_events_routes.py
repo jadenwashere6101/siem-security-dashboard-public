@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -71,6 +72,13 @@ DEFAULT_ALERT_LIMIT = 50
 MAX_ALERT_LIMIT = 100
 VALID_ALERT_SORT_OPTIONS = frozenset({"newest", "oldest", "severity"})
 VALID_ALERT_SOURCE_FILTERS = VALID_EVENT_SOURCES | {"legacy"}
+ALERT_TIMELINE_RANGES = {
+    "24h": {"hours": 24, "bucket": "hour"},
+    "7d": {"days": 7, "bucket": "6 hours"},
+    "30d": {"days": 30, "bucket": "day"},
+    "90d": {"days": 90, "bucket": "day"},
+}
+DEFAULT_ALERT_TIMELINE_RANGE = "7d"
 
 _ALERT_SELECT = """
     SELECT
@@ -174,6 +182,11 @@ def _parse_alert_list_request_args(include_pagination: bool = False):
         "sort": sort,
         "operational_scope": operational_scope,
     }
+
+    timeline_range = _normalize_alert_filter_value(request.args.get("timeline_range")) or DEFAULT_ALERT_TIMELINE_RANGE
+    if timeline_range not in ALERT_TIMELINE_RANGES:
+        return None, (jsonify({"error": "invalid timeline_range"}), 400)
+    args["timeline_range"] = timeline_range
 
     if include_pagination:
         limit, limit_error = _parse_non_negative_int(
@@ -350,30 +363,100 @@ def _fetch_top_source_ips(cur, where_clause: str, params: list):
     return [{"name": row[0], "value": int(row[1] or 0)} for row in cur.fetchall()]
 
 
-def _fetch_alert_timeline(cur, where_clause: str, params: list):
+def _resolve_timeline_window_start(timeline_range: str) -> datetime:
+    range_meta = ALERT_TIMELINE_RANGES.get(
+        timeline_range,
+        ALERT_TIMELINE_RANGES[DEFAULT_ALERT_TIMELINE_RANGE],
+    )
+    now = datetime.now(timezone.utc)
+    if range_meta.get("hours"):
+        return now - timedelta(hours=int(range_meta["hours"]))
+    return now - timedelta(days=int(range_meta["days"]))
+
+
+def _fetch_alert_timeline(cur, where_clause: str, params: list, timeline_range: str):
+    range_meta = ALERT_TIMELINE_RANGES.get(
+        timeline_range,
+        ALERT_TIMELINE_RANGES[DEFAULT_ALERT_TIMELINE_RANGE],
+    )
+    bucket = range_meta["bucket"]
+    window_start = _resolve_timeline_window_start(timeline_range)
+    timeline_where = (
+        f"{where_clause} AND created_at >= %s"
+        if where_clause
+        else " WHERE created_at >= %s"
+    )
+    timeline_params = [*params, window_start]
+    if bucket == "6 hours":
+        bucket_sql = """
+            date_trunc('day', created_at AT TIME ZONE 'UTC')
+            + floor(extract(hour from created_at AT TIME ZONE 'UTC') / 6) * interval '6 hours'
+        """
+    elif bucket == "day":
+        bucket_sql = "date_trunc('day', created_at AT TIME ZONE 'UTC')"
+    else:
+        bucket_sql = "date_trunc('hour', created_at AT TIME ZONE 'UTC')"
     cur.execute(
         f"""
         SELECT
-            date_trunc('hour', created_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS bucket_start,
+            ({bucket_sql}) AT TIME ZONE 'UTC' AS bucket_start,
             COUNT(*) AS alert_count
         FROM alerts
-        {where_clause}
+        {timeline_where}
         GROUP BY bucket_start
         ORDER BY bucket_start ASC
         """,
-        tuple(params),
+        tuple(timeline_params),
     )
-    return [
-        {
-            "bucketStart": int(
-                row[0].replace(tzinfo=timezone.utc).timestamp() * 1000
+    return {
+        "range": timeline_range,
+        "bucket": bucket,
+        "window_start": window_start.isoformat(),
+        "points": [
+            {
+                "bucketStart": int(
+                    row[0].replace(tzinfo=timezone.utc).timestamp() * 1000
+                )
+                if row[0].tzinfo is None
+                else int(row[0].astimezone(timezone.utc).timestamp() * 1000),
+                "count": int(row[1] or 0),
+            }
+            for row in cur.fetchall()
+        ],
+    }
+
+
+def _load_synthetic_source_ip_exclusions() -> set[str]:
+    raw_value = (
+        os.getenv("SIEM_SYNTHETIC_SOURCE_IP_EXCLUSIONS")
+        or os.getenv("SYNTHETIC_SOURCE_IP_EXCLUSIONS")
+        or ""
+    )
+    exclusions: set[str] = set()
+    for part in raw_value.split(","):
+        normalized = part.strip()
+        if not normalized:
+            continue
+        try:
+            exclusions.add(str(ipaddress.ip_address(normalized)))
+        except ValueError:
+            current_app.logger.warning(
+                "Ignoring invalid synthetic source IP exclusion: %s",
+                normalized,
             )
-            if row[0].tzinfo is None
-            else int(row[0].astimezone(timezone.utc).timestamp() * 1000),
-            "count": int(row[1] or 0),
-        }
-        for row in cur.fetchall()
-    ]
+    return exclusions
+
+
+def _exclude_synthetic_source_ips(items: list[dict[str, Any]], excluded_ips: set[str]) -> list[dict[str, Any]]:
+    if not excluded_ips:
+        return items
+    filtered_items = []
+    for item in items:
+        candidate = item.get("name") or item.get("source_ip")
+        if str(candidate or "") in excluded_ips:
+            continue
+        filtered_items.append(item)
+    return filtered_items
 
 
 def _fetch_map_marker_rows(cur, where_clause: str, params: list):
@@ -762,7 +845,8 @@ def _fetch_alert_intelligence(conn, rows) -> dict[int, dict[str, Any]]:
                 COUNT(DISTINCT ia.incident_id),
                 COUNT(*) FILTER (WHERE a.response_status IS NOT NULL),
                 COUNT(DISTINCT NULLIF(COALESCE(a.context->'target_context'->>'primary_destination_ip', ''), '')),
-                COUNT(DISTINCT NULLIF(COALESCE(a.context->'target_context'->>'primary_destination_port', ''), ''))
+                COUNT(DISTINCT NULLIF(COALESCE(a.context->'target_context'->>'primary_destination_port', ''), '')),
+                ARRAY_AGG(a.created_at ORDER BY a.created_at)
             FROM alerts a
             LEFT JOIN incident_alerts ia ON ia.alert_id = a.id
             WHERE a.source_ip = ANY(%s::inet[])
@@ -779,6 +863,7 @@ def _fetch_alert_intelligence(conn, rows) -> dict[int, dict[str, Any]]:
                 "previous_responses": int(row[5] or 0),
                 "repeated_destinations": int(row[6] or 0),
                 "repeated_services": int(row[7] or 0),
+                "observed_at": [value.isoformat() for value in (row[8] or []) if value is not None],
                 "campaign_count": 0,
             }
             for row in cur.fetchall()
@@ -1022,8 +1107,14 @@ def get_alerts_summary():
         where_clause = _build_alerts_where_clause(clauses)
         metrics = _fetch_alert_summary_metrics(cur, where_clause, params)
         top_source_ips = _fetch_top_source_ips(cur, where_clause, params)
-        timeline = _fetch_alert_timeline(cur, where_clause, params)
+        timeline_payload = _fetch_alert_timeline(
+            cur,
+            where_clause,
+            params,
+            query_args["timeline_range"],
+        )
         marker_rows = _fetch_map_marker_rows(cur, where_clause, params)
+        excluded_source_ips = _load_synthetic_source_ip_exclusions()
 
         marker_ids = [row[0] for row in marker_rows]
         response_outcomes_by_alert = _resolve_alert_list_response_outcomes(conn, marker_ids)
@@ -1042,13 +1133,21 @@ def get_alerts_summary():
             )
             alert_payload["alert_count"] = int(row[20] or 0)
             map_markers.append(alert_payload)
+        if excluded_source_ips:
+            top_source_ips = _exclude_synthetic_source_ips(top_source_ips, excluded_source_ips)
+            map_markers = _exclude_synthetic_source_ips(map_markers, excluded_source_ips)
 
         return (
             jsonify(
                 {
                     "metrics": metrics,
                     "top_source_ips": top_source_ips,
-                    "timeline": timeline,
+                    "timeline": timeline_payload["points"],
+                    "timeline_meta": {
+                        "range": timeline_payload["range"],
+                        "bucket": timeline_payload["bucket"],
+                        "window_start": timeline_payload["window_start"],
+                    },
                     "map_markers": map_markers,
                 }
             ),

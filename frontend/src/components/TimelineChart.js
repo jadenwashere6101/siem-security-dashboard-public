@@ -18,17 +18,60 @@ function TimelineChart({
   cardStyle,
   cardHeaderStyle,
   cardTitleStyle,
+  timelineRange,
+  onTimelineRangeChange,
+  timelineMeta,
+  summaryPendingLabel,
+  summaryBusy,
   displaySettings,
 }) {
   const hasEnoughTrendData = data.length >= 2;
   const formatBucketTimestamp = (value) =>
     formatTimestamp(value, displaySettings, "Unknown time");
+  const rangeOptions = [
+    { value: "24h", label: "24 hours" },
+    { value: "7d", label: "7 days" },
+    { value: "30d", label: "30 days" },
+    { value: "90d", label: "90 days" },
+  ];
+  const bucketLabel = timelineMeta?.bucket === "day" ? "Daily buckets" : timelineMeta?.bucket === "6 hours" ? "6-hour buckets" : "Hourly buckets";
 
   return (
     <section style={{ ...cardStyle, marginBottom: "24px" }}>
       <div style={cardHeaderStyle}>
-        <h2 style={cardTitleStyle}>Alerts Over Time</h2>
+        <div>
+          <h2 style={cardTitleStyle}>Alerts Over Time</h2>
+          <p style={{ margin: 0, color: "#8b949e", fontSize: "13px" }}>{bucketLabel}</p>
+        </div>
+        <div style={rangeControlRowStyle}>
+          {rangeOptions.map((option) => {
+            const selected = timelineRange === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => onTimelineRangeChange?.(option.value)}
+                disabled={summaryBusy}
+                aria-pressed={selected}
+                style={{
+                  ...rangeButtonStyle,
+                  ...(selected ? rangeButtonActiveStyle : null),
+                  opacity: summaryBusy && !selected ? 0.72 : 1,
+                  cursor: summaryBusy ? "progress" : "pointer",
+                }}
+              >
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
+      {summaryPendingLabel ? (
+        <div role="status" aria-live="polite" style={summaryStatusStyle}>
+          <span style={summarySpinnerStyle} aria-hidden="true" />
+          <span>{summaryPendingLabel}</span>
+        </div>
+      ) : null}
 
       <div className="chart-container" style={{ height: "220px", padding: "20px" }}>
         {!hasEnoughTrendData ? (
@@ -77,5 +120,47 @@ function TimelineChart({
     </section>
   );
 }
+
+const rangeControlRowStyle = {
+  display: "flex",
+  alignItems: "center",
+  gap: "8px",
+  flexWrap: "wrap",
+};
+
+const rangeButtonStyle = {
+  border: "1px solid rgba(139, 148, 158, 0.28)",
+  backgroundColor: "#0d1117",
+  color: "#c9d1d9",
+  borderRadius: "999px",
+  padding: "7px 12px",
+  fontSize: "12px",
+  fontWeight: "700",
+};
+
+const rangeButtonActiveStyle = {
+  borderColor: "rgba(217, 164, 65, 0.48)",
+  backgroundColor: "rgba(217, 164, 65, 0.16)",
+  color: "#f5d487",
+};
+
+const summaryStatusStyle = {
+  display: "flex",
+  alignItems: "center",
+  gap: "8px",
+  padding: "0 20px 12px 20px",
+  color: "#c9d1d9",
+  fontSize: "13px",
+};
+
+const summarySpinnerStyle = {
+  width: "14px",
+  height: "14px",
+  borderRadius: "999px",
+  border: "2px solid rgba(201, 209, 217, 0.24)",
+  borderTopColor: "#d9a441",
+  borderRightColor: "transparent",
+  animation: "workspace-spin 0.8s linear infinite",
+};
 
 export default TimelineChart;

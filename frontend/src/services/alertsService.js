@@ -12,6 +12,11 @@ const summaryFallback = {
   },
   top_source_ips: [],
   timeline: [],
+  timeline_meta: {
+    range: "7d",
+    bucket: "6 hours",
+    window_start: null,
+  },
   map_markers: [],
 };
 
@@ -25,6 +30,7 @@ function buildAlertQuery({
   sourceFilter,
   sortOption,
   operationalScope,
+  timelineRange,
   limit,
   offset,
 } = {}) {
@@ -42,6 +48,7 @@ function buildAlertQuery({
   if (operationalScope && operationalScope !== "all_history") {
     params.set("operational_scope", operationalScope);
   }
+  if (timelineRange) params.set("timeline_range", String(timelineRange).trim());
   if (limit !== undefined && limit !== null && limit !== "") params.set("limit", String(limit));
   if (offset !== undefined && offset !== null && offset !== "") params.set("offset", String(offset));
   return params.toString();

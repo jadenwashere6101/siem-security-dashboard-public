@@ -65,6 +65,13 @@ function AlertsTable({
   cardHeaderStyle,
   cardTitleStyle,
   cardSubtitleStyle,
+  exactSourceIp = "",
+  exactTargetIp = "",
+  exactAlertId = null,
+  canResetFilters = false,
+  onResetFilters = null,
+  alertsPendingLabel = "",
+  alertsBusy = false,
   filterWrapperStyle,
   filterLabelStyle,
   selectStyle,
@@ -564,6 +571,13 @@ function AlertsTable({
           cardHeaderStyle={cardHeaderStyle}
           cardTitleStyle={cardTitleStyle}
           cardSubtitleStyle={cardSubtitleStyle}
+          exactSourceIp={exactSourceIp}
+          exactTargetIp={exactTargetIp}
+          exactAlertId={exactAlertId}
+          canResetFilters={canResetFilters}
+          onResetFilters={onResetFilters}
+          alertsPendingLabel={alertsPendingLabel}
+          alertsBusy={alertsBusy}
           filterWrapperStyle={filterWrapperStyle}
           filterLabelStyle={filterLabelStyle}
           selectStyle={selectStyle}
@@ -698,11 +712,11 @@ function AlertsTable({
             <button
               type="button"
               onClick={onPreviousPage}
-              disabled={!canGoToPreviousPage}
+              disabled={!canGoToPreviousPage || alertsBusy}
               style={{
                 ...paginationButtonStyle,
-                opacity: canGoToPreviousPage ? 1 : 0.55,
-                cursor: canGoToPreviousPage ? "pointer" : "default",
+                opacity: canGoToPreviousPage && !alertsBusy ? 1 : 0.55,
+                cursor: canGoToPreviousPage && !alertsBusy ? "pointer" : "default",
               }}
             >
               Previous
@@ -710,11 +724,11 @@ function AlertsTable({
             <button
               type="button"
               onClick={onNextPage}
-              disabled={!canGoToNextPage}
+              disabled={!canGoToNextPage || alertsBusy}
               style={{
                 ...paginationButtonStyle,
-                opacity: canGoToNextPage ? 1 : 0.55,
-                cursor: canGoToNextPage ? "pointer" : "default",
+                opacity: canGoToNextPage && !alertsBusy ? 1 : 0.55,
+                cursor: canGoToNextPage && !alertsBusy ? "pointer" : "default",
               }}
             >
               Next

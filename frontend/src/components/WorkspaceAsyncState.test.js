@@ -17,7 +17,7 @@ describe("WorkspaceAsyncState", () => {
     const { WorkspaceInitialState } = await import("./WorkspaceAsyncState");
     render(<WorkspaceInitialState loading loadingLabel="Loading workspace" />);
     expect(screen.getByRole("status").firstChild).toHaveStyle({
-      animation: "workspace-spin 0.9s linear infinite",
+      animation: "workspace-spin 0.85s linear infinite",
     });
   });
 

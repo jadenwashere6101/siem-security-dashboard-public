@@ -10,6 +10,7 @@ INVESTIGATION_LABELS = {
     "medium": "Review Soon",
     "low": "Monitor",
 }
+RETURNING_ATTACKER_WINDOW_GAP_HOURS = 6
 
 
 def _to_datetime(value: Any) -> datetime | None:
@@ -54,27 +55,74 @@ def _reason(reason_id: str, text: str) -> dict[str, str]:
     return {"id": reason_id, "text": text}
 
 
+def _normalize_observed_timestamps(values: Any) -> list[datetime]:
+    normalized: list[datetime] = []
+    for value in values or []:
+        parsed = _to_datetime(value)
+        if parsed is not None:
+            normalized.append(parsed)
+    normalized.sort()
+    return normalized
+
+
+def _build_observation_windows(observed_at: list[datetime]) -> list[tuple[datetime, datetime]]:
+    if not observed_at:
+        return []
+    windows: list[tuple[datetime, datetime]] = []
+    window_start = observed_at[0]
+    previous = observed_at[0]
+    for current in observed_at[1:]:
+        if (current - previous).total_seconds() >= RETURNING_ATTACKER_WINDOW_GAP_HOURS * 3600:
+            windows.append((window_start, previous))
+            window_start = current
+        previous = current
+    windows.append((window_start, previous))
+    return windows
+
+
 def build_returning_attacker_context(history: dict[str, Any] | None) -> dict[str, Any]:
     history = history or {}
     first_seen = history.get("first_seen")
     last_seen = history.get("last_seen")
+    observed_at = _normalize_observed_timestamps(history.get("observed_at"))
+    observation_windows = _build_observation_windows(observed_at)
+    distinct_observation_days = len({item.date() for item in observed_at})
     days_observed = max(
         _coerce_int(history.get("days_observed")),
         _days_observed(first_seen, last_seen),
+        distinct_observation_days,
     )
     previous_incidents = _coerce_int(history.get("previous_incidents"))
     previous_responses = _coerce_int(history.get("previous_responses"))
     repeated_destinations = _coerce_int(history.get("repeated_destinations"))
     repeated_services = _coerce_int(history.get("repeated_services"))
     campaign_count = _coerce_int(history.get("campaign_count"))
-    is_returning = days_observed > 1 or previous_incidents > 0 or previous_responses > 0
+    observation_window_count = len(observation_windows)
+    returned_after_hours = 0
+    if observation_window_count >= 2:
+        last_prior_window_end = observation_windows[-2][1]
+        latest_window_start = observation_windows[-1][0]
+        returned_after_hours = max(
+            int(round((latest_window_start - last_prior_window_end).total_seconds() / 3600)),
+            1,
+        )
+    is_returning = distinct_observation_days >= 2 or observation_window_count >= 2
 
     reasons: list[dict[str, str]] = []
-    if days_observed > 1:
-        reasons.append(_reason("days_observed", f"Returning for {days_observed} days"))
-    if previous_incidents > 0:
+    if distinct_observation_days >= 2:
+        reasons.append(_reason("distinct_days", f"Seen on {distinct_observation_days} distinct days"))
+    elif observation_window_count >= 2:
+        reasons.append(
+            _reason(
+                "observation_windows",
+                f"Returned after {returned_after_hours} hour{'s' if returned_after_hours != 1 else ''}",
+            )
+        )
+    elif observed_at:
+        reasons.append(_reason("repeated_activity", "Repeated activity within one continuous burst"))
+    if is_returning and previous_incidents > 0:
         reasons.append(_reason("previous_incidents", f"Linked to {previous_incidents} previous incidents"))
-    if previous_responses > 0:
+    if is_returning and previous_responses > 0:
         reasons.append(_reason("previous_responses", f"{previous_responses} previous response actions recorded"))
     if repeated_destinations > 0:
         reasons.append(_reason("repeated_destinations", f"Repeatedly targeted {_plural(repeated_destinations, 'destination')}"))
@@ -86,13 +134,25 @@ def build_returning_attacker_context(history: dict[str, Any] | None) -> dict[str
     if not reasons:
         reasons.append(_reason("new_source", "No prior history for this source"))
 
+    if distinct_observation_days >= 2:
+        headline = "Returning attacker"
+    elif observation_window_count >= 2:
+        headline = "Returning attacker"
+    elif observed_at:
+        headline = "Repeated activity"
+    else:
+        headline = "No prior history"
+
     return {
         "is_returning": is_returning,
-        "headline": "Returning attacker" if is_returning else "No prior history",
+        "headline": headline,
         "summary": reasons[0]["text"],
         "first_seen": first_seen,
         "last_seen": last_seen,
         "days_observed": days_observed,
+        "distinct_observation_days": distinct_observation_days,
+        "observation_window_count": observation_window_count,
+        "returned_after_hours": returned_after_hours,
         "previous_incidents": previous_incidents,
         "previous_responses": previous_responses,
         "repeated_destinations": repeated_destinations,
