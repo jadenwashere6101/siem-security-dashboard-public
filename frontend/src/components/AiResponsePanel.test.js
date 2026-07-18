@@ -94,3 +94,54 @@ test("AiResponsePanel renders insufficient context and stale warnings", () => {
   expect(screen.getByText("This answer may be stale because the visible SIEM context changed.")).toBeInTheDocument();
   expect(screen.getByText("0 sources · 2 omitted")).toBeInTheDocument();
 });
+
+test("AiResponsePanel renders read-only tool evidence metadata", () => {
+  render(
+    <AiResponsePanel
+      state={{
+        status: "success",
+        title: "Tool-assisted answer",
+        response: {
+          answer: "The source IP is linked to recent alerts.",
+          insufficient_context: false,
+          context: { sources: [{ source_type: "visible_context" }], omitted_count: 0 },
+          metadata: {
+            provider: "ollama",
+            model: "qwen3:4b-instruct",
+            status: "success",
+            local_request: true,
+            paid_request: false,
+            estimated_cost_usd: 0,
+          },
+          tools: {
+            used: true,
+            read_only: true,
+            truncated: true,
+            omitted_count: 1,
+            calls: [
+              {
+                tool_name: "get_source_ip_context",
+                status: "success",
+                sources: [{ source_path: "/source-ip-context" }],
+              },
+              {
+                tool_name: "read_audit_log",
+                status: "forbidden",
+                sources: [],
+              },
+            ],
+          },
+        },
+      }}
+      onDismiss={() => {}}
+      onRetry={() => {}}
+      onCancel={() => {}}
+    />
+  );
+
+  expect(screen.getByLabelText("Read-only AI tool evidence")).toBeInTheDocument();
+  expect(screen.getByText("2 read tools · 1 limited/failed · 1 omitted")).toBeInTheDocument();
+  expect(screen.getByText("get_source_ip_context")).toBeInTheDocument();
+  expect(screen.getByText("read_audit_log")).toBeInTheDocument();
+  expect(screen.getByText("forbidden")).toBeInTheDocument();
+});

@@ -62,6 +62,34 @@ test("requestAiChat posts visible context and client-owned history", async () =>
   );
 });
 
+test("requestAiChat preserves optional read-tool policy", async () => {
+  fetch.mockResolvedValue({
+    ok: true,
+    json: async () => ({ status: "success", answer: "chat" }),
+  });
+
+  await sendSiemChatMessage({
+    message: "Show me everything tied to this IP",
+    visible_context: { active_section: "dashboard" },
+    client_history: [],
+    use_tools: true,
+    tool_policy: { max_tool_calls: 5, time_window_hours: 24 },
+  });
+
+  expect(fetch).toHaveBeenCalledWith(
+    expect.stringContaining("/ai/chat"),
+    expect.objectContaining({
+      body: JSON.stringify({
+        message: "Show me everything tied to this IP",
+        visible_context: { active_section: "dashboard" },
+        client_history: [],
+        use_tools: true,
+        tool_policy: { max_tool_calls: 5, time_window_hours: 24 },
+      }),
+    })
+  );
+});
+
 test("getAiStatus fetches status with credentials and abort signal", async () => {
   const controller = new AbortController();
   fetch.mockResolvedValue({

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import json
 from typing import Any
 
+from flask_login import current_user
+
 from core.ai.config import AiGatewayConfig, load_ai_gateway_config
 from core.ai.context_builder import (
     AiContextError,
@@ -14,6 +16,14 @@ from core.ai.context_builder import (
 )
 from core.ai.gateway import AiGateway
 from core.ai.models import AiGatewayRequest, AiRequestMetadata
+from core.ai.soc_tool_executor import (
+    build_deterministic_tool_plan,
+    execute_tool_plan,
+    normalize_tool_policy,
+    should_skip_tools_for_gateway,
+    tool_summary_for_prompt,
+)
+from core.ai.soc_tools import SocToolExecutionSummary
 
 ALLOWED_EXPLAIN_ACTIONS = frozenset(
     {
@@ -65,6 +75,8 @@ def explain_context(
         raise AiContextValidationError("question is too large.")
 
     resolved_config = config if config is not None else load_ai_gateway_config()
+    use_tools = bool(payload.get("use_tools"))
+    tool_policy = normalize_tool_policy(payload.get("tool_policy"))
     ai_context = build_ai_context(
         context_type=context_type,
         context=context,
@@ -77,6 +89,9 @@ def explain_context(
         question=question,
         gateway=gateway,
         config=resolved_config,
+        use_tools=use_tools,
+        tool_policy=tool_policy,
+        planning_context=context,
     )
 
 
@@ -103,6 +118,8 @@ def chat_about_siem(
     visible_context = payload.get("visible_context") if isinstance(payload.get("visible_context"), dict) else {}
 
     resolved_config = config if config is not None else load_ai_gateway_config()
+    use_tools = bool(payload.get("use_tools"))
+    tool_policy = normalize_tool_policy(payload.get("tool_policy"))
     ai_context = build_ai_context(
         context_type="general",
         context=visible_context,
@@ -116,6 +133,9 @@ def chat_about_siem(
         question=message,
         gateway=gateway,
         config=resolved_config,
+        use_tools=use_tools,
+        tool_policy=tool_policy,
+        planning_context=visible_context,
     )
 
 
@@ -133,6 +153,7 @@ def service_error_response(error: AiContextError) -> AiServiceResult:
                 "insufficient_reason": str(error),
             },
             "metadata": _empty_metadata(error.error_code),
+            "tools": _empty_tools(),
             "error": str(error),
         },
         status_code=error.status_code,
@@ -146,8 +167,27 @@ def _answer_from_context(
     question: str,
     gateway: AiGateway | None,
     config: AiGatewayConfig,
+    use_tools: bool = False,
+    tool_policy: dict[str, Any] | None = None,
+    planning_context: dict[str, Any] | None = None,
 ) -> AiServiceResult:
-    if ai_context.insufficient_context:
+    tools = _empty_tool_summary()
+    if use_tools and not should_skip_tools_for_gateway(config):
+        plan = build_deterministic_tool_plan(
+            question=question,
+            context_type=ai_context.context_type,
+            context=planning_context or {},
+            tool_policy=tool_policy,
+        )
+        tools = execute_tool_plan(
+            plan,
+            actor_role=getattr(current_user, "role", None),
+            config=config,
+            tool_policy=tool_policy,
+        )
+
+    has_tool_evidence = any(call.status == "success" and call.data not in (None, {}, []) for call in tools.calls)
+    if ai_context.insufficient_context and not has_tool_evidence:
         return AiServiceResult(
             {
                 "status": "insufficient_context",
@@ -155,12 +195,13 @@ def _answer_from_context(
                 "insufficient_context": True,
                 "context": ai_context.metadata(),
                 "metadata": _empty_metadata("insufficient_context", mode=config.mode),
+                "tools": tools.as_dict(),
                 "error": ai_context.insufficient_reason,
             },
             status_code=200,
         )
 
-    prompt = _build_prompt(ai_context, action=action, question=question)
+    prompt = _build_prompt(ai_context, action=action, question=question, tools=tools, config=config)
     if len(prompt) > config.max_prompt_chars:
         return AiServiceResult(
             {
@@ -173,6 +214,7 @@ def _answer_from_context(
                     "insufficient_reason": "Prompt exceeded configured AI size limit.",
                 },
                 "metadata": _empty_metadata("insufficient_context", mode=config.mode),
+                "tools": tools.as_dict(),
                 "error": "Prompt exceeded configured AI size limit.",
             },
             status_code=200,
@@ -198,25 +240,42 @@ def _answer_from_context(
             "insufficient_context": False,
             "context": ai_context.metadata(),
             "metadata": response_payload["metadata"],
+            "tools": tools.as_dict(),
             "error": response_payload["error"],
         },
         status_code=200,
     )
 
 
-def _build_prompt(ai_context: AiContextPayload, *, action: str, question: str) -> str:
+def _build_prompt(
+    ai_context: AiContextPayload,
+    *,
+    action: str,
+    question: str,
+    tools: SocToolExecutionSummary | None = None,
+    config: AiGatewayConfig | None = None,
+) -> str:
     context_json = json.dumps(ai_context.data, default=str, sort_keys=True, indent=2)
+    tool_budget = max(1000, (config.max_prompt_chars // 3 if config else 4000))
+    tools_json = json.dumps(
+        tool_summary_for_prompt(tools, max_chars=tool_budget) if tools else _empty_tools(),
+        default=str,
+        sort_keys=True,
+        indent=2,
+    )
     question_line = question or _default_question(action, ai_context.context_type)
     return (
         "You are a read-only SIEM analyst assistant.\n"
         "Use only the supplied SIEM context. If the context is incomplete, say what is missing.\n"
         "Do not claim you checked data that is not included. Do not execute or suggest commands that mutate production.\n"
+        "Read-tool results are evidence only; do not say remediation, blocking, approval, or SOAR execution happened.\n"
         "Recommendations must be analyst next steps only; do not say an action was taken.\n\n"
         f"Action: {action}\n"
         f"Question: {question_line}\n"
         f"Context type: {ai_context.context_type}\n"
         f"Context sources: {json.dumps(ai_context.metadata(), default=str, sort_keys=True)}\n\n"
         f"SIEM context:\n{context_json}\n\n"
+        f"Read-only SOC tool evidence:\n{tools_json}\n\n"
         "Answer with concise sections: Summary, Key Evidence, Uncertainty, Recommended Next Steps."
     )
 
@@ -242,6 +301,14 @@ def _empty_metadata(status: str, *, mode: str = "disabled") -> dict[str, Any]:
         fallback_reason=None,
         error_code=status,
     ).as_dict()
+
+
+def _empty_tool_summary() -> SocToolExecutionSummary:
+    return SocToolExecutionSummary(used=False)
+
+
+def _empty_tools() -> dict[str, Any]:
+    return _empty_tool_summary().as_dict()
 
 
 __all__ = [

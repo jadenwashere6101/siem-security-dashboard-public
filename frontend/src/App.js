@@ -947,6 +947,8 @@ function AppInner() {
           message,
           visible_context: visibleContext,
           client_history: aiChatHistory,
+          use_tools: true,
+          tool_policy: { max_tool_calls: 5, time_window_hours: 24 },
         },
         executor: requestAiChat,
         contextKey: JSON.stringify({ section: activeSection, filters: visibleContext.visible_filters }),

@@ -21,3 +21,14 @@ export function sourceCountLabel(context) {
   if (omitted > 0) return `${count} sources · ${omitted} omitted`;
   return `${count} sources`;
 }
+
+export function toolUsageLabel(tools) {
+  if (!tools?.used) return "No read tools used";
+  const calls = Array.isArray(tools.calls) ? tools.calls : [];
+  const failures = calls.filter((call) => call.status && call.status !== "success").length;
+  const omitted = Number(tools.omitted_count || 0);
+  const parts = [`${calls.length} read tools`];
+  if (failures) parts.push(`${failures} limited/failed`);
+  if (tools.truncated || omitted > 0) parts.push(`${omitted} omitted`);
+  return parts.join(" · ");
+}

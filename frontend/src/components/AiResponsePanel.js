@@ -1,5 +1,5 @@
 import React from "react";
-import { providerCostLabel, providerStatusLabel, sourceCountLabel } from "../utils/aiDisplay";
+import { providerCostLabel, providerStatusLabel, sourceCountLabel, toolUsageLabel } from "../utils/aiDisplay";
 
 function AiResponsePanel({
   state,
@@ -12,6 +12,8 @@ function AiResponsePanel({
   const response = state.response || {};
   const metadata = response.metadata;
   const context = response.context;
+  const tools = response.tools;
+  const toolCalls = Array.isArray(tools?.calls) ? tools.calls : [];
 
   return (
     <aside
@@ -57,7 +59,27 @@ function AiResponsePanel({
             <span>{providerStatusLabel(metadata)}</span>
             <span>{providerCostLabel(metadata)}</span>
             <span>{sourceCountLabel(context)}</span>
+            <span>{toolUsageLabel(tools)}</span>
           </div>
+          {tools?.used ? (
+            <div style={toolBoxStyle} aria-label="Read-only AI tool evidence">
+              <p style={toolTitleStyle}>Read-only investigation evidence</p>
+              {toolCalls.length ? (
+                <ul style={toolListStyle}>
+                  {toolCalls.map((call, index) => (
+                    <li key={`${call.tool_name || "tool"}-${index}`} style={toolItemStyle}>
+                      <strong>{call.tool_name || "unknown_tool"}</strong>
+                      <span>{call.status || "unknown"}</span>
+                      <span>{Array.isArray(call.sources) ? call.sources.length : 0} sources</span>
+                      {call.truncated ? <span>truncated</span> : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p style={mutedStyle}>No read-tool evidence was returned.</p>
+              )}
+            </div>
+          ) : null}
         </div>
       ) : null}
     </aside>
@@ -98,5 +120,9 @@ const answerStyle = { whiteSpace: "pre-wrap", lineHeight: 1.6, fontSize: "14px" 
 const metadataStyle = { display: "grid", gap: "4px", marginTop: "14px", color: "#94a3b8", fontSize: "12px" };
 const primaryButtonStyle = { border: "none", borderRadius: "8px", padding: "8px 12px", background: "#0ea5e9", color: "#fff", cursor: "pointer" };
 const secondaryButtonStyle = { ...primaryButtonStyle, background: "#334155" };
+const toolBoxStyle = { marginTop: "14px", border: "1px solid rgba(148, 163, 184, 0.22)", borderRadius: "12px", padding: "12px", background: "rgba(15, 23, 42, 0.68)" };
+const toolTitleStyle = { margin: "0 0 8px", color: "#bae6fd", fontSize: "12px", fontWeight: 800 };
+const toolListStyle = { listStyle: "none", padding: 0, margin: 0, display: "grid", gap: "8px" };
+const toolItemStyle = { display: "flex", flexWrap: "wrap", gap: "8px", justifyContent: "space-between", color: "#cbd5e1", fontSize: "12px" };
 
 export default AiResponsePanel;
