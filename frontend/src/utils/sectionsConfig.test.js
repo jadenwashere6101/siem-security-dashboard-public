@@ -19,6 +19,7 @@ const EXPECTED_SECTION_IDS = [
   "notification-policy",
   "admin-users",
   "admin-audit-logs",
+  "repo-architecture-assistant",
   "soar-queue",
   "soar-incidents",
   "soar-approvals",
@@ -161,6 +162,12 @@ const expectedVisibility = {
     viewer: false,
     unauthenticated: false,
   },
+  "repo-architecture-assistant": {
+    super_admin: true,
+    analyst: false,
+    viewer: false,
+    unauthenticated: false,
+  },
   "soar-queue": {
     super_admin: true,
     analyst: false,
@@ -213,7 +220,7 @@ const expectedVisibility = {
 
 describe("sectionsConfig", () => {
   test("contains exactly the expected section ids", () => {
-    expect(sectionsConfig).toHaveLength(26);
+    expect(sectionsConfig).toHaveLength(27);
     expect(sectionsConfig.map((section) => section.id)).toEqual(EXPECTED_SECTION_IDS);
   });
 

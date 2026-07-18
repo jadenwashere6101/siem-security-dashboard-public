@@ -142,6 +142,10 @@ jest.mock('./components/AuditLogPanel', () => () => (
   <div data-testid="audit-log-panel">Audit Log Panel Mock</div>
 ));
 
+jest.mock('./components/RepoArchitectureAssistantPanel', () => () => (
+  <div data-testid="repo-architecture-assistant-panel">Repo Architecture Assistant Mock</div>
+));
+
 jest.mock('./components/LiveLogsPanel', () => (props) => (
   <div data-testid="live-logs-panel">
     Live Logs Panel Mock {props.label} {props.source}
@@ -471,6 +475,7 @@ test('renders split administration nav for super_admin and each item loads only 
   expect(await screen.findByRole('button', { name: /detection rules/i })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: /user management/i })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: /audit logs/i })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /repo architecture ai/i })).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: /^administration$/i })).not.toBeInTheDocument();
 
   await userEvent.click(screen.getByRole('button', { name: /detection rules/i }));
@@ -487,6 +492,13 @@ test('renders split administration nav for super_admin and each item loads only 
   expect(await screen.findByTestId('audit-log-panel')).toBeInTheDocument();
   expect(screen.queryByTestId('detection-rules-panel')).not.toBeInTheDocument();
   expect(screen.queryByTestId('admin-users-panel')).not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole('button', { name: /repo architecture ai/i }));
+  expect(await screen.findByTestId('repo-architecture-assistant-panel')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /open general siem ai chat/i })).toBeInTheDocument();
+  expect(screen.queryByTestId('detection-rules-panel')).not.toBeInTheDocument();
+  expect(screen.queryByTestId('admin-users-panel')).not.toBeInTheDocument();
+  expect(screen.queryByTestId('audit-log-panel')).not.toBeInTheDocument();
 });
 
 test('does not render split administration nav for analyst', async () => {
@@ -502,6 +514,7 @@ test('does not render split administration nav for analyst', async () => {
   expect(screen.queryByRole('button', { name: /detection rules/i })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: /user management/i })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: /audit logs/i })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /repo architecture ai/i })).not.toBeInTheDocument();
 });
 
 test('does not render SOAR Operations nav for viewer', async () => {
@@ -518,6 +531,7 @@ test('does not render SOAR Operations nav for viewer', async () => {
   expect(screen.queryByRole('button', { name: /detection rules/i })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: /user management/i })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: /audit logs/i })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /repo architecture ai/i })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: /soar operations/i })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: /soar metrics/i })).not.toBeInTheDocument();
   expect(screen.queryByTestId('dead-letters-panel')).not.toBeInTheDocument();

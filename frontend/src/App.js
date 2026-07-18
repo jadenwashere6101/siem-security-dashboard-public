@@ -24,6 +24,7 @@ import SettingsPanel from "./components/SettingsPanel";
 import SidebarLayout from "./components/SidebarLayout";
 import AiResponsePanel from "./components/AiResponsePanel";
 import FloatingSiemChat from "./components/FloatingSiemChat";
+import RepoArchitectureAssistantPanel from "./components/RepoArchitectureAssistantPanel";
 import { UiSettingsProvider, useUiSettings } from "./context/UiSettingsContext";
 import { ResponseSyncProvider } from "./context/ResponseSyncContext";
 import {
@@ -1412,6 +1413,16 @@ function AppInner() {
 
         {activeSection === "admin-audit-logs" && isSectionVisible("admin-audit-logs", roleFlags) && (
           <AuditLogPanel
+            cardStyle={cardStyle}
+            cardHeaderStyle={cardHeaderStyle}
+            cardTitleStyle={cardTitleStyle}
+            cardSubtitleStyle={cardSubtitleStyle}
+          />
+        )}
+
+        {activeSection === "repo-architecture-assistant" &&
+          isSectionVisible("repo-architecture-assistant", roleFlags) && (
+          <RepoArchitectureAssistantPanel
             cardStyle={cardStyle}
             cardHeaderStyle={cardHeaderStyle}
             cardTitleStyle={cardTitleStyle}

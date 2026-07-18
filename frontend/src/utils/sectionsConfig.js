@@ -75,6 +75,12 @@ export const sectionsConfig = [
     visibleWhen: ({ isSuperAdmin }) => isSuperAdmin,
   },
   {
+    id: "repo-architecture-assistant",
+    label: "Repo Architecture AI",
+    group: "administration",
+    visibleWhen: ({ isSuperAdmin }) => isSuperAdmin,
+  },
+  {
     id: "soar-queue",
     label: "SOAR Queue",
     group: "soar",

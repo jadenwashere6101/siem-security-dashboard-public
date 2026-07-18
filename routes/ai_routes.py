@@ -10,7 +10,12 @@ from core.ai.explainer_service import (
     service_error_response,
 )
 from core.ai.readiness import get_ai_gateway_status
-from core.auth import analyst_or_super_admin_required
+from core.ai.repo_assistant_service import (
+    RepoAssistantValidationError,
+    answer_repo_question,
+    get_repo_assistant_status,
+)
+from core.auth import analyst_or_super_admin_required, super_admin_required
 
 ai_bp = Blueprint("ai", __name__)
 
@@ -61,4 +66,33 @@ def ai_chat_route():
         return jsonify(result.payload), result.status_code
     except Exception as error:
         current_app.logger.error("Error in ai_chat_route: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@ai_bp.route("/ai/repo/status", methods=["GET"])
+@login_required
+@super_admin_required
+def ai_repo_status_route():
+    try:
+        return jsonify(get_repo_assistant_status()), 200
+    except Exception as error:
+        current_app.logger.error("Error in ai_repo_status_route: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@ai_bp.route("/ai/repo/chat", methods=["POST"])
+@login_required
+@super_admin_required
+def ai_repo_chat_route():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "JSON object body is required."}), 400
+
+    try:
+        result = answer_repo_question(payload)
+        return jsonify(result.payload), result.status_code
+    except RepoAssistantValidationError as error:
+        return jsonify({"status": error.error_code, "error": str(error)}), error.status_code
+    except Exception as error:
+        current_app.logger.error("Error in ai_repo_chat_route status=failed error=%s", error)
         return jsonify({"error": "Internal server error"}), 500
