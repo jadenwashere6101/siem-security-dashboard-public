@@ -7,6 +7,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 import logging
 import os
 from routes.admin_routes import admin_bp
+from routes.ai_routes import ai_bp
 from routes.alert_mutation_routes import alert_mutation_bp
 from routes.alerts_events_routes import alerts_events_bp
 from routes.auth_routes import auth_bp
@@ -116,6 +117,7 @@ def create_app():
     login_manager.user_loader(load_user)
 
     app.register_blueprint(auth_bp)
+    app.register_blueprint(ai_bp)
     app.register_blueprint(blocklist_bp)
     app.register_blueprint(reporting_bp)
     app.register_blueprint(admin_bp)
