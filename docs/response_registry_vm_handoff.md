@@ -33,7 +33,7 @@ Do **not** edit feature source on the VM. Do **not** merge on a dirty VM.
    - Re-run dry-run; expect `Nothing to apply`.
 
 5. **Registry backfill (safe, evidence-only)**
-   - `python3 scripts/backfill_indicator_response_registry.py --db-url "$DATABASE_URL"`
+   - `python3 scripts/backfill_indicator_response_registry.py`
    - Imports only provable Blocklist relationships; labels inferred/unknown provenance.
    - Do **not** invent success outcomes.
 

@@ -165,12 +165,12 @@ jobs:
       - name: Apply full migration chain to disposable database
         run: |
           set -euo pipefail
-          python3 scripts/migrate.py --db-url "$DATABASE_URL"
+          DATABASE_URL="$DATABASE_URL" python3 scripts/migrate.py
 
       - name: Verify post-apply dry-run reports no pending migrations
         run: |
           set -euo pipefail
-          output="$(python3 scripts/migrate.py --db-url "$DATABASE_URL" --dry-run 2>&1)"
+          output="$(DATABASE_URL="$DATABASE_URL" python3 scripts/migrate.py --dry-run 2>&1)"
           printf '%s\n' "$output"
           if ! grep -q "Nothing to apply" <<<"$output"; then
             echo "::error::Post-apply dry-run did not report 'Nothing to apply'."
