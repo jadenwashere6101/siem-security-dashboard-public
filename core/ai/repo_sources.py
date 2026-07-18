@@ -51,9 +51,11 @@ _BINARY_OR_GENERATED_SUFFIXES = {
 }
 _EXCLUDED_PARTS = {
     ".git",
+    ".venv",
     "__pycache__",
     ".pytest_cache",
     "node_modules",
+    "venv",
     "build",
     "coverage",
     ".mypy_cache",

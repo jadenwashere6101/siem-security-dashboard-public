@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import os
 import re
 from pathlib import Path
 
@@ -116,19 +117,23 @@ class RepoIndex:
     def refresh(self) -> bool:
         changed = False
         seen: set[str] = set()
-        self._excluded = {}
+        next_excluded: dict[str, ExcludedRepoPath] = {}
+        next_fingerprints: dict[str, tuple[float, int, str]] = {}
+        next_chunks_by_path: dict[str, list[RepoChunk]] = {}
 
-        for path in sorted(self.repo_root.rglob("*")):
-            if not path.is_file():
+        for path in _iter_repo_files(self.repo_root, next_excluded):
+            rel_path = _safe_relative_path(self.repo_root, path)
+            if rel_path is None:
+                skipped_path = _display_path(self.repo_root, path)
+                next_excluded[skipped_path] = ExcludedRepoPath(skipped_path, "outside_repo_root")
                 continue
-            rel_path = _relative_path(self.repo_root, path)
             try:
                 stat = path.stat()
             except OSError:
                 continue
             exclusion = excluded_repo_path(rel_path, size=stat.st_size)
             if exclusion:
-                self._excluded[rel_path] = exclusion
+                next_excluded[rel_path] = exclusion
                 continue
             classification = classify_repo_path(rel_path, size=stat.st_size)
             if classification is None:
@@ -136,14 +141,16 @@ class RepoIndex:
             seen.add(rel_path)
             content = _read_text(path)
             if content is None:
-                self._excluded[rel_path] = ExcludedRepoPath(rel_path, "non_text_file")
+                next_excluded[rel_path] = ExcludedRepoPath(rel_path, "non_text_file")
                 continue
             content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
             fingerprint = (stat.st_mtime, stat.st_size, content_hash)
             if self._fingerprints.get(rel_path) == fingerprint:
+                next_fingerprints[rel_path] = fingerprint
+                next_chunks_by_path[rel_path] = self._chunks_by_path.get(rel_path, [])
                 continue
-            self._fingerprints[rel_path] = fingerprint
-            self._chunks_by_path[rel_path] = _chunk_file(
+            next_fingerprints[rel_path] = fingerprint
+            next_chunks_by_path[rel_path] = _chunk_file(
                 rel_path,
                 content,
                 classification,
@@ -153,12 +160,16 @@ class RepoIndex:
             )
             changed = True
 
-        for stale_path in set(self._chunks_by_path) - seen:
-            self._chunks_by_path.pop(stale_path, None)
-            self._fingerprints.pop(stale_path, None)
+        if set(self._chunks_by_path) - seen:
             changed = True
 
-        self._indexed_files = len(self._chunks_by_path)
+        if next_excluded != self._excluded:
+            changed = True
+
+        self._fingerprints = next_fingerprints
+        self._chunks_by_path = next_chunks_by_path
+        self._excluded = next_excluded
+        self._indexed_files = len(next_chunks_by_path)
         return changed
 
     def _matching_excluded(self, query_terms: set[str]) -> list[dict[str, str]]:
@@ -174,8 +185,36 @@ class RepoIndex:
         return matches
 
 
-def _relative_path(root: Path, path: Path) -> str:
-    return path.resolve().relative_to(root).as_posix()
+def _iter_repo_files(root: Path, excluded: dict[str, ExcludedRepoPath]):
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        current_dir = Path(dirpath)
+        kept_dirs = []
+        for dirname in sorted(dirnames):
+            child = current_dir / dirname
+            rel_path = _safe_relative_path(root, child) or _display_path(root, child)
+            exclusion = excluded_repo_path(rel_path)
+            if exclusion:
+                excluded[rel_path] = exclusion
+                continue
+            kept_dirs.append(dirname)
+        dirnames[:] = kept_dirs
+
+        for filename in sorted(filenames):
+            yield current_dir / filename
+
+
+def _safe_relative_path(root: Path, path: Path) -> str | None:
+    try:
+        return path.resolve().relative_to(root).as_posix()
+    except (OSError, ValueError):
+        return None
+
+
+def _display_path(root: Path, path: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.name
 
 
 def _read_text(path: Path) -> str | None:

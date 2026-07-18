@@ -4,6 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from werkzeug.security import generate_password_hash
 
 from core.ai.config import AI_MODE_LOCAL_ONLY, AiGatewayConfig
@@ -90,6 +91,8 @@ def _repo(tmp_path: Path) -> Path:
     _write(tmp_path / "openspec/archive/old-feature/proposal.md", "# Old feature\nArchived OpenSpec.\n")
     _write(tmp_path / "docs/MODULARIZATION_HANDOFF.md", "# Historical handoff\nOld backend files.\n")
     _write(tmp_path / "frontend/build/asset.js", "secret build output")
+    _write(tmp_path / "venv/lib/python3.11/site-packages/vendor.py", "def vendor_secret():\n    return 'ignored'\n")
+    _write(tmp_path / ".venv/lib/python3.11/site-packages/local_vendor.py", "def local_vendor_secret():\n    return 'ignored'\n")
     _write(tmp_path / ".env", "DATABASE_URL=postgres://secret")
     _write(tmp_path / "sonar_issues.csv", "secret,export")
     return tmp_path
@@ -131,6 +134,8 @@ def test_source_policy_includes_current_sources_and_excludes_secrets_runtime_and
     assert classify_repo_path("openspec/archive/old/proposal.md").label == LABEL_HISTORICAL
     assert excluded_repo_path(".env").reason == "secret_file"
     assert excluded_repo_path("frontend/build/static/main.js").reason == "excluded_runtime_or_generated_path"
+    assert excluded_repo_path("venv/lib/python/site-packages/package.py").reason == "excluded_runtime_or_generated_path"
+    assert excluded_repo_path(".venv/lib/python/site-packages/package.py").reason == "excluded_runtime_or_generated_path"
     assert excluded_repo_path("sonar_issues.csv").reason == "generated_report"
     assert excluded_repo_path("private.pem").reason == "credential_file"
 
@@ -168,6 +173,52 @@ def test_repo_index_returns_metadata_line_ranges_historical_labels_and_refresh(t
 
     historical = index.search("historical old backend files", include_historical=True)
     assert any(chunk.label == LABEL_HISTORICAL for chunk in historical.chunks)
+
+
+def test_repo_index_excludes_virtualenv_directories(tmp_path):
+    index = RepoIndex(_repo(tmp_path))
+    result = index.search("venv", refresh=True)
+
+    assert all("venv/" not in chunk.path and ".venv/" not in chunk.path for chunk in result.chunks)
+    assert any(match["path"].startswith("venv") for match in result.excluded_matches)
+    assert any(match["path"].startswith(".venv") for match in result.excluded_matches)
+
+
+def test_repo_index_skips_symlinks_that_resolve_outside_repo_root(tmp_path):
+    root = _repo(tmp_path / "repo")
+    outside = tmp_path / "outside_secret.py"
+    outside.write_text("def outside_secret():\n    return 'must not index'\n", encoding="utf-8")
+    try:
+        (root / "core" / "outside_secret.py").symlink_to(outside)
+    except OSError as error:
+        pytest.skip(f"symlink creation unavailable: {error}")
+
+    result = RepoIndex(root).search("outside secret", refresh=True)
+
+    assert result.chunks == []
+    assert any(match["path"] == "core/outside_secret.py" for match in result.excluded_matches)
+
+
+def test_repo_index_failed_refresh_does_not_publish_partial_state(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    index = RepoIndex(root)
+    baseline = index.search("detection rules", refresh=True)
+    assert baseline.indexed_files > 0
+    baseline_chunk_paths = set(index._chunks_by_path)
+
+    def broken_read(path):
+        if path.name == "playbook_routes.py":
+            raise RuntimeError("simulated refresh failure")
+        return "changed content"
+
+    monkeypatch.setattr("core.ai.repo_index._read_text", broken_read)
+
+    with pytest.raises(RuntimeError):
+        index.refresh()
+
+    assert index._indexed_files == baseline.indexed_files
+    assert set(index._chunks_by_path) == baseline_chunk_paths
+    assert index.search("detection rules", refresh=False).indexed_files == baseline.indexed_files
 
 
 def test_repo_index_retrieves_representative_architecture_questions(tmp_path):
