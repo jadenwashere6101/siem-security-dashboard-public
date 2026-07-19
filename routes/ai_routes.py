@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 from flask import Blueprint, current_app, jsonify, request
-from flask_login import login_required
+from flask_login import current_user, login_required
+
+from core.ai.action_service import (
+    AiActionValidationError,
+    confirm_ai_action,
+    preview_ai_action,
+    service_error_response as action_service_error_response,
+)
 
 from core.ai.explainer_service import (
     AiContextError,
@@ -90,6 +97,44 @@ def ai_drafts_route():
         return jsonify(result.payload), result.status_code
     except Exception as error:
         current_app.logger.error("Error in ai_drafts_route: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@ai_bp.route("/ai/actions/preview", methods=["POST"])
+@login_required
+@analyst_or_super_admin_required
+def ai_action_preview_route():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "JSON object body is required."}), 400
+
+    try:
+        result = preview_ai_action(payload, actor=current_user)
+        return jsonify(result.payload), result.status_code
+    except AiActionValidationError as error:
+        result = action_service_error_response(error)
+        return jsonify(result.payload), result.status_code
+    except Exception as error:
+        current_app.logger.error("Error in ai_action_preview_route: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@ai_bp.route("/ai/actions/confirm", methods=["POST"])
+@login_required
+@analyst_or_super_admin_required
+def ai_action_confirm_route():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "JSON object body is required."}), 400
+
+    try:
+        result = confirm_ai_action(payload, actor=current_user)
+        return jsonify(result.payload), result.status_code
+    except AiActionValidationError as error:
+        result = action_service_error_response(error)
+        return jsonify(result.payload), result.status_code
+    except Exception as error:
+        current_app.logger.error("Error in ai_action_confirm_route: %s", error)
         return jsonify({"error": "Internal server error"}), 500
 
 

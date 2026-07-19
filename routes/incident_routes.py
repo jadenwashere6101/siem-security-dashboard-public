@@ -16,6 +16,7 @@ from core.incident_store import (
     list_incidents,
     update_incident_status,
 )
+from core.note_store import create_incident_note, list_incident_notes, validate_note_text
 from core.soar_response_outcomes import (
     get_latest_outcomes_for_incidents_bulk,
     serialize_incident_outcome_timeline_entries,
@@ -748,6 +749,63 @@ def get_incident_timeline_route(incident_id):
         return jsonify(payload), 200
     except Exception as error:
         current_app.logger.error("Error in get_incident_timeline_route: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@incident_bp.route("/incidents/<int:incident_id>/notes", methods=["GET"])
+@login_required
+@analyst_or_super_admin_required
+def get_incident_notes_route(incident_id):
+    conn = None
+    try:
+        conn = get_db_connection()
+        if get_incident_detail(conn, incident_id) is None:
+            return jsonify({"error": "incident not found"}), 404
+        return jsonify(list_incident_notes(conn, incident_id)), 200
+    except Exception as error:
+        current_app.logger.error("Error in get_incident_notes_route: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@incident_bp.route("/incidents/<int:incident_id>/notes", methods=["POST"])
+@login_required
+@analyst_or_super_admin_required
+def add_incident_note_route(incident_id):
+    conn = None
+    try:
+        data = request.get_json(silent=True) or {}
+        try:
+            note_text = validate_note_text(data.get("note_text"))
+        except ValueError as error:
+            return jsonify({"error": str(error)}), 400
+
+        conn = get_db_connection()
+        try:
+            note = create_incident_note(conn, incident_id=incident_id, author=current_user.id, note_text=note_text)
+        except LookupError:
+            return jsonify({"error": "incident not found"}), 404
+        conn.commit()
+
+        log_audit_event(
+            "ADD_INCIDENT_NOTE",
+            actor_username=current_user.id,
+            actor_role=current_user.role,
+            http_method=request.method,
+            request_path=request.path,
+            source_ip=request.remote_addr,
+            details={"incident_id": incident_id, "note_id": note["id"]},
+        )
+        return jsonify(note), 201
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        current_app.logger.error("Error in add_incident_note_route: %s", error)
         return jsonify({"error": "Internal server error"}), 500
     finally:
         if conn:

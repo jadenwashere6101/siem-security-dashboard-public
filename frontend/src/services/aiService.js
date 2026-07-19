@@ -41,6 +41,12 @@ export const requestAiChat = sendSiemChatMessage;
 export const requestAiDraft = (payload, options = {}) =>
   postAiRequest("/ai/drafts", payload, options);
 
+export const previewAiAction = (payload, options = {}) =>
+  postAiRequest("/ai/actions/preview", payload, options);
+
+export const confirmAiAction = (payload, options = {}) =>
+  postAiRequest("/ai/actions/confirm", payload, options);
+
 export const getAiStatus = async (options = {}) => {
   const res = await fetch(buildSiemPath("/ai/status"), {
     credentials: "include",

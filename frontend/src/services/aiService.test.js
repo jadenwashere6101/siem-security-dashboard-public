@@ -1,5 +1,7 @@
 import {
+  confirmAiAction,
   getAiStatus,
+  previewAiAction,
   requestAiChat,
   requestAiDraft,
   requestAiExplanation,
@@ -135,6 +137,55 @@ test("requestAiDraft posts review-only draft requests", async () => {
         context: { incident_id: 7 },
         use_tools: true,
         tool_policy: { max_tool_calls: 3, time_window_hours: 24 },
+      }),
+    })
+  );
+});
+
+test("previewAiAction and confirmAiAction use the approval-gated action endpoints", async () => {
+  fetch
+    .mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ status: "preview_ready", preview: { payload_digest: "abc" } }),
+    })
+    .mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ status: "confirmed", result: { outcome: "real" } }),
+    });
+
+  await previewAiAction({
+    action_type: "add_incident_note",
+    payload: { incident_id: 7, note_text: "Reviewed note" },
+    idempotency_key: "ai-action-note-7",
+  });
+  await confirmAiAction({
+    action_type: "add_incident_note",
+    payload: { incident_id: 7, note_text: "Reviewed note" },
+    idempotency_key: "ai-action-note-7",
+    confirm: true,
+    confirmation_token: "token",
+    payload_digest: "abc",
+    target_fingerprint: "fingerprint",
+  });
+
+  expect(fetch).toHaveBeenNthCalledWith(
+    1,
+    expect.stringContaining("/ai/actions/preview"),
+    expect.objectContaining({ method: "POST", credentials: "include" })
+  );
+  expect(fetch).toHaveBeenNthCalledWith(
+    2,
+    expect.stringContaining("/ai/actions/confirm"),
+    expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({
+        action_type: "add_incident_note",
+        payload: { incident_id: 7, note_text: "Reviewed note" },
+        idempotency_key: "ai-action-note-7",
+        confirm: true,
+        confirmation_token: "token",
+        payload_digest: "abc",
+        target_fingerprint: "fingerprint",
       }),
     })
   );

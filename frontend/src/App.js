@@ -1550,6 +1550,7 @@ function AppInner() {
               onDismiss={dismissAiPanel}
               onRetry={retryAiRequest}
               onCancel={cancelAiRequest}
+              userRole={userRole}
             />
             <FloatingSiemChat onAsk={handleAskAiChat} disabled={aiPanelState.status === "loading"} />
           </>

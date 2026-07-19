@@ -6,6 +6,7 @@ from core.auth import analyst_or_super_admin_required
 from core.db import get_db_connection
 from core.extensions import limiter
 from core.incident_store import auto_close_resolved_p3_incidents_for_alert
+from core.note_store import MAX_NOTE_LENGTH, create_alert_note, list_alert_notes, validate_note_text
 from core.response_command_contracts import (
     ORIGIN_MANUAL_ALERT,
     ResponseCommandRequest,
@@ -17,7 +18,7 @@ from core.soar_response_outcomes import resolve_response_log_outcome
 alert_mutation_bp = Blueprint("alert_mutation", __name__)
 
 VALID_RESPONSE_ACTIONS = {"block_ip", "monitor", "flag_high_priority"}
-MAX_ALERT_NOTE_LENGTH = 2000
+MAX_ALERT_NOTE_LENGTH = MAX_NOTE_LENGTH
 
 
 @alert_mutation_bp.route("/alerts/<int:alert_id>/response-log", methods=["GET"])
@@ -75,40 +76,13 @@ def get_response_log(alert_id):
 @analyst_or_super_admin_required
 def get_alert_notes(alert_id):
     conn = None
-    cur = None
     try:
         conn = get_db_connection()
-        cur = conn.cursor()
-
-        cur.execute(
-            """
-            SELECT id, alert_id, author, note_text, created_at
-            FROM alert_notes
-            WHERE alert_id = %s
-            ORDER BY created_at DESC
-            """,
-            (alert_id,)
-        )
-
-        rows = cur.fetchall()
-        notes = [
-            {
-                "id": row[0],
-                "alert_id": row[1],
-                "author": row[2],
-                "note_text": row[3],
-                "created_at": str(row[4]),
-            }
-            for row in rows
-        ]
-
-        return jsonify(notes), 200
+        return jsonify(list_alert_notes(conn, alert_id)), 200
     except Exception as e:
         current_app.logger.error("Error in get_alert_notes: %s", e)
         return jsonify({"error": "Internal server error"}), 500
     finally:
-        if cur:
-            cur.close()
         if conn:
             conn.close()
 
@@ -119,59 +93,28 @@ def get_alert_notes(alert_id):
 @analyst_or_super_admin_required
 def add_alert_note(alert_id):
     conn = None
-    cur = None
     try:
         data = request.get_json() or {}
-        note_text = (data.get("note_text") or "").strip()
-
-        if not note_text:
-            return jsonify({"error": "note_text is required"}), 400
-
-        if len(note_text) > MAX_ALERT_NOTE_LENGTH:
-            return jsonify({"error": f"note_text must be {MAX_ALERT_NOTE_LENGTH} characters or fewer"}), 400
+        try:
+            note_text = validate_note_text(data.get("note_text"))
+        except ValueError as error:
+            return jsonify({"error": str(error)}), 400
 
         conn = get_db_connection()
-        cur = conn.cursor()
-
-        cur.execute(
-            """
-            SELECT 1
-            FROM alerts
-            WHERE id = %s
-            """,
-            (alert_id,)
-        )
-
-        if not cur.fetchone():
+        try:
+            note = create_alert_note(conn, alert_id=alert_id, author=current_user.id, note_text=note_text)
+        except LookupError:
             return jsonify({"error": "Alert not found"}), 404
 
-        cur.execute(
-            """
-            INSERT INTO alert_notes (alert_id, author, note_text)
-            VALUES (%s, %s, %s)
-            RETURNING id, alert_id, author, note_text, created_at
-            """,
-            (alert_id, current_user.id, note_text)
-        )
-
-        row = cur.fetchone()
         conn.commit()
 
-        return jsonify({
-            "id": row[0],
-            "alert_id": row[1],
-            "author": row[2],
-            "note_text": row[3],
-            "created_at": str(row[4]),
-        }), 201
+        return jsonify(note), 201
     except Exception as e:
         if conn:
             conn.rollback()
         current_app.logger.error("Error in add_alert_note: %s", e)
         return jsonify({"error": "Internal server error"}), 500
     finally:
-        if cur:
-            cur.close()
         if conn:
             conn.close()
 

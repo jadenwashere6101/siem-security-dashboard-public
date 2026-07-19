@@ -155,7 +155,7 @@ def test_schema_snapshot_marker_matches_latest_migration():
         migrations_dir=repo_root / "migrations",
     )
 
-    assert version == 23
+    assert version == 24
 
 
 def test_pfsense_ingest_config_migration_scope_and_defaults():

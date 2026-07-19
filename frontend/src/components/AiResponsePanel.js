@@ -1,4 +1,5 @@
-import React from "react";
+import React, { useState } from "react";
+import { confirmAiAction, previewAiAction } from "../services/aiService";
 import { providerCostLabel, providerStatusLabel, sourceCountLabel, toolUsageLabel } from "../utils/aiDisplay";
 
 function AiResponsePanel({
@@ -6,6 +7,7 @@ function AiResponsePanel({
   onDismiss,
   onRetry,
   onCancel,
+  userRole,
 }) {
   if (!state || state.status === "idle") return null;
   const busy = state.status === "loading";
@@ -52,7 +54,7 @@ function AiResponsePanel({
           {response.insufficient_context ? (
             <p style={warningStyle}>{response.error || "There was not enough SIEM context to answer safely."}</p>
           ) : null}
-          {draft ? <DraftReview draft={draft} /> : null}
+          {draft ? <DraftReview draft={draft} response={response} userRole={userRole} /> : null}
           {!draft ? (
             <div style={answerStyle}>{response.answer || response.error || "No AI answer was returned."}</div>
           ) : response.error ? (
@@ -92,11 +94,73 @@ function AiResponsePanel({
   );
 }
 
-function DraftReview({ draft }) {
+function DraftReview({ draft, response, userRole }) {
   const payload = draft?.payload && typeof draft.payload === "object" ? draft.payload : {};
   const validation = draft?.validation || {};
   const labels = draft?.labels || {};
   const entries = Object.entries(payload);
+  const actionCandidate = buildActionCandidate(draft, response, userRole);
+  const [actionState, setActionState] = useState({ status: "idle", preview: null, result: null, error: "" });
+  const [acknowledged, setAcknowledged] = useState(false);
+
+  const previewAction = async () => {
+    if (!actionCandidate) return;
+    setAcknowledged(false);
+    setActionState({ status: "previewing", preview: null, result: null, error: "" });
+    try {
+      const previewResponse = await previewAiAction(actionCandidate.request);
+      setActionState({
+        status: "preview_ready",
+        preview: previewResponse.preview,
+        result: null,
+        error: "",
+      });
+    } catch (error) {
+      setActionState({
+        status: "error",
+        preview: null,
+        result: error.payload?.result || null,
+        error: error.message || "Unable to preview AI action.",
+      });
+    }
+  };
+
+  const confirmAction = async () => {
+    if (!actionCandidate || !actionState.preview || !acknowledged || actionState.preview.stale) return;
+    setActionState((current) => ({ ...current, status: "confirming", error: "" }));
+    try {
+      const confirmResponse = await confirmAiAction({
+        ...actionCandidate.request,
+        confirm: true,
+        confirmation_token: actionState.preview.confirmation_token,
+        payload_digest: actionState.preview.payload_digest,
+        target_fingerprint: actionState.preview.target_fingerprint,
+      });
+      setActionState({
+        status: "confirmed",
+        preview: actionState.preview,
+        result: confirmResponse.result,
+        error: "",
+      });
+    } catch (error) {
+      setActionState({
+        status: "error",
+        preview: actionState.preview,
+        result: error.payload?.result || null,
+        error: error.message || "Unable to confirm AI action.",
+      });
+    }
+  };
+
+  const rejectAction = () => {
+    setAcknowledged(false);
+    setActionState({
+      status: "rejected",
+      preview: actionState.preview,
+      result: { outcome: "rejected", message: "Action rejected. No production change was made.", no_production_change: true },
+      error: "",
+    });
+  };
 
   return (
     <section aria-label="AI-generated draft review" style={draftBoxStyle}>
@@ -132,8 +196,118 @@ function DraftReview({ draft }) {
       ) : (
         <p style={mutedStyle}>No valid draft payload was returned.</p>
       )}
+      {actionCandidate ? (
+        <section aria-label="Approval-gated AI action review" style={actionBoxStyle}>
+          <p style={actionTitleStyle}>Approval-gated action available</p>
+          <p style={mutedStyle}>{actionCandidate.label}</p>
+          <button
+            type="button"
+            onClick={previewAction}
+            disabled={actionState.status === "previewing" || actionState.status === "confirming"}
+            style={secondaryButtonStyle}
+          >
+            {actionState.status === "previewing" ? "Previewing..." : "Preview exact action payload"}
+          </button>
+          {actionState.preview ? (
+            <div style={actionPreviewStyle}>
+              <p style={actionTitleStyle}>Exact payload before confirmation</p>
+              <pre style={actionPreStyle}>{JSON.stringify(actionState.preview.payload, null, 2)}</pre>
+              <p style={mutedStyle}>Targets: {(actionState.preview.target_resource_keys || []).join(", ")}</p>
+              <p style={mutedStyle}>Required role: {actionState.preview.required_role}</p>
+              {actionState.preview.stale ? (
+                <p style={warningStyle}>This preview is stale. Regenerate it before confirming.</p>
+              ) : null}
+              {actionState.status !== "confirmed" && actionState.status !== "rejected" ? (
+                <>
+                  <label style={ackLabelStyle}>
+                    <input
+                      type="checkbox"
+                      checked={acknowledged}
+                      onChange={(event) => setAcknowledged(event.target.checked)}
+                    />
+                    I reviewed the exact payload and want to confirm this AI-assisted action.
+                  </label>
+                  <div style={actionButtonRowStyle}>
+                    <button
+                      type="button"
+                      onClick={confirmAction}
+                      disabled={!acknowledged || actionState.preview.stale || actionState.status === "confirming"}
+                      style={primaryButtonStyle}
+                    >
+                      {actionState.status === "confirming" ? "Confirming..." : "Confirm action"}
+                    </button>
+                    <button type="button" onClick={rejectAction} style={secondaryButtonStyle}>
+                      Reject action
+                    </button>
+                  </div>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+          {actionState.result ? (
+            <div role="status" style={actionResultStyle}>
+              <strong>{actionState.result.outcome || "unknown"}</strong>
+              <span>{actionState.result.message || "No result message returned."}</span>
+              {actionState.result.no_production_change ? <span>No production change made.</span> : null}
+            </div>
+          ) : null}
+          {actionState.error ? <p style={errorStyle}>{actionState.error}</p> : null}
+        </section>
+      ) : null}
     </section>
   );
+}
+
+function buildActionCandidate(draft, response, userRole) {
+  if (!draft || draft.validation?.valid !== true) return null;
+  if (draft.draft_type !== "incident_note") return null;
+  const incidentId = findSourceRecordId(response?.context, "incident");
+  if (!incidentId) return null;
+  const noteParts = [
+    draft.payload?.summary,
+    Array.isArray(draft.payload?.evidence) && draft.payload.evidence.length
+      ? `Evidence: ${draft.payload.evidence.join("; ")}`
+      : null,
+    draft.payload?.uncertainty ? `Uncertainty: ${draft.payload.uncertainty}` : null,
+    Array.isArray(draft.payload?.recommended_next_steps) && draft.payload.recommended_next_steps.length
+      ? `Next steps: ${draft.payload.recommended_next_steps.join("; ")}`
+      : null,
+  ].filter(Boolean);
+  const noteText = noteParts.join("\n\n").slice(0, 2000);
+  if (!noteText || !["analyst", "super_admin"].includes(userRole)) return null;
+  return {
+    label: "Create an incident note from this reviewed draft. This requires preview and explicit confirmation.",
+    request: {
+      action_type: "add_incident_note",
+      payload: {
+        incident_id: incidentId,
+        note_text: noteText,
+      },
+      idempotency_key: `ai-action-incident-note-${incidentId}-${simpleHash(noteText + (draft.generated_at || ""))}`,
+      source_draft: {
+        draft_type: draft.draft_type,
+        generated_at: draft.generated_at,
+        labels: draft.labels,
+      },
+    },
+  };
+}
+
+function simpleHash(value) {
+  let hash = 0;
+  const text = String(value || "");
+  for (let index = 0; index < text.length; index += 1) {
+    hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
+  }
+  return hash.toString(16);
+}
+
+function findSourceRecordId(context, sourceType) {
+  const sources = Array.isArray(context?.sources) ? context.sources : [];
+  const source = sources.find((item) => item?.source_type === sourceType && Array.isArray(item.record_ids) && item.record_ids.length);
+  const value = source?.record_ids?.[0];
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 function formatDraftKey(key) {
@@ -203,5 +377,12 @@ const draftTermStyle = { color: "#a7f3d0", fontSize: "12px", fontWeight: 800, te
 const draftValueStyle = { margin: "2px 0 0", color: "#e2e8f0", whiteSpace: "pre-wrap", lineHeight: 1.5 };
 const draftListItemStyle = { display: "block", marginBottom: "3px" };
 const draftErrorListStyle = { margin: "0 0 12px", paddingLeft: "18px", color: "#fde68a" };
+const actionBoxStyle = { marginTop: "14px", border: "1px solid rgba(14, 165, 233, 0.38)", borderRadius: "12px", padding: "12px", background: "rgba(14, 116, 144, 0.14)" };
+const actionTitleStyle = { margin: "0 0 8px", color: "#bae6fd", fontSize: "12px", fontWeight: 800 };
+const actionPreviewStyle = { marginTop: "10px", display: "grid", gap: "8px" };
+const actionPreStyle = { margin: 0, maxHeight: "180px", overflow: "auto", whiteSpace: "pre-wrap", color: "#e0f2fe", background: "rgba(2, 6, 23, 0.55)", borderRadius: "10px", padding: "10px", fontSize: "12px" };
+const ackLabelStyle = { display: "flex", gap: "8px", alignItems: "flex-start", color: "#dbeafe", fontSize: "12px" };
+const actionButtonRowStyle = { display: "flex", flexWrap: "wrap", gap: "8px" };
+const actionResultStyle = { marginTop: "10px", display: "grid", gap: "4px", color: "#d1fae5", fontSize: "12px" };
 
 export default AiResponsePanel;
