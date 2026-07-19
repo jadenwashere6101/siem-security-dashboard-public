@@ -480,6 +480,21 @@ function IncidentsPanel({
                       onClick={() =>
                         onAskAi({
                           contextType: "incident",
+                          action: "recommend_next_steps",
+                          investigation: true,
+                          title: `Guided investigation for incident #${selectedIncident.id}`,
+                          question: "Run a bounded, read-only guided investigation for this incident with timeline evidence, gaps, and recommended analyst next steps.",
+                          context: { incident_id: selectedIncident.id },
+                          toolPolicy: { max_tool_calls: 5, time_window_hours: 24 },
+                        })
+                      }
+                    >
+                      Guided investigation
+                    </AiAssistantButton>
+                    <AiAssistantButton
+                      onClick={() =>
+                        onAskAi({
+                          contextType: "incident",
                           draftType: "incident_note",
                           title: `Draft note for incident #${selectedIncident.id}`,
                           instruction: "Draft an incident note for analyst review only. Do not save it to the incident.",

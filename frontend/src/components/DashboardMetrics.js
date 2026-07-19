@@ -30,6 +30,20 @@ function DashboardMetrics({
             onClick={() =>
               onAskAi({
                 contextType: "dashboard",
+                action: "explain_anomaly",
+                investigation: true,
+                title: "Guided dashboard investigation",
+                question: "Run a bounded, read-only guided investigation of the current dashboard summary and identify source-cited analyst next steps.",
+                toolPolicy: { max_tool_calls: 5, time_window_hours: 24 },
+              })
+            }
+          >
+            Guided investigation
+          </AiAssistantButton>
+          <AiAssistantButton
+            onClick={() =>
+              onAskAi({
+                contextType: "dashboard",
                 draftType: "investigation_checklist",
                 title: "Draft dashboard investigation checklist",
                 instruction: "Draft a read-only investigation checklist from the visible dashboard summary. Do not run or save anything.",

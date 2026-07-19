@@ -41,6 +41,9 @@ export const requestAiChat = sendSiemChatMessage;
 export const requestAiDraft = (payload, options = {}) =>
   postAiRequest("/ai/drafts", payload, options);
 
+export const requestAiInvestigation = (payload, options = {}) =>
+  postAiRequest("/ai/investigations", payload, options);
+
 export const previewAiAction = (payload, options = {}) =>
   postAiRequest("/ai/actions/preview", payload, options);
 

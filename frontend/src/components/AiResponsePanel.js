@@ -16,6 +16,7 @@ function AiResponsePanel({
   const context = response.context;
   const tools = response.tools;
   const draft = response.draft;
+  const investigation = response.investigation;
   const toolCalls = Array.isArray(tools?.calls) ? tools.calls : [];
 
   return (
@@ -54,10 +55,11 @@ function AiResponsePanel({
           {response.insufficient_context ? (
             <p style={warningStyle}>{response.error || "There was not enough SIEM context to answer safely."}</p>
           ) : null}
+          {investigation ? <InvestigationReview investigation={investigation} /> : null}
           {draft ? <DraftReview draft={draft} response={response} userRole={userRole} /> : null}
-          {!draft ? (
+          {!draft && !investigation ? (
             <div style={answerStyle}>{response.answer || response.error || "No AI answer was returned."}</div>
-          ) : response.error ? (
+          ) : response.error && !investigation ? (
             <p style={warningStyle}>{response.error}</p>
           ) : null}
           {state.stale ? (
@@ -91,6 +93,113 @@ function AiResponsePanel({
         </div>
       ) : null}
     </aside>
+  );
+}
+
+function InvestigationReview({ investigation }) {
+  const steps = Array.isArray(investigation?.steps) ? investigation.steps : [];
+  const recommendations = Array.isArray(investigation?.recommendations) ? investigation.recommendations : [];
+  const correlations = Array.isArray(investigation?.correlations) ? investigation.correlations : [];
+  const drafts = Array.isArray(investigation?.drafts) ? investigation.drafts : [];
+  const observability = investigation?.observability || {};
+  const routing = observability.routing_profile || {};
+  const providerResponses = Array.isArray(observability.provider_responses) ? observability.provider_responses : [];
+
+  return (
+    <section aria-label="Guided AI investigation" style={investigationBoxStyle}>
+      <div style={investigationHeaderStyle}>
+        <div>
+          <p style={investigationEyebrowStyle}>Guided investigation</p>
+          <h3 style={investigationTitleStyle}>{formatDraftKey(investigation?.workflow_type || "advanced investigation")}</h3>
+        </div>
+        <span style={investigationStatusStyle}>{investigation?.status || "unknown"}</span>
+      </div>
+      <div style={draftLabelGridStyle}>
+        <span>{investigation?.labels?.read_only === true ? "Read-only" : "Read state unknown"}</span>
+        <span>{investigation?.labels?.writes_performed === false ? "No production change made" : "Write state unknown"}</span>
+        <span>{investigation?.labels?.production_action_required_for_changes ? "Confirmation required for changes" : "Action boundary unknown"}</span>
+      </div>
+      {investigation?.summary ? <div style={answerStyle}>{investigation.summary}</div> : null}
+      <div style={investigationMetaGridStyle}>
+        <span>Routing: {routing.profile || "unknown"}</span>
+        <span>Latency: {observability.total_latency_ms ?? 0} ms</span>
+        <span>Tokens: {(observability.aggregate_prompt_tokens || 0) + (observability.aggregate_completion_tokens || 0)}</span>
+        <span>Cost: {observability.aggregate_estimated_cost_usd == null ? "unavailable" : `$${Number(observability.aggregate_estimated_cost_usd).toFixed(4)}`}</span>
+      </div>
+      <div style={investigationSectionStyle}>
+        <p style={toolTitleStyle}>Progress</p>
+        <ol style={investigationStepListStyle}>
+          {steps.map((step, index) => (
+            <li key={`${step.step_type || "step"}-${index}`} style={investigationStepStyle}>
+              <strong>{formatDraftKey(step.step_type || "step")}</strong>
+              <span>{step.status || "unknown"}</span>
+              {step.detail ? <small>{step.detail}</small> : null}
+            </li>
+          ))}
+        </ol>
+      </div>
+      {correlations.length ? (
+        <div style={investigationSectionStyle}>
+          <p style={toolTitleStyle}>Source-cited evidence</p>
+          <ul style={toolListStyle}>
+            {correlations.slice(0, 8).map((item, index) => (
+              <li key={`${item.source_path || "source"}-${index}`} style={toolItemStyle}>
+                <strong>{item.source_type || "source"}</strong>
+                <span>{item.source_path || "unknown source"}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {recommendations.length ? (
+        <div style={investigationSectionStyle}>
+          <p style={toolTitleStyle}>Recommended analyst next steps</p>
+          <ul style={investigationRecommendationListStyle}>
+            {recommendations.map((item, index) => (
+              <li key={`${item.title || "recommendation"}-${index}`} style={investigationRecommendationStyle}>
+                <strong>{item.title || "Recommendation"}</strong>
+                <span>{item.recommendation || ""}</span>
+                {item.requires_confirmation ? <small>Explicit confirmation required before any production change.</small> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {drafts.length ? (
+        <div style={investigationSectionStyle}>
+          <p style={toolTitleStyle}>Transient automatic draft</p>
+          {drafts.map((draftResponse, index) => {
+            const draft = draftResponse?.draft || {};
+            return (
+              <div key={`${draft.draft_type || "draft"}-${index}`} style={draftBoxStyle}>
+                <p style={draftEyebrowStyle}>AI-generated draft</p>
+                <h4 style={draftTitleStyle}>{draft.title || "AI draft"}</h4>
+                <div style={draftLabelGridStyle}>
+                  <span>{draft.labels?.persisted === false ? "Not saved" : "Saved state unknown"}</span>
+                  <span>{draft.labels?.applied === false ? "Not applied" : "Apply state unknown"}</span>
+                  <span>{draft.labels?.approval_required_before_apply ? "Review required before apply" : "Review state unknown"}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+      {providerResponses.length ? (
+        <div style={investigationSectionStyle}>
+          <p style={toolTitleStyle}>Provider path</p>
+          <ul style={toolListStyle}>
+            {providerResponses.map((item, index) => (
+              <li key={`${item.provider || "provider"}-${index}`} style={toolItemStyle}>
+                <strong>{item.provider || "none"} / {item.model || "no model"}</strong>
+                <span>{item.status || "unknown"}</span>
+                {item.fallback_attempted ? <span>fallback: {item.fallback_reason || "attempted"}</span> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {investigation?.error ? <p style={warningStyle}>{investigation.error}</p> : null}
+    </section>
   );
 }
 
@@ -366,6 +475,17 @@ const toolBoxStyle = { marginTop: "14px", border: "1px solid rgba(148, 163, 184,
 const toolTitleStyle = { margin: "0 0 8px", color: "#bae6fd", fontSize: "12px", fontWeight: 800 };
 const toolListStyle = { listStyle: "none", padding: 0, margin: 0, display: "grid", gap: "8px" };
 const toolItemStyle = { display: "flex", flexWrap: "wrap", gap: "8px", justifyContent: "space-between", color: "#cbd5e1", fontSize: "12px" };
+const investigationBoxStyle = { border: "1px solid rgba(125, 211, 252, 0.38)", borderRadius: "14px", padding: "14px", background: "rgba(8, 47, 73, 0.28)", display: "grid", gap: "12px" };
+const investigationHeaderStyle = { display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "flex-start" };
+const investigationEyebrowStyle = { margin: 0, color: "#67e8f9", fontSize: "11px", letterSpacing: "0.12em", textTransform: "uppercase", fontWeight: 800 };
+const investigationTitleStyle = { margin: "3px 0 0", fontSize: "16px", color: "#e0f2fe", textTransform: "capitalize" };
+const investigationStatusStyle = { border: "1px solid rgba(125, 211, 252, 0.45)", borderRadius: "999px", padding: "4px 8px", color: "#bae6fd", fontSize: "11px", fontWeight: 800, whiteSpace: "nowrap" };
+const investigationMetaGridStyle = { display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "6px", color: "#cbd5e1", fontSize: "12px" };
+const investigationSectionStyle = { display: "grid", gap: "8px" };
+const investigationStepListStyle = { margin: 0, paddingLeft: "18px", display: "grid", gap: "8px" };
+const investigationStepStyle = { color: "#dbeafe", fontSize: "12px", display: "grid", gap: "2px" };
+const investigationRecommendationListStyle = { margin: 0, paddingLeft: "18px", display: "grid", gap: "8px" };
+const investigationRecommendationStyle = { color: "#e2e8f0", fontSize: "12px", display: "grid", gap: "3px" };
 const draftBoxStyle = { border: "1px solid rgba(34, 197, 94, 0.38)", borderRadius: "14px", padding: "14px", background: "rgba(6, 78, 59, 0.2)" };
 const draftHeaderStyle = { display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "flex-start", marginBottom: "10px" };
 const draftEyebrowStyle = { margin: 0, color: "#86efac", fontSize: "11px", letterSpacing: "0.12em", textTransform: "uppercase", fontWeight: 800 };

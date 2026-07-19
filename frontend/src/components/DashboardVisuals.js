@@ -44,6 +44,20 @@ function DashboardVisuals({
           >
             Explain graph/anomaly
           </AiAssistantButton>
+          <AiAssistantButton
+            onClick={() =>
+              onAskAi({
+                contextType: "dashboard",
+                action: "explain_anomaly",
+                investigation: true,
+                title: "Guided dashboard anomaly investigation",
+                question: "Run a bounded, read-only guided investigation of visible dashboard anomalies with source-cited evidence.",
+                toolPolicy: { max_tool_calls: 5, time_window_hours: 24 },
+              })
+            }
+          >
+            Guided investigation
+          </AiAssistantButton>
         </div>
       ) : null}
       <div style={chartsGridStyle}>

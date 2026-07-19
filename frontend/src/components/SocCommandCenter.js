@@ -1140,6 +1140,21 @@ function SocCommandCenter({
                               onClick={() =>
                                 onAskAi({
                                   contextType: "recon_activity",
+                                  action: "investigate_cluster",
+                                  investigation: true,
+                                  title: `Guided recon investigation #${reconContext.detail.id}`,
+                                  question: "Run a bounded, read-only guided investigation for this recon cluster with source-cited evidence and recommended analyst next steps.",
+                                  context: { activity_id: reconContext.detail.id },
+                                  toolPolicy: { max_tool_calls: 5, time_window_hours: 24 },
+                                })
+                              }
+                            >
+                              Guided investigation
+                            </AiAssistantButton>
+                            <AiAssistantButton
+                              onClick={() =>
+                                onAskAi({
+                                  contextType: "recon_activity",
                                   draftType: "investigation_checklist",
                                   title: `Draft checklist for recon #${reconContext.detail.id}`,
                                   instruction: "Draft a read-only investigation checklist for this recon cluster. Do not execute actions.",

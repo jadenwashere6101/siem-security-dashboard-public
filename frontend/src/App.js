@@ -37,7 +37,7 @@ import {
 } from "./utils/sessionIdentity";
 import { updateAlertStatusRequest } from "./services/alertStatusService";
 import { loadAlertDashboardSummary, loadAlerts } from "./services/alertsService";
-import { requestAiChat, requestAiDraft, requestAiExplanation } from "./services/aiService";
+import { requestAiChat, requestAiDraft, requestAiExplanation, requestAiInvestigation } from "./services/aiService";
 import {
   loadCurrentSession,
   loginToDashboard,
@@ -938,10 +938,15 @@ function AppInner() {
             question: options.question || "",
             context,
           };
+      const executor = options.investigation
+        ? requestAiInvestigation
+        : options.draftType
+          ? requestAiDraft
+          : requestAiExplanation;
       runAiRequest({
-        title: options.title || (options.draftType ? "AI draft" : "AI explanation"),
+        title: options.title || (options.investigation ? "Guided AI investigation" : options.draftType ? "AI draft" : "AI explanation"),
         request: payload,
-        executor: options.draftType ? requestAiDraft : requestAiExplanation,
+        executor,
         contextKey,
       });
     },

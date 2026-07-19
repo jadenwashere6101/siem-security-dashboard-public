@@ -919,6 +919,21 @@ function ResponseRegistryPanel({
                       onClick={() =>
                         onAskAi({
                           contextType: "response_registry",
+                          action: "explain_response",
+                          investigation: true,
+                          title: `Guided registry review #${record.id}`,
+                          question: "Run a bounded, read-only guided investigation of this response registry record and related evidence.",
+                          context: { registry_id: record.id, source_ip: record.indicator_value },
+                          toolPolicy: { max_tool_calls: 5, time_window_hours: 24 },
+                        })
+                      }
+                    >
+                      Guided review
+                    </AiAssistantButton>
+                    <AiAssistantButton
+                      onClick={() =>
+                        onAskAi({
+                          contextType: "response_registry",
                           draftType: "response_recommendation",
                           title: `Draft response recommendation for registry #${record.id}`,
                           instruction: "Draft response recommendation options for analyst review only. Do not execute registry commands.",

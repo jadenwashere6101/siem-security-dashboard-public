@@ -157,6 +157,147 @@ test("AiResponsePanel renders read-only tool evidence metadata", () => {
   expect(screen.getByText("forbidden")).toBeInTheDocument();
 });
 
+test("AiResponsePanel renders guided investigation progress evidence recommendations and observability", () => {
+  render(
+    <AiResponsePanel
+      state={{
+        status: "success",
+        title: "Guided investigation for alert #7",
+        response: {
+          investigation: {
+            status: "partial",
+            workflow_type: "alert_investigation",
+            summary: "Summary\n\nCorrelated evidence references /alerts/7.",
+            labels: {
+              read_only: true,
+              writes_performed: false,
+              production_action_required_for_changes: true,
+            },
+            steps: [
+              { step_type: "build_context", status: "success", detail: "Collected context." },
+              { step_type: "execute_read_tool", status: "partial", detail: "One tool was forbidden." },
+              { step_type: "finalize_summary", status: "success", detail: "Assembled result." },
+            ],
+            correlations: [
+              { source_type: "alert", source_path: "/alerts/7", record_ids: [7] },
+              { source_type: "events", source_path: "/alerts/7/related-events", record_ids: [7] },
+            ],
+            recommendations: [
+              {
+                title: "Prepare response through existing controls",
+                recommendation: "Use preview and explicit confirmation before any production change.",
+                requires_confirmation: true,
+              },
+            ],
+            drafts: [
+              {
+                status: "success",
+                draft: {
+                  draft_type: "investigation_checklist",
+                  title: "Investigation checklist draft",
+                  labels: {
+                    ai_generated: true,
+                    read_only: true,
+                    persisted: false,
+                    applied: false,
+                    approval_required_before_apply: true,
+                  },
+                },
+              },
+            ],
+            observability: {
+              total_latency_ms: 42,
+              aggregate_prompt_tokens: 30,
+              aggregate_completion_tokens: 12,
+              aggregate_estimated_cost_usd: 0,
+              routing_profile: { profile: "advanced" },
+              provider_responses: [
+                {
+                  provider: "ollama",
+                  model: "qwen3:4b-instruct",
+                  status: "fallback_blocked",
+                  fallback_attempted: true,
+                  fallback_reason: "provider_timeout",
+                },
+              ],
+            },
+          },
+          context: { sources: [{ source_type: "alert" }], omitted_count: 0 },
+          metadata: { status: "success", local_request: true, paid_request: false },
+          tools: { used: false, calls: [] },
+        },
+      }}
+      onDismiss={() => {}}
+      onRetry={() => {}}
+      onCancel={() => {}}
+    />
+  );
+
+  expect(screen.getByLabelText("Guided AI investigation")).toBeInTheDocument();
+  expect(screen.getByText("Guided investigation")).toBeInTheDocument();
+  expect(screen.getAllByText("partial").length).toBeGreaterThan(0);
+  expect(screen.getByText("No production change made")).toBeInTheDocument();
+  expect(screen.getByText("Confirmation required for changes")).toBeInTheDocument();
+  expect(screen.getByText(/Routing:\s*advanced/)).toBeInTheDocument();
+  expect(screen.getByText(/Cost:\s*\$0.0000/)).toBeInTheDocument();
+  expect(screen.getByText("build context")).toBeInTheDocument();
+  expect(screen.getByText("/alerts/7")).toBeInTheDocument();
+  expect(screen.getByText("Recommended analyst next steps")).toBeInTheDocument();
+  expect(screen.getByText("Explicit confirmation required before any production change.")).toBeInTheDocument();
+  expect(screen.getByText("Transient automatic draft")).toBeInTheDocument();
+  expect(screen.getByText("Not saved")).toBeInTheDocument();
+  expect(screen.getByText("Not applied")).toBeInTheDocument();
+  expect(screen.getByText("fallback: provider_timeout")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /confirm action/i })).not.toBeInTheDocument();
+});
+
+test("AiResponsePanel renders cancelled guided investigation state without action controls", () => {
+  render(
+    <AiResponsePanel
+      state={{
+        status: "success",
+        title: "Guided investigation for alert #7",
+        response: {
+          investigation: {
+            status: "cancelled",
+            workflow_type: "alert_investigation",
+            summary: "Investigation was cancelled before read tools completed.",
+            error: "Investigation was cancelled.",
+            labels: {
+              read_only: true,
+              writes_performed: false,
+              production_action_required_for_changes: true,
+            },
+            steps: [{ step_type: "finalize_summary", status: "cancelled", detail: "Investigation was cancelled." }],
+            correlations: [],
+            recommendations: [],
+            drafts: [],
+            observability: {
+              total_latency_ms: 5,
+              aggregate_prompt_tokens: 0,
+              aggregate_completion_tokens: 0,
+              aggregate_estimated_cost_usd: null,
+              routing_profile: { profile: "simple" },
+              provider_responses: [],
+              cancelled: true,
+            },
+          },
+          metadata: { status: "cancelled", local_request: true, paid_request: false },
+          tools: { used: false, calls: [] },
+        },
+      }}
+      onDismiss={() => {}}
+      onRetry={() => {}}
+      onCancel={() => {}}
+    />
+  );
+
+  expect(screen.getAllByText("cancelled").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("Investigation was cancelled.").length).toBeGreaterThan(0);
+  expect(screen.getByText("No production change made")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /confirm action/i })).not.toBeInTheDocument();
+});
+
 test("AiResponsePanel renders AI drafts as review-only not-applied payloads", () => {
   render(
     <AiResponsePanel

@@ -5,6 +5,7 @@ import {
   requestAiChat,
   requestAiDraft,
   requestAiExplanation,
+  requestAiInvestigation,
   sendSiemChatMessage,
 } from "./aiService";
 
@@ -137,6 +138,50 @@ test("requestAiDraft posts review-only draft requests", async () => {
         context: { incident_id: 7 },
         use_tools: true,
         tool_policy: { max_tool_calls: 3, time_window_hours: 24 },
+      }),
+    })
+  );
+});
+
+test("requestAiInvestigation posts guided investigation requests with abort signal", async () => {
+  const controller = new AbortController();
+  fetch.mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      status: "success",
+      investigation: {
+        status: "success",
+        labels: { read_only: true, writes_performed: false },
+        observability: { total_latency_ms: 10 },
+      },
+    }),
+  });
+
+  const result = await requestAiInvestigation(
+    {
+      context_type: "alert",
+      context: { alert_id: 7, source_ip: "198.51.100.10" },
+      question: "Run a guided investigation",
+      tool_policy: { max_tool_calls: 5, time_window_hours: 24 },
+      allow_automatic_draft: true,
+    },
+    { signal: controller.signal }
+  );
+
+  expect(result.investigation.labels.read_only).toBe(true);
+  expect(result.investigation.labels.writes_performed).toBe(false);
+  expect(fetch).toHaveBeenCalledWith(
+    expect.stringContaining("/ai/investigations"),
+    expect.objectContaining({
+      method: "POST",
+      credentials: "include",
+      signal: controller.signal,
+      body: JSON.stringify({
+        context_type: "alert",
+        context: { alert_id: 7, source_ip: "198.51.100.10" },
+        question: "Run a guided investigation",
+        tool_policy: { max_tool_calls: 5, time_window_hours: 24 },
+        allow_automatic_draft: true,
       }),
     })
   );

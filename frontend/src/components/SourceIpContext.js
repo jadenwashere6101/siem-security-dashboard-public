@@ -401,6 +401,21 @@ function PanelHeader({ sourceIp, compact, onAskAi = null, aiEnabled = false }) {
               onClick={() =>
                 onAskAi({
                   contextType: "source_ip",
+                  action: "summarize_activity",
+                  investigation: true,
+                  title: `Guided investigation for ${sourceIp}`,
+                  question: "Run a bounded, read-only guided investigation for this source IP with correlations, evidence gaps, and recommended analyst next steps.",
+                  context: { source_ip: sourceIp },
+                  toolPolicy: { max_tool_calls: 5, time_window_hours: 24 },
+                })
+              }
+            >
+              Guided investigation
+            </AiAssistantButton>
+            <AiAssistantButton
+              onClick={() =>
+                onAskAi({
+                  contextType: "source_ip",
                   draftType: "response_recommendation",
                   title: `Draft response recommendation for ${sourceIp}`,
                   instruction: "Draft response recommendation options for analyst review only. Do not execute or submit anything.",

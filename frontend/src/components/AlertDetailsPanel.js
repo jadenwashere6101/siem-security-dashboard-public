@@ -196,6 +196,21 @@ function AlertDetailsPanel({
             onClick={() =>
               onAskAi({
                 contextType: "alert",
+                action: "recommend_investigation",
+                investigation: true,
+                title: `Guided investigation for alert #${selectedAlert.id}`,
+                question: "Run a bounded, read-only guided investigation for this alert with source-cited evidence and recommended analyst next steps.",
+                context: { alert_id: selectedAlert.id, source_ip: selectedAlert.source_ip },
+                toolPolicy: { max_tool_calls: 5, time_window_hours: 24 },
+              })
+            }
+          >
+            Guided investigation
+          </AiAssistantButton>
+          <AiAssistantButton
+            onClick={() =>
+              onAskAi({
+                contextType: "alert",
                 action: "why_important",
                 title: `Importance for alert #${selectedAlert.id}`,
                 question: "Explain why this alert is important for an analyst.",
