@@ -102,10 +102,13 @@ def test_default_flow_includes_dry_run_then_apply():
     main_body = text.split("main() {", 1)[1].split("\n}\n\nmain", 1)[0]
     dry_idx = main_body.index("run_migration_dry_run")
     apply_idx = main_body.index("run_migration_apply")
+    install_idx = main_body.index("install_backend_unit")
     restart_idx = main_body.index("restart_backend_service")
     status_idx = main_body.index("check_backend_service_status")
     health_idx = main_body.index("check_health_endpoint")
-    assert dry_idx < apply_idx < restart_idx < status_idx < health_idx
+    security_idx = main_body.index("check_runtime_security_gates")
+    worker_idx = main_body.index("install_and_restart_worker_units")
+    assert dry_idx < apply_idx < install_idx < restart_idx < status_idx < health_idx < security_idx < worker_idx
 
 
 def test_health_retry_loop_is_bounded_with_backoff():
@@ -145,6 +148,8 @@ def test_skip_health_check_still_skips_health_logic():
     assert "Skipping health check (--skip-health-check)." in skip_block
     assert "exit 0" in skip_block
     assert "check_health_endpoint" not in skip_block
+    assert "check_runtime_security_gates" not in skip_block
+    assert "install_and_restart_worker_units" not in skip_block
 
 
 def test_restart_still_happens_before_health_check():
@@ -152,3 +157,49 @@ def test_restart_still_happens_before_health_check():
     main_body = text.split("main() {", 1)[1].split("\n}\n\nmain", 1)[0]
     assert main_body.index("restart_backend_service") < main_body.index("check_health_endpoint")
     assert main_body.index("check_backend_service_status") < main_body.index("check_health_endpoint")
+
+
+def test_installs_backend_unit_before_restart():
+    text = read_deploy_script()
+    assert 'readonly BACKEND_UNIT_SOURCE="deploy/systemd/siem-backend.service"' in text
+    assert 'readonly RUNTIME_VALIDATOR="scripts/validate_backend_runtime_env.sh"' in text
+    assert "install_backend_unit()" in text
+    assert "scripts/install_siem_backend_service.sh" in text
+    main_body = text.split("main() {", 1)[1].split("\n}\n\nmain", 1)[0]
+    assert main_body.index("install_backend_unit") < main_body.index("restart_backend_service")
+
+
+def test_verifies_gunicorn_effective_unit_and_blocks_flask_dev_server():
+    text = read_deploy_script()
+    assert "check_backend_effective_unit()" in text
+    assert "venv/bin/gunicorn" in text
+    assert "siem_backend:app" in text
+    assert "python[0-9. ]+siem_backend\\.py|flask run|app\\.run" in text
+    main_body = text.split("main() {", 1)[1].split("\n}\n\nmain", 1)[0]
+    assert main_body.index("check_runtime_security_gates") < main_body.index("install_and_restart_worker_units")
+
+
+def test_runtime_security_gates_cover_loopback_debugger_and_secure_cookies():
+    text = read_deploy_script()
+    assert "check_loopback_bind()" in text
+    assert "127\\\\.0\\\\.0\\\\.1" in text
+    assert "publicly bound" in text
+    assert "check_debugger_absent()" in text
+    assert "?__debugger__=yes" in text
+    assert "werkzeug|debugger|console locked|interactive traceback" in text
+    assert "check_secure_cookie_config()" in text
+    assert "SESSION_COOKIE_SECURE" in text
+    assert "SESSION_COOKIE_HTTPONLY" in text
+    assert "SESSION_COOKIE_SAMESITE" in text
+
+
+def test_preflight_prints_sanitized_gunicorn_runtime_settings():
+    text = read_deploy_script()
+    assert "Runtime:        Gunicorn WSGI siem_backend:app" in text
+    assert "SIEM_DEBUG:" in text
+    assert "SIEM_BIND_HOST:" in text
+    assert "Gunicorn workers:" in text
+    assert "Gunicorn timeout:" in text
+    assert "DB password:    <redacted>" in text
+    assert "$SIEM_SECRET_KEY" not in text
+    assert "$SECRET_KEY" not in text

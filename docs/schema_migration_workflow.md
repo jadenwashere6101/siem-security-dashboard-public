@@ -334,8 +334,14 @@ python3 -m pytest \
 ### Application health (VM, after deploy)
 
 ```bash
-curl -s "http://HOST:PORT/health"
+curl -fsS http://127.0.0.1:5051/health
+sudo systemctl cat siem-backend.service --no-pager | grep gunicorn
+ss -ltnp | grep '127.0.0.1:5051'
 ```
+
+Production backend deployments must use `siem-backend.service` running Gunicorn
+against `siem_backend:app`; Flask's development server is not a production
+runtime.
 
 ---
 

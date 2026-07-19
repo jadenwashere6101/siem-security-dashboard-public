@@ -1,9 +1,10 @@
 #!/bin/bash
-# Frontend artifact deploy helper. VM backend + schema migrations: scripts/deploy_backend_vm.sh
+# Frontend artifact deploy helper. It does not commit, pull, push, deploy backend
+# code, or restart services. VM backend + schema migrations: scripts/deploy_backend_vm.sh
 
 set -e
 
-echo "Starting example deploy..."
+echo "Starting frontend artifact build..."
 
 # -------- CONFIG --------
 REMOTE_USER="your-user"
@@ -12,16 +13,6 @@ SSH_KEY="~/.ssh/your-key.pem"
 REMOTE_PATH="/path/to/project/frontend/build"
 LOCAL_FRONTEND="frontend"
 # ------------------------
-
-MSG=${1:-"update"}
-
-echo "Committing local changes..."
-git add -u
-git commit -m "$MSG" || echo "No changes to commit"
-
-echo "Syncing with remote repository..."
-git pull --rebase origin main
-git push origin main
 
 echo "Building frontend..."
 cd "$LOCAL_FRONTEND"

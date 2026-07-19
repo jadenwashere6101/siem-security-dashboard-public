@@ -19,11 +19,15 @@ Check:
 ```bash
 python3 -m py_compile siem_backend.py
 curl -i http://127.0.0.1:5051/health
+sudo systemctl cat siem-backend.service --no-pager | grep gunicorn
+ss -ltnp | grep '127.0.0.1:5051'
 ```
 
 Pass:
 - `py_compile` succeeds
 - `/health` returns `200`
+- production service evidence shows Gunicorn, not Flask's development server
+- backend bind is loopback-only in production
 
 ## 2. Frontend Build
 

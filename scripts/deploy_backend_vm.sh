@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# VM backend deploy: migrations, source-controlled worker unit installation, daemon reload,
-# backend/worker restarts, and effective unit verification.
+# VM backend deploy: migrations, source-controlled backend/worker unit installation,
+# daemon reload, Gunicorn backend restart, security gates, and effective unit verification.
 # See docs/schema_migration_workflow.md and openspec/changes/harden-migration-deployment-workflow/
 # Frontend deploy remains deploy.sh (artifact helper only).
 
@@ -9,6 +9,8 @@ set -euo pipefail
 readonly SERVICE_NAME="siem-backend.service"
 readonly MIGRATE_SCRIPT="scripts/migrate.py"
 readonly ENV_FILE=".env"
+readonly BACKEND_UNIT_SOURCE="deploy/systemd/siem-backend.service"
+readonly RUNTIME_VALIDATOR="scripts/validate_backend_runtime_env.sh"
 readonly HEALTH_MAX_ATTEMPTS=10
 readonly HEALTH_RETRY_SECONDS=2
 
@@ -30,8 +32,9 @@ usage() {
 Usage: scripts/deploy_backend_vm.sh [OPTIONS]
 
 Run from the repository root on the VM after syncing code.
-Applies pending schema migrations, installs current worker units, reloads systemd,
-restarts backend and workers, and verifies their effective configuration.
+Applies pending schema migrations, installs the current Gunicorn backend unit,
+reloads systemd, restarts backend, verifies health/security gates, then installs
+and restarts worker units.
 
 Options:
   --dry-run-migrations   Run migration dry-run only; do not apply, restart, or health-check.
@@ -85,6 +88,9 @@ verify_repo_root() {
   [[ -f "$MIGRATE_SCRIPT" ]] || die "Missing ${MIGRATE_SCRIPT}. Run from repository root."
   [[ -d migrations ]] || die "Missing migrations/ directory."
   [[ -x venv/bin/python ]] || die "Missing venv/bin/python. Create the project virtualenv on the VM."
+  [[ -x venv/bin/gunicorn ]] || die "Missing venv/bin/gunicorn. Install runtime requirements on the VM."
+  [[ -f "$BACKEND_UNIT_SOURCE" ]] || die "Missing ${BACKEND_UNIT_SOURCE}."
+  [[ -f "$RUNTIME_VALIDATOR" ]] || die "Missing ${RUNTIME_VALIDATOR}."
 }
 
 # Load .env without echoing values (read-only; does not modify the file).
@@ -177,13 +183,19 @@ verify_db_settings_present() {
 }
 
 print_preflight() {
-  local git_rev migration_count db_host db_name db_user health_port
+  local git_rev migration_count db_host db_name db_user health_port bind_host debug workers timeout graceful_timeout keepalive
   git_rev="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   migration_count="$(find migrations -maxdepth 1 -name '*.sql' | wc -l | tr -d ' ')"
   db_host="${SIEM_DB_HOST:-${DB_HOST:-}}"
   db_name="${SIEM_DB_NAME:-${DB_NAME:-}}"
   db_user="${SIEM_DB_USER:-${DB_USER:-}}"
   health_port="${SIEM_PORT:-5051}"
+  bind_host="${SIEM_BIND_HOST:-<unset>}"
+  debug="${SIEM_DEBUG:-<unset>}"
+  workers="${SIEM_GUNICORN_WORKERS:-2}"
+  timeout="${SIEM_GUNICORN_TIMEOUT:-120}"
+  graceful_timeout="${SIEM_GUNICORN_GRACEFUL_TIMEOUT:-30}"
+  keepalive="${SIEM_GUNICORN_KEEPALIVE:-5}"
 
   log "=== Backend VM deploy preflight ==="
   log "Repo root:      ${REPO_ROOT}"
@@ -195,6 +207,15 @@ print_preflight() {
   log "DB user:        ${db_user:-<unset>}"
   log "DB password:    <redacted>"
   log "Service:        ${SERVICE_NAME}"
+  log "Backend unit:   ${BACKEND_UNIT_SOURCE}"
+  log "Runtime:        Gunicorn WSGI siem_backend:app"
+  log "SIEM_DEBUG:     ${debug}"
+  log "SIEM_BIND_HOST: ${bind_host}"
+  log "SIEM_PORT:      ${health_port}"
+  log "Gunicorn workers: ${workers}"
+  log "Gunicorn timeout: ${timeout}"
+  log "Gunicorn graceful timeout: ${graceful_timeout}"
+  log "Gunicorn keepalive: ${keepalive}"
   log "INTEGRATION_MODE: ${INTEGRATION_MODE:-<unset>}"
   log "SOAR_REAL_SLACK_ENABLED: ${SOAR_REAL_SLACK_ENABLED:-<unset>}"
   log "Dry-run only:   $([[ "$DRY_RUN_MIGRATIONS" -eq 1 ]] && echo yes || echo no)"
@@ -223,6 +244,11 @@ restart_backend_service() {
   sudo systemctl restart "$SERVICE_NAME"
 }
 
+install_backend_unit() {
+  log "Installing source-controlled ${SERVICE_NAME}..."
+  scripts/install_siem_backend_service.sh
+}
+
 install_and_restart_worker_units() {
   log "Installing repository worker units, reloading systemd, and restarting workers..."
   scripts/install_soar_playbook_worker_service.sh --enable --start
@@ -232,6 +258,18 @@ install_and_restart_worker_units() {
 check_backend_service_status() {
   log "Checking ${SERVICE_NAME} status..."
   sudo systemctl status "$SERVICE_NAME" --no-pager || die "${SERVICE_NAME} is not healthy after restart."
+}
+
+check_backend_effective_unit() {
+  local effective
+  log "Checking effective ${SERVICE_NAME} unit..."
+  effective="$(sudo systemctl cat "$SERVICE_NAME" --no-pager)"
+  printf '%s\n' "$effective"
+  grep -q 'venv/bin/gunicorn' <<<"$effective" || die "${SERVICE_NAME} does not run Gunicorn."
+  grep -q 'siem_backend:app' <<<"$effective" || die "${SERVICE_NAME} does not target siem_backend:app."
+  if grep -Eq 'python[0-9. ]+siem_backend\.py|flask run|app\.run' <<<"$effective"; then
+    die "${SERVICE_NAME} contains Flask development-server startup."
+  fi
 }
 
 check_health_endpoint() {
@@ -261,6 +299,65 @@ check_health_endpoint() {
   die "Health check failed for ${health_url} after ${HEALTH_MAX_ATTEMPTS} attempts."
 }
 
+check_loopback_bind() {
+  local health_port bind_line
+  health_port="${SIEM_PORT:-5051}"
+  if ! command -v ss >/dev/null 2>&1; then
+    log "ss not available; skipping local socket bind check."
+    return 0
+  fi
+
+  log "Verifying backend listens only on 127.0.0.1:${health_port} ..."
+  bind_line="$(ss -ltnp 2>/dev/null | grep -E "127\\.0\\.0\\.1:${health_port}[[:space:]]" || true)"
+  [[ -n "$bind_line" ]] || die "No loopback listener found for backend port ${health_port}."
+  if ss -ltnp 2>/dev/null | grep -E "(0\\.0\\.0\\.0|\\[::\\]|:::):${health_port}[[:space:]]"; then
+    die "Backend port ${health_port} is publicly bound."
+  fi
+}
+
+check_debugger_absent() {
+  local health_port body
+  health_port="${SIEM_PORT:-5051}"
+  if ! command -v curl >/dev/null 2>&1; then
+    log "curl not available; skipping debugger probe."
+    return 0
+  fi
+
+  log "Verifying Werkzeug debugger middleware is absent..."
+  body="$(curl -sS --max-time 5 "http://127.0.0.1:${health_port}/?__debugger__=yes&cmd=resource&f=style.css" 2>/dev/null || true)"
+  if grep -Eqi 'werkzeug|debugger|console locked|interactive traceback' <<<"$body"; then
+    die "Werkzeug debugger signature detected."
+  fi
+}
+
+check_secure_cookie_config() {
+  log "Verifying Flask session cookie security configuration..."
+  venv/bin/python - <<'PY'
+import sys
+
+import siem_backend
+
+app = siem_backend.app
+checks = {
+    "SESSION_COOKIE_SECURE": app.config.get("SESSION_COOKIE_SECURE") is True,
+    "SESSION_COOKIE_HTTPONLY": app.config.get("SESSION_COOKIE_HTTPONLY") is True,
+    "SESSION_COOKIE_SAMESITE": app.config.get("SESSION_COOKIE_SAMESITE") == "Lax",
+}
+failed = [name for name, ok in checks.items() if not ok]
+if failed:
+    print("Unsafe session cookie configuration: " + ", ".join(failed), file=sys.stderr)
+    sys.exit(1)
+print("Session cookie configuration is secure.")
+PY
+}
+
+check_runtime_security_gates() {
+  check_backend_effective_unit
+  check_loopback_bind
+  check_debugger_absent
+  check_secure_cookie_config
+}
+
 main() {
   parse_args "$@"
   resolve_repo_root
@@ -284,16 +381,17 @@ main() {
     exit 0
   fi
 
+  install_backend_unit
   restart_backend_service
   check_backend_service_status
-  install_and_restart_worker_units
-
   if [[ "$SKIP_HEALTH_CHECK" -eq 1 ]]; then
     log "Skipping health check (--skip-health-check)."
     exit 0
   fi
 
   check_health_endpoint
+  check_runtime_security_gates
+  install_and_restart_worker_units
   log "Backend VM deploy complete."
 }
 

@@ -4,12 +4,14 @@ Use this only on the VM after an authorized Mac commit/push. The Mac repository 
 
 1. Confirm `git status --short` is empty before merging. Never merge on a dirty VM.
 2. Review changed backend, worker wrapper, and `deploy/systemd` artifacts.
-3. Run `scripts/deploy_backend_vm.sh`. It installs both worker unit templates, runs
-   `systemctl daemon-reload`, restarts the backend and workers, and prints effective units with
-   `systemctl cat` so installed configuration cannot silently drift from the repository.
+3. Run `scripts/deploy_backend_vm.sh`. It installs the Gunicorn backend unit and both worker unit
+   templates, runs `systemctl daemon-reload`, restarts the backend, verifies health/security gates,
+   then restarts workers and prints effective units with `systemctl cat` so installed configuration
+   cannot silently drift from the repository.
 4. Inspect only non-secret effective guards. Expected operational modes are real Slack, Email,
    and Webhook; simulation-only Teams, firewall, `monitor`, and `flag_high_priority`.
-5. Confirm backend health and worker/timer status without triggering playbooks or notifications.
+5. Confirm backend health, Gunicorn effective-unit evidence, loopback bind, debugger absence,
+   secure cookies, and worker/timer status without triggering playbooks or notifications.
 6. If verification fails, restore the prior authorized revision and unit templates, run
    `systemctl daemon-reload`, restart the affected services, and repeat sanitized checks.
 

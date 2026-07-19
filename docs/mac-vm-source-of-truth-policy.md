@@ -128,13 +128,13 @@ Frontend deployment does not require a backend restart unless backend code/confi
 
 ### Backend/runtime source without migrations
 
-After the VM clean-tree sync, use the repository deployment/runbook instructions. Restart only affected services and verify:
+After the VM clean-tree sync, use the repository deployment/runbook instructions. Production SIEM backend traffic must be served by Gunicorn through `siem-backend.service`; Flask's development server is local-development-only and must not serve production traffic. Restart only affected services and verify:
 
 ```bash
 curl -fsS http://127.0.0.1:5051/health
 ```
 
-Inspect relevant service status/journals and effective configuration without printing secrets.
+Inspect relevant service status/journals and effective configuration without printing secrets. Backend verification must include Gunicorn process/effective-unit evidence, `SIEM_DEBUG=false`, `SIEM_BIND_HOST=127.0.0.1`, loopback-only backend bind, debugger absence, raw port `5051` not publicly reachable, and `Secure` session cookies.
 
 ### Migrations or schema changes
 
@@ -145,7 +145,7 @@ bash scripts/deploy_backend_vm.sh --dry-run-migrations
 bash scripts/deploy_backend_vm.sh
 ```
 
-The deployment helper performs its own migration dry-run before apply, installs current SOAR worker units, restarts affected services, and checks backend health. Do not manually apply ad hoc schema changes outside an explicitly approved emergency procedure.
+The deployment helper performs its own migration dry-run before apply, installs the current Gunicorn backend unit and SOAR worker units, restarts affected services, and checks backend health plus production runtime security gates. Do not manually apply ad hoc schema changes outside an explicitly approved emergency procedure.
 
 ### Combined frontend and backend change
 
@@ -167,7 +167,7 @@ Every deployment handoff must report:
 - clean-tree preflight result;
 - migrations/backfills run and results;
 - services restarted and health/status results;
-- sanitized configuration/guard state;
+- sanitized configuration/guard state, including Gunicorn runtime evidence and production security gates;
 - frontend artifact deployment when applicable;
 - database/runtime before-and-after counts when data was changed;
 - smoke-test results, rollback readiness, unresolved risks, and next owner;

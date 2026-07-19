@@ -31,10 +31,10 @@ Alert, playbook, and approval validation is "verify once implemented." If a depe
 
    Stop if any output is returned. Never merge on a dirty VM.
 
-3. Sync VM code only after the VM is clean:
+3. Sync VM code only after the VM is clean and the deployment is explicitly approved:
 
    ```bash
-   ssh -i ~/.ssh/jadeng15.pem jaden@4.204.25.149 'cd /home/jaden/siem-security-dashboard && git fetch origin && git merge origin/main'
+   ssh -i ~/.ssh/jadeng15.pem jaden@4.204.25.149 'cd /home/jaden/siem-security-dashboard && git fetch origin && git reset --hard origin/main'
    ```
 
 4. Check and apply pending migrations before dependent restarts:
@@ -44,13 +44,12 @@ Alert, playbook, and approval validation is "verify once implemented." If a depe
    bash scripts/deploy_backend_vm.sh --skip-restart
    ```
 
-5. Restart in dependency order: backend first, then workers, then listener.
+5. Deploy in dependency order: backend first, then workers, then listener. The backend step uses the Gunicorn deploy helper before listener restart.
 
    ```bash
-   sudo systemctl restart siem-backend.service
+   bash scripts/deploy_backend_vm.sh
+   sudo systemctl cat siem-backend.service --no-pager | grep gunicorn
    curl -fsS http://127.0.0.1:5051/health
-   sudo systemctl restart soar-playbook-worker.service
-   sudo systemctl restart soar-response-action-worker.timer
    sudo systemctl restart pfsense-syslog-listener.service
    ```
 

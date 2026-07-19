@@ -14,6 +14,10 @@ source .env
 set +a
 ```
 
+For production VM checks, confirm `siem-backend.service` is running Gunicorn,
+`/health` responds on `127.0.0.1:5051`, and the backend port is not publicly
+bound before running route-level behavior checks.
+
 ## 1. `/ingest` Basic Flow
 
 Command:

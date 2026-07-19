@@ -1,0 +1,29 @@
+[Unit]
+Description=SIEM Backend API (Gunicorn WSGI)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jaden
+Group=jaden
+WorkingDirectory=/home/jaden/siem-security-dashboard
+EnvironmentFile=/home/jaden/siem-security-dashboard/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=SIEM_BIND_HOST=127.0.0.1
+Environment=SIEM_PORT=5051
+Environment=SIEM_DEBUG=false
+ExecStartPre=/home/jaden/siem-security-dashboard/scripts/validate_backend_runtime_env.sh
+ExecStart=/bin/sh -lc 'exec /home/jaden/siem-security-dashboard/venv/bin/gunicorn --workers "${SIEM_GUNICORN_WORKERS:-2}" --worker-class sync --bind "${SIEM_BIND_HOST:-127.0.0.1}:${SIEM_PORT:-5051}" --timeout "${SIEM_GUNICORN_TIMEOUT:-120}" --graceful-timeout "${SIEM_GUNICORN_GRACEFUL_TIMEOUT:-30}" --keep-alive "${SIEM_GUNICORN_KEEPALIVE:-5}" --access-logfile - --error-logfile - --capture-output --log-level "${SIEM_GUNICORN_LOG_LEVEL:-info}" siem_backend:app'
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGTERM
+TimeoutStopSec=45
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

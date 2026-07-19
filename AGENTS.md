@@ -12,6 +12,7 @@ Do not attempt to fix too much at once, or when it is not related to the current
 ## Top-Level Safeguard (intentional duplication)
 
 - Do not commit, push, deploy, or mutate production unless explicitly requested.
+- Production backend deployments must use the documented Gunicorn/systemd path; never run Flask's development server for production.
 
 ## Engineering Gates
 

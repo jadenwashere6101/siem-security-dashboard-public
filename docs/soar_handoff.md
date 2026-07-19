@@ -63,8 +63,8 @@ The frontend is a Create React App application under `frontend/`.
 - Development uses the CRA dev server only for local development.
 - Production/demo deployment uses `npm run build`.
 - CRA outputs static files into `frontend/build/`.
-- Flask serves the built frontend assets as static files for the deployed app.
-- nginx sits in front of Flask as the reverse proxy in the deployed VM workflow.
+- Gunicorn serves the Flask WSGI app, including built frontend assets, in production.
+- nginx sits in front of Gunicorn as the reverse proxy in the deployed VM workflow.
 - Production is not a localhost dev-server workflow.
 - The frontend artifact deployment model is build plus sync of `frontend/build/`
   to the configured remote static path.
@@ -82,6 +82,8 @@ Operational references:
   artifacts after operator review.
 - Backend/VM deployment reference: `scripts/deploy_backend_vm.sh` plus
   [Schema Migration Workflow](schema_migration_workflow.md).
+- Production backend runtime reference:
+  [Production WSGI Runtime](production_wsgi_runtime.md).
 - Worker operations reference:
   [SOAR Playbook Worker Daemon Runbook](soar_playbook_worker_daemon_runbook.md).
 
