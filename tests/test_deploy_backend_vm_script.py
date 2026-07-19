@@ -109,6 +109,7 @@ def test_default_flow_includes_dry_run_then_apply():
     security_idx = main_body.index("check_runtime_security_gates")
     worker_idx = main_body.index("install_and_restart_worker_units")
     assert dry_idx < apply_idx < install_idx < restart_idx < status_idx < health_idx < security_idx < worker_idx
+    assert main_body.index("check_rate_limit_storage") < main_body.index("print_preflight")
 
 
 def test_health_retry_loop_is_bounded_with_backoff():
@@ -191,6 +192,8 @@ def test_runtime_security_gates_cover_loopback_debugger_and_secure_cookies():
     assert "SESSION_COOKIE_SECURE" in text
     assert "SESSION_COOKIE_HTTPONLY" in text
     assert "SESSION_COOKIE_SAMESITE" in text
+    assert "check_rate_limit_storage()" in text
+    assert "Validating shared rate-limit Redis storage" in text
 
 
 def test_preflight_prints_sanitized_gunicorn_runtime_settings():
@@ -201,5 +204,22 @@ def test_preflight_prints_sanitized_gunicorn_runtime_settings():
     assert "Gunicorn workers:" in text
     assert "Gunicorn timeout:" in text
     assert "DB password:    <redacted>" in text
+    assert "Rate-limit storage:" in text
+    assert "Rate-limit storage connectivity: checked" in text
+    assert "validate_rate_limit_storage_runtime(os.environ, production=True, ping=False)" in text
     assert "$SIEM_SECRET_KEY" not in text
     assert "$SECRET_KEY" not in text
+    assert "$SIEM_RATE_LIMIT_STORAGE_URI" not in text
+
+
+def test_rate_limit_storage_validation_blocks_worker_restart():
+    text = read_deploy_script()
+    main_body = text.split("main() {", 1)[1].split("\n}\n\nmain", 1)[0]
+    security_fn = text.split("check_runtime_security_gates() {", 1)[1].split("\n}\n\nmain", 1)[0]
+
+    assert "check_rate_limit_storage" in security_fn
+    assert main_body.index("check_runtime_security_gates") < main_body.index("install_and_restart_worker_units")
+    assert "apt install redis" not in text
+    assert "yum install redis" not in text
+    assert "systemctl restart redis" not in text
+    assert "systemctl reload nginx" not in text

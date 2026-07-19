@@ -50,9 +50,36 @@ def test_backend_systemd_unit_does_not_start_flask_development_server():
 def validator_env(tmp_path: Path, **overrides: str) -> dict[str, str]:
     fake_root = tmp_path / "repo"
     gunicorn = fake_root / "venv" / "bin" / "gunicorn"
+    python = fake_root / "venv" / "bin" / "python"
     gunicorn.parent.mkdir(parents=True)
     gunicorn.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     gunicorn.chmod(0o755)
+    python.write_text(
+        """#!/bin/sh
+case "${SIEM_RATE_LIMIT_STORAGE_URI:-}" in
+  "")
+    printf 'ERROR: Missing SIEM_RATE_LIMIT_STORAGE_URI for production.\\n' >&2
+    exit 1
+    ;;
+  memory://*)
+    printf 'ERROR: Production rate limiting cannot use memory storage.\\n' >&2
+    exit 1
+    ;;
+  *10.0.0.*|*0.0.0.0*)
+    printf 'ERROR: Production rate-limit Redis storage must use a loopback host.\\n' >&2
+    exit 1
+    ;;
+  redis://*unreachable*|rediss://*unreachable*)
+    printf 'ERROR: Unable to connect to rate-limit Redis storage (ConnectionError).\\n' >&2
+    exit 1
+    ;;
+esac
+cat >/dev/null
+printf 'backend=redis host=127.0.0.1 port=6379 db=0\\n'
+""",
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
     env = {
         **os.environ,
         "SIEM_BACKEND_ROOT": str(fake_root),
@@ -66,6 +93,7 @@ def validator_env(tmp_path: Path, **overrides: str) -> dict[str, str]:
         "SIEM_DB_NAME": "siem",
         "SIEM_DB_USER": "siem",
         "SIEM_DB_PASSWORD": "present",
+        "SIEM_RATE_LIMIT_STORAGE_URI": "redis://:secret-value@127.0.0.1:6379/0?token=hidden",
     }
     env.update(overrides)
     return env
@@ -87,7 +115,10 @@ def test_runtime_validator_accepts_safe_production_environment(tmp_path):
     assert result.returncode == 0
     assert "debug=false" in result.stdout
     assert "bind=127.0.0.1" in result.stdout
+    assert 'rate_limit_storage="backend=redis host=127.0.0.1 port=6379 db=0"' in result.stdout
     assert "present" not in result.stdout
+    assert "secret-value" not in result.stdout
+    assert "token=hidden" not in result.stdout
 
 
 def test_runtime_validator_rejects_debug_true(tmp_path):
@@ -115,6 +146,38 @@ def test_runtime_validator_requires_secret_admin_and_database_without_leaking_va
     assert result.returncode != 0
     assert "Missing SIEM_SECRET_KEY or SECRET_KEY" in result.stderr
     assert "present" not in result.stderr
+
+
+def test_runtime_validator_rejects_missing_rate_limit_storage_uri(tmp_path):
+    env = validator_env(tmp_path)
+    env.pop("SIEM_RATE_LIMIT_STORAGE_URI")
+    result = run_validator(env)
+
+    assert result.returncode != 0
+    assert "Rate-limit storage validation failed" in result.stderr
+    assert "SIEM_RATE_LIMIT_STORAGE_URI" in result.stderr
+
+
+def test_runtime_validator_rejects_memory_rate_limit_storage(tmp_path):
+    result = run_validator(validator_env(tmp_path, SIEM_RATE_LIMIT_STORAGE_URI="memory://"))
+
+    assert result.returncode != 0
+    assert "Rate-limit storage validation failed" in result.stderr
+    assert "memory storage" in result.stderr
+
+
+def test_runtime_validator_rejects_public_or_unreachable_redis_without_leaking_uri(tmp_path):
+    result = run_validator(
+        validator_env(
+            tmp_path,
+            SIEM_RATE_LIMIT_STORAGE_URI="redis://:super-secret@10.0.0.5:6379/0?token=hidden",
+        )
+    )
+
+    assert result.returncode != 0
+    assert "loopback host" in result.stderr
+    assert "super-secret" not in result.stderr
+    assert "token=hidden" not in result.stderr
 
 
 def test_install_helper_supports_dry_run_start_reload_and_rollback():

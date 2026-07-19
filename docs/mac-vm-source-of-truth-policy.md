@@ -134,7 +134,7 @@ After the VM clean-tree sync, use the repository deployment/runbook instructions
 curl -fsS http://127.0.0.1:5051/health
 ```
 
-Inspect relevant service status/journals and effective configuration without printing secrets. Backend verification must include Gunicorn process/effective-unit evidence, `SIEM_DEBUG=false`, `SIEM_BIND_HOST=127.0.0.1`, loopback-only backend bind, debugger absence, raw port `5051` not publicly reachable, and `Secure` session cookies.
+Inspect relevant service status/journals and effective configuration without printing secrets. Backend verification must include Gunicorn process/effective-unit evidence, `SIEM_DEBUG=false`, `SIEM_BIND_HOST=127.0.0.1`, loopback-only backend bind, debugger absence, raw port `5051` not publicly reachable, `Secure` session cookies, and shared Redis-backed Flask-Limiter storage on loopback. Redis is used only for Flask-Limiter counters, not sessions, queues, caches, SOAR execution, or application data.
 
 ### Migrations or schema changes
 

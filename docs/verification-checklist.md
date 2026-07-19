@@ -21,6 +21,7 @@ python3 -m py_compile siem_backend.py
 curl -i http://127.0.0.1:5051/health
 sudo systemctl cat siem-backend.service --no-pager | grep gunicorn
 ss -ltnp | grep '127.0.0.1:5051'
+ss -ltnp | grep '127.0.0.1:6379'
 ```
 
 Pass:
@@ -28,6 +29,7 @@ Pass:
 - `/health` returns `200`
 - production service evidence shows Gunicorn, not Flask's development server
 - backend bind is loopback-only in production
+- shared Redis-backed Flask-Limiter storage is present on loopback and not printed with credentials
 
 ## 2. Frontend Build
 

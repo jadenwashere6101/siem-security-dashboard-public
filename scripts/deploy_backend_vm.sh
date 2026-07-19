@@ -183,7 +183,7 @@ verify_db_settings_present() {
 }
 
 print_preflight() {
-  local git_rev migration_count db_host db_name db_user health_port bind_host debug workers timeout graceful_timeout keepalive
+  local git_rev migration_count db_host db_name db_user health_port bind_host debug workers timeout graceful_timeout keepalive limiter_storage
   git_rev="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   migration_count="$(find migrations -maxdepth 1 -name '*.sql' | wc -l | tr -d ' ')"
   db_host="${SIEM_DB_HOST:-${DB_HOST:-}}"
@@ -196,6 +196,7 @@ print_preflight() {
   timeout="${SIEM_GUNICORN_TIMEOUT:-120}"
   graceful_timeout="${SIEM_GUNICORN_GRACEFUL_TIMEOUT:-30}"
   keepalive="${SIEM_GUNICORN_KEEPALIVE:-5}"
+  limiter_storage="$(rate_limit_storage_summary)"
 
   log "=== Backend VM deploy preflight ==="
   log "Repo root:      ${REPO_ROOT}"
@@ -216,6 +217,8 @@ print_preflight() {
   log "Gunicorn timeout: ${timeout}"
   log "Gunicorn graceful timeout: ${graceful_timeout}"
   log "Gunicorn keepalive: ${keepalive}"
+  log "Rate-limit storage: ${limiter_storage}"
+  log "Rate-limit storage connectivity: checked"
   log "INTEGRATION_MODE: ${INTEGRATION_MODE:-<unset>}"
   log "SOAR_REAL_SLACK_ENABLED: ${SOAR_REAL_SLACK_ENABLED:-<unset>}"
   log "Dry-run only:   $([[ "$DRY_RUN_MIGRATIONS" -eq 1 ]] && echo yes || echo no)"
@@ -223,6 +226,28 @@ print_preflight() {
   log "Skip health:    $([[ "$SKIP_HEALTH_CHECK" -eq 1 ]] && echo yes || echo no)"
   log "Health probe:   http://127.0.0.1:${health_port}/health"
   log "==================================="
+}
+
+rate_limit_storage_summary() {
+  venv/bin/python - <<'PY'
+import os
+import sys
+
+from core.rate_limit_config import RateLimitStorageConfigError, validate_rate_limit_storage_runtime
+
+try:
+    config = validate_rate_limit_storage_runtime(os.environ, production=True, ping=False)
+except RateLimitStorageConfigError as exc:
+    print(f"invalid ({exc})", file=sys.stderr)
+    sys.exit(1)
+
+print(config.sanitized_summary)
+PY
+}
+
+check_rate_limit_storage() {
+  log "Validating shared rate-limit Redis storage..."
+  "$RUNTIME_VALIDATOR"
 }
 
 run_migration_dry_run() {
@@ -354,6 +379,7 @@ PY
 check_runtime_security_gates() {
   check_backend_effective_unit
   check_loopback_bind
+  check_rate_limit_storage
   check_debugger_absent
   check_secure_cookie_config
 }
@@ -365,6 +391,7 @@ main() {
   load_env_file "$ENV_FILE"
   verify_db_settings_present
   build_database_url
+  check_rate_limit_storage
   print_preflight
 
   run_migration_dry_run

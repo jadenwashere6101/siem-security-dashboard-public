@@ -50,6 +50,7 @@ Alert, playbook, and approval validation is "verify once implemented." If a depe
    bash scripts/deploy_backend_vm.sh
    sudo systemctl cat siem-backend.service --no-pager | grep gunicorn
    curl -fsS http://127.0.0.1:5051/health
+   ss -ltnp | grep '127.0.0.1:6379'
    sudo systemctl restart pfsense-syslog-listener.service
    ```
 

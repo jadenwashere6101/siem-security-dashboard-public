@@ -13,6 +13,7 @@ Do not attempt to fix too much at once, or when it is not related to the current
 
 - Do not commit, push, deploy, or mutate production unless explicitly requested.
 - Production backend deployments must use the documented Gunicorn/systemd path; never run Flask's development server for production.
+- Production Flask-Limiter storage must remain shared and production-safe under Gunicorn; do not regress to in-memory limiter storage for production.
 
 ## Engineering Gates
 

@@ -3,7 +3,9 @@ from flask_cors import CORS
 from flask_login import LoginManager
 from dotenv import load_dotenv
 from core.auth import load_user
+from core.rate_limit_config import apply_rate_limit_config
 from werkzeug.middleware.proxy_fix import ProxyFix
+from limits.errors import StorageError
 import logging
 import os
 from routes.admin_routes import admin_bp
@@ -86,6 +88,7 @@ def create_app():
 
     app = Flask(__name__, static_folder="frontend/build/static")
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+    apply_rate_limit_config(app, os.environ, production=not SIEM_DEBUG)
     limiter.init_app(app)
     app.config["FRONTEND_BUILD_DIR"] = os.path.join(app.root_path, "frontend", "build")
     app.config["SECRET_KEY"] = resolve_secret_key()
@@ -113,6 +116,17 @@ def create_app():
             "error": "rate_limited",
             "message": "Too many requests. Please try again later."
         }), 429
+
+    @app.errorhandler(StorageError)
+    def handle_rate_limit_storage_error(error):
+        current_app.logger.error(
+            "Rate-limit storage unavailable: %s",
+            type(getattr(error, "storage_error", error)).__name__,
+        )
+        return jsonify({
+            "error": "rate_limit_storage_unavailable",
+            "message": "Rate limiting is temporarily unavailable. Please try again later."
+        }), 503
 
     login_manager.user_loader(load_user)
 

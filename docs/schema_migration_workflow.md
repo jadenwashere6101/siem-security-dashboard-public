@@ -174,7 +174,7 @@ Many VMs already have tables from earlier additive SQL or `schema.sql` guards. T
 1. Pull latest code.
 2. Dry-run → review pending migrations.
 3. Apply → verify → deploy/restart application if needed.
-4. Run application health checks (e.g. `GET /health`) after schema apply.
+4. Run application health checks (e.g. `GET /health`) after schema apply. Production backend verification must also include Gunicorn effective-unit evidence, loopback-only backend binding, shared Redis-backed Flask-Limiter storage, debugger absence, and secure cookies.
 
 ### Fresh database on the VM
 
@@ -337,11 +337,13 @@ python3 -m pytest \
 curl -fsS http://127.0.0.1:5051/health
 sudo systemctl cat siem-backend.service --no-pager | grep gunicorn
 ss -ltnp | grep '127.0.0.1:5051'
+ss -ltnp | grep '127.0.0.1:6379'
 ```
 
 Production backend deployments must use `siem-backend.service` running Gunicorn
 against `siem_backend:app`; Flask's development server is not a production
-runtime.
+runtime. Shared Redis-backed Flask-Limiter storage must be reachable on loopback
+and must not be logged with credentials.
 
 ---
 

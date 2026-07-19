@@ -65,6 +65,7 @@ The frontend is a Create React App application under `frontend/`.
 - CRA outputs static files into `frontend/build/`.
 - Gunicorn serves the Flask WSGI app, including built frontend assets, in production.
 - nginx sits in front of Gunicorn as the reverse proxy in the deployed VM workflow.
+- Redis is used only as shared Flask-Limiter counter storage in production; it is not a session, cache, queue, SOAR, or application-data backend.
 - Production is not a localhost dev-server workflow.
 - The frontend artifact deployment model is build plus sync of `frontend/build/`
   to the configured remote static path.

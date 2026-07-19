@@ -37,6 +37,7 @@ Mandatory production values:
 - `SIEM_SECRET_KEY` or `SECRET_KEY`
 - `SIEM_ADMIN_USERNAME` and `SIEM_ADMIN_PASSWORD`
 - `DATABASE_URL` or complete `SIEM_DB_*` / `DB_*` settings
+- `SIEM_RATE_LIMIT_STORAGE_URI` pointing at loopback Redis for Flask-Limiter counters
 
 Optional Gunicorn tuning:
 
@@ -46,7 +47,19 @@ Optional Gunicorn tuning:
 - `SIEM_GUNICORN_KEEPALIVE`, default `5`
 - `SIEM_GUNICORN_LOG_LEVEL`, default `info`
 
-Do not print secret values when validating `.env`.
+Do not print secret values when validating `.env`, including Redis limiter URI
+credentials or query parameters.
+
+`SIEM_RATE_LIMIT_STORAGE_URI` is mandatory in production and must use `redis://`
+or `rediss://` loopback storage, for example:
+
+```text
+SIEM_RATE_LIMIT_STORAGE_URI=redis://127.0.0.1:6379/0
+```
+
+Redis is scoped only to Flask-Limiter counters. Do not use it for sessions,
+caches, queues, SOAR execution, notification delivery, or application data as
+part of this runtime.
 
 ## Install Or Update
 
@@ -67,7 +80,7 @@ bash scripts/deploy_backend_vm.sh
 ```
 
 The deploy helper installs the repo-owned backend unit before restart and verifies
-health and local security gates before worker restarts.
+health, shared limiter storage, and local security gates before worker restarts.
 
 ## Reload, Restart, And Logs
 
@@ -102,6 +115,7 @@ Every production backend deployment must verify:
 ```bash
 curl -fsS http://127.0.0.1:5051/health
 ss -ltnp | grep '127.0.0.1:5051'
+ss -ltnp | grep '127.0.0.1:6379'
 sudo systemctl cat siem-backend.service --no-pager | grep gunicorn
 sudo systemctl cat siem-backend.service --no-pager | grep 'siem_backend:app'
 ```
@@ -110,9 +124,12 @@ Also verify:
 
 - `SIEM_DEBUG=false`
 - `SIEM_BIND_HOST=127.0.0.1`
+- `SIEM_RATE_LIMIT_STORAGE_URI` is present, redacted in logs, and reachable
 - raw public port `5051` is not reachable
 - Werkzeug debugger probes do not return debugger signatures
 - public `/login` session cookies include `Secure`, `HttpOnly`, and `SameSite=Lax`
+- repeated `/login` attempts share one limiter counter across Gunicorn workers
+- limiter counters survive `systemctl reload siem-backend.service` until their TTL expires
 - nginx is the only public HTTP/HTTPS entrypoint for SIEM traffic
 - AI, SOAR, PostgreSQL, bank app, honeypot, and static frontend checks still pass
 
@@ -138,3 +155,7 @@ curl -fsS http://127.0.0.1:5051/health
 Do not alter nginx, database rows, migrations, bank app, honeypot, provider
 configuration, VM firewall, or Azure NSG rules as part of this rollback unless a
 separate approved incident procedure requires it.
+
+If Redis limiter storage is the failing component, restore the prior approved
+commit and prior limiter environment state. Do not silently configure production
+memory storage on the new code.
