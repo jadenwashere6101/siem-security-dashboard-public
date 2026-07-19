@@ -13,6 +13,7 @@ function AiResponsePanel({
   const metadata = response.metadata;
   const context = response.context;
   const tools = response.tools;
+  const draft = response.draft;
   const toolCalls = Array.isArray(tools?.calls) ? tools.calls : [];
 
   return (
@@ -51,7 +52,12 @@ function AiResponsePanel({
           {response.insufficient_context ? (
             <p style={warningStyle}>{response.error || "There was not enough SIEM context to answer safely."}</p>
           ) : null}
-          <div style={answerStyle}>{response.answer || response.error || "No AI answer was returned."}</div>
+          {draft ? <DraftReview draft={draft} /> : null}
+          {!draft ? (
+            <div style={answerStyle}>{response.answer || response.error || "No AI answer was returned."}</div>
+          ) : response.error ? (
+            <p style={warningStyle}>{response.error}</p>
+          ) : null}
           {state.stale ? (
             <p style={warningStyle}>This answer may be stale because the visible SIEM context changed.</p>
           ) : null}
@@ -84,6 +90,68 @@ function AiResponsePanel({
       ) : null}
     </aside>
   );
+}
+
+function DraftReview({ draft }) {
+  const payload = draft?.payload && typeof draft.payload === "object" ? draft.payload : {};
+  const validation = draft?.validation || {};
+  const labels = draft?.labels || {};
+  const entries = Object.entries(payload);
+
+  return (
+    <section aria-label="AI-generated draft review" style={draftBoxStyle}>
+      <div style={draftHeaderStyle}>
+        <div>
+          <p style={draftEyebrowStyle}>AI-generated draft</p>
+          <h3 style={draftTitleStyle}>{draft?.title || "AI draft"}</h3>
+        </div>
+        <span style={draftStatusStyle}>{validation.valid ? "Schema valid" : "Needs review"}</span>
+      </div>
+      <div style={draftLabelGridStyle}>
+        <span>{labels.read_only === true ? "Read-only" : "Review required"}</span>
+        <span>{labels.persisted === false ? "Not saved" : "Saved state unknown"}</span>
+        <span>{labels.applied === false ? "Not applied" : "Apply state unknown"}</span>
+        <span>{labels.approval_required_before_apply === true ? "Review required before apply" : "Approval status unknown"}</span>
+      </div>
+      {validation.valid === false && Array.isArray(validation.errors) && validation.errors.length ? (
+        <ul style={draftErrorListStyle}>
+          {validation.errors.map((error, index) => (
+            <li key={`${error}-${index}`}>{error}</li>
+          ))}
+        </ul>
+      ) : null}
+      {entries.length ? (
+        <dl style={draftPayloadStyle}>
+          {entries.map(([key, value]) => (
+            <React.Fragment key={key}>
+              <dt style={draftTermStyle}>{formatDraftKey(key)}</dt>
+              <dd style={draftValueStyle}>{formatDraftValue(value)}</dd>
+            </React.Fragment>
+          ))}
+        </dl>
+      ) : (
+        <p style={mutedStyle}>No valid draft payload was returned.</p>
+      )}
+    </section>
+  );
+}
+
+function formatDraftKey(key) {
+  return String(key || "").replace(/_/g, " ");
+}
+
+function formatDraftValue(value) {
+  if (Array.isArray(value)) {
+    return value.map((item, index) => (
+      <span key={index} style={draftListItemStyle}>
+        {typeof item === "object" ? JSON.stringify(item) : String(item)}
+      </span>
+    ));
+  }
+  if (value && typeof value === "object") {
+    return JSON.stringify(value, null, 2);
+  }
+  return String(value ?? "");
 }
 
 const panelStyle = {
@@ -124,5 +192,16 @@ const toolBoxStyle = { marginTop: "14px", border: "1px solid rgba(148, 163, 184,
 const toolTitleStyle = { margin: "0 0 8px", color: "#bae6fd", fontSize: "12px", fontWeight: 800 };
 const toolListStyle = { listStyle: "none", padding: 0, margin: 0, display: "grid", gap: "8px" };
 const toolItemStyle = { display: "flex", flexWrap: "wrap", gap: "8px", justifyContent: "space-between", color: "#cbd5e1", fontSize: "12px" };
+const draftBoxStyle = { border: "1px solid rgba(34, 197, 94, 0.38)", borderRadius: "14px", padding: "14px", background: "rgba(6, 78, 59, 0.2)" };
+const draftHeaderStyle = { display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "flex-start", marginBottom: "10px" };
+const draftEyebrowStyle = { margin: 0, color: "#86efac", fontSize: "11px", letterSpacing: "0.12em", textTransform: "uppercase", fontWeight: 800 };
+const draftTitleStyle = { margin: "3px 0 0", fontSize: "16px", color: "#ecfdf5" };
+const draftStatusStyle = { border: "1px solid rgba(134, 239, 172, 0.45)", borderRadius: "999px", padding: "4px 8px", color: "#bbf7d0", fontSize: "11px", fontWeight: 800, whiteSpace: "nowrap" };
+const draftLabelGridStyle = { display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "12px", color: "#d1fae5", fontSize: "12px" };
+const draftPayloadStyle = { display: "grid", gap: "10px", margin: 0 };
+const draftTermStyle = { color: "#a7f3d0", fontSize: "12px", fontWeight: 800, textTransform: "capitalize" };
+const draftValueStyle = { margin: "2px 0 0", color: "#e2e8f0", whiteSpace: "pre-wrap", lineHeight: 1.5 };
+const draftListItemStyle = { display: "block", marginBottom: "3px" };
+const draftErrorListStyle = { margin: "0 0 12px", paddingLeft: "18px", color: "#fde68a" };
 
 export default AiResponsePanel;

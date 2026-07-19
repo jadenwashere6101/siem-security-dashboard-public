@@ -901,19 +901,34 @@ function ResponseRegistryPanel({
               <h3 style={{ margin: 0, fontSize: "16px" }}>Indicator detail</h3>
               <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" }}>
                 {aiEnabled && record && typeof onAskAi === "function" ? (
-                  <AiAssistantButton
-                    onClick={() =>
-                      onAskAi({
-                        contextType: "response_registry",
-                        action: "explain_response",
-                        title: `Response registry #${record.id}`,
-                        question: "Explain this response registry record and its current response state.",
-                        context: { registry_id: record.id },
-                      })
-                    }
-                  >
-                    Explain this response
-                  </AiAssistantButton>
+                  <>
+                    <AiAssistantButton
+                      onClick={() =>
+                        onAskAi({
+                          contextType: "response_registry",
+                          action: "explain_response",
+                          title: `Response registry #${record.id}`,
+                          question: "Explain this response registry record and its current response state.",
+                          context: { registry_id: record.id },
+                        })
+                      }
+                    >
+                      Explain this response
+                    </AiAssistantButton>
+                    <AiAssistantButton
+                      onClick={() =>
+                        onAskAi({
+                          contextType: "response_registry",
+                          draftType: "response_recommendation",
+                          title: `Draft response recommendation for registry #${record.id}`,
+                          instruction: "Draft response recommendation options for analyst review only. Do not execute registry commands.",
+                          context: { registry_id: record.id },
+                        })
+                      }
+                    >
+                      Draft response
+                    </AiAssistantButton>
+                  </>
                 ) : null}
                 <button type="button" onClick={handleCloseDetail} style={secondaryButtonStyle(false)}>
                   Close

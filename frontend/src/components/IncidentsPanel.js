@@ -476,6 +476,45 @@ function IncidentsPanel({
                     >
                       Recommend next steps
                     </AiAssistantButton>
+                    <AiAssistantButton
+                      onClick={() =>
+                        onAskAi({
+                          contextType: "incident",
+                          draftType: "incident_note",
+                          title: `Draft note for incident #${selectedIncident.id}`,
+                          instruction: "Draft an incident note for analyst review only. Do not save it to the incident.",
+                          context: { incident_id: selectedIncident.id },
+                        })
+                      }
+                    >
+                      Draft incident note
+                    </AiAssistantButton>
+                    <AiAssistantButton
+                      onClick={() =>
+                        onAskAi({
+                          contextType: "incident",
+                          draftType: "escalation_summary",
+                          title: `Draft escalation for incident #${selectedIncident.id}`,
+                          instruction: "Draft an escalation summary for analyst review only. Do not send or save it.",
+                          context: { incident_id: selectedIncident.id },
+                        })
+                      }
+                    >
+                      Draft escalation
+                    </AiAssistantButton>
+                    <AiAssistantButton
+                      onClick={() =>
+                        onAskAi({
+                          contextType: "incident",
+                          draftType: "playbook_draft",
+                          title: `Draft playbook for incident #${selectedIncident.id}`,
+                          instruction: "Draft a playbook outline for analyst review only. Do not create or run a playbook.",
+                          context: { incident_id: selectedIncident.id },
+                        })
+                      }
+                    >
+                      Draft playbook
+                    </AiAssistantButton>
                   </>
                 ) : null}
                 <button type="button" style={detailCloseButtonStyle} onClick={handleCloseDetail}>

@@ -37,7 +37,7 @@ import {
 } from "./utils/sessionIdentity";
 import { updateAlertStatusRequest } from "./services/alertStatusService";
 import { loadAlertDashboardSummary, loadAlerts } from "./services/alertsService";
-import { requestAiChat, requestAiExplanation } from "./services/aiService";
+import { requestAiChat, requestAiDraft, requestAiExplanation } from "./services/aiService";
 import {
   loadCurrentSession,
   loginToDashboard,
@@ -919,19 +919,29 @@ function AppInner() {
         selectedAlertId,
         filters: visibleContext.visible_filters,
       });
-      const payload = {
-        context_type: options.contextType,
-        action: options.action,
-        question: options.question || "",
-        context: {
-          ...visibleContext,
-          ...(options.context || {}),
-        },
+      const context = {
+        ...visibleContext,
+        ...(options.context || {}),
       };
+      const payload = options.draftType
+        ? {
+            draft_type: options.draftType,
+            instruction: options.instruction || options.question || "",
+            context_type: options.contextType,
+            context,
+            use_tools: options.useTools !== false,
+            tool_policy: options.toolPolicy || { max_tool_calls: 3, time_window_hours: 24 },
+          }
+        : {
+            context_type: options.contextType,
+            action: options.action,
+            question: options.question || "",
+            context,
+          };
       runAiRequest({
-        title: options.title || "AI explanation",
+        title: options.title || (options.draftType ? "AI draft" : "AI explanation"),
         request: payload,
-        executor: requestAiExplanation,
+        executor: options.draftType ? requestAiDraft : requestAiExplanation,
         contextKey,
       });
     },

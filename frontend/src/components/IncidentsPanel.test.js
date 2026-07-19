@@ -215,6 +215,9 @@ describe("IncidentsPanel", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Summarize incident" }));
     await userEvent.click(screen.getByRole("button", { name: "Recommend next steps" }));
+    await userEvent.click(screen.getByRole("button", { name: "Draft incident note" }));
+    await userEvent.click(screen.getByRole("button", { name: "Draft escalation" }));
+    await userEvent.click(screen.getByRole("button", { name: "Draft playbook" }));
 
     expect(onAskAi).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -227,6 +230,27 @@ describe("IncidentsPanel", () => {
       expect.objectContaining({
         contextType: "incident",
         action: "recommend_next_steps",
+        context: { incident_id: 7 },
+      })
+    );
+    expect(onAskAi).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextType: "incident",
+        draftType: "incident_note",
+        context: { incident_id: 7 },
+      })
+    );
+    expect(onAskAi).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextType: "incident",
+        draftType: "escalation_summary",
+        context: { incident_id: 7 },
+      })
+    );
+    expect(onAskAi).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextType: "incident",
+        draftType: "playbook_draft",
         context: { incident_id: 7 },
       })
     );

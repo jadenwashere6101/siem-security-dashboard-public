@@ -161,6 +161,8 @@ test("AlertDetailsPanel exposes alert and detection AI entry points", async () =
   await userEvent.click(screen.getByRole("button", { name: "Recommend investigation" }));
   await userEvent.click(screen.getByRole("button", { name: "Why is this important?" }));
   await userEvent.click(screen.getByRole("button", { name: "Explain detection" }));
+  await userEvent.click(screen.getByRole("button", { name: "Draft detection change" }));
+  await userEvent.click(screen.getByRole("button", { name: "Draft checklist" }));
 
   expect(onAskAi).toHaveBeenCalledWith(
     expect.objectContaining({
@@ -188,6 +190,20 @@ test("AlertDetailsPanel exposes alert and detection AI entry points", async () =
       contextType: "detection",
       action: "explain_detection",
       context: { alert_id: 101 },
+    })
+  );
+  expect(onAskAi).toHaveBeenCalledWith(
+    expect.objectContaining({
+      contextType: "detection",
+      draftType: "detection_rule_change",
+      context: { alert_id: 101, source_ip: "8.8.8.8" },
+    })
+  );
+  expect(onAskAi).toHaveBeenCalledWith(
+    expect.objectContaining({
+      contextType: "alert",
+      draftType: "investigation_checklist",
+      context: { alert_id: 101, source_ip: "8.8.8.8" },
     })
   );
 });

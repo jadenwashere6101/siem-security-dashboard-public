@@ -1136,6 +1136,32 @@ function SocCommandCenter({
                             >
                               Investigate cluster
                             </AiAssistantButton>
+                            <AiAssistantButton
+                              onClick={() =>
+                                onAskAi({
+                                  contextType: "recon_activity",
+                                  draftType: "investigation_checklist",
+                                  title: `Draft checklist for recon #${reconContext.detail.id}`,
+                                  instruction: "Draft a read-only investigation checklist for this recon cluster. Do not execute actions.",
+                                  context: { activity_id: reconContext.detail.id },
+                                })
+                              }
+                            >
+                              Draft checklist
+                            </AiAssistantButton>
+                            <AiAssistantButton
+                              onClick={() =>
+                                onAskAi({
+                                  contextType: "recon_activity",
+                                  draftType: "response_recommendation",
+                                  title: `Draft response options for recon #${reconContext.detail.id}`,
+                                  instruction: "Draft response recommendation options for analyst review only. Do not approve or execute anything.",
+                                  context: { activity_id: reconContext.detail.id },
+                                })
+                              }
+                            >
+                              Draft response
+                            </AiAssistantButton>
                           </>
                         ) : null}
                         <StatusBadge tone={String(reconContext.detail.severity || "").toLowerCase() === "high" ? "warning" : "info"}>

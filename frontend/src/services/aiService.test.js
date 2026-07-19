@@ -1,4 +1,10 @@
-import { getAiStatus, requestAiChat, requestAiExplanation, sendSiemChatMessage } from "./aiService";
+import {
+  getAiStatus,
+  requestAiChat,
+  requestAiDraft,
+  requestAiExplanation,
+  sendSiemChatMessage,
+} from "./aiService";
 
 beforeEach(() => {
   global.fetch = jest.fn();
@@ -85,6 +91,50 @@ test("requestAiChat preserves optional read-tool policy", async () => {
         client_history: [],
         use_tools: true,
         tool_policy: { max_tool_calls: 5, time_window_hours: 24 },
+      }),
+    })
+  );
+});
+
+test("requestAiDraft posts review-only draft requests", async () => {
+  const controller = new AbortController();
+  fetch.mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      status: "success",
+      draft: {
+        draft_type: "incident_note",
+        labels: { ai_generated: true, read_only: true, persisted: false, applied: false },
+      },
+    }),
+  });
+
+  const result = await requestAiDraft(
+    {
+      draft_type: "incident_note",
+      instruction: "Draft a note.",
+      context_type: "incident",
+      context: { incident_id: 7 },
+      use_tools: true,
+      tool_policy: { max_tool_calls: 3, time_window_hours: 24 },
+    },
+    { signal: controller.signal }
+  );
+
+  expect(result.draft.labels.persisted).toBe(false);
+  expect(fetch).toHaveBeenCalledWith(
+    expect.stringContaining("/ai/drafts"),
+    expect.objectContaining({
+      method: "POST",
+      credentials: "include",
+      signal: controller.signal,
+      body: JSON.stringify({
+        draft_type: "incident_note",
+        instruction: "Draft a note.",
+        context_type: "incident",
+        context: { incident_id: 7 },
+        use_tools: true,
+        tool_policy: { max_tool_calls: 3, time_window_hours: 24 },
       }),
     })
   );

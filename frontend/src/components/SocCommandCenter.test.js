@@ -579,6 +579,8 @@ describe("SocCommandCenter", () => {
     expect(await screen.findByText("Distributed commodity scanning.")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Explain campaign" }));
     await userEvent.click(screen.getByRole("button", { name: "Investigate cluster" }));
+    await userEvent.click(screen.getByRole("button", { name: "Draft checklist" }));
+    await userEvent.click(screen.getByRole("button", { name: "Draft response" }));
 
     expect(onAskAi).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -591,6 +593,20 @@ describe("SocCommandCenter", () => {
       expect.objectContaining({
         contextType: "recon_activity",
         action: "investigate_cluster",
+        context: { activity_id: 90 },
+      })
+    );
+    expect(onAskAi).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextType: "recon_activity",
+        draftType: "investigation_checklist",
+        context: { activity_id: 90 },
+      })
+    );
+    expect(onAskAi).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextType: "recon_activity",
+        draftType: "response_recommendation",
         context: { activity_id: 90 },
       })
     );

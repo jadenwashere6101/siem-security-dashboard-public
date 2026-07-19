@@ -218,6 +218,32 @@ function AlertDetailsPanel({
           >
             Explain detection
           </AiAssistantButton>
+          <AiAssistantButton
+            onClick={() =>
+              onAskAi({
+                contextType: "detection",
+                draftType: "detection_rule_change",
+                title: `Draft detection change for alert #${selectedAlert.id}`,
+                instruction: "Draft a detection rule change proposal for analyst review only. Do not apply or save anything.",
+                context: { alert_id: selectedAlert.id, source_ip: selectedAlert.source_ip },
+              })
+            }
+          >
+            Draft detection change
+          </AiAssistantButton>
+          <AiAssistantButton
+            onClick={() =>
+              onAskAi({
+                contextType: "alert",
+                draftType: "investigation_checklist",
+                title: `Draft checklist for alert #${selectedAlert.id}`,
+                instruction: "Draft a read-only investigation checklist for this alert. Do not execute any steps.",
+                context: { alert_id: selectedAlert.id, source_ip: selectedAlert.source_ip },
+              })
+            }
+          >
+            Draft checklist
+          </AiAssistantButton>
         </div>
       ) : null}
       {getTargetedAlertMeta(selectedAlert.alert_type) && (

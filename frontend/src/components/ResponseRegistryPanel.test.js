@@ -192,11 +192,19 @@ test("renders response registry AI entry point for selected detail", async () =>
   const detail = await openFirstRow();
 
   await userEvent.click(within(detail).getByRole("button", { name: "Explain this response" }));
+  await userEvent.click(within(detail).getByRole("button", { name: "Draft response" }));
 
   expect(onAskAi).toHaveBeenCalledWith(
     expect.objectContaining({
       contextType: "response_registry",
       action: "explain_response",
+      context: { registry_id: 11 },
+    })
+  );
+  expect(onAskAi).toHaveBeenCalledWith(
+    expect.objectContaining({
+      contextType: "response_registry",
+      draftType: "response_recommendation",
       context: { registry_id: 11 },
     })
   );

@@ -26,6 +26,18 @@ function DashboardMetrics({
           >
             Ask AI about dashboard
           </AiAssistantButton>
+          <AiAssistantButton
+            onClick={() =>
+              onAskAi({
+                contextType: "dashboard",
+                draftType: "investigation_checklist",
+                title: "Draft dashboard investigation checklist",
+                instruction: "Draft a read-only investigation checklist from the visible dashboard summary. Do not run or save anything.",
+              })
+            }
+          >
+            Draft checklist
+          </AiAssistantButton>
         </div>
       ) : null}
       <section style={metricsGridStyle}>
@@ -58,6 +70,8 @@ function DashboardMetrics({
 const aiBarStyle = {
   display: "flex",
   justifyContent: "flex-end",
+  gap: "8px",
+  flexWrap: "wrap",
   margin: "0 0 12px",
 };
 

@@ -397,6 +397,32 @@ function PanelHeader({ sourceIp, compact, onAskAi = null, aiEnabled = false }) {
             >
               Summarize activity
             </AiAssistantButton>
+            <AiAssistantButton
+              onClick={() =>
+                onAskAi({
+                  contextType: "source_ip",
+                  draftType: "response_recommendation",
+                  title: `Draft response recommendation for ${sourceIp}`,
+                  instruction: "Draft response recommendation options for analyst review only. Do not execute or submit anything.",
+                  context: { source_ip: sourceIp },
+                })
+              }
+            >
+              Draft response
+            </AiAssistantButton>
+            <AiAssistantButton
+              onClick={() =>
+                onAskAi({
+                  contextType: "source_ip",
+                  draftType: "investigation_checklist",
+                  title: `Draft checklist for ${sourceIp}`,
+                  instruction: "Draft a read-only investigation checklist for this source IP. Do not run any actions.",
+                  context: { source_ip: sourceIp },
+                })
+              }
+            >
+              Draft checklist
+            </AiAssistantButton>
           </>
         ) : null}
         <span style={ipPillStyle}>{sourceIp || "none"}</span>

@@ -145,3 +145,95 @@ test("AiResponsePanel renders read-only tool evidence metadata", () => {
   expect(screen.getByText("read_audit_log")).toBeInTheDocument();
   expect(screen.getByText("forbidden")).toBeInTheDocument();
 });
+
+test("AiResponsePanel renders AI drafts as review-only not-applied payloads", () => {
+  render(
+    <AiResponsePanel
+      state={{
+        status: "success",
+        title: "Draft incident note",
+        response: {
+          draft: {
+            draft_type: "incident_note",
+            title: "Incident note draft",
+            labels: {
+              ai_generated: true,
+              read_only: true,
+              persisted: false,
+              applied: false,
+              approval_required_before_apply: true,
+            },
+            validation: { valid: true, errors: [] },
+            payload: {
+              summary: "Suspicious scan activity observed.",
+              evidence: ["Alert #7 fired"],
+              recommended_next_steps: ["Review related events"],
+            },
+          },
+          context: { sources: [{ source_type: "incident" }], omitted_count: 0 },
+          metadata: {
+            provider: "ollama",
+            model: "qwen3:4b-instruct",
+            status: "success",
+            local_request: true,
+            paid_request: false,
+            estimated_cost_usd: 0,
+          },
+          tools: { used: false, calls: [] },
+        },
+      }}
+      onDismiss={() => {}}
+      onRetry={() => {}}
+      onCancel={() => {}}
+    />
+  );
+
+  expect(screen.getByLabelText("AI-generated draft review")).toBeInTheDocument();
+  expect(screen.getByText("AI-generated draft")).toBeInTheDocument();
+  expect(screen.getByText("Not saved")).toBeInTheDocument();
+  expect(screen.getByText("Not applied")).toBeInTheDocument();
+  expect(screen.getByText("Review required before apply")).toBeInTheDocument();
+  expect(screen.getByText("Suspicious scan activity observed.")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /apply/i })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /approve/i })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /execute/i })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /save/i })).not.toBeInTheDocument();
+});
+
+test("AiResponsePanel shows draft validation errors without payload submission controls", () => {
+  render(
+    <AiResponsePanel
+      state={{
+        status: "success",
+        title: "Invalid draft",
+        response: {
+          error: "AI draft response did not match the required schema.",
+          draft: {
+            draft_type: "incident_note",
+            title: "Incident note draft",
+            labels: {
+              ai_generated: true,
+              read_only: true,
+              persisted: false,
+              applied: false,
+              approval_required_before_apply: true,
+            },
+            validation: { valid: false, errors: ["evidence is required"] },
+            payload: {},
+          },
+          context: { sources: [], omitted_count: 0 },
+          metadata: { status: "draft_validation_failed" },
+          tools: { used: false, calls: [] },
+        },
+      }}
+      onDismiss={() => {}}
+      onRetry={() => {}}
+      onCancel={() => {}}
+    />
+  );
+
+  expect(screen.getByText("Needs review")).toBeInTheDocument();
+  expect(screen.getByText("evidence is required")).toBeInTheDocument();
+  expect(screen.getByText("No valid draft payload was returned.")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /run/i })).not.toBeInTheDocument();
+});

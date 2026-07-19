@@ -19,11 +19,18 @@ test("DashboardMetrics exposes contextual dashboard AI action", async () => {
   );
 
   await userEvent.click(screen.getByRole("button", { name: "Ask AI about dashboard" }));
+  await userEvent.click(screen.getByRole("button", { name: "Draft checklist" }));
 
   expect(onAskAi).toHaveBeenCalledWith(
     expect.objectContaining({
       contextType: "dashboard",
       action: "ask_dashboard",
+    })
+  );
+  expect(onAskAi).toHaveBeenCalledWith(
+    expect.objectContaining({
+      contextType: "dashboard",
+      draftType: "investigation_checklist",
     })
   );
 });

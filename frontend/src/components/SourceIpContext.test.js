@@ -161,6 +161,8 @@ test("SourceIpContext exposes source-IP AI entry points", async () => {
   await userEvent.click(screen.getByRole("button", { name: "Explain this IP" }));
   await userEvent.click(screen.getByRole("button", { name: "Is this reconnaissance?" }));
   await userEvent.click(screen.getByRole("button", { name: "Summarize activity" }));
+  await userEvent.click(screen.getByRole("button", { name: "Draft response" }));
+  await userEvent.click(screen.getByRole("button", { name: "Draft checklist" }));
 
   expect(onAskAi).toHaveBeenCalledWith(
     expect.objectContaining({
@@ -180,6 +182,20 @@ test("SourceIpContext exposes source-IP AI entry points", async () => {
     expect.objectContaining({
       contextType: "source_ip",
       action: "summarize_activity",
+      context: { source_ip: "8.8.8.8" },
+    })
+  );
+  expect(onAskAi).toHaveBeenCalledWith(
+    expect.objectContaining({
+      contextType: "source_ip",
+      draftType: "response_recommendation",
+      context: { source_ip: "8.8.8.8" },
+    })
+  );
+  expect(onAskAi).toHaveBeenCalledWith(
+    expect.objectContaining({
+      contextType: "source_ip",
+      draftType: "investigation_checklist",
       context: { source_ip: "8.8.8.8" },
     })
   );

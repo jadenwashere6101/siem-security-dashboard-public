@@ -9,6 +9,11 @@ from core.ai.explainer_service import (
     explain_context,
     service_error_response,
 )
+from core.ai.drafting_service import (
+    DraftValidationError,
+    create_draft,
+    service_error_response as draft_service_error_response,
+)
 from core.ai.readiness import get_ai_gateway_status
 from core.ai.repo_assistant_service import (
     RepoAssistantValidationError,
@@ -66,6 +71,25 @@ def ai_chat_route():
         return jsonify(result.payload), result.status_code
     except Exception as error:
         current_app.logger.error("Error in ai_chat_route: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@ai_bp.route("/ai/drafts", methods=["POST"])
+@login_required
+@analyst_or_super_admin_required
+def ai_drafts_route():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "JSON object body is required."}), 400
+
+    try:
+        result = create_draft(payload)
+        return jsonify(result.payload), result.status_code
+    except (AiContextError, DraftValidationError) as error:
+        result = draft_service_error_response(error)
+        return jsonify(result.payload), result.status_code
+    except Exception as error:
+        current_app.logger.error("Error in ai_drafts_route: %s", error)
         return jsonify({"error": "Internal server error"}), 500
 
 
