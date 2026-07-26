@@ -1,4 +1,19 @@
 from engines.ingest_engine import _build_synthetic_provenance_context
+from core.synthetic_data_policy import (
+    CONFIRMED_LEGACY_SYNTHETIC_SOURCE_IPS,
+    CONFIRMED_SYNTHETIC_CLEANUP_SOURCE_IPS,
+    load_synthetic_source_ip_exclusions,
+)
+
+
+def test_one_dot_one_is_cleanup_eligible_but_not_globally_excluded_from_dashboard(monkeypatch):
+    monkeypatch.delenv("SIEM_SYNTHETIC_SOURCE_IP_EXCLUSIONS", raising=False)
+    monkeypatch.delenv("SYNTHETIC_SOURCE_IP_EXCLUSIONS", raising=False)
+    exclusions, _ = load_synthetic_source_ip_exclusions()
+
+    assert "1.1.1.1" in CONFIRMED_SYNTHETIC_CLEANUP_SOURCE_IPS
+    assert "1.1.1.1" not in CONFIRMED_LEGACY_SYNTHETIC_SOURCE_IPS
+    assert "1.1.1.1" not in exclusions
 
 
 def test_ingest_event_with_canonical_synthetic_provenance_marks_alert_context():

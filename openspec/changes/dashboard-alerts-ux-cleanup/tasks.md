@@ -51,8 +51,8 @@
 ## 7. PDF and Confirmed Synthetic Data Follow-up
 
 - [x] 7.1 Preserve the same-origin attachment download path for filtered PDF export while keeping CSV and TXT export links filter-backed.
-- [x] 7.2 Centralize operational source-IP classification for source-IP dashboard widgets, including documentation networks and confirmed legacy synthetic sources.
+- [x] 7.2 Centralize operational source-IP classification for source-IP dashboard widgets, including documentation networks and the complete VM-reviewed legacy synthetic source set.
 - [x] 7.3 Preserve legitimate `1.1.1.1` production telemetry by avoiding broad public-IP or private/reserved range exclusions.
 - [x] 7.4 Mark simulator-origin ingest payloads with canonical synthetic provenance and prevent them from being normalized as operational source metadata.
-- [x] 7.5 Add a dry-run-first cleanup mechanism for confirmed synthetic alerts and associated synthetic event rows with dependency reporting, backup-before-delete, explicit confirmation, and transactional execution.
+- [x] 7.5 Add a dry-run-first cleanup mechanism for the complete confirmed legacy synthetic alert/event dataset with dependency reporting, benign monitor-only handling, backup-before-delete, explicit confirmation, and transactional execution.
 - [x] 7.6 Add focused tests for PDF/TXT/CSV filter preservation, centralized synthetic classification, and cleanup selectors that cannot capture unrelated records.

@@ -15,20 +15,62 @@ DOCUMENTATION_SOURCE_IP_NETWORK_EXCLUSIONS = frozenset(
 
 CONFIRMED_LEGACY_SYNTHETIC_SOURCE_IPS = frozenset(
     {
+        "8.8.8.8",
+        "12.12.12.12",
+        "13.13.13.13",
+        "55.55.55.55",
+        "55.66.77.88",
+        "66.77.88.99",
+        "77.77.77.77",
+        "88.88.88.88",
+        "99.99.99.99",
+        "101.101.101.101",
+        "102.102.102.102",
         "103.103.103.103",
+        "104.104.104.104",
+        "105.105.105.105",
+        "106.106.106.106",
         "107.107.107.107",
+    }
+)
+
+CONFIRMED_SYNTHETIC_CLEANUP_SOURCE_IPS = frozenset(CONFIRMED_LEGACY_SYNTHETIC_SOURCE_IPS | {"1.1.1.1"})
+
+CONFIRMED_LEGACY_SYNTHETIC_ALERT_IDS = frozenset(
+    {
+        16,
+        17,
+        18,
+        34,
+        35,
+        36,
+        37,
+        44,
+        45,
+        46,
+        47,
     }
 )
 
 SYNTHETIC_PROVENANCE_VALUES = frozenset(
     {
+        "azure_smoke",
         "demo",
+        "manual_test",
+        "seed",
+        "seeded_test",
+        "smoke",
         "simulated",
         "simulation",
         "simulator",
         "synthetic",
         "test",
     }
+)
+
+SYNTHETIC_TEXT_EVIDENCE_REGEX = (
+    r"(synthetic|simulated|simulator|demo|smoke|seeded?|manual[ _-]?test|"
+    r"fabricated|test[ _-]?alert|test[ _-]?data|testuser[0-9]+|user[0-9]{1,3})"
 )
 
 
@@ -96,6 +138,64 @@ def _context_provenance_sql(context_column: str) -> str:
     """
 
 
+def build_synthetic_context_value_sql(context_column: str) -> str:
+    context_column = _sql_identifier(context_column)
+    return f"""
+        LOWER(
+            COALESCE(
+                NULLIF({context_column}->>'data_provenance', ''),
+                NULLIF({context_column}->>'telemetry_provenance', ''),
+                NULLIF({context_column}->>'provenance', ''),
+                NULLIF({context_column}#>>'{{provenance,classification}}', ''),
+                NULLIF({context_column}#>>'{{provenance,source}}', ''),
+                NULLIF({context_column}#>>'{{provenance,origin}}', ''),
+                NULLIF({context_column}#>>'{{metadata,data_provenance}}', ''),
+                NULLIF({context_column}#>>'{{metadata,provenance}}', ''),
+                ''
+            )
+        )
+    """
+
+
+def build_legacy_synthetic_alert_evidence_sql(
+    *,
+    table_alias: str = "",
+) -> tuple[str, list]:
+    prefix = f"{_sql_identifier(table_alias)}." if table_alias else ""
+    context_value_sql = build_synthetic_context_value_sql(f"{prefix}context")
+    synthetic_values = sorted(SYNTHETIC_PROVENANCE_VALUES)
+    cleanup_ips = sorted(CONFIRMED_SYNTHETIC_CLEANUP_SOURCE_IPS)
+    alert_ids = sorted(CONFIRMED_LEGACY_SYNTHETIC_ALERT_IDS)
+    return (
+        f"""
+        (
+            {prefix}id = ANY(%s)
+            OR (
+                host({prefix}source_ip) = ANY(%s)
+                AND (
+                    LOWER(COALESCE({prefix}source, '')) = ANY(%s)
+                    OR LOWER(COALESCE({prefix}source_type, '')) = ANY(%s)
+                    OR {context_value_sql} = ANY(%s)
+                    OR COALESCE({prefix}message, '') ~* %s
+                    OR COALESCE({prefix}alert_type, '') ~* %s
+                    OR COALESCE({prefix}context::text, '') ~* %s
+                )
+            )
+        )
+        """,
+        [
+            alert_ids,
+            cleanup_ips,
+            synthetic_values,
+            synthetic_values,
+            synthetic_values,
+            SYNTHETIC_TEXT_EVIDENCE_REGEX,
+            SYNTHETIC_TEXT_EVIDENCE_REGEX,
+            SYNTHETIC_TEXT_EVIDENCE_REGEX,
+        ],
+    )
+
+
 def build_operational_source_ip_exclusion_sql(
     *,
     source_ip_column: str = "source_ip",
@@ -152,5 +252,5 @@ def mark_payload_as_synthetic(
 
 
 def normalize_confirmed_synthetic_alert_ids(values: Iterable[int | str] | None = None) -> tuple[int, ...]:
-    selected = values or (16, 17, 18, 34, 35, 36, 37, 44, 45, 46, 47)
+    selected = values or CONFIRMED_LEGACY_SYNTHETIC_ALERT_IDS
     return tuple(sorted({int(value) for value in selected}))

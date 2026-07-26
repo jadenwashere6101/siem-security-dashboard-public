@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
 from core.db import get_db_connection
 from core.synthetic_data_policy import (
-    CONFIRMED_LEGACY_SYNTHETIC_SOURCE_IPS,
+    CONFIRMED_SYNTHETIC_CLEANUP_SOURCE_IPS,
     SYNTHETIC_PROVENANCE_VALUES,
+    SYNTHETIC_TEXT_EVIDENCE_REGEX,
+    build_legacy_synthetic_alert_evidence_sql,
     normalize_confirmed_synthetic_alert_ids,
 )
 
@@ -37,6 +39,15 @@ DEPENDENCY_QUERIES = {
         "SELECT * FROM recon_activity_alerts WHERE alert_id = ANY(%s) ORDER BY alert_id, recon_activity_id"
     ),
 }
+BENIGN_MONITOR_DEPENDENCY_TABLES = frozenset(
+    {
+        "response_actions_queue",
+        "response_actions_log",
+        "soar_response_decisions",
+        "soar_response_outcome_events",
+        "indicator_response_events",
+    }
+)
 
 
 def _json_default(value: Any):
@@ -61,16 +72,26 @@ def fetch_confirmed_synthetic_alert_rows(
     alert_ids: tuple[int, ...],
     source_ips: tuple[str, ...],
 ) -> list[dict[str, Any]]:
+    evidence_sql, evidence_params = build_legacy_synthetic_alert_evidence_sql()
     return _fetch_dicts(
         cur,
-        """
+        f"""
         SELECT *
         FROM alerts
-        WHERE id = ANY(%s)
-          AND host(source_ip) = ANY(%s)
+        WHERE {evidence_sql}
+          AND (
+              %s::text[] = ARRAY[]::text[]
+              OR host(source_ip) = ANY(%s)
+              OR id = ANY(%s)
+          )
         ORDER BY id
         """,
-        (list(alert_ids), list(source_ips)),
+        (
+            *evidence_params,
+            list(source_ips),
+            list(source_ips),
+            list(alert_ids),
+        ),
     )
 
 
@@ -80,6 +101,7 @@ def fetch_associated_synthetic_event_rows(
     source_ips: tuple[str, ...],
 ) -> list[dict[str, Any]]:
     synthetic_values = sorted(SYNTHETIC_PROVENANCE_VALUES)
+    cleanup_ips = sorted(source_ips)
     return _fetch_dicts(
         cur,
         """
@@ -96,12 +118,14 @@ def fetch_associated_synthetic_event_rows(
               OR LOWER(COALESCE(raw_payload->>'provenance', '')) = ANY(%s)
               OR LOWER(COALESCE(raw_payload#>>'{provenance,classification}', '')) = ANY(%s)
               OR LOWER(COALESCE(raw_payload#>>'{provenance,source}', '')) = ANY(%s)
-              OR message ILIKE 'Simulated %%'
+              OR LOWER(COALESCE(raw_payload#>>'{provenance,origin}', '')) = ANY(%s)
+              OR COALESCE(message, '') ~* %s
+              OR COALESCE(raw_payload::text, '') ~* %s
           )
         ORDER BY id
         """,
         (
-            list(source_ips),
+            cleanup_ips,
             synthetic_values,
             synthetic_values,
             synthetic_values,
@@ -111,6 +135,9 @@ def fetch_associated_synthetic_event_rows(
             synthetic_values,
             synthetic_values,
             synthetic_values,
+            synthetic_values,
+            SYNTHETIC_TEXT_EVIDENCE_REGEX,
+            SYNTHETIC_TEXT_EVIDENCE_REGEX,
         ),
     )
 
@@ -122,6 +149,26 @@ def fetch_dependency_report(cur, alert_ids: tuple[int, ...]) -> dict[str, list[d
     }
 
 
+def _is_benign_monitor_dependency(table: str, row: dict[str, Any]) -> bool:
+    if table not in BENIGN_MONITOR_DEPENDENCY_TABLES:
+        return False
+    action = str(row.get("action") or row.get("selected_action") or row.get("requested_action") or "").lower()
+    if action != "monitor":
+        return False
+    if table == "soar_response_outcome_events":
+        return str(row.get("execution_mode") or "").lower() in {"observed", "simulation", "tracking_only", "read_only"}
+    return True
+
+
+def _unexpected_dependency_counts(dependencies: dict[str, list[dict[str, Any]]]) -> dict[str, int]:
+    unexpected = {}
+    for table, rows in dependencies.items():
+        unexpected_count = sum(1 for row in rows if not _is_benign_monitor_dependency(table, row))
+        if unexpected_count:
+            unexpected[table] = unexpected_count
+    return unexpected
+
+
 def build_cleanup_report(
     conn,
     *,
@@ -129,25 +176,23 @@ def build_cleanup_report(
     source_ips: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     alert_ids = normalize_confirmed_synthetic_alert_ids(alert_ids)
-    source_ips = tuple(sorted(source_ips or CONFIRMED_LEGACY_SYNTHETIC_SOURCE_IPS))
+    source_ips = tuple(sorted(source_ips or CONFIRMED_SYNTHETIC_CLEANUP_SOURCE_IPS))
     with conn.cursor() as cur:
         alerts = fetch_confirmed_synthetic_alert_rows(cur, alert_ids=alert_ids, source_ips=source_ips)
         events = fetch_associated_synthetic_event_rows(cur, source_ips=source_ips)
         dependencies = fetch_dependency_report(cur, tuple(row["id"] for row in alerts))
         found_alert_ids = {int(row["id"]) for row in alerts}
         dependency_counts = {table: len(rows) for table, rows in dependencies.items()}
+        benign_monitor_dependency_counts = {
+            table: sum(1 for row in rows if _is_benign_monitor_dependency(table, row))
+            for table, rows in dependencies.items()
+        }
+        benign_monitor_dependency_counts = {
+            table: count for table, count in benign_monitor_dependency_counts.items() if count
+        }
         refusal_reasons = []
         missing_alert_ids = [alert_id for alert_id in alert_ids if alert_id not in found_alert_ids]
-        if missing_alert_ids:
-            refusal_reasons.append(
-                {
-                    "code": "missing_confirmed_alert_ids",
-                    "alert_ids": missing_alert_ids,
-                }
-            )
-        unexpected_dependencies = {
-            table: count for table, count in dependency_counts.items() if count > 0
-        }
+        unexpected_dependencies = _unexpected_dependency_counts(dependencies)
         if unexpected_dependencies:
             refusal_reasons.append(
                 {
@@ -163,6 +208,8 @@ def build_cleanup_report(
             "selected_events": events,
             "dependencies": dependencies,
             "dependency_counts": dependency_counts,
+            "benign_monitor_dependency_counts": benign_monitor_dependency_counts,
+            "missing_configured_alert_ids": missing_alert_ids,
             "refusal_reasons": refusal_reasons,
             "would_delete": {
                 "alerts": len(alerts),
@@ -174,7 +221,9 @@ def build_cleanup_report(
 def write_backup(report: dict[str, Any], backup_dir: str | Path) -> Path:
     backup_path = Path(backup_dir)
     backup_path.mkdir(parents=True, exist_ok=True)
-    output_path = backup_path / f"confirmed_synthetic_dashboard_cleanup_{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.json"
+    output_path = backup_path / (
+        f"confirmed_synthetic_dashboard_cleanup_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
+    )
     output_path.write_text(json.dumps(report, indent=2, default=_json_default) + "\n", encoding="utf-8")
     return output_path
 
