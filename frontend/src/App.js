@@ -14,6 +14,7 @@ import IntegrationStatusPanel from "./components/IntegrationStatusPanel";
 import SoarMetricsDashboard from "./components/SoarMetricsDashboard";
 import DeadLettersPanel from "./components/DeadLettersPanel";
 import SocCommandCenter from "./components/SocCommandCenter";
+import ReconWorkspace from "./components/ReconWorkspace";
 import SeverityResponseMatrixPanel from "./components/SeverityResponseMatrixPanel";
 import ThreatHuntPanel from "./components/ThreatHuntPanel";
 import ResponseRegistryPanel from "./components/ResponseRegistryPanel";
@@ -1335,8 +1336,16 @@ function AppInner() {
             onOpenResponseRegistry={handleOpenResponseRegistry}
             onOpenIncident={handleOpenIncident}
             onViewRelatedAlerts={handleViewRelatedAlerts}
+            onOpenReconWorkspace={() => handleNavigate("recon-history")}
             onAskAi={handleAskAi}
             aiEnabled={canTakeAlertActions}
+          />
+        )}
+
+        {activeSection === "recon-history" && isSectionVisible("recon-history", roleFlags) && (
+          <ReconWorkspace
+            onViewRelatedAlerts={handleViewRelatedAlerts}
+            onOpenIncident={handleOpenIncident}
           />
         )}
 

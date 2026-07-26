@@ -929,15 +929,139 @@ def test_get_recon_activities_and_detail_return_bounded_payloads(client, postgre
     assert list_resp.status_code == 200
     payload = list_resp.get_json()
     assert payload["count"] == 1
+    assert payload["total"] == 1
+    assert payload["limit"] == 20
+    assert payload["offset"] == 0
     assert payload["items"][0]["label"] == "Distributed Internet Reconnaissance Activity"
     assert payload["items"][0]["display"]["target_summary"] == "203.0.113.20 (203.0.113.0/24)"
+    assert payload["items"][0]["recon_intelligence"]["classification"] == "recon_cluster"
+    assert payload["items"][0]["recon_intelligence"]["confidence"] == "low"
+    assert "Campaign" not in payload["items"][0]["display"]["headline"]
 
     detail_resp = _fetch_recon_activities_response(client, conn, f"/recon-activities/{activity_id}")
     assert detail_resp.status_code == 200
     detail = detail_resp.get_json()
     assert detail["summary"]["primary_destination_ports"] == [5060]
     assert detail["alerts"][0]["id"] == alert_id
+    assert detail["alerts_total"] == 1
     assert detail["display"]["coordination_label"] == "Coordination not established"
+
+    linked_resp = _fetch_recon_activities_response(client, conn, f"/recon-activities/{activity_id}/alerts?limit=1&offset=0")
+    assert linked_resp.status_code == 200
+    linked = linked_resp.get_json()
+    assert linked["total"] == 1
+    assert linked["items"][0]["id"] == alert_id
+
+
+def test_recon_history_filters_pagination_and_campaign_tiers(client, postgres_db):
+    conn, cur = postgres_db
+    alert_ids = []
+    for index, source_ip in enumerate(("198.51.100.10", "198.51.100.11", "198.51.100.12", "198.51.100.13")):
+        cur.execute(
+            """
+            INSERT INTO alerts (
+                alert_type, severity, source_ip, source, source_type, message, status, created_at, context
+            )
+            VALUES (
+                %s, 'high', %s, 'pfsense', 'firewall', %s, 'open',
+                NOW() - (%s || ' minutes')::interval,
+                %s
+            )
+            RETURNING id
+            """,
+            (
+                "pfsense_firewall_allow_after_deny" if index == 3 else "pfsense_firewall_port_scan",
+                source_ip,
+                f"Campaign-grade recon member {index}",
+                90 - index,
+                Json(
+                    {
+                        "target_context": {
+                            "primary_destination_ip": "203.0.113.44",
+                            "primary_destination_port": 443,
+                            "sample_destination_ips": ["203.0.113.44"],
+                            "sample_destination_ports": [443],
+                        }
+                    }
+                ),
+            ),
+        )
+        alert_ids.append(cur.fetchone()[0])
+    cur.execute(
+        """
+        INSERT INTO recon_activities (
+            activity_type, source, source_type, status, severity, coordination_status,
+            protected_range_key, service_signature, first_seen, last_seen, assessment_text, membership_evidence, summary
+        )
+        VALUES (
+            'distributed_internet_reconnaissance', 'pfsense', 'firewall', 'open', 'high', 'supported',
+            '203.0.113.0/24', '[443]'::jsonb, NOW() - INTERVAL '90 minutes', NOW(),
+            'Campaign-grade evidence is present.',
+            '{}'::jsonb,
+            %s
+        )
+        RETURNING id
+        """,
+        (
+            Json(
+                {
+                    "source_ip_count": 4,
+                    "destination_ip_count": 1,
+                    "distinct_service_count": 1,
+                    "primary_destination_ports": [443],
+                    "alert_types": ["pfsense_firewall_port_scan", "pfsense_firewall_allow_after_deny"],
+                    "underlying_alert_count": 4,
+                    "progression_observed": True,
+                    "representative_sources": ["198.51.100.10", "198.51.100.11"],
+                    "target_context": {
+                        "primary_destination_ip": "203.0.113.44",
+                        "primary_destination_port": 443,
+                        "sample_destination_ips": ["203.0.113.44"],
+                        "sample_destination_ports": [443],
+                    },
+                }
+            ),
+        ),
+    )
+    campaign_activity_id = cur.fetchone()[0]
+    for alert_id in alert_ids:
+        cur.execute(
+            "INSERT INTO recon_activity_alerts (recon_activity_id, alert_id, membership_evidence) VALUES (%s, %s, '{}'::jsonb)",
+            (campaign_activity_id, alert_id),
+        )
+    conn.commit()
+
+    _login_as_super_admin(client)
+    campaign_resp = _fetch_recon_activities_response(
+        client,
+        conn,
+        "/recon-activities?classification=campaign_recon&confidence=high&search=203.0.113.44&limit=2&offset=0",
+    )
+    assert campaign_resp.status_code == 200
+    payload = campaign_resp.get_json()
+    assert payload["total"] == 1
+    assert payload["items"][0]["id"] == campaign_activity_id
+    assert payload["items"][0]["recon_intelligence"]["classification"] == "campaign_recon"
+    assert payload["items"][0]["recon_intelligence"]["confidence"] == "high"
+
+    linked_resp = _fetch_recon_activities_response(
+        client,
+        conn,
+        f"/recon-activities/{campaign_activity_id}/alerts?limit=2&offset=2&sort=oldest",
+    )
+    assert linked_resp.status_code == 200
+    linked = linked_resp.get_json()
+    assert linked["total"] == 4
+    assert linked["count"] == 2
+    assert linked["offset"] == 2
+
+
+def test_recon_history_rejects_invalid_filters(client, postgres_db):
+    conn, _cur = postgres_db
+    _login_as_super_admin(client)
+    resp = _fetch_recon_activities_response(client, conn, "/recon-activities?classification=campaign&sort=latest")
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "invalid classification filter"
 
 
 def test_get_alerts_exact_source_and_alert_id_filters_do_not_broaden_results(client, postgres_db):

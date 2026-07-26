@@ -650,6 +650,7 @@ function SocCommandCenter({
   onOpenResponseRegistry = null,
   onOpenIncident = null,
   onViewRelatedAlerts = null,
+  onOpenReconWorkspace = null,
   onAskAi = null,
   aiEnabled = false,
 }) {
@@ -1035,6 +1036,11 @@ function SocCommandCenter({
                 <p style={sectionLabelStyle}>Recon Activity</p>
                 <h3 id="recon-activity-heading" style={cardTitleStyle}>Distributed Internet Reconnaissance Activity</h3>
               </div>
+              {typeof onOpenReconWorkspace === "function" ? (
+                <button type="button" onClick={onOpenReconWorkspace} style={secondaryButtonStyle}>
+                  View All History
+                </button>
+              ) : null}
             </div>
             <div
               style={{
@@ -1114,14 +1120,14 @@ function SocCommandCenter({
                               onClick={() =>
                                 onAskAi({
                                   contextType: "recon_activity",
-                                  action: "explain_campaign",
+                                  action: "explain_recon_activity",
                                   title: `Recon activity #${reconContext.detail.id}`,
-                                  question: "Explain this recon campaign or cluster using SIEM evidence.",
+                                  question: "Explain this recon activity using SIEM evidence and its confidence tier.",
                                   context: { activity_id: reconContext.detail.id },
                                 })
                               }
                             >
-                              Explain campaign
+                              Explain recon
                             </AiAssistantButton>
                             <AiAssistantButton
                               onClick={() =>
@@ -1230,6 +1236,18 @@ function SocCommandCenter({
                         <dt style={detailTermStyle}>Related incident</dt>
                         <dd style={detailValueStyle}>
                           {reconContext.detail.related_incident_id ? `Incident ${reconContext.detail.related_incident_id}` : "None"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt style={detailTermStyle}>Evidence tier</dt>
+                        <dd style={detailValueStyle}>
+                          {titleCase(reconContext.detail.recon_intelligence?.classification || reconContext.detail.display?.classification || "recon_cluster")}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt style={detailTermStyle}>Confidence</dt>
+                        <dd style={detailValueStyle}>
+                          {titleCase(reconContext.detail.recon_intelligence?.confidence || reconContext.detail.display?.confidence || "low")}
                         </dd>
                       </div>
                       <div>

@@ -1111,7 +1111,7 @@ def test_distributed_recon_alerts_share_one_activity_when_range_and_service_over
             )[0]
             enroll_alert_in_recon_activity(conn, alert["alert_id"])
 
-    activities = list_recon_activities(conn, limit=10)
+    activities = list_recon_activities(conn, limit=10)["items"]
     assert len(activities) == 1
     assert activities[0]["summary"]["source_ip_count"] == 2
     assert activities[0]["summary"]["destination_ip_count"] >= 2
@@ -1140,7 +1140,7 @@ def test_distributed_recon_membership_rejects_time_only_overlap(postgres_db):
             )[0]
             enroll_alert_in_recon_activity(conn, alert["alert_id"])
 
-    activities = list_recon_activities(conn, limit=10)
+    activities = list_recon_activities(conn, limit=10)["items"]
     assert len(activities) == 2
 
 
@@ -1255,7 +1255,7 @@ def test_distributed_recon_500_source_regression_stays_operationally_bounded(pos
     )
     assert cur.fetchone()[0] == 0
 
-    activities = list_recon_activities(conn, limit=10)
+    activities = list_recon_activities(conn, limit=10)["items"]
     assert len(activities) == 1
     assert activities[0]["severity"] == "high"
     assert activities[0]["summary"]["source_ip_count"] == 500
@@ -1312,7 +1312,7 @@ def test_allow_after_deny_breaks_outside_commodity_aggregate_and_keeps_source_sp
     assert flags["immediate_alert_eligible"] is True
     assert progression_context["context"].get("recon_activity") is None
 
-    activities = list_recon_activities(conn, limit=10)
+    activities = list_recon_activities(conn, limit=10)["items"]
     assert len(activities) == 1
     assert activities[0]["summary"]["source_ip_count"] == 2
 

@@ -22,7 +22,7 @@ from core.pfsense_operational_baseline import (
     build_pfsense_alert_baseline_filter,
     normalize_operational_scope,
 )
-from core.recon_activity_store import get_recon_activity_detail, list_recon_activities
+from core.recon_activity_store import get_recon_activity_detail, list_recon_activities, list_recon_activity_alerts
 from core.soar_response_outcomes import (
     build_latest_outcome_api_shape,
     get_latest_decisions_for_alerts_bulk,
@@ -87,6 +87,12 @@ PFSENSE_WHY_FIRED_LABELS = {
 DEFAULT_ALERT_LIMIT = 50
 MAX_ALERT_LIMIT = 100
 VALID_ALERT_SORT_OPTIONS = frozenset({"newest", "oldest", "severity"})
+VALID_RECON_STATUS_FILTERS = frozenset({"open", "monitoring", "resolved"})
+VALID_RECON_SEVERITY_FILTERS = frozenset({"low", "medium", "high"})
+VALID_RECON_CONFIDENCE_FILTERS = frozenset({"low", "medium", "high"})
+VALID_RECON_CLASSIFICATION_FILTERS = frozenset({"recon_cluster", "possible_campaign", "campaign_recon"})
+VALID_RECON_SORT_OPTIONS = frozenset({"last_seen_desc", "last_seen_asc", "first_seen_desc", "severity_desc"})
+VALID_RECON_ALERT_SORT_OPTIONS = frozenset({"newest", "oldest"})
 VALID_ALERT_SOURCE_FILTERS = VALID_EVENT_SOURCES | {"legacy"}
 ALERT_TIMELINE_RANGES = {
     "24h": {"hours": 24, "bucket": "hour"},
@@ -1304,13 +1310,85 @@ def get_recon_activities():
     try:
         conn = get_db_connection()
         status = _normalize_alert_filter_value(request.args.get("status"))
+        if status is not None and status not in VALID_RECON_STATUS_FILTERS:
+            return jsonify({"error": "invalid status filter"}), 400
+        severity = _normalize_alert_filter_value(request.args.get("severity"))
+        if severity is not None and severity not in VALID_RECON_SEVERITY_FILTERS:
+            return jsonify({"error": "invalid severity filter"}), 400
+        confidence = _normalize_alert_filter_value(request.args.get("confidence"))
+        if confidence is not None and confidence not in VALID_RECON_CONFIDENCE_FILTERS:
+            return jsonify({"error": "invalid confidence filter"}), 400
+        classification = _normalize_alert_filter_value(request.args.get("classification"))
+        if classification is not None and classification not in VALID_RECON_CLASSIFICATION_FILTERS:
+            return jsonify({"error": "invalid classification filter"}), 400
+        search = _normalize_alert_filter_value(request.args.get("search"))
+        start_time = _normalize_alert_filter_value(request.args.get("start_time"))
+        end_time = _normalize_alert_filter_value(request.args.get("end_time"))
+        time_range = _normalize_alert_filter_value(request.args.get("time_range"))
+        if time_range and time_range not in {"24h", "7d", "30d", "90d", "all"}:
+            return jsonify({"error": "invalid time_range"}), 400
+        if time_range and time_range != "all" and not start_time:
+            window = ALERT_TIMELINE_RANGES.get(time_range)
+            if window:
+                start_time = (datetime.now(timezone.utc) - timedelta(**{key: value for key, value in window.items() if key in {"hours", "days"}})).isoformat()
+        sort = _normalize_alert_filter_value(request.args.get("sort")) or "last_seen_desc"
+        if sort not in VALID_RECON_SORT_OPTIONS:
+            return jsonify({"error": "invalid sort option"}), 400
         limit, limit_error = _parse_non_negative_int(request.args.get("limit"), 20, "limit")
         if limit_error:
             return jsonify({"error": limit_error}), 400
-        items = list_recon_activities(conn, status=status, limit=limit or 20)
-        return jsonify({"items": items, "count": len(items)}), 200
+        offset, offset_error = _parse_non_negative_int(request.args.get("offset"), 0, "offset")
+        if offset_error:
+            return jsonify({"error": offset_error}), 400
+        payload = list_recon_activities(
+            conn,
+            status=status,
+            severity=severity,
+            confidence=confidence,
+            classification=classification,
+            search=search,
+            start_time=start_time,
+            end_time=end_time,
+            sort=sort,
+            limit=limit or 20,
+            offset=offset or 0,
+        )
+        return jsonify(payload), 200
     except Exception:
         current_app.logger.exception("Error in get_recon_activities")
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@alerts_events_bp.route("/recon-activities/<int:activity_id>/alerts", methods=["GET"])
+@login_required
+def get_recon_activity_alerts(activity_id):
+    conn = None
+    try:
+        conn = get_db_connection()
+        if get_recon_activity_detail(conn, activity_id) is None:
+            return jsonify({"error": "Recon activity not found"}), 404
+        limit, limit_error = _parse_non_negative_int(request.args.get("limit"), 20, "limit")
+        if limit_error:
+            return jsonify({"error": limit_error}), 400
+        offset, offset_error = _parse_non_negative_int(request.args.get("offset"), 0, "offset")
+        if offset_error:
+            return jsonify({"error": offset_error}), 400
+        sort = _normalize_alert_filter_value(request.args.get("sort")) or "newest"
+        if sort not in VALID_RECON_ALERT_SORT_OPTIONS:
+            return jsonify({"error": "invalid sort option"}), 400
+        payload = list_recon_activity_alerts(
+            conn,
+            activity_id,
+            limit=limit or 20,
+            offset=offset or 0,
+            sort=sort,
+        )
+        return jsonify(payload), 200
+    except Exception:
+        current_app.logger.exception("Error in get_recon_activity_alerts")
         return jsonify({"error": "Internal server error"}), 500
     finally:
         if conn:

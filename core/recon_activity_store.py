@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from psycopg2.extras import Json
@@ -19,6 +19,10 @@ from core.pfsense_recon import (
 )
 
 VPN_PORTS = frozenset({500, 1194, 1197, 1701, 4500, 51820})
+VALID_RECON_CLASSIFICATIONS = frozenset({"recon_cluster", "possible_campaign", "campaign_recon"})
+VALID_RECON_CONFIDENCE_LEVELS = frozenset({"low", "medium", "high"})
+VALID_RECON_SORT_OPTIONS = frozenset({"last_seen_desc", "last_seen_asc", "first_seen_desc", "severity_desc"})
+MAX_RECON_PAGE_SIZE = 100
 
 
 def _normalize_alert_context(row: tuple[Any, ...]) -> dict[str, Any]:
@@ -263,23 +267,152 @@ def _build_coordination_assessment(summary: dict[str, Any], coordination_status:
     return {"label": label, "reasons": reasons[:3]}
 
 
+def _parse_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _duration_minutes(first_seen: Any, last_seen: Any) -> float:
+    first = _parse_datetime(first_seen)
+    last = _parse_datetime(last_seen)
+    if not first or not last:
+        return 0.0
+    if first.tzinfo is None:
+        first = first.replace(tzinfo=timezone.utc)
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    return max((last - first).total_seconds() / 60.0, 0.0)
+
+
+def build_recon_intelligence_projection(
+    *,
+    summary: dict[str, Any],
+    coordination_status: str | None,
+    related_incident_id: Any,
+    first_seen: Any,
+    last_seen: Any,
+) -> dict[str, Any]:
+    alert_count = int(summary.get("underlying_alert_count") or 0)
+    source_count = int(summary.get("source_ip_count") or 0)
+    destination_count = int(summary.get("destination_ip_count") or 0)
+    service_count = int(summary.get("distinct_service_count") or 0)
+    alert_type_count = len(summary.get("alert_types") or [])
+    duration_minutes = _duration_minutes(first_seen, last_seen)
+    has_incident = related_incident_id is not None
+    progression_observed = bool(summary.get("progression_observed"))
+    coordination_supported = str(coordination_status or "").lower() == "supported"
+
+    reasons: list[dict[str, str]] = []
+    missing: list[dict[str, str]] = []
+    score = 0
+
+    if alert_count >= 3:
+        score += 2
+        reasons.append({"id": "linked_alert_volume", "text": f"{alert_count} linked recon alerts"})
+    elif alert_count >= 2:
+        score += 1
+        reasons.append({"id": "linked_alert_volume", "text": "Multiple linked recon alerts"})
+    else:
+        missing.append({"id": "linked_alert_volume", "text": "Only one linked alert is present"})
+
+    if source_count >= 3:
+        score += 2
+        reasons.append({"id": "source_diversity", "text": f"{source_count} contributing sources"})
+    elif source_count >= 2:
+        score += 1
+        reasons.append({"id": "source_diversity", "text": "More than one source contributed"})
+    else:
+        missing.append({"id": "source_diversity", "text": "Only one source is present"})
+
+    if duration_minutes >= 30:
+        score += 1
+        reasons.append({"id": "temporal_depth", "text": "Activity spans at least 30 minutes"})
+    else:
+        missing.append({"id": "temporal_depth", "text": "Activity duration is short"})
+
+    if destination_count > 0 and service_count > 0 and alert_count >= 2:
+        score += 1
+        reasons.append({"id": "target_service_consistency", "text": "Linked alerts share target or service evidence"})
+    else:
+        missing.append({"id": "target_service_consistency", "text": "Target/service consistency is limited"})
+
+    if alert_type_count >= 2:
+        score += 1
+        reasons.append({"id": "alert_type_diversity", "text": "Multiple recon detection types contributed"})
+    else:
+        missing.append({"id": "alert_type_diversity", "text": "Only one detection type contributed"})
+
+    if has_incident:
+        score += 2
+        reasons.append({"id": "incident_correlation", "text": "Recon is linked to an active incident"})
+    else:
+        missing.append({"id": "incident_correlation", "text": "No active incident correlation is present"})
+
+    if progression_observed or coordination_supported:
+        score += 2
+        reasons.append({"id": "progression", "text": "Progression or supported coordination evidence is present"})
+    else:
+        missing.append({"id": "progression", "text": "No progression evidence is present"})
+
+    evidence_categories = len(reasons)
+    weak_singleton = (
+        alert_count <= 1
+        and source_count <= 1
+        and duration_minutes < 30
+        and not has_incident
+        and not progression_observed
+        and not coordination_supported
+    )
+    if weak_singleton:
+        classification = "recon_cluster"
+        confidence = "low"
+    elif score >= 7 and evidence_categories >= 3 and (has_incident or progression_observed or coordination_supported or source_count >= 3):
+        classification = "campaign_recon"
+        confidence = "high"
+    elif score >= 4 and evidence_categories >= 2:
+        classification = "possible_campaign"
+        confidence = "medium"
+    else:
+        classification = "recon_cluster"
+        confidence = "low"
+
+    return {
+        "classification": classification,
+        "confidence": confidence,
+        "score": score,
+        "reasons": reasons[:5],
+        "missing_evidence": missing[:5],
+        "duration_minutes": round(duration_minutes, 1),
+    }
+
+
 def _build_recon_story(
     summary: dict[str, Any],
     campaign_intelligence: dict[str, Any],
     investigation_value: dict[str, Any],
+    recon_intelligence: dict[str, Any],
 ) -> dict[str, str]:
     primary_port = ((summary.get("primary_destination_ports") or [None]) or [None])[0]
     service_label = _format_service_label(primary_port)
     source_count = int(summary.get("source_ip_count") or 0)
 
-    if campaign_intelligence.get("present") and service_label and "VPN" in service_label:
-        headline = "Campaign-linked VPN recon"
-    elif campaign_intelligence.get("present"):
-        headline = "Campaign-linked recon"
+    classification = recon_intelligence.get("classification")
+    if classification == "campaign_recon" and service_label and "VPN" in service_label:
+        headline = "Campaign-grade VPN recon"
+    elif classification == "campaign_recon":
+        headline = "Campaign-grade recon"
+    elif classification == "possible_campaign":
+        headline = "Possible recon campaign"
     elif source_count > 1 and service_label and "VPN" in service_label:
-        headline = "Repeated VPN recon"
+        headline = "VPN recon cluster"
     elif source_count > 1:
-        headline = "Routine internet recon"
+        headline = "Recon cluster"
     else:
         headline = "Source-specific recon"
 
@@ -306,6 +439,7 @@ def _build_display_projection(
     investigation_value: dict[str, Any],
     coordination_assessment: dict[str, Any],
     story: dict[str, Any],
+    recon_intelligence: dict[str, Any],
 ) -> dict[str, Any]:
     target_context = summary.get("target_context") if isinstance(summary.get("target_context"), dict) else {}
     primary_target = target_context.get("primary_destination_ip") or protected_range_key
@@ -355,6 +489,8 @@ def _build_display_projection(
         "status_label": str(status or "").replace("_", " ").title(),
         "investigation_label": investigation_value.get("label") or "Monitor",
         "coordination_label": coordination_assessment.get("label") or "Current assessment unavailable",
+        "classification": recon_intelligence.get("classification") or "recon_cluster",
+        "confidence": recon_intelligence.get("confidence") or "low",
         "action_recommendation": story.get("disposition") or "No immediate investigation recommended",
         "review_state_version": "|".join(version_parts),
     }
@@ -371,8 +507,10 @@ def _update_activity_summary(conn, activity_id: int) -> None:
             SELECT
                 MIN(a.created_at),
                 MAX(a.created_at),
-                COALESCE(MAX(i.id), NULL)
+                COALESCE(MAX(i.id), NULL),
+                MAX(ra.coordination_status)
             FROM recon_activity_alerts ral
+            JOIN recon_activities ra ON ra.id = ral.recon_activity_id
             JOIN alerts a ON a.id = ral.alert_id
             LEFT JOIN incident_alerts ia ON ia.alert_id = a.id
             LEFT JOIN incidents i ON i.id = ia.incident_id AND i.status IN ('open', 'investigating')
@@ -381,6 +519,14 @@ def _update_activity_summary(conn, activity_id: int) -> None:
             (activity_id,),
         )
         row = cur.fetchone() or (None, None, None)
+        summary["progression_observed"] = bool(summary.get("progression_observed"))
+        summary["recon_intelligence"] = build_recon_intelligence_projection(
+            summary=summary,
+            coordination_status=row[3],
+            related_incident_id=row[2],
+            first_seen=row[0],
+            last_seen=row[1],
+        )
         cur.execute(
             """
             UPDATE recon_activities
@@ -533,14 +679,81 @@ def enroll_alert_in_recon_activity(conn, alert_id: int) -> dict[str, Any] | None
     return get_recon_activity_detail(conn, activity_id)
 
 
-def list_recon_activities(conn, *, limit: int = 20, status: str | None = None) -> list[dict[str, Any]]:
+def _normalize_recon_limit(limit: int | None) -> int:
+    return max(1, min(int(limit or 20), MAX_RECON_PAGE_SIZE))
+
+
+def _normalize_recon_offset(offset: int | None) -> int:
+    return max(0, int(offset or 0))
+
+
+def _sort_clause(sort: str | None) -> str:
+    if sort == "last_seen_asc":
+        return "last_seen ASC NULLS LAST, id ASC"
+    if sort == "first_seen_desc":
+        return "first_seen DESC NULLS LAST, id DESC"
+    if sort == "severity_desc":
+        return """
+            CASE severity
+                WHEN 'high' THEN 1
+                WHEN 'medium' THEN 2
+                WHEN 'low' THEN 3
+                ELSE 4
+            END,
+            last_seen DESC NULLS LAST,
+            id DESC
+        """
+    return "last_seen DESC NULLS LAST, id DESC"
+
+
+def list_recon_activities(
+    conn,
+    *,
+    limit: int = 20,
+    offset: int = 0,
+    status: str | None = None,
+    severity: str | None = None,
+    confidence: str | None = None,
+    classification: str | None = None,
+    search: str | None = None,
+    start_time: str | None = None,
+    end_time: str | None = None,
+    sort: str | None = None,
+) -> dict[str, Any]:
+    normalized_limit = _normalize_recon_limit(limit)
+    normalized_offset = _normalize_recon_offset(offset)
+    normalized_sort = sort if sort in VALID_RECON_SORT_OPTIONS else "last_seen_desc"
     params: list[Any] = []
     clauses = ["activity_type = %s"]
     params.append(PFSENSE_RECON_ACTIVITY_TYPE)
     if status:
         clauses.append("status = %s")
         params.append(status)
-    params.append(max(1, min(int(limit), 100)))
+    if severity:
+        clauses.append("severity = %s")
+        params.append(severity)
+    if start_time:
+        clauses.append("last_seen >= %s::timestamptz")
+        params.append(start_time)
+    if end_time:
+        clauses.append("first_seen <= %s::timestamptz")
+        params.append(end_time)
+    if search:
+        clauses.append(
+            """
+            (
+                protected_range_key ILIKE %s
+                OR assessment_text ILIKE %s
+                OR source ILIKE %s
+                OR source_type ILIKE %s
+                OR summary::text ILIKE %s
+            )
+            """
+        )
+        search_value = f"%{search}%"
+        params.extend([search_value, search_value, search_value, search_value, search_value])
+
+    needs_projection_filter = bool(confidence or classification)
     with conn.cursor() as cur:
         cur.execute(
             f"""
@@ -563,13 +776,120 @@ def list_recon_activities(conn, *, limit: int = 20, status: str | None = None) -
                 resolved_at
             FROM recon_activities
             WHERE {' AND '.join(clauses)}
-            ORDER BY last_seen DESC, id DESC
-            LIMIT %s
+            ORDER BY {_sort_clause(normalized_sort)}
+            {'' if needs_projection_filter else 'LIMIT %s OFFSET %s'}
             """,
-            params,
+            params if needs_projection_filter else [*params, normalized_limit, normalized_offset],
         )
         rows = cur.fetchall()
-    return [_serialize_recon_activity_row(row) for row in rows]
+
+        if needs_projection_filter:
+            serialized = [_serialize_recon_activity_row(row) for row in rows]
+            if confidence:
+                serialized = [item for item in serialized if item.get("recon_intelligence", {}).get("confidence") == confidence]
+            if classification:
+                serialized = [
+                    item
+                    for item in serialized
+                    if item.get("recon_intelligence", {}).get("classification") == classification
+                ]
+            total = len(serialized)
+            items = serialized[normalized_offset : normalized_offset + normalized_limit]
+        else:
+            items = [_serialize_recon_activity_row(row) for row in rows]
+            cur.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM recon_activities
+                WHERE {' AND '.join(clauses)}
+                """,
+                params,
+            )
+            total = int(cur.fetchone()[0] or 0)
+    return {
+        "items": items,
+        "count": len(items),
+        "total": total,
+        "limit": normalized_limit,
+        "offset": normalized_offset,
+        "sort": normalized_sort,
+        "filters": {
+            "status": status,
+            "severity": severity,
+            "confidence": confidence,
+            "classification": classification,
+            "search": search,
+            "start_time": start_time,
+            "end_time": end_time,
+        },
+    }
+
+
+def list_recon_activity_alerts(
+    conn,
+    activity_id: int,
+    *,
+    limit: int = 20,
+    offset: int = 0,
+    sort: str | None = None,
+) -> dict[str, Any]:
+    normalized_limit = _normalize_recon_limit(limit)
+    normalized_offset = _normalize_recon_offset(offset)
+    order_clause = "a.created_at ASC, a.id ASC" if sort == "oldest" else "a.created_at DESC, a.id DESC"
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM recon_activity_alerts
+            WHERE recon_activity_id = %s
+            """,
+            (activity_id,),
+        )
+        total = int(cur.fetchone()[0] or 0)
+        cur.execute(
+            f"""
+            SELECT
+                a.id,
+                a.alert_type,
+                a.severity,
+                host(a.source_ip),
+                a.message,
+                a.created_at,
+                a.country,
+                a.reputation_score,
+                a.context
+            FROM recon_activity_alerts ral
+            JOIN alerts a ON a.id = ral.alert_id
+            WHERE ral.recon_activity_id = %s
+            ORDER BY {order_clause}
+            LIMIT %s OFFSET %s
+            """,
+            (activity_id, normalized_limit, normalized_offset),
+        )
+        rows = cur.fetchall()
+    return {
+        "activity_id": activity_id,
+        "items": [_serialize_recon_activity_alert_row(row) for row in rows],
+        "count": len(rows),
+        "total": total,
+        "limit": normalized_limit,
+        "offset": normalized_offset,
+        "sort": "oldest" if sort == "oldest" else "newest",
+    }
+
+
+def _serialize_recon_activity_alert_row(row) -> dict[str, Any]:
+    return {
+        "id": int(row[0]),
+        "alert_type": row[1],
+        "severity": row[2],
+        "source_ip": row[3],
+        "message": row[4],
+        "created_at": row[5].isoformat() if row[5] else None,
+        "country": row[6],
+        "reputation_score": row[7],
+        "target_context": row[8].get("target_context") if isinstance(row[8], dict) else {},
+    }
 
 
 def get_recon_activity_detail(conn, activity_id: int) -> dict[str, Any] | None:
@@ -602,40 +922,11 @@ def get_recon_activity_detail(conn, activity_id: int) -> dict[str, Any] | None:
         if row is None:
             return None
         payload = _serialize_recon_activity_row(row)
-        cur.execute(
-            """
-            SELECT
-                a.id,
-                a.alert_type,
-                a.severity,
-                host(a.source_ip),
-                a.message,
-                a.created_at,
-                a.country,
-                a.reputation_score,
-                a.context
-            FROM recon_activity_alerts ral
-            JOIN alerts a ON a.id = ral.alert_id
-            WHERE ral.recon_activity_id = %s
-            ORDER BY a.created_at DESC, a.id DESC
-            LIMIT 25
-            """,
-            (activity_id,),
-        )
-        payload["alerts"] = [
-            {
-                "id": int(item[0]),
-                "alert_type": item[1],
-                "severity": item[2],
-                "source_ip": item[3],
-                "message": item[4],
-                "created_at": item[5].isoformat() if item[5] else None,
-                "country": item[6],
-                "reputation_score": item[7],
-                "target_context": item[8].get("target_context") if isinstance(item[8], dict) else {},
-            }
-            for item in cur.fetchall()
-        ]
+        linked_alerts = list_recon_activity_alerts(conn, activity_id, limit=10, offset=0)
+        payload["alerts"] = linked_alerts["items"]
+        payload["alerts_total"] = linked_alerts["total"]
+        payload["alerts_limit"] = linked_alerts["limit"]
+        payload["alerts_offset"] = linked_alerts["offset"]
         return payload
 
 
@@ -663,7 +954,14 @@ def _serialize_recon_activity_row(row) -> dict[str, Any]:
         persistent_activity=int(summary.get("source_ip_count") or 0) > 1,
     )
     coordination_assessment = _build_coordination_assessment(summary, row[6])
-    story = _build_recon_story(summary, campaign_intelligence, investigation_value)
+    recon_intelligence = build_recon_intelligence_projection(
+        summary=summary,
+        coordination_status=row[6],
+        related_incident_id=row[12],
+        first_seen=row[8],
+        last_seen=row[9],
+    )
+    story = _build_recon_story(summary, campaign_intelligence, investigation_value, recon_intelligence)
     display = _build_display_projection(
         summary=summary,
         protected_range_key=row[7],
@@ -673,6 +971,7 @@ def _serialize_recon_activity_row(row) -> dict[str, Any]:
         investigation_value=investigation_value,
         coordination_assessment=coordination_assessment,
         story=story,
+        recon_intelligence=recon_intelligence,
     )
     return {
         "id": int(row[0]),
@@ -689,6 +988,7 @@ def _serialize_recon_activity_row(row) -> dict[str, Any]:
         "assessment_text": row[10],
         "summary": summary,
         "campaign_intelligence": campaign_intelligence,
+        "recon_intelligence": recon_intelligence,
         "investigation_value": investigation_value,
         "story": story,
         "coordination_assessment": coordination_assessment,

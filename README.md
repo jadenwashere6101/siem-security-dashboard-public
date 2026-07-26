@@ -61,7 +61,7 @@ progression story are all visible without reading backend logic.
 
 This recon workspace shows the platform turning noisy internet scanning into a
 single investigation object, with compact triage on the left and a bounded
-campaign-style summary on the right.
+evidence-based summary on the right.
 
 ### Incident Workspace
 
@@ -364,6 +364,8 @@ repository.
 - compact list/detail workflow for distributed commodity recon
 - source counts, destination counts, primary ports, coordination status, and
   assessment text
+- evidence tiers separate low-confidence `recon_cluster` activity from
+  `possible_campaign` and high-confidence `campaign_recon`
 
 ### Incidents
 

@@ -577,7 +577,7 @@ describe("SocCommandCenter", () => {
     expect(await screen.findByText("Repeated VPN recon")).toBeInTheDocument();
     await waitFor(() => expect(loadReconActivity).toHaveBeenCalledWith(90));
     expect(await screen.findByText("Distributed commodity scanning.")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Explain campaign" }));
+    await userEvent.click(screen.getByRole("button", { name: "Explain recon" }));
     await userEvent.click(screen.getByRole("button", { name: "Investigate cluster" }));
     await userEvent.click(screen.getByRole("button", { name: "Draft checklist" }));
     await userEvent.click(screen.getByRole("button", { name: "Draft response" }));
@@ -585,7 +585,7 @@ describe("SocCommandCenter", () => {
     expect(onAskAi).toHaveBeenCalledWith(
       expect.objectContaining({
         contextType: "recon_activity",
-        action: "explain_campaign",
+        action: "explain_recon_activity",
         context: { activity_id: 90 },
       })
     );
