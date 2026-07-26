@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ipaddress
-import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -33,6 +32,7 @@ from core.soar_response_outcomes import (
 from helpers.enrichment_helpers import enrich_alert_with_correlation_context, enrich_alert_with_mitre
 from core.ip_helpers import determine_response_action, get_ip_reputation, lookup_ip_reputation
 from core.source_inventory import CANONICAL_SOURCE_IDS
+from core.synthetic_data_policy import build_operational_source_ip_exclusion_sql
 from engines.detection_config import PFSENSE_ALERT_COOLDOWN_MINUTES, get_detection_rule_defaults
 from engines.detection_rule_catalog import DETECTION_RULE_CATALOG, list_detection_rule_catalog
 from helpers.query_helpers import (
@@ -95,7 +95,6 @@ ALERT_TIMELINE_RANGES = {
     "90d": {"days": 90, "bucket": "day"},
 }
 DEFAULT_ALERT_TIMELINE_RANGE = "7d"
-
 _ALERT_SELECT = """
     SELECT
         id,
@@ -392,62 +391,6 @@ def _fetch_alert_timeline(cur, where_clause: str, params: list, timeline_range: 
             for row in cur.fetchall()
         ],
     }
-
-
-def _load_synthetic_source_ip_exclusions() -> tuple[set[str], set[str]]:
-    raw_value = (
-        os.getenv("SIEM_SYNTHETIC_SOURCE_IP_EXCLUSIONS")
-        or os.getenv("SYNTHETIC_SOURCE_IP_EXCLUSIONS")
-        or ""
-    )
-    raw_network_value = (
-        os.getenv("SIEM_SYNTHETIC_SOURCE_IP_NETWORK_EXCLUSIONS")
-        or os.getenv("SYNTHETIC_SOURCE_IP_NETWORK_EXCLUSIONS")
-        or ""
-    )
-    exclusions: set[str] = set()
-    network_exclusions: set[str] = set()
-    for part in raw_value.split(","):
-        normalized = part.strip()
-        if not normalized:
-            continue
-        try:
-            if "/" in normalized:
-                network_exclusions.add(str(ipaddress.ip_network(normalized, strict=False)))
-            else:
-                exclusions.add(str(ipaddress.ip_address(normalized)))
-        except ValueError:
-            current_app.logger.warning(
-                "Ignoring invalid synthetic source IP exclusion: %s",
-                normalized,
-            )
-    for part in raw_network_value.split(","):
-        normalized = part.strip()
-        if not normalized:
-            continue
-        try:
-            network_exclusions.add(str(ipaddress.ip_network(normalized, strict=False)))
-        except ValueError:
-            current_app.logger.warning(
-                "Ignoring invalid synthetic source IP network exclusion: %s",
-                normalized,
-            )
-    return exclusions, network_exclusions
-
-
-def _build_synthetic_source_ip_exclusion_sql(
-    excluded_ips: set[str],
-    excluded_networks: set[str],
-) -> tuple[str, list]:
-    clauses = []
-    params = []
-    if excluded_ips:
-        clauses.append("NOT (host(source_ip) = ANY(%s))")
-        params.append(sorted(excluded_ips))
-    if excluded_networks:
-        clauses.append("NOT (source_ip <<= ANY(%s::cidr[]))")
-        params.append(sorted(excluded_networks))
-    return " AND ".join(clauses), params
 
 
 def _fetch_map_marker_rows(
@@ -1147,10 +1090,8 @@ def get_alerts_summary():
             return jsonify({"error": rule_error}), 400
         clauses, params = _build_alert_filter_sql(query_args)
         where_clause = _build_alerts_where_clause(clauses)
-        excluded_source_ips, excluded_source_networks = _load_synthetic_source_ip_exclusions()
-        source_ip_exclusion_clause, source_ip_exclusion_params = _build_synthetic_source_ip_exclusion_sql(
-            excluded_source_ips,
-            excluded_source_networks,
+        source_ip_exclusion_clause, source_ip_exclusion_params = build_operational_source_ip_exclusion_sql(
+            logger=current_app.logger,
         )
         metrics = _fetch_alert_summary_metrics(
             cur,

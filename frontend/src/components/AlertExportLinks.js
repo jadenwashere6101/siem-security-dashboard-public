@@ -6,7 +6,6 @@ function AlertExportLinks({
   exportLabelStyle,
   inlineExportLinkStyle,
   exportDividerStyle,
-  downloadPdfReport,
 }) {
   return (
     <div style={exportRowStyle}>
@@ -19,25 +18,15 @@ function AlertExportLinks({
         Download Incident Report (TXT)
       </a>
       <span style={exportDividerStyle}>|</span>
-      <button
-        type="button"
+      <a
+        href={buildSiemPath(`/alerts/${alert.id}/report/pdf`)}
         style={{
           ...inlineExportLinkStyle,
-          border: "none",
-          backgroundColor: "transparent",
-          padding: 0,
-          cursor: "pointer",
         }}
-        onClick={(e) => {
-          e.stopPropagation();
-          downloadPdfReport(
-            buildSiemPath(`/alerts/${alert.id}/report/pdf`),
-            `siem-alert-${alert.id}-report.pdf`
-          );
-        }}
+        onClick={(e) => e.stopPropagation()}
       >
         Download PDF Report
-      </button>
+      </a>
     </div>
   );
 }

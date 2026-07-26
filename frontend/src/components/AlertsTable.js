@@ -264,36 +264,6 @@ function AlertsTable({
   // Export / Report Actions
   // ==========================================================================
 
-  const downloadPdfReport = async (url, filename) => {
-    try {
-      const response = await fetch(url, {
-        credentials: "include",
-      });
-
-      if (!response.ok) {
-        throw new Error("Unable to download PDF report");
-      }
-
-      const pdfBlob = await response.blob();
-      const objectUrl = window.URL.createObjectURL(pdfBlob);
-      const downloadLink = document.createElement("a");
-
-      downloadLink.href = objectUrl;
-      downloadLink.download = filename;
-      downloadLink.style.display = "none";
-      downloadLink.rel = "noopener";
-      document.body.appendChild(downloadLink);
-      downloadLink.click();
-      document.body.removeChild(downloadLink);
-      window.setTimeout(() => {
-        window.URL.revokeObjectURL(objectUrl);
-      }, 1000);
-    } catch (err) {
-      console.error("Error downloading PDF report:", err);
-      showToast("Unable to download PDF report", "error");
-    }
-  };
-
   const executeAction = async (alertId, action) => {
     if (!canTakeAlertActions) {
       showToast("Requires analyst or super-admin privileges", "error");
@@ -590,7 +560,6 @@ function AlertsTable({
           multiAlertCsvExportHref={multiAlertCsvExportHref}
           multiAlertReportHref={multiAlertReportHref}
           multiAlertPdfReportHref={multiAlertPdfReportHref}
-          downloadPdfReport={downloadPdfReport}
           cardHeaderStyle={cardHeaderStyle}
           cardTitleStyle={cardTitleStyle}
           cardSubtitleStyle={cardSubtitleStyle}
@@ -691,7 +660,6 @@ function AlertsTable({
                             expandedTextStyle={expandedTextStyle}
                             monoCellStyle={monoCellStyle}
                             canTakeAlertActions={canTakeAlertActions}
-                            downloadPdfReport={downloadPdfReport}
                             executeAction={executeAction}
                             executingActionId={executingActionId}
                             getActionButtonStyle={getActionButtonStyle}

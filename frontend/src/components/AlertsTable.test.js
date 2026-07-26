@@ -170,6 +170,7 @@ test("exports include rule filter and exact alert filters", () => {
   );
 
   const csvHref = screen.getByText("Download Filtered Alerts (CSV)").getAttribute("href");
+  const pdfHref = screen.getByText("Download Filtered PDF Report").getAttribute("href");
   expect(csvHref).toContain("search=failed");
   expect(csvHref).toContain("severity=high");
   expect(csvHref).toContain("source=bank_app");
@@ -178,6 +179,9 @@ test("exports include rule filter and exact alert filters", () => {
   expect(csvHref).toContain("exact_source_ip=8.8.8.8");
   expect(csvHref).toContain("exact_target_ip=10.0.0.5");
   expect(csvHref).toContain("alert_id=101");
+  expect(pdfHref).toContain("/alerts/report/pdf");
+  expect(pdfHref).toContain("rule_id=failed_login_threshold");
+  expect(pdfHref).toContain("exact_source_ip=8.8.8.8");
 });
 
 function renderAlertsTable(alerts, setAlerts) {

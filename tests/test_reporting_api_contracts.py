@@ -291,6 +291,7 @@ def test_filtered_exports_honor_rule_id_and_existing_filters(client, postgres_db
     with _patched_app_db(conn):
         txt_resp = client.get(f"/alerts/report?{query}")
     assert txt_resp.status_code == 200
+    assert "attachment" in txt_resp.headers.get("Content-Disposition", "")
     txt_body = txt_resp.data.decode("utf-8", errors="replace")
     assert "filtered export match" in txt_body
     assert "filtered export wrong rule" not in txt_body
@@ -299,10 +300,18 @@ def test_filtered_exports_honor_rule_id_and_existing_filters(client, postgres_db
     with _patched_route_db_only(conn):
         csv_resp = client.get(f"/alerts/export/csv?{query}")
     assert csv_resp.status_code == 200
+    assert "attachment" in csv_resp.headers.get("Content-Disposition", "")
     csv_body = csv_resp.data.decode("utf-8", errors="replace")
     assert "filtered export match" in csv_body
     assert "filtered export wrong rule" not in csv_body
     assert "filtered export wrong severity" not in csv_body
+
+    with _patched_app_db(conn):
+        pdf_resp = client.get(f"/alerts/report/pdf?{query}")
+    assert pdf_resp.status_code == 200
+    assert pdf_resp.content_type == "application/pdf"
+    assert "attachment" in pdf_resp.headers.get("Content-Disposition", "")
+    assert pdf_resp.data[:4] == b"%PDF"
 
 
 def test_csv_export_preserves_latest_environment_lookup(client, postgres_db):

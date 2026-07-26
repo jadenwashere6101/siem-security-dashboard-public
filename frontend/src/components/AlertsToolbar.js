@@ -31,7 +31,6 @@ function AlertsToolbar({
   multiAlertCsvExportHref,
   multiAlertReportHref,
   multiAlertPdfReportHref,
-  downloadPdfReport,
   cardHeaderStyle,
   cardTitleStyle,
   cardSubtitleStyle,
@@ -82,22 +81,14 @@ function AlertsToolbar({
             <a href={multiAlertReportHref} style={exportMenuOptionStyle}>
               Download Filtered Incident Report (TXT)
             </a>
-            <button
-              type="button"
-              onClick={() =>
-                downloadPdfReport(multiAlertPdfReportHref, "siem-alert-report.pdf")
-              }
+            <a
+              href={multiAlertPdfReportHref}
               style={{
                 ...exportMenuOptionStyle,
-                border: "none",
-                width: "100%",
-                backgroundColor: "transparent",
-                cursor: "pointer",
-                textAlign: "left",
               }}
             >
               Download Filtered PDF Report
-            </button>
+            </a>
           </div>
         </details>
       </div>

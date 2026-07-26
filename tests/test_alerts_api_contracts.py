@@ -316,7 +316,7 @@ def test_get_alerts_summary_remains_authoritative_independent_of_alert_page(clie
         (
             "summary_high_one",
             "high",
-            "198.51.100.10",
+            "8.8.4.30",
             "bank_app",
             "custom",
             "Summary high alert 1",
@@ -328,7 +328,7 @@ def test_get_alerts_summary_remains_authoritative_independent_of_alert_page(clie
             "2026-07-14T10:00:00Z",
             "summary_high_two",
             "high",
-            "198.51.100.10",
+            "8.8.4.30",
             "bank_app",
             "custom",
             "Summary high alert 2",
@@ -340,7 +340,7 @@ def test_get_alerts_summary_remains_authoritative_independent_of_alert_page(clie
             "2026-07-14T10:10:00Z",
             "summary_medium_one",
             "medium",
-            "198.51.100.11",
+            "8.8.4.31",
             "nginx",
             "web_log",
             "Summary medium alert",
@@ -948,8 +948,8 @@ def test_get_alerts_exact_source_and_alert_id_filters_do_not_broaden_results(cli
             alert_type, severity, source_ip, source, source_type, message, status
         )
         VALUES
-            ('exact_source_match', 'high', '198.51.100.10', 'pfsense', 'firewall', 'source match', 'open'),
-            ('exact_source_other', 'high', '198.51.100.11', 'pfsense', 'firewall', 'source other', 'open')
+            ('exact_source_match', 'high', '8.8.4.70', 'pfsense', 'firewall', 'source match', 'open'),
+            ('exact_source_other', 'high', '8.8.4.71', 'pfsense', 'firewall', 'source other', 'open')
         RETURNING id, alert_type
         """
     )
@@ -961,7 +961,7 @@ def test_get_alerts_exact_source_and_alert_id_filters_do_not_broaden_results(cli
     resp = _fetch_alerts_response_for_path(
         client,
         conn,
-        "/alerts?exact_source_ip=198.51.100.10&search=198.51.100&sort=oldest",
+        "/alerts?exact_source_ip=8.8.4.70&search=8.8.4&sort=oldest",
     )
     assert resp.status_code == 200
     payload = resp.get_json()
@@ -975,7 +975,7 @@ def test_get_alerts_exact_source_and_alert_id_filters_do_not_broaden_results(cli
     assert summary_resp.status_code == 200
     summary_payload = summary_resp.get_json()
     assert summary_payload["metrics"]["total_alerts"] == 1
-    assert summary_payload["top_source_ips"] == [{"name": "198.51.100.10", "value": 1}]
+    assert summary_payload["top_source_ips"] == [{"name": "8.8.4.70", "value": 1}]
 
 
 def test_get_alerts_rule_id_filter_composes_with_existing_filters(client, postgres_db):
@@ -1164,21 +1164,140 @@ def test_get_alerts_summary_excludes_configured_synthetic_ips_from_visuals(clien
             alert_type, severity, source_ip, source, source_type, message, status
         )
         VALUES
-            ('synthetic_source', 'medium', '198.51.100.40', 'pfsense', 'firewall', 'synthetic top ip', 'open'),
-            ('legit_source', 'medium', '198.51.100.41', 'pfsense', 'firewall', 'legit top ip', 'open'),
-            ('legit_source_repeat', 'medium', '198.51.100.41', 'pfsense', 'firewall', 'legit top ip 2', 'open')
+            ('synthetic_source', 'medium', '9.9.9.9', 'pfsense', 'firewall', 'synthetic top ip', 'open'),
+            ('legit_source', 'medium', '8.8.4.41', 'pfsense', 'firewall', 'legit top ip', 'open'),
+            ('legit_source_repeat', 'medium', '8.8.4.41', 'pfsense', 'firewall', 'legit top ip 2', 'open')
         """
     )
     conn.commit()
-    monkeypatch.setenv("SIEM_SYNTHETIC_SOURCE_IP_EXCLUSIONS", "198.51.100.40")
+    monkeypatch.setenv("SIEM_SYNTHETIC_SOURCE_IP_EXCLUSIONS", "9.9.9.9")
 
     _login_as_super_admin(client)
     summary_resp = _fetch_alert_summary_response(client, conn)
 
     assert summary_resp.status_code == 200
     payload = summary_resp.get_json()
-    assert payload["top_source_ips"] == [{"name": "198.51.100.41", "value": 2}]
-    assert all(marker["source_ip"] != "198.51.100.40" for marker in payload["map_markers"])
+    assert payload["top_source_ips"] == [{"name": "8.8.4.41", "value": 2}]
+    assert all(marker["source_ip"] != "9.9.9.9" for marker in payload["map_markers"])
+
+
+def test_get_alerts_summary_excludes_documentation_networks_by_default(client, postgres_db, monkeypatch):
+    conn, cur = postgres_db
+    monkeypatch.delenv("SIEM_SYNTHETIC_SOURCE_IP_EXCLUSIONS", raising=False)
+    monkeypatch.delenv("SYNTHETIC_SOURCE_IP_EXCLUSIONS", raising=False)
+    monkeypatch.delenv("SIEM_SYNTHETIC_SOURCE_IP_NETWORK_EXCLUSIONS", raising=False)
+    monkeypatch.delenv("SYNTHETIC_SOURCE_IP_NETWORK_EXCLUSIONS", raising=False)
+    cur.execute(
+        """
+        INSERT INTO alerts (
+            alert_type, severity, source_ip, source, source_type, message, status, latitude, longitude
+        )
+        VALUES
+            ('doc_one', 'medium', '192.0.2.10', 'bank_app', 'custom', 'TEST-NET-1 sample', 'open', 37.7749, -122.4194),
+            ('doc_two', 'medium', '198.51.100.10', 'bank_app', 'custom', 'TEST-NET-2 sample', 'open', 37.7749, -122.4194),
+            ('doc_three', 'medium', '203.0.113.10', 'bank_app', 'custom', 'TEST-NET-3 sample', 'open', 37.7749, -122.4194),
+            ('legit_one', 'medium', '8.8.4.80', 'bank_app', 'custom', 'legit source sample', 'open', 40.7128, -74.0060),
+            ('legit_two', 'medium', '8.8.4.80', 'bank_app', 'custom', 'legit source repeat', 'open', 40.7128, -74.0060)
+        """
+    )
+    conn.commit()
+
+    _login_as_super_admin(client)
+    summary_resp = _fetch_alert_summary_response(client, conn)
+
+    assert summary_resp.status_code == 200
+    payload = summary_resp.get_json()
+    assert payload["metrics"]["total_alerts"] == 5
+    assert payload["metrics"]["unique_source_ips"] == 1
+    assert payload["top_source_ips"] == [{"name": "8.8.4.80", "value": 2}]
+    assert {marker["source_ip"] for marker in payload["map_markers"]} == {"8.8.4.80"}
+
+
+def test_get_alerts_summary_excludes_confirmed_legacy_synthetic_ips_but_preserves_one_dot_one(
+    client,
+    postgres_db,
+    monkeypatch,
+):
+    conn, cur = postgres_db
+    monkeypatch.delenv("SIEM_SYNTHETIC_SOURCE_IP_EXCLUSIONS", raising=False)
+    monkeypatch.delenv("SYNTHETIC_SOURCE_IP_EXCLUSIONS", raising=False)
+    cur.execute(
+        """
+        INSERT INTO alerts (
+            alert_type, severity, source_ip, source, source_type, message, status, latitude, longitude
+        )
+        VALUES
+            ('legacy_synthetic', 'medium', '103.103.103.103', 'bank_app', 'custom', 'legacy synthetic sample', 'open', 37.7749, -122.4194),
+            ('legacy_synthetic', 'medium', '103.103.103.103', 'bank_app', 'custom', 'legacy synthetic repeat', 'open', 37.7749, -122.4194),
+            ('legacy_synthetic', 'medium', '107.107.107.107', 'bank_app', 'custom', 'legacy synthetic sample', 'open', 37.7749, -122.4194),
+            ('pfsense_real', 'high', '1.1.1.1', 'pfsense', 'firewall', 'legitimate pfSense telemetry', 'open', -33.8688, 151.2093),
+            ('pfsense_real', 'high', '1.1.1.1', 'pfsense', 'firewall', 'legitimate pfSense telemetry repeat', 'open', -33.8688, 151.2093)
+        """
+    )
+    conn.commit()
+
+    _login_as_super_admin(client)
+    summary_resp = _fetch_alert_summary_response(client, conn)
+
+    assert summary_resp.status_code == 200
+    payload = summary_resp.get_json()
+    assert payload["metrics"]["total_alerts"] == 5
+    assert payload["metrics"]["unique_source_ips"] == 1
+    assert payload["top_source_ips"] == [{"name": "1.1.1.1", "value": 2}]
+    assert {marker["source_ip"] for marker in payload["map_markers"]} == {"1.1.1.1"}
+
+
+def test_get_alerts_summary_excludes_canonical_synthetic_provenance_from_source_ip_widgets(
+    client,
+    postgres_db,
+    monkeypatch,
+):
+    conn, cur = postgres_db
+    monkeypatch.delenv("SIEM_SYNTHETIC_SOURCE_IP_EXCLUSIONS", raising=False)
+    monkeypatch.delenv("SYNTHETIC_SOURCE_IP_EXCLUSIONS", raising=False)
+    cur.execute(
+        """
+        INSERT INTO alerts (
+            alert_type, severity, source_ip, source, source_type, message, status, context, latitude, longitude
+        )
+        VALUES
+            (
+                'synthetic_context',
+                'medium',
+                '8.8.4.90',
+                'bank_app',
+                'custom',
+                'synthetic provenance sample',
+                'open',
+                '{"data_provenance":"synthetic"}'::jsonb,
+                37.7749,
+                -122.4194
+            ),
+            (
+                'operational_context',
+                'medium',
+                '8.8.4.91',
+                'bank_app',
+                'custom',
+                'operational provenance sample',
+                'open',
+                '{"data_provenance":"operational"}'::jsonb,
+                40.7128,
+                -74.0060
+            )
+        """
+    )
+    conn.commit()
+
+    _login_as_super_admin(client)
+    summary_resp = _fetch_alert_summary_response(client, conn)
+
+    assert summary_resp.status_code == 200
+    payload = summary_resp.get_json()
+    assert payload["metrics"]["total_alerts"] == 2
+    assert payload["metrics"]["unique_source_ips"] == 1
+    assert payload["top_source_ips"] == [{"name": "8.8.4.91", "value": 1}]
+    assert {marker["source_ip"] for marker in payload["map_markers"]} == {"8.8.4.91"}
 
 
 def test_get_alerts_summary_excludes_synthetic_ips_before_aggregation_limit(client, postgres_db, monkeypatch):

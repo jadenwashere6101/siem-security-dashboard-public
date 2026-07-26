@@ -110,6 +110,13 @@ test("AlertExpandedRow renders no-history badge for null response outcome", () =
   expect(screen.getByLabelText(/no canonical outcome recorded/i)).toBeInTheDocument();
 });
 
+test("AlertExpandedRow exposes single-alert PDF as a direct download link", () => {
+  renderExpandedRow({ ...baseAlert, response_outcome: null });
+
+  const pdfLink = screen.getByRole("link", { name: "Download PDF Report" });
+  expect(pdfLink).toHaveAttribute("href", "/alerts/101/report/pdf");
+});
+
 test("AlertExpandedRow gives response and manual action headings explicit readable foregrounds", () => {
   renderExpandedRow({ ...baseAlert, response_outcome: null });
 

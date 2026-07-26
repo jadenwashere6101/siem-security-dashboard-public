@@ -436,19 +436,23 @@ def add_event():
         conn = get_db_connection()
         cur = conn.cursor()
 
-        alerts_created = ingest_normalized_event(
-            {
-                "event_type": event_type,
-                "severity": severity,
-                "source_ip": source_ip,
-                "message": message,
-                "app_name": app_name,
-                "environment": environment,
-                "raw_payload": raw_payload,
-            },
-            conn,
-            cur,
-        )
+        normalized_event = {
+            "event_type": event_type,
+            "severity": severity,
+            "source_ip": source_ip,
+            "message": message,
+            "app_name": app_name,
+            "environment": environment,
+            "raw_payload": raw_payload,
+        }
+        source = str(data.get("source") or "").strip()
+        source_type = str(data.get("source_type") or "").strip()
+        if source:
+            normalized_event["source"] = source
+        if source_type:
+            normalized_event["source_type"] = source_type
+
+        alerts_created = ingest_normalized_event(normalized_event, conn, cur)
 
         conn.commit()
 

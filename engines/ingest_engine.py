@@ -23,6 +23,7 @@ from engines.detection_engine import (
     _generate_successful_login_after_spray_alerts_core,
 )
 from helpers.ingest_normalizers import reject_raw_password_fields
+from core.synthetic_data_policy import SYNTHETIC_PROVENANCE_VALUES
 
 IMPLEMENTED_BASE_DETECTION_RULE_IDS = (
     "failed_login_threshold",
@@ -43,6 +44,72 @@ IMPLEMENTED_BASE_DETECTION_RULE_IDS = (
     "pfsense_firewall_suspicious_allow",
     "pfsense_firewall_allow_after_deny",
 )
+
+
+def _lower_text(value):
+    return str(value or "").strip().lower()
+
+
+def _raw_payload_provenance_values(raw_payload):
+    if not isinstance(raw_payload, dict):
+        return []
+    values = [
+        raw_payload.get("data_provenance"),
+        raw_payload.get("telemetry_provenance"),
+    ]
+    provenance = raw_payload.get("provenance")
+    if isinstance(provenance, dict):
+        values.extend([provenance.get("classification"), provenance.get("source")])
+    else:
+        values.append(provenance)
+    metadata = raw_payload.get("metadata")
+    if isinstance(metadata, dict):
+        values.append(metadata.get("data_provenance"))
+    return [_lower_text(value) for value in values if _lower_text(value)]
+
+
+def _build_synthetic_provenance_context(event_dict):
+    raw_payload = event_dict.get("raw_payload")
+    provenance_values = set(_raw_payload_provenance_values(raw_payload))
+    source_markers = {
+        _lower_text(event_dict.get("source")),
+        _lower_text(event_dict.get("source_type")),
+        _lower_text(event_dict.get("app_name")),
+    }
+    matched = (provenance_values | source_markers) & SYNTHETIC_PROVENANCE_VALUES
+    if not matched:
+        return None
+    origin = None
+    provenance = raw_payload.get("provenance") if isinstance(raw_payload, dict) else None
+    if isinstance(provenance, dict):
+        origin = provenance.get("origin") or provenance.get("source")
+    return {
+        "data_provenance": "synthetic",
+        "provenance": {
+            "classification": "synthetic",
+            "origin": origin or event_dict.get("app_name") or event_dict.get("source") or "ingest",
+        },
+    }
+
+
+def _mark_alerts_with_synthetic_provenance(cur, alerts_created, provenance_context):
+    if not provenance_context:
+        return
+    alert_ids = [
+        int(alert["alert_id"])
+        for alert in alerts_created
+        if isinstance(alert, dict) and alert.get("alert_id") is not None
+    ]
+    if not alert_ids:
+        return
+    cur.execute(
+        """
+        UPDATE alerts
+        SET context = COALESCE(context, '{}'::jsonb) || %s::jsonb
+        WHERE id = ANY(%s)
+        """,
+        (Json(provenance_context), alert_ids),
+    )
 
 
 def _run_detector(rule_id, detector, *, cur, conn, source_ip, source, source_type):
@@ -172,5 +239,11 @@ def ingest_normalized_event(event_dict, conn, cur):
     }:
         alerts_created.extend(generate_correlated_activity_alerts(cur, conn, correlated_source_ip))
         alerts_created.extend(generate_targeted_correlation_alerts(cur, conn, correlated_source_ip))
+
+    _mark_alerts_with_synthetic_provenance(
+        cur,
+        alerts_created,
+        _build_synthetic_provenance_context(event_dict),
+    )
 
     return alerts_created

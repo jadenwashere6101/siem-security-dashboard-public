@@ -45,7 +45,6 @@ function AlertExpandedRow({
   expandedTextStyle,
   monoCellStyle,
   canTakeAlertActions,
-  downloadPdfReport,
   executeAction,
   executingActionId,
   getActionButtonStyle,
@@ -156,7 +155,6 @@ function AlertExpandedRow({
             exportLabelStyle={exportLabelStyle}
             inlineExportLinkStyle={inlineExportLinkStyle}
             exportDividerStyle={exportDividerStyle}
-            downloadPdfReport={downloadPdfReport}
           />
 
           <AlertResponseLog logs={responseLog} />

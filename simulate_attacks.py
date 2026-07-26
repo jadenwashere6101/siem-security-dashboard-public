@@ -6,6 +6,8 @@ import time
 import requests
 from dotenv import load_dotenv
 
+from core.synthetic_data_policy import mark_payload_as_synthetic
+
 
 def env_first(*names, default=None):
     for name in names:
@@ -23,14 +25,17 @@ SIEM_INGEST_API_KEY = env_first("SIEM_INGEST_API_KEY", "INGEST_API_KEY", default
 
 
 def send_event(event_type, severity, source_ip, message):
-    payload = {
-        "event_type": event_type,
-        "severity": severity,
-        "source_ip": source_ip,
-        "message": message,
-        "app_name": "simulator",
-        "environment": "dev"
-    }
+    payload = mark_payload_as_synthetic(
+        {
+            "event_type": event_type,
+            "severity": severity,
+            "source_ip": source_ip,
+            "message": message,
+            "app_name": "simulator",
+            "environment": "dev",
+        },
+        origin="simulate_attacks.py",
+    )
 
     headers = {}
     if SIEM_INGEST_API_KEY:

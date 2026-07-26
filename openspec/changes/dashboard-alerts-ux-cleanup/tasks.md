@@ -47,3 +47,12 @@
 - [x] 6.3 Preserve CSV columns, filters including `rule_id`, export authorization, and latest environment semantics.
 - [x] 6.4 Add focused reporting and schema tests for the bounded CSV query and migration snapshot.
 - [x] 6.5 Capture local PostgreSQL before/after query-plan evidence without applying migrations to production or accessing the VM.
+
+## 7. PDF and Confirmed Synthetic Data Follow-up
+
+- [x] 7.1 Preserve the same-origin attachment download path for filtered PDF export while keeping CSV and TXT export links filter-backed.
+- [x] 7.2 Centralize operational source-IP classification for source-IP dashboard widgets, including documentation networks and confirmed legacy synthetic sources.
+- [x] 7.3 Preserve legitimate `1.1.1.1` production telemetry by avoiding broad public-IP or private/reserved range exclusions.
+- [x] 7.4 Mark simulator-origin ingest payloads with canonical synthetic provenance and prevent them from being normalized as operational source metadata.
+- [x] 7.5 Add a dry-run-first cleanup mechanism for confirmed synthetic alerts and associated synthetic event rows with dependency reporting, backup-before-delete, explicit confirmation, and transactional execution.
+- [x] 7.6 Add focused tests for PDF/TXT/CSV filter preservation, centralized synthetic classification, and cleanup selectors that cannot capture unrelated records.
