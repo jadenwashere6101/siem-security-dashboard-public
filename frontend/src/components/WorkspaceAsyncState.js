@@ -1,21 +1,10 @@
 import React from "react";
-
-function prefersReducedMotion() {
-  return (
-    typeof window !== "undefined" &&
-    typeof window.matchMedia === "function" &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches
-  );
-}
+import LoadingIndicator from "./LoadingIndicator";
 
 export function WorkspaceInitialState({ loading, error, loadingLabel, errorLabel, onRetry }) {
   if (loading) {
-    const reducedMotion = prefersReducedMotion();
     return (
-      <div role="status" aria-live="polite" style={initialStateStyle}>
-        <div style={buildSpinnerStyle(reducedMotion)} aria-hidden="true" />
-        <span>{loadingLabel}</span>
-      </div>
+      <LoadingIndicator label={loadingLabel} size={16} style={initialStateStyle} />
     );
   }
 
@@ -60,16 +49,6 @@ const initialStateStyle = {
   color: "#c9d1d9",
   padding: "12px 0",
 };
-
-const buildSpinnerStyle = (reducedMotion) => ({
-  width: "16px",
-  height: "16px",
-  border: "2px solid rgba(201, 209, 217, 0.28)",
-  borderTopColor: "#58a6ff",
-  borderRightColor: "transparent",
-  borderRadius: "999px",
-  animation: reducedMotion ? "none" : "workspace-spin 0.85s linear infinite",
-});
 
 const errorStateStyle = {
   display: "flex",

@@ -65,3 +65,16 @@ test("updates rendered labels when timestamp preferences change", () => {
   expect(screen.getByTestId("axis-label")).toHaveTextContent("22:00 UTC");
   expect(screen.getByTestId("axis-label")).not.toHaveTextContent("PM");
 });
+
+test("renders summary pending state with the shared spinner", () => {
+  render(
+    <TimelineChart
+      {...baseProps}
+      summaryPendingLabel="Updating chart..."
+      displaySettings={{ timezoneMode: "utc", timestampFormat: "24h" }}
+    />
+  );
+
+  expect(screen.getByRole("status")).toHaveTextContent("Updating chart...");
+  expect(screen.getByRole("status").firstChild).toHaveClass("workspace-loading-spinner");
+});

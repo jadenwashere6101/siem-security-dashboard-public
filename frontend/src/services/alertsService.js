@@ -28,6 +28,7 @@ function buildAlertQuery({
   severityFilter,
   statusFilter,
   sourceFilter,
+  ruleFilter,
   sortOption,
   operationalScope,
   timelineRange,
@@ -44,6 +45,7 @@ function buildAlertQuery({
   if (severityFilter && severityFilter !== "all") params.set("severity", severityFilter);
   if (statusFilter && statusFilter !== "all") params.set("status", statusFilter);
   if (sourceFilter && sourceFilter !== "all") params.set("source", sourceFilter);
+  if (ruleFilter && ruleFilter !== "all") params.set("rule_id", ruleFilter);
   if (sortOption) params.set("sort", sortOption);
   if (operationalScope && operationalScope !== "all_history") {
     params.set("operational_scope", operationalScope);
@@ -83,3 +85,18 @@ export const loadAlertDashboardSummary = async (queryOptions = {}) => {
 
   return data;
 };
+
+export const loadAlertRuleOptions = async () => {
+  const res = await fetch(buildSiemPath("/alerts/rule-options"), {
+    credentials: "include",
+  });
+  const data = await parseJsonResponse(res, { items: [] });
+
+  if (!res.ok) {
+    throw new Error(getApiErrorMessage(data, "Failed to fetch detection rule options", ["error", "message"]));
+  }
+
+  return Array.isArray(data?.items) ? data.items : [];
+};
+
+export { buildAlertQuery };

@@ -18,6 +18,27 @@ code {
     monospace;
 }
 
+.workspace-loading-spinner {
+  display: inline-block;
+  flex: 0 0 auto;
+  border: 2px solid rgba(201, 209, 217, 0.24);
+  border-right-color: transparent;
+  border-radius: 999px;
+  animation: workspace-spin 0.85s linear infinite;
+}
+
+@keyframes workspace-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-loading-spinner {
+    animation: none;
+  }
+}
+
 .chart-container:focus,
 .chart-container:focus-visible {
   outline: none;

@@ -34,6 +34,16 @@ from helpers.enrichment_helpers import enrich_alert_with_correlation_context, en
 from core.ip_helpers import determine_response_action, get_ip_reputation, lookup_ip_reputation
 from core.source_inventory import CANONICAL_SOURCE_IDS
 from engines.detection_config import PFSENSE_ALERT_COOLDOWN_MINUTES, get_detection_rule_defaults
+from engines.detection_rule_catalog import DETECTION_RULE_CATALOG, list_detection_rule_catalog
+from helpers.query_helpers import (
+    build_alert_filter_sql,
+    build_alerts_where_clause,
+    fetch_observed_alert_types,
+    normalize_alert_filter_value,
+    normalize_ip_filter_value,
+    normalize_rule_id_filter,
+    validate_rule_id_filter,
+)
 
 
 alerts_events_bp = Blueprint("alerts_events", __name__)
@@ -124,23 +134,8 @@ def _parse_non_negative_int(value, default, field_name):
     return parsed, None
 
 
-def _normalize_alert_filter_value(value):
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text or text.lower() == "all":
-        return None
-    return text
-
-
-def _normalize_ip_filter_value(value):
-    normalized = _normalize_alert_filter_value(value)
-    if normalized is None:
-        return None
-    try:
-        return str(ipaddress.ip_address(normalized))
-    except ValueError:
-        raise ValueError("invalid IP filter")
+_normalize_alert_filter_value = normalize_alert_filter_value
+_normalize_ip_filter_value = normalize_ip_filter_value
 
 
 def _parse_alert_list_request_args(include_pagination: bool = False):
@@ -177,11 +172,17 @@ def _parse_alert_list_request_args(include_pagination: bool = False):
     if alert_id_error:
         return None, (jsonify({"error": alert_id_error}), 400)
 
+    try:
+        rule_id = normalize_rule_id_filter(request.args.get("rule_id"))
+    except ValueError:
+        return None, (jsonify({"error": "invalid rule_id"}), 400)
+
     args = {
         "search": search,
         "exact_source_ip": exact_source_ip,
         "exact_target_ip": exact_target_ip,
         "alert_id": alert_id,
+        "rule_id": rule_id,
         "severity": severity,
         "status": status,
         "source": source,
@@ -218,69 +219,7 @@ def _parse_alert_list_request_args(include_pagination: bool = False):
     return args, None
 
 
-def _build_alert_filter_sql(filters: dict):
-    clauses = []
-    params = []
-
-    if filters.get("search"):
-        pattern = f"%{filters['search']}%"
-        clauses.append("(host(source_ip) ILIKE %s OR message ILIKE %s)")
-        params.extend((pattern, pattern))
-
-    if filters.get("exact_source_ip"):
-        clauses.append("host(source_ip) = %s")
-        params.append(filters["exact_source_ip"])
-
-    if filters.get("exact_target_ip"):
-        clauses.append(
-            """
-            (
-                COALESCE(context->'target_context'->>'primary_destination_ip', '') = %s
-                OR COALESCE(context->'target_context'->>'destination_ip', '') = %s
-                OR COALESCE(context->'target_context'->>'top_destination_ip', '') = %s
-                OR EXISTS (
-                    SELECT 1
-                    FROM jsonb_array_elements_text(
-                        COALESCE(context->'target_context'->'sample_destination_ips', '[]'::jsonb)
-                    ) AS sample_destination_ip(value)
-                    WHERE sample_destination_ip.value = %s
-                )
-            )
-            """
-        )
-        params.extend(
-            (
-                filters["exact_target_ip"],
-                filters["exact_target_ip"],
-                filters["exact_target_ip"],
-                filters["exact_target_ip"],
-            )
-        )
-
-    if filters.get("alert_id") is not None:
-        clauses.append("id = %s")
-        params.append(filters["alert_id"])
-
-    if filters.get("severity"):
-        clauses.append("severity = %s")
-        params.append(filters["severity"])
-
-    if filters.get("status"):
-        clauses.append("status = %s")
-        params.append(filters["status"])
-
-    if filters.get("source"):
-        clauses.append("COALESCE(source, 'legacy') = %s")
-        params.append(filters["source"])
-
-    operational_clause, operational_params = build_pfsense_alert_baseline_filter(
-        filters.get("operational_scope") or "all_history"
-    )
-    if operational_clause:
-        clauses.append(operational_clause)
-        params.extend(operational_params)
-
-    return clauses, params
+_build_alert_filter_sql = build_alert_filter_sql
 
 
 def _build_alert_order_clause(sort: str) -> str:
@@ -302,10 +241,7 @@ def _build_alert_order_clause(sort: str) -> str:
     return "ORDER BY created_at DESC, id DESC"
 
 
-def _build_alerts_where_clause(clauses: list[str]) -> str:
-    if not clauses:
-        return ""
-    return " WHERE " + " AND ".join(clauses)
+_build_alerts_where_clause = build_alerts_where_clause
 
 
 def _fetch_alert_rows(cur, where_clause: str, order_clause: str, params: list, *, limit: int, offset: int):
@@ -320,7 +256,18 @@ def _fetch_alert_total(cur, where_clause: str, params: list):
     return int(row[0] or 0) if row else 0
 
 
-def _fetch_alert_summary_metrics(cur, where_clause: str, params: list):
+def _fetch_alert_summary_metrics(
+    cur,
+    where_clause: str,
+    params: list,
+    *,
+    source_ip_exclusion_clause: str = "",
+    source_ip_exclusion_params: list | None = None,
+):
+    source_ip_exclusion_params = source_ip_exclusion_params or []
+    unique_source_filter = "WHERE source_ip IS NOT NULL"
+    if source_ip_exclusion_clause:
+        unique_source_filter += f" AND {source_ip_exclusion_clause}"
     cur.execute(
         f"""
         SELECT
@@ -328,11 +275,16 @@ def _fetch_alert_summary_metrics(cur, where_clause: str, params: list):
             COUNT(*) FILTER (WHERE severity = 'high') AS high_count,
             COUNT(*) FILTER (WHERE severity = 'medium') AS medium_count,
             COUNT(*) FILTER (WHERE severity = 'low') AS low_count,
-            COUNT(DISTINCT host(source_ip)) FILTER (WHERE source_ip IS NOT NULL) AS unique_source_ips
+            (
+                SELECT COUNT(DISTINCT host(source_ip))
+                FROM alerts
+                {where_clause}
+                {" AND " if where_clause else " WHERE "}{unique_source_filter.removeprefix("WHERE ")}
+            ) AS unique_source_ips
         FROM alerts
         {where_clause}
         """,
-        tuple(params),
+        tuple([*params, *source_ip_exclusion_params, *params]),
     )
     row = cur.fetchone() or (0, 0, 0, 0, 0)
     return {
@@ -344,27 +296,37 @@ def _fetch_alert_summary_metrics(cur, where_clause: str, params: list):
     }
 
 
-def _fetch_top_source_ips(cur, where_clause: str, params: list):
+def _build_source_ip_where_clause(
+    where_clause: str,
+    source_ip_exclusion_clause: str = "",
+) -> str:
+    source_clauses = ["source_ip IS NOT NULL"]
+    if source_ip_exclusion_clause:
+        source_clauses.append(source_ip_exclusion_clause)
+    source_filter = " AND ".join(source_clauses)
+    return f"{where_clause} AND {source_filter}" if where_clause else f" WHERE {source_filter}"
+
+
+def _fetch_top_source_ips(
+    cur,
+    where_clause: str,
+    params: list,
+    *,
+    source_ip_exclusion_clause: str = "",
+    source_ip_exclusion_params: list | None = None,
+):
+    source_ip_exclusion_params = source_ip_exclusion_params or []
+    source_where_clause = _build_source_ip_where_clause(where_clause, source_ip_exclusion_clause)
     cur.execute(
         f"""
         SELECT host(source_ip) AS source_ip, COUNT(*) AS alert_count
         FROM alerts
-        {where_clause}
-        AND source_ip IS NOT NULL
-        GROUP BY host(source_ip)
-        ORDER BY alert_count DESC, source_ip ASC
-        LIMIT 5
-        """
-        if where_clause
-        else """
-        SELECT host(source_ip) AS source_ip, COUNT(*) AS alert_count
-        FROM alerts
-        WHERE source_ip IS NOT NULL
+        {source_where_clause}
         GROUP BY host(source_ip)
         ORDER BY alert_count DESC, source_ip ASC
         LIMIT 5
         """,
-        tuple(params),
+        tuple([*params, *source_ip_exclusion_params]),
     )
     return [{"name": row[0], "value": int(row[1] or 0)} for row in cur.fetchall()]
 
@@ -432,51 +394,82 @@ def _fetch_alert_timeline(cur, where_clause: str, params: list, timeline_range: 
     }
 
 
-def _load_synthetic_source_ip_exclusions() -> set[str]:
+def _load_synthetic_source_ip_exclusions() -> tuple[set[str], set[str]]:
     raw_value = (
         os.getenv("SIEM_SYNTHETIC_SOURCE_IP_EXCLUSIONS")
         or os.getenv("SYNTHETIC_SOURCE_IP_EXCLUSIONS")
         or ""
     )
+    raw_network_value = (
+        os.getenv("SIEM_SYNTHETIC_SOURCE_IP_NETWORK_EXCLUSIONS")
+        or os.getenv("SYNTHETIC_SOURCE_IP_NETWORK_EXCLUSIONS")
+        or ""
+    )
     exclusions: set[str] = set()
+    network_exclusions: set[str] = set()
     for part in raw_value.split(","):
         normalized = part.strip()
         if not normalized:
             continue
         try:
-            exclusions.add(str(ipaddress.ip_address(normalized)))
+            if "/" in normalized:
+                network_exclusions.add(str(ipaddress.ip_network(normalized, strict=False)))
+            else:
+                exclusions.add(str(ipaddress.ip_address(normalized)))
         except ValueError:
             current_app.logger.warning(
                 "Ignoring invalid synthetic source IP exclusion: %s",
                 normalized,
             )
-    return exclusions
-
-
-def _exclude_synthetic_source_ips(items: list[dict[str, Any]], excluded_ips: set[str]) -> list[dict[str, Any]]:
-    if not excluded_ips:
-        return items
-    filtered_items = []
-    for item in items:
-        candidate = item.get("name") or item.get("source_ip")
-        if str(candidate or "") in excluded_ips:
+    for part in raw_network_value.split(","):
+        normalized = part.strip()
+        if not normalized:
             continue
-        filtered_items.append(item)
-    return filtered_items
+        try:
+            network_exclusions.add(str(ipaddress.ip_network(normalized, strict=False)))
+        except ValueError:
+            current_app.logger.warning(
+                "Ignoring invalid synthetic source IP network exclusion: %s",
+                normalized,
+            )
+    return exclusions, network_exclusions
 
 
-def _fetch_map_marker_rows(cur, where_clause: str, params: list):
+def _build_synthetic_source_ip_exclusion_sql(
+    excluded_ips: set[str],
+    excluded_networks: set[str],
+) -> tuple[str, list]:
+    clauses = []
+    params = []
+    if excluded_ips:
+        clauses.append("NOT (host(source_ip) = ANY(%s))")
+        params.append(sorted(excluded_ips))
+    if excluded_networks:
+        clauses.append("NOT (source_ip <<= ANY(%s::cidr[]))")
+        params.append(sorted(excluded_networks))
+    return " AND ".join(clauses), params
+
+
+def _fetch_map_marker_rows(
+    cur,
+    where_clause: str,
+    params: list,
+    *,
+    source_ip_exclusion_clause: str = "",
+    source_ip_exclusion_params: list | None = None,
+):
+    source_ip_exclusion_params = source_ip_exclusion_params or []
+    source_where_clause = _build_source_ip_where_clause(where_clause, source_ip_exclusion_clause)
     query = f"""
         WITH filtered AS (
             SELECT *
             FROM alerts
-            {where_clause}
+            {source_where_clause}
         ),
         source_counts AS (
             SELECT host(source_ip) AS source_ip_key, COUNT(*) AS alert_count
             FROM filtered
-            WHERE source_ip IS NOT NULL
-              AND latitude IS NOT NULL
+            WHERE latitude IS NOT NULL
               AND longitude IS NOT NULL
             GROUP BY host(source_ip)
         ),
@@ -503,8 +496,7 @@ def _fetch_map_marker_rows(cur, where_clause: str, params: list):
                 source_type,
                 context
             FROM filtered
-            WHERE source_ip IS NOT NULL
-              AND latitude IS NOT NULL
+            WHERE latitude IS NOT NULL
               AND longitude IS NOT NULL
             ORDER BY host(source_ip), created_at DESC, id DESC
         )
@@ -535,7 +527,7 @@ def _fetch_map_marker_rows(cur, where_clause: str, params: list):
           ON source_counts.source_ip_key = host(latest.source_ip)
         ORDER BY source_counts.alert_count DESC, latest.created_at DESC, latest.id DESC
     """
-    cur.execute(query, tuple(params))
+    cur.execute(query, tuple([*params, *source_ip_exclusion_params]))
     return cur.fetchall()
 
 
@@ -1081,6 +1073,11 @@ def get_alerts():
 
         conn = get_db_connection()
         cur = conn.cursor()
+        rule_error = validate_rule_id_filter(cur, query_args.get("rule_id"))
+        if rule_error:
+            cur.close()
+            conn.close()
+            return jsonify({"error": rule_error}), 400
         clauses, params = _build_alert_filter_sql(query_args)
         where_clause = _build_alerts_where_clause(clauses)
         order_clause = _build_alert_order_clause(query_args["sort"])
@@ -1145,18 +1142,43 @@ def get_alerts_summary():
 
         conn = get_db_connection()
         cur = conn.cursor()
+        rule_error = validate_rule_id_filter(cur, query_args.get("rule_id"))
+        if rule_error:
+            return jsonify({"error": rule_error}), 400
         clauses, params = _build_alert_filter_sql(query_args)
         where_clause = _build_alerts_where_clause(clauses)
-        metrics = _fetch_alert_summary_metrics(cur, where_clause, params)
-        top_source_ips = _fetch_top_source_ips(cur, where_clause, params)
+        excluded_source_ips, excluded_source_networks = _load_synthetic_source_ip_exclusions()
+        source_ip_exclusion_clause, source_ip_exclusion_params = _build_synthetic_source_ip_exclusion_sql(
+            excluded_source_ips,
+            excluded_source_networks,
+        )
+        metrics = _fetch_alert_summary_metrics(
+            cur,
+            where_clause,
+            params,
+            source_ip_exclusion_clause=source_ip_exclusion_clause,
+            source_ip_exclusion_params=source_ip_exclusion_params,
+        )
+        top_source_ips = _fetch_top_source_ips(
+            cur,
+            where_clause,
+            params,
+            source_ip_exclusion_clause=source_ip_exclusion_clause,
+            source_ip_exclusion_params=source_ip_exclusion_params,
+        )
         timeline_payload = _fetch_alert_timeline(
             cur,
             where_clause,
             params,
             query_args["timeline_range"],
         )
-        marker_rows = _fetch_map_marker_rows(cur, where_clause, params)
-        excluded_source_ips = _load_synthetic_source_ip_exclusions()
+        marker_rows = _fetch_map_marker_rows(
+            cur,
+            where_clause,
+            params,
+            source_ip_exclusion_clause=source_ip_exclusion_clause,
+            source_ip_exclusion_params=source_ip_exclusion_params,
+        )
 
         marker_ids = [row[0] for row in marker_rows]
         response_outcomes_by_alert = _resolve_alert_list_response_outcomes(conn, marker_ids)
@@ -1175,10 +1197,6 @@ def get_alerts_summary():
             )
             alert_payload["alert_count"] = int(row[20] or 0)
             map_markers.append(alert_payload)
-        if excluded_source_ips:
-            top_source_ips = _exclude_synthetic_source_ips(top_source_ips, excluded_source_ips)
-            map_markers = _exclude_synthetic_source_ips(map_markers, excluded_source_ips)
-
         return (
             jsonify(
                 {
@@ -1197,6 +1215,46 @@ def get_alerts_summary():
         )
     except Exception as error:
         current_app.logger.error("Error in get_alerts_summary: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+
+@alerts_events_bp.route("/alerts/rule-options", methods=["GET"])
+@login_required
+def get_alert_rule_options():
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        observed_alert_types = fetch_observed_alert_types(cur)
+        catalog_options = [
+            {
+                "rule_id": record.rule_id,
+                "label": record.display_name,
+                "family": record.family,
+                "rule_type": record.rule_type,
+            }
+            for record in list_detection_rule_catalog()
+            if record.rule_id in observed_alert_types
+        ]
+        catalog_ids = {item["rule_id"] for item in catalog_options}
+        legacy_options = [
+            {
+                "rule_id": alert_type,
+                "label": alert_type.replace("_", " ").title(),
+                "family": "legacy",
+                "rule_type": "base",
+            }
+            for alert_type in sorted(observed_alert_types - set(DETECTION_RULE_CATALOG) - catalog_ids)
+        ]
+        return jsonify({"items": [*catalog_options, *legacy_options]}), 200
+    except Exception as error:
+        current_app.logger.error("Error in get_alert_rule_options: %s", error)
         return jsonify({"error": "Internal server error"}), 500
     finally:
         if cur:

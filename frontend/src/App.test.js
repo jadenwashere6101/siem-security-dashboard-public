@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from './App';
 import { loadCurrentSession } from './services/authService';
-import { loadAlertDashboardSummary, loadAlerts } from './services/alertsService';
+import { loadAlertDashboardSummary, loadAlertRuleOptions, loadAlerts } from './services/alertsService';
 import { UI_SETTINGS_STORAGE_KEY } from './utils/uiSettings';
 
 jest.mock('./services/authService', () => ({
@@ -14,6 +14,7 @@ jest.mock('./services/authService', () => ({
 jest.mock('./services/alertsService', () => ({
   loadAlerts: jest.fn(),
   loadAlertDashboardSummary: jest.fn(),
+  loadAlertRuleOptions: jest.fn(),
 }));
 
 jest.mock('./components/DashboardSection', () => (props) => (
@@ -23,6 +24,7 @@ jest.mock('./components/DashboardSection', () => (props) => (
     <div>severity:{props.severityFilter || ''}</div>
     <div>status:{props.statusFilter || ''}</div>
     <div>source:{props.sourceFilter || ''}</div>
+    <div>rule:{props.ruleFilter || ''}</div>
     <div>scope:{props.operationalScope}</div>
     <div>loading:{String(Boolean(props.loading))}</div>
     <div>refreshing:{String(Boolean(props.refreshing))}</div>
@@ -38,6 +40,9 @@ jest.mock('./components/DashboardSection', () => (props) => (
     </button>
     <button type="button" onClick={() => props.setSourceFilter('pfsense')}>
       Dashboard set source
+    </button>
+    <button type="button" onClick={() => props.setRuleFilter('failed_login_threshold')}>
+      Dashboard set rule
     </button>
     <button type="button" onClick={() => props.setSearchTerm('manual search')}>
       Dashboard set search
@@ -182,6 +187,9 @@ beforeEach(() => {
     timeline: [],
     map_markers: [],
   });
+  loadAlertRuleOptions.mockResolvedValue([
+    { rule_id: 'failed_login_threshold', label: 'Failed Login Threshold' },
+  ]);
 });
 
 test('renders without crashing', async () => {
@@ -386,12 +394,14 @@ test('contextual alert pivots clear incompatible local filters while manual filt
   await userEvent.click(screen.getByRole('button', { name: 'Dashboard set severity' }));
   await userEvent.click(screen.getByRole('button', { name: 'Dashboard set status' }));
   await userEvent.click(screen.getByRole('button', { name: 'Dashboard set source' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Dashboard set rule' }));
   await userEvent.click(screen.getByRole('button', { name: 'Dashboard set search' }));
 
   expect(dashboard).toHaveTextContent('search:manual search');
   expect(dashboard).toHaveTextContent('severity:high');
   expect(dashboard).toHaveTextContent('status:resolved');
   expect(dashboard).toHaveTextContent('source:pfsense');
+  expect(dashboard).toHaveTextContent('rule:failed_login_threshold');
 
   await userEvent.click(screen.getByRole('button', { name: /soar incidents/i }));
   await userEvent.click(await screen.findByRole('button', { name: 'Incident open related alerts' }));
@@ -404,6 +414,7 @@ test('contextual alert pivots clear incompatible local filters while manual filt
         severityFilter: '',
         statusFilter: '',
         sourceFilter: 'all',
+        ruleFilter: 'all',
         offset: 0,
       })
     );
@@ -413,6 +424,7 @@ test('contextual alert pivots clear incompatible local filters while manual filt
   expect(await screen.findByTestId('dashboard-section')).toHaveTextContent('search:');
   expect(screen.getByTestId('dashboard-section')).toHaveTextContent('severity:');
   expect(screen.getByTestId('dashboard-section')).toHaveTextContent('status:');
+  expect(screen.getByTestId('dashboard-section')).toHaveTextContent('rule:all');
   expect(screen.getByTestId('dashboard-section')).toHaveTextContent('source:all');
 });
 

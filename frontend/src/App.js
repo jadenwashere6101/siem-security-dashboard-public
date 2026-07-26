@@ -36,7 +36,7 @@ import {
   writeStoredSessionIdentity,
 } from "./utils/sessionIdentity";
 import { updateAlertStatusRequest } from "./services/alertStatusService";
-import { loadAlertDashboardSummary, loadAlerts } from "./services/alertsService";
+import { loadAlertDashboardSummary, loadAlertRuleOptions, loadAlerts } from "./services/alertsService";
 import { requestAiChat, requestAiDraft, requestAiExplanation, requestAiInvestigation } from "./services/aiService";
 import {
   loadCurrentSession,
@@ -63,6 +63,7 @@ const createAlertViewState = () => ({
   exactTargetIp: "",
   exactAlertId: null,
   sourceFilter: "all",
+  ruleFilter: "all",
   severityFilter: "",
   statusFilter: "",
   operationalScope: OPERATIONAL_SCOPE_SINCE_TUNING,
@@ -106,6 +107,7 @@ function isAlertViewAtDefault(view) {
     view.exactTargetIp === baseline.exactTargetIp &&
     view.exactAlertId === baseline.exactAlertId &&
     view.sourceFilter === baseline.sourceFilter &&
+    view.ruleFilter === baseline.ruleFilter &&
     view.severityFilter === baseline.severityFilter &&
     view.statusFilter === baseline.statusFilter &&
     view.operationalScope === baseline.operationalScope &&
@@ -134,6 +136,7 @@ function buildContextualAlertView(current, { sourceIp = "", targetIp = "", alert
     exactTargetIp: targetIp,
     exactAlertId: alertId,
     sourceFilter: "all",
+    ruleFilter: "all",
     severityFilter: "",
     statusFilter: "",
     offset: 0,
@@ -146,6 +149,7 @@ function AppInner() {
   const [alertView, setAlertView] = useState(createAlertViewState);
   const [alertsPendingLabel, setAlertsPendingLabel] = useState("");
   const [summaryPendingLabel, setSummaryPendingLabel] = useState("");
+  const [alertRuleOptions, setAlertRuleOptions] = useState([]);
   const [selectedAlertId, setSelectedAlertId] = useState(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUsername, setCurrentUsername] = useState(null);
@@ -219,6 +223,12 @@ function AppInner() {
     applyAlertViewPatch({ sourceFilter: value }, { clearExactPivots: false });
   }, [applyAlertViewPatch]);
 
+  const setRuleFilter = useCallback((value) => {
+    setAlertsPendingLabel("Updating recent alerts…");
+    setSummaryPendingLabel("Updating dashboard summary…");
+    applyAlertViewPatch({ ruleFilter: value }, { clearExactPivots: false });
+  }, [applyAlertViewPatch]);
+
   const setSeverityFilter = useCallback((value) => {
     setAlertsPendingLabel("Updating recent alerts…");
     setSummaryPendingLabel("Updating dashboard summary…");
@@ -264,6 +274,7 @@ function AppInner() {
       severityFilter: alertView.severityFilter,
       statusFilter: alertView.statusFilter,
       sourceFilter: alertView.sourceFilter,
+      ruleFilter: alertView.ruleFilter,
       sortOption: alertView.sortOption,
       operationalScope: alertView.operationalScope,
       limit: alertPageSize,
@@ -281,6 +292,7 @@ function AppInner() {
       severityFilter: alertView.severityFilter,
       statusFilter: alertView.statusFilter,
       sourceFilter: alertView.sourceFilter,
+      ruleFilter: alertView.ruleFilter,
       sortOption: alertView.sortOption,
       operationalScope: alertView.operationalScope,
       timelineRange: alertView.timelineRange,
@@ -329,6 +341,7 @@ function AppInner() {
       setAlertView(createAlertViewState());
       setAlertsState(createAlertRowsState());
       setAlertSummaryState(createAlertSummaryState());
+      setAlertRuleOptions([]);
       writeStoredSessionIdentity(null);
     } finally {
       setAuthLoading(false);
@@ -476,6 +489,7 @@ function AppInner() {
       setAlertView(createAlertViewState());
       setAlertsState(createAlertRowsState());
       setAlertSummaryState(createAlertSummaryState());
+      setAlertRuleOptions([]);
       writeStoredSessionIdentity(null);
     }
   };
@@ -488,6 +502,31 @@ function AppInner() {
     if (!isAuthenticated) return;
     fetchAlertRows();
   }, [fetchAlertRows, isAuthenticated]);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setAlertRuleOptions([]);
+      return;
+    }
+
+    let cancelled = false;
+    loadAlertRuleOptions()
+      .then((items) => {
+        if (!cancelled) {
+          setAlertRuleOptions(items);
+        }
+      })
+      .catch((err) => {
+        console.error("Error fetching alert rule options:", err);
+        if (!cancelled) {
+          setAlertRuleOptions([]);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -818,6 +857,7 @@ function AppInner() {
       visible_filters: {
         search: alertView.searchTerm,
         source: alertView.sourceFilter,
+        rule_id: alertView.ruleFilter,
         severity: alertView.severityFilter,
         status: alertView.statusFilter,
         operational_scope: alertView.operationalScope,
@@ -1183,6 +1223,9 @@ function AppInner() {
             setSeverityFilter={setSeverityFilter}
             sourceFilter={alertView.sourceFilter}
             setSourceFilter={setSourceFilter}
+            ruleFilter={alertView.ruleFilter}
+            setRuleFilter={setRuleFilter}
+            ruleFilterOptions={alertRuleOptions}
             selectedAlertId={selectedAlertId}
             setSelectedAlertId={setSelectedAlertId}
             getSeverityBadgeStyle={(severity) => ({

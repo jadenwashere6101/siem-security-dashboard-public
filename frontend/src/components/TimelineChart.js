@@ -9,6 +9,7 @@ import {
   CartesianGrid,
 } from "recharts";
 import { formatTimestamp } from "../utils/displayFormatting";
+import LoadingIndicator from "./LoadingIndicator";
 
 function TimelineChart({
   data,
@@ -67,10 +68,11 @@ function TimelineChart({
         </div>
       </div>
       {summaryPendingLabel ? (
-        <div role="status" aria-live="polite" style={summaryStatusStyle}>
-          <span style={summarySpinnerStyle} aria-hidden="true" />
-          <span>{summaryPendingLabel}</span>
-        </div>
+        <LoadingIndicator
+          label={summaryPendingLabel}
+          accentColor="#d9a441"
+          style={summaryStatusStyle}
+        />
       ) : null}
 
       <div className="chart-container" style={{ height: "220px", padding: "20px" }}>
@@ -151,16 +153,6 @@ const summaryStatusStyle = {
   padding: "0 20px 12px 20px",
   color: "#c9d1d9",
   fontSize: "13px",
-};
-
-const summarySpinnerStyle = {
-  width: "14px",
-  height: "14px",
-  borderRadius: "999px",
-  border: "2px solid rgba(201, 209, 217, 0.24)",
-  borderTopColor: "#d9a441",
-  borderRightColor: "transparent",
-  animation: "workspace-spin 0.8s linear infinite",
 };
 
 export default TimelineChart;

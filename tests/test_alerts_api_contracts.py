@@ -978,6 +978,82 @@ def test_get_alerts_exact_source_and_alert_id_filters_do_not_broaden_results(cli
     assert summary_payload["top_source_ips"] == [{"name": "198.51.100.10", "value": 1}]
 
 
+def test_get_alerts_rule_id_filter_composes_with_existing_filters(client, postgres_db):
+    conn, cur = postgres_db
+    cur.execute(
+        """
+        INSERT INTO alerts (
+            alert_type, severity, source_ip, source, source_type, message, status, created_at
+        )
+        VALUES
+            ('failed_login_threshold', 'high', '8.8.4.10', 'bank_app', 'custom', 'rule match', 'open', NOW() - INTERVAL '3 minutes'),
+            ('failed_login_threshold', 'low', '8.8.4.11', 'bank_app', 'custom', 'wrong severity', 'open', NOW() - INTERVAL '2 minutes'),
+            ('port_scan_threshold', 'high', '8.8.4.12', 'bank_app', 'custom', 'wrong rule', 'open', NOW() - INTERVAL '1 minute')
+        """
+    )
+    conn.commit()
+
+    _login_as_super_admin(client)
+    resp = _fetch_alerts_response_for_path(
+        client,
+        conn,
+        "/alerts?rule_id=failed_login_threshold&severity=high&source=bank_app&sort=oldest&limit=1&offset=0",
+    )
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["total"] == 1
+    assert [item["alert_type"] for item in payload["items"]] == ["failed_login_threshold"]
+    assert [item["source_ip"] for item in payload["items"]] == ["8.8.4.10"]
+
+    summary_resp = _fetch_alert_summary_response_for_path(
+        client,
+        conn,
+        "/alerts/summary?rule_id=failed_login_threshold&severity=high&source=bank_app",
+    )
+    assert summary_resp.status_code == 200
+    summary = summary_resp.get_json()
+    assert summary["metrics"]["total_alerts"] == 1
+    assert summary["top_source_ips"] == [{"name": "8.8.4.10", "value": 1}]
+
+
+def test_get_alerts_rejects_malformed_and_unsupported_rule_id(client, postgres_db):
+    conn, _cur = postgres_db
+    conn.commit()
+
+    _login_as_super_admin(client)
+    malformed = _fetch_alerts_response_for_path(client, conn, "/alerts?rule_id=bad%20rule")
+    assert malformed.status_code == 400
+    assert malformed.get_json()["error"] == "invalid rule_id"
+
+    unsupported = _fetch_alerts_response_for_path(client, conn, "/alerts?rule_id=missing_legacy_rule")
+    assert unsupported.status_code == 400
+    assert unsupported.get_json()["error"] == "unsupported rule_id"
+
+
+def test_alert_rule_options_returns_safe_observed_rule_metadata(client, postgres_db):
+    conn, cur = postgres_db
+    cur.execute(
+        """
+        INSERT INTO alerts (alert_type, severity, source_ip, source, source_type, message, status)
+        VALUES
+            ('failed_login_threshold', 'high', '8.8.4.20', 'bank_app', 'custom', 'catalog rule', 'open'),
+            ('legacy_custom_rule', 'medium', '8.8.4.21', 'legacy', 'legacy', 'legacy rule', 'open')
+        """
+    )
+    conn.commit()
+
+    _login_as_super_admin(client)
+    with patch("routes.alerts_events_routes.get_db_connection", return_value=_RouteSafeConnection(conn)):
+        resp = client.get("/alerts/rule-options")
+
+    assert resp.status_code == 200
+    items = resp.get_json()["items"]
+    by_id = {item["rule_id"]: item for item in items}
+    assert by_id["failed_login_threshold"]["label"] == "Failed Login Threshold"
+    assert by_id["legacy_custom_rule"]["label"] == "Legacy Custom Rule"
+    assert "parameter_definitions" not in by_id["failed_login_threshold"]
+
+
 def test_get_alerts_exact_target_filter_matches_primary_and_sample_destination_ips(client, postgres_db):
     conn, cur = postgres_db
     cur.execute(
@@ -1103,3 +1179,73 @@ def test_get_alerts_summary_excludes_configured_synthetic_ips_from_visuals(clien
     payload = summary_resp.get_json()
     assert payload["top_source_ips"] == [{"name": "198.51.100.41", "value": 2}]
     assert all(marker["source_ip"] != "198.51.100.40" for marker in payload["map_markers"])
+
+
+def test_get_alerts_summary_excludes_synthetic_ips_before_aggregation_limit(client, postgres_db, monkeypatch):
+    conn, cur = postgres_db
+    values = []
+    params = []
+    for index in range(6):
+        values.append("(%s, %s, %s, %s, %s, %s, %s, %s, %s)")
+        params.extend(
+            [
+                "synthetic_source",
+                "medium",
+                "9.9.9.9",
+                "pfsense",
+                "firewall",
+                f"synthetic top ip {index}",
+                "open",
+                37.7749,
+                -122.4194,
+            ]
+        )
+    for index, source_ip in enumerate(["8.8.8.1", "8.8.8.2", "8.8.8.3", "8.8.8.4", "8.8.8.5"], start=1):
+        values.append("(%s, %s, %s, %s, %s, %s, %s, %s, %s)")
+        params.extend(
+            [
+                "legit_source",
+                "medium",
+                source_ip,
+                "pfsense",
+                "firewall",
+                f"legit ip {index}",
+                "open",
+                40.7128,
+                -74.0060,
+            ]
+        )
+    cur.execute(
+        f"""
+        INSERT INTO alerts (
+            alert_type, severity, source_ip, source, source_type, message, status, latitude, longitude
+        )
+        VALUES {", ".join(values)}
+        """,
+        params,
+    )
+    conn.commit()
+    monkeypatch.setenv("SIEM_SYNTHETIC_SOURCE_IP_EXCLUSIONS", "9.9.9.9")
+
+    _login_as_super_admin(client)
+    summary_resp = _fetch_alert_summary_response(client, conn)
+
+    assert summary_resp.status_code == 200
+    payload = summary_resp.get_json()
+    assert payload["metrics"]["total_alerts"] == 11
+    assert payload["metrics"]["unique_source_ips"] == 5
+    assert payload["top_source_ips"] == [
+        {"name": "8.8.8.1", "value": 1},
+        {"name": "8.8.8.2", "value": 1},
+        {"name": "8.8.8.3", "value": 1},
+        {"name": "8.8.8.4", "value": 1},
+        {"name": "8.8.8.5", "value": 1},
+    ]
+    assert all(marker["source_ip"] != "9.9.9.9" for marker in payload["map_markers"])
+    assert {marker["source_ip"] for marker in payload["map_markers"]} == {
+        "8.8.8.1",
+        "8.8.8.2",
+        "8.8.8.3",
+        "8.8.8.4",
+        "8.8.8.5",
+    }

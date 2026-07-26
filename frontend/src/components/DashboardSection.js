@@ -24,6 +24,9 @@ function DashboardSection({
   setSeverityFilter,
   sourceFilter,
   setSourceFilter,
+  ruleFilter,
+  setRuleFilter,
+  ruleFilterOptions,
   selectedAlertId,
   setSelectedAlertId,
   getSeverityBadgeStyle,
@@ -149,6 +152,9 @@ function DashboardSection({
           setSeverityFilter={setSeverityFilter}
           sourceFilter={sourceFilter}
           setSourceFilter={setSourceFilter}
+          ruleFilter={ruleFilter}
+          setRuleFilter={setRuleFilter}
+          ruleFilterOptions={ruleFilterOptions}
           selectedAlertId={selectedAlertId}
           setSelectedAlertId={setSelectedAlertId}
           getSeverityBadgeStyle={getSeverityBadgeStyle}

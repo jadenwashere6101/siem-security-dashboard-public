@@ -48,7 +48,17 @@ def _login_super_admin(client):
     assert resp.status_code == 200
 
 
-def _insert_alert(cur, *, source_ip="198.51.100.250", message="Reporting contract alert"):
+def _insert_alert(
+    cur,
+    *,
+    source_ip="198.51.100.250",
+    message="Reporting contract alert",
+    alert_type="failed_login_threshold",
+    severity="high",
+    status="open",
+    source="bank_app",
+    source_type="custom",
+):
     cur.execute(
         """
         INSERT INTO alerts (
@@ -63,7 +73,7 @@ def _insert_alert(cur, *, source_ip="198.51.100.250", message="Reporting contrac
         VALUES (%s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """,
-        ("failed_login_threshold", "high", source_ip, "bank_app", "custom", message, "open"),
+        (alert_type, severity, source_ip, source, source_type, message, status),
     )
     return cur.fetchone()[0]
 
@@ -241,3 +251,53 @@ def test_csv_export_authenticated_returns_csv_with_header_row(client, postgres_d
     body = resp.data.decode("utf-8", errors="replace")
     first_line = body.splitlines()[0]
     assert first_line == "id,alert_type,severity,source_ip,status,created_at,environment,message"
+
+
+def test_filtered_exports_honor_rule_id_and_existing_filters(client, postgres_db):
+    conn, cur = postgres_db
+    _insert_alert(
+        cur,
+        source_ip="8.8.4.40",
+        message="filtered export match",
+        alert_type="failed_login_threshold",
+        severity="high",
+        status="open",
+        source="bank_app",
+    )
+    _insert_alert(
+        cur,
+        source_ip="8.8.4.41",
+        message="filtered export wrong rule",
+        alert_type="port_scan_threshold",
+        severity="high",
+        status="open",
+        source="bank_app",
+    )
+    _insert_alert(
+        cur,
+        source_ip="8.8.4.42",
+        message="filtered export wrong severity",
+        alert_type="failed_login_threshold",
+        severity="low",
+        status="open",
+        source="bank_app",
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    query = "rule_id=failed_login_threshold&severity=high&source=bank_app&search=filtered%20export"
+    with _patched_app_db(conn):
+        txt_resp = client.get(f"/alerts/report?{query}")
+    assert txt_resp.status_code == 200
+    txt_body = txt_resp.data.decode("utf-8", errors="replace")
+    assert "filtered export match" in txt_body
+    assert "filtered export wrong rule" not in txt_body
+    assert "filtered export wrong severity" not in txt_body
+
+    with _patched_route_db_only(conn):
+        csv_resp = client.get(f"/alerts/export/csv?{query}")
+    assert csv_resp.status_code == 200
+    csv_body = csv_resp.data.decode("utf-8", errors="replace")
+    assert "filtered export match" in csv_body
+    assert "filtered export wrong rule" not in csv_body
+    assert "filtered export wrong severity" not in csv_body

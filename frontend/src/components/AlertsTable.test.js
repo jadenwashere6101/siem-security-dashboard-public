@@ -72,6 +72,11 @@ function AlertsTableHarness({ initialAlerts, onSetAlerts }) {
       setSeverityFilter={() => {}}
       sourceFilter="all"
       setSourceFilter={() => {}}
+      ruleFilter="all"
+      setRuleFilter={() => {}}
+      ruleFilterOptions={[
+        { rule_id: "failed_login_threshold", label: "Failed Login Threshold" },
+      ]}
       statusFilter="all"
       setStatusFilter={() => {}}
       selectedAlertId={selectedAlertId}
@@ -110,6 +115,70 @@ function AlertsTableHarness({ initialAlerts, onSetAlerts }) {
     />
   );
 }
+
+test("exports include rule filter and exact alert filters", () => {
+  render(
+    <AlertsTable
+      alerts={[baseAlert]}
+      canTakeAlertActions={true}
+      searchTerm="failed"
+      setSearchTerm={() => {}}
+      sortOption="newest"
+      setSortOption={() => {}}
+      severityFilter="high"
+      setSeverityFilter={() => {}}
+      sourceFilter="bank_app"
+      setSourceFilter={() => {}}
+      ruleFilter="failed_login_threshold"
+      setRuleFilter={() => {}}
+      ruleFilterOptions={[
+        { rule_id: "failed_login_threshold", label: "Failed Login Threshold" },
+      ]}
+      statusFilter="open"
+      setStatusFilter={() => {}}
+      selectedAlertId={null}
+      setSelectedAlertId={() => {}}
+      getSeverityBadgeStyle={() => ({})}
+      cardStyle={styles}
+      cardHeaderStyle={styles}
+      cardTitleStyle={styles}
+      cardSubtitleStyle={styles}
+      exactSourceIp="8.8.8.8"
+      exactTargetIp="10.0.0.5"
+      exactAlertId={101}
+      filterWrapperStyle={styles}
+      filterLabelStyle={styles}
+      selectStyle={styles}
+      emptyStateStyle={styles}
+      emptyStateTextStyle={styles}
+      tableWrapperStyle={styles}
+      tableStyle={styles}
+      headerCellStyle={styles}
+      bodyCellStyle={styles}
+      onUpdateStatus={() => ({ ok: true })}
+      monoCellStyle={styles}
+      tableRowStyle={styles}
+      expandedCellStyle={styles}
+      expandedContentStyle={styles}
+      expandedLabelStyle={styles}
+      expandedTextStyle={styles}
+      totalAlerts={1}
+      pageOffset={0}
+      pageLimit={50}
+      pageEnd={1}
+    />
+  );
+
+  const csvHref = screen.getByText("Download Filtered Alerts (CSV)").getAttribute("href");
+  expect(csvHref).toContain("search=failed");
+  expect(csvHref).toContain("severity=high");
+  expect(csvHref).toContain("source=bank_app");
+  expect(csvHref).toContain("rule_id=failed_login_threshold");
+  expect(csvHref).toContain("status=open");
+  expect(csvHref).toContain("exact_source_ip=8.8.8.8");
+  expect(csvHref).toContain("exact_target_ip=10.0.0.5");
+  expect(csvHref).toContain("alert_id=101");
+});
 
 function renderAlertsTable(alerts, setAlerts) {
   return render(

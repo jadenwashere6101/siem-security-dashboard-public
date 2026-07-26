@@ -56,6 +56,9 @@ function AlertsTable({
   setSeverityFilter,
   sourceFilter,
   setSourceFilter,
+  ruleFilter,
+  setRuleFilter,
+  ruleFilterOptions = [],
   statusFilter,
   setStatusFilter,
   selectedAlertId,
@@ -388,11 +391,26 @@ function AlertsTable({
   if (severityFilter && severityFilter !== "all") {
     reportQuery.set("severity", severityFilter);
   }
+  if (sourceFilter && sourceFilter !== "all") {
+    reportQuery.set("source", sourceFilter);
+  }
+  if (ruleFilter && ruleFilter !== "all") {
+    reportQuery.set("rule_id", ruleFilter);
+  }
   if (statusFilter && statusFilter !== "all") {
     reportQuery.set("status", statusFilter);
   }
   if (operationalScope && operationalScope !== "all_history") {
     reportQuery.set("operational_scope", operationalScope);
+  }
+  if (exactSourceIp) {
+    reportQuery.set("exact_source_ip", exactSourceIp);
+  }
+  if (exactTargetIp) {
+    reportQuery.set("exact_target_ip", exactTargetIp);
+  }
+  if (exactAlertId !== undefined && exactAlertId !== null && exactAlertId !== "") {
+    reportQuery.set("alert_id", String(exactAlertId));
   }
   const multiAlertReportHref = buildSiemPath(
     `/alerts/report${reportQuery.toString() ? `?${reportQuery.toString()}` : ""}`
@@ -564,6 +582,9 @@ function AlertsTable({
           setSeverityFilter={setSeverityFilter}
           sourceFilter={sourceFilter}
           setSourceFilter={setSourceFilter}
+          ruleFilter={ruleFilter}
+          setRuleFilter={setRuleFilter}
+          ruleFilterOptions={ruleFilterOptions}
           statusFilter={statusFilter}
           setStatusFilter={setStatusFilter}
           multiAlertCsvExportHref={multiAlertCsvExportHref}

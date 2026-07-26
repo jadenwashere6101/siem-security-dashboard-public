@@ -1,5 +1,6 @@
 import React from "react";
 import OperationalScopeToggle from "./OperationalScopeToggle";
+import LoadingIndicator from "./LoadingIndicator";
 import { SOURCE_METADATA } from "../utils/sourceMetadata";
 
 function AlertsToolbar({
@@ -15,6 +16,9 @@ function AlertsToolbar({
   setSeverityFilter,
   sourceFilter,
   setSourceFilter,
+  ruleFilter = "all",
+  setRuleFilter = () => {},
+  ruleFilterOptions = [],
   statusFilter,
   setStatusFilter,
   exactSourceIp,
@@ -66,10 +70,7 @@ function AlertsToolbar({
           </div>
         ) : null}
         {alertsPendingLabel ? (
-          <div role="status" aria-live="polite" style={alertsStatusStyle}>
-            <span style={alertsSpinnerStyle} aria-hidden="true" />
-            <span>{alertsPendingLabel}</span>
-          </div>
+          <LoadingIndicator label={alertsPendingLabel} style={alertsStatusStyle} />
         ) : null}
 
         <details style={exportMenuStyle}>
@@ -180,6 +181,26 @@ function AlertsToolbar({
           <option value="all">All Sources</option>
           {SOURCE_METADATA.map((item) => (
             <option key={item.source} value={item.source}>{item.source}</option>
+          ))}
+        </select>
+      </div>
+
+      <div style={filterWrapperStyle}>
+        <label htmlFor="ruleFilter" style={filterLabelStyle}>
+          Detection Rule
+        </label>
+        <select
+          id="ruleFilter"
+          value={ruleFilter}
+          onChange={(e) => setRuleFilter(e.target.value)}
+          disabled={alertsBusy}
+          style={selectStyle}
+        >
+          <option value="all">All Rules</option>
+          {ruleFilterOptions.map((item) => (
+            <option key={item.rule_id} value={item.rule_id}>
+              {item.label || item.rule_id}
+            </option>
           ))}
         </select>
       </div>
@@ -296,15 +317,6 @@ const alertsStatusStyle = {
   marginTop: "10px",
   color: "#c9d1d9",
   fontSize: "13px",
-};
-const alertsSpinnerStyle = {
-  width: "14px",
-  height: "14px",
-  borderRadius: "999px",
-  border: "2px solid rgba(201, 209, 217, 0.24)",
-  borderTopColor: "#58a6ff",
-  borderRightColor: "transparent",
-  animation: "workspace-spin 0.8s linear infinite",
 };
 const resetButtonStyle = {
   minWidth: "160px",

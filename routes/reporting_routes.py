@@ -8,8 +8,17 @@ from flask_login import current_user, login_required
 from core.audit_helpers import log_audit_event
 from core.auth import analyst_or_super_admin_required
 from core.db import get_db_connection
+from core.pfsense_operational_baseline import normalize_operational_scope
 from helpers.pdf_helpers import build_pdf_report_response
-from helpers.query_helpers import fetch_alert_csv_rows, fetch_alert_rows, fetch_response_logs_by_alert_id
+from helpers.query_helpers import (
+    build_alert_filter_scope_label,
+    fetch_alert_csv_rows,
+    fetch_alert_rows,
+    fetch_response_logs_by_alert_id,
+    normalize_ip_filter_value,
+    normalize_rule_id_filter,
+    validate_rule_id_filter,
+)
 from helpers.reporting_helpers import (
     build_alert_report_sections,
     build_report_header,
@@ -18,6 +27,46 @@ from helpers.reporting_helpers import (
 )
 
 reporting_bp = Blueprint("reporting", __name__)
+
+
+def _parse_filtered_export_args():
+    try:
+        exact_source_ip = normalize_ip_filter_value(request.args.get("exact_source_ip"))
+        exact_target_ip = normalize_ip_filter_value(request.args.get("exact_target_ip"))
+        rule_id = normalize_rule_id_filter(request.args.get("rule_id"))
+        operational_scope = normalize_operational_scope(request.args.get("operational_scope"))
+    except ValueError as exc:
+        return None, str(exc)
+
+    alert_id = request.args.get("alert_id")
+    if alert_id not in (None, ""):
+        try:
+            alert_id = int(alert_id)
+        except ValueError:
+            return None, "invalid alert_id"
+        if alert_id < 0:
+            return None, "invalid alert_id"
+    else:
+        alert_id = None
+
+    return {
+        "search": request.args.get("search", ""),
+        "severity": request.args.get("severity", ""),
+        "status": request.args.get("status", ""),
+        "source": request.args.get("source", ""),
+        "operational_scope": operational_scope,
+        "exact_source_ip": exact_source_ip,
+        "exact_target_ip": exact_target_ip,
+        "alert_id": alert_id,
+        "rule_id": rule_id,
+    }, None
+
+
+def _validate_filtered_export_args(cur, filters):
+    rule_error = validate_rule_id_filter(cur, filters.get("rule_id"))
+    if rule_error:
+        return rule_error
+    return None
 
 
 @reporting_bp.route("/alerts/<int:alert_id>/report", methods=["GET"])
@@ -137,11 +186,12 @@ def export_multi_alert_report():
         conn = get_db_connection()
         cur = conn.cursor()
 
-        filters = {
-            "search": request.args.get("search", ""),
-            "severity": request.args.get("severity", ""),
-            "status": request.args.get("status", ""),
-        }
+        filters, filter_error = _parse_filtered_export_args()
+        if filter_error:
+            return jsonify({"error": filter_error}), 400
+        filter_error = _validate_filtered_export_args(cur, filters)
+        if filter_error:
+            return jsonify({"error": filter_error}), 400
         alert_rows = fetch_alert_rows(cur, filters)
         alert_ids = [row[0] for row in alert_rows]
         response_logs_map = fetch_response_logs_by_alert_id(cur, alert_ids)
@@ -153,14 +203,7 @@ def export_multi_alert_report():
             if severity in severity_counts:
                 severity_counts[severity] += 1
 
-        scope_parts = ["Filtered Alert Export"]
-        if filters["search"]:
-            scope_parts.append(f'search="{filters["search"]}"')
-        if filters["severity"] and filters["severity"].lower() != "all":
-            scope_parts.append(f'severity={filters["severity"]}')
-        if filters["status"] and filters["status"].lower() != "all":
-            scope_parts.append(f'status={filters["status"]}')
-        scope_text = " | ".join(scope_parts)
+        scope_text = build_alert_filter_scope_label(filters)
 
         lines = build_report_header(generated_at, scope_text)
         lines.extend([
@@ -228,11 +271,12 @@ def export_alerts_csv():
         conn = get_db_connection()
         cur = conn.cursor()
 
-        filters = {
-            "search": request.args.get("search", ""),
-            "severity": request.args.get("severity", ""),
-            "status": request.args.get("status", ""),
-        }
+        filters, filter_error = _parse_filtered_export_args()
+        if filter_error:
+            return jsonify({"error": filter_error}), 400
+        filter_error = _validate_filtered_export_args(cur, filters)
+        if filter_error:
+            return jsonify({"error": filter_error}), 400
         alert_rows = fetch_alert_csv_rows(cur, filters)
 
         string_io = StringIO()
@@ -279,11 +323,12 @@ def export_multi_alert_report_pdf():
         conn = get_db_connection()
         cur = conn.cursor()
 
-        filters = {
-            "search": request.args.get("search", ""),
-            "severity": request.args.get("severity", ""),
-            "status": request.args.get("status", ""),
-        }
+        filters, filter_error = _parse_filtered_export_args()
+        if filter_error:
+            return jsonify({"error": filter_error}), 400
+        filter_error = _validate_filtered_export_args(cur, filters)
+        if filter_error:
+            return jsonify({"error": filter_error}), 400
         alert_rows = fetch_alert_rows(cur, filters)
         alert_ids = [row[0] for row in alert_rows]
         response_logs_map = fetch_response_logs_by_alert_id(cur, alert_ids)
@@ -295,14 +340,7 @@ def export_multi_alert_report_pdf():
             if severity in severity_counts:
                 severity_counts[severity] += 1
 
-        scope_parts = ["Filtered Alert Export"]
-        if filters["search"]:
-            scope_parts.append(f'search="{filters["search"]}"')
-        if filters["severity"] and filters["severity"].lower() != "all":
-            scope_parts.append(f'severity={filters["severity"]}')
-        if filters["status"] and filters["status"].lower() != "all":
-            scope_parts.append(f'status={filters["status"]}')
-        scope_text = " | ".join(scope_parts)
+        scope_text = build_alert_filter_scope_label(filters)
 
         summary_note = (
             "The report includes all alerts matching the current dashboard filters at the time of export."
