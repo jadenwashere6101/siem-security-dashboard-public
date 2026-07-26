@@ -69,8 +69,9 @@ SYNTHETIC_PROVENANCE_VALUES = frozenset(
 )
 
 SYNTHETIC_TEXT_EVIDENCE_REGEX = (
-    r"(synthetic|simulated|simulator|demo|smoke|seeded?|manual[ _-]?test|"
-    r"fabricated|test[ _-]?alert|test[ _-]?data|testuser[0-9]+|user[0-9]{1,3})"
+    r"(synthetic|simulated|simulation|simulator|demo|smoke|seeded?|manual[ _-]?test|"
+    r"fabricated|test[ _-]?(alert|data|user|run|batch|note)|this is a test|"
+    r"azure[ _-]?smoke|dummy|fake|sample|testuser[0-9]+|user[0-9]{1,3})"
 )
 
 
@@ -138,62 +139,23 @@ def _context_provenance_sql(context_column: str) -> str:
     """
 
 
-def build_synthetic_context_value_sql(context_column: str) -> str:
-    context_column = _sql_identifier(context_column)
+def build_synthetic_json_value_sql(json_column: str) -> str:
+    json_column = _sql_identifier(json_column)
     return f"""
         LOWER(
             COALESCE(
-                NULLIF({context_column}->>'data_provenance', ''),
-                NULLIF({context_column}->>'telemetry_provenance', ''),
-                NULLIF({context_column}->>'provenance', ''),
-                NULLIF({context_column}#>>'{{provenance,classification}}', ''),
-                NULLIF({context_column}#>>'{{provenance,source}}', ''),
-                NULLIF({context_column}#>>'{{provenance,origin}}', ''),
-                NULLIF({context_column}#>>'{{metadata,data_provenance}}', ''),
-                NULLIF({context_column}#>>'{{metadata,provenance}}', ''),
+                NULLIF({json_column}->>'data_provenance', ''),
+                NULLIF({json_column}->>'telemetry_provenance', ''),
+                NULLIF({json_column}->>'provenance', ''),
+                NULLIF({json_column}#>>'{{provenance,classification}}', ''),
+                NULLIF({json_column}#>>'{{provenance,source}}', ''),
+                NULLIF({json_column}#>>'{{provenance,origin}}', ''),
+                NULLIF({json_column}#>>'{{metadata,data_provenance}}', ''),
+                NULLIF({json_column}#>>'{{metadata,provenance}}', ''),
                 ''
             )
         )
     """
-
-
-def build_legacy_synthetic_alert_evidence_sql(
-    *,
-    table_alias: str = "",
-) -> tuple[str, list]:
-    prefix = f"{_sql_identifier(table_alias)}." if table_alias else ""
-    context_value_sql = build_synthetic_context_value_sql(f"{prefix}context")
-    synthetic_values = sorted(SYNTHETIC_PROVENANCE_VALUES)
-    cleanup_ips = sorted(CONFIRMED_SYNTHETIC_CLEANUP_SOURCE_IPS)
-    alert_ids = sorted(CONFIRMED_LEGACY_SYNTHETIC_ALERT_IDS)
-    return (
-        f"""
-        (
-            {prefix}id = ANY(%s)
-            OR (
-                host({prefix}source_ip) = ANY(%s)
-                AND (
-                    LOWER(COALESCE({prefix}source, '')) = ANY(%s)
-                    OR LOWER(COALESCE({prefix}source_type, '')) = ANY(%s)
-                    OR {context_value_sql} = ANY(%s)
-                    OR COALESCE({prefix}message, '') ~* %s
-                    OR COALESCE({prefix}alert_type, '') ~* %s
-                    OR COALESCE({prefix}context::text, '') ~* %s
-                )
-            )
-        )
-        """,
-        [
-            alert_ids,
-            cleanup_ips,
-            synthetic_values,
-            synthetic_values,
-            synthetic_values,
-            SYNTHETIC_TEXT_EVIDENCE_REGEX,
-            SYNTHETIC_TEXT_EVIDENCE_REGEX,
-            SYNTHETIC_TEXT_EVIDENCE_REGEX,
-        ],
-    )
 
 
 def build_operational_source_ip_exclusion_sql(

@@ -34,11 +34,14 @@ def _insert_alert(
     source="bank_app",
     source_type="custom",
     context="'{}'::jsonb",
+    created_at="NOW()",
 ):
     cur.execute(
         f"""
-        INSERT INTO alerts (id, alert_type, severity, source_ip, source, source_type, message, status, context)
-        VALUES (%s, %s, 'medium', %s, %s, %s, %s, 'open', {context})
+        INSERT INTO alerts (
+            id, alert_type, severity, source_ip, source, source_type, message, status, context, created_at
+        )
+        VALUES (%s, %s, 'medium', %s, %s, %s, %s, 'open', {context}, {created_at})
         """,
         (alert_id, alert_type, source_ip, source, source_type, message),
     )
@@ -60,6 +63,17 @@ def _insert_event(cur, source_ip, *, source, source_type, app_name, environment,
 
 def test_cleanup_report_selects_reviewed_synthetic_alerts_and_preserves_production_alerts(postgres_db):
     conn, cur = postgres_db
+    for source_ip in REVIEWED_SYNTHETIC_IPS:
+        _insert_event(
+            cur,
+            source_ip,
+            source="demo",
+            source_type="custom",
+            app_name="simulator",
+            environment="dev",
+            message="Reviewed synthetic event batch",
+            raw_payload='{"data_provenance":"synthetic"}',
+        )
     selected_ids = []
     for index in range(44):
         source_ip = REVIEWED_SYNTHETIC_IPS[index % len(REVIEWED_SYNTHETIC_IPS)]
@@ -95,6 +109,7 @@ def test_cleanup_report_selects_reviewed_synthetic_alerts_and_preserves_producti
         alert_type="pfsense_firewall_repeated_deny",
         source="pfsense",
         source_type="firewall",
+        created_at="NOW() - INTERVAL '5 days'",
     )
     _insert_alert(
         cur,
@@ -102,6 +117,7 @@ def test_cleanup_report_selects_reviewed_synthetic_alerts_and_preserves_producti
         "8.8.8.8",
         "legitimate bank-app traffic",
         alert_type="failed_login_threshold",
+        created_at="NOW() - INTERVAL '5 days'",
     )
     _insert_alert(
         cur,
@@ -117,6 +133,7 @@ def test_cleanup_report_selects_reviewed_synthetic_alerts_and_preserves_producti
     assert {row["id"] for row in report["selected_alerts"]} == set(selected_ids)
     assert all(row["id"] not in {9001, 9002, 9003} for row in report["selected_alerts"])
     assert report["would_delete"]["alerts"] == 44
+    assert report["would_delete"]["events"] == len(REVIEWED_SYNTHETIC_IPS)
     assert report["refusal_reasons"] == []
 
 
@@ -163,6 +180,16 @@ def test_cleanup_report_selects_synthetic_events_without_capturing_real_one_dot_
 def test_cleanup_report_allows_benign_monitor_only_dependencies(postgres_db):
     conn, cur = postgres_db
     _insert_alert(cur, 16, "103.103.103.103", "confirmed legacy synthetic")
+    _insert_event(
+        cur,
+        "103.103.103.103",
+        source="simulator",
+        source_type="simulator",
+        app_name="simulator",
+        environment="dev",
+        message="Simulated failed login",
+        raw_payload='{"data_provenance":"synthetic"}',
+    )
     cur.execute(
         """
         INSERT INTO response_actions_queue (idempotency_key, alert_id, source_ip, action, status)
@@ -188,9 +215,57 @@ def test_cleanup_report_allows_benign_monitor_only_dependencies(postgres_db):
     assert report["refusal_reasons"] == []
 
 
+def test_cleanup_report_allows_reviewed_synthetic_note_and_simulated_escalation(postgres_db):
+    conn, cur = postgres_db
+    _insert_alert(cur, 16, "103.103.103.103", "confirmed legacy synthetic")
+    _insert_event(
+        cur,
+        "103.103.103.103",
+        source="simulator",
+        source_type="simulator",
+        app_name="simulator",
+        environment="dev",
+        message="Simulated failed login",
+        raw_payload='{"data_provenance":"synthetic"}',
+    )
+    cur.execute(
+        """
+        INSERT INTO alert_notes (alert_id, author, note_text)
+        VALUES (16, 'admin', 'this is a test note from synthetic cleanup verification')
+        """
+    )
+    cur.execute(
+        """
+        INSERT INTO response_actions_log (alert_id, source_ip, action, status, details)
+        VALUES (16, '103.103.103.103', 'escalate', 'success', 'simulated escalation test artifact')
+        """
+    )
+    conn.commit()
+
+    report = build_cleanup_report(conn, alert_ids=(16,), source_ips=("103.103.103.103",))
+
+    assert report["dependency_counts"]["alert_notes"] == 1
+    assert report["dependency_counts"]["response_actions_log"] == 1
+    assert report["benign_monitor_dependency_counts"] == {
+        "alert_notes": 1,
+        "response_actions_log": 1,
+    }
+    assert report["refusal_reasons"] == []
+
+
 def test_cleanup_report_blocks_unexpected_dependencies(postgres_db):
     conn, cur = postgres_db
     _insert_alert(cur, 16, "103.103.103.103", "confirmed legacy synthetic")
+    _insert_event(
+        cur,
+        "103.103.103.103",
+        source="simulator",
+        source_type="simulator",
+        app_name="simulator",
+        environment="dev",
+        message="Simulated failed login",
+        raw_payload='{"data_provenance":"synthetic"}',
+    )
     cur.execute(
         """
         INSERT INTO alert_notes (alert_id, author, note_text)
@@ -223,6 +298,12 @@ def test_cleanup_dry_run_confirmation_backup_and_execution_remove_no_orphaned_ev
         message="Simulated failed login",
         raw_payload='{"data_provenance":"synthetic"}',
     )
+    cur.execute(
+        """
+        INSERT INTO response_actions_queue (idempotency_key, alert_id, source_ip, action, status)
+        VALUES ('execution-monitor-16', 16, '103.103.103.103', 'monitor', 'pending')
+        """
+    )
     conn.commit()
 
     dry_run = execute_cleanup(conn)
@@ -244,4 +325,15 @@ def test_cleanup_dry_run_confirmation_backup_and_execution_remove_no_orphaned_ev
     cur.execute("SELECT COUNT(*) FROM alerts WHERE id = 16")
     assert cur.fetchone()[0] == 0
     cur.execute("SELECT COUNT(*) FROM events WHERE id = %s", (event_id,))
+    assert cur.fetchone()[0] == 0
+    cur.execute("SELECT alert_id FROM response_actions_queue WHERE idempotency_key = 'execution-monitor-16'")
+    assert cur.fetchone()[0] is None
+    cur.execute(
+        """
+        SELECT COUNT(*)
+        FROM alerts a
+        WHERE a.source_ip = '103.103.103.103'::inet
+          AND a.created_at >= NOW() - INTERVAL '24 hours'
+        """
+    )
     assert cur.fetchone()[0] == 0

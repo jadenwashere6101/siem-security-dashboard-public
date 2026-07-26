@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -13,7 +14,7 @@ from core.synthetic_data_policy import (
     CONFIRMED_SYNTHETIC_CLEANUP_SOURCE_IPS,
     SYNTHETIC_PROVENANCE_VALUES,
     SYNTHETIC_TEXT_EVIDENCE_REGEX,
-    build_legacy_synthetic_alert_evidence_sql,
+    build_synthetic_json_value_sql,
     normalize_confirmed_synthetic_alert_ids,
 )
 
@@ -68,79 +69,87 @@ def _fetch_dicts(cur, query: str, params: tuple) -> list[dict[str, Any]]:
     return _rows_as_dicts(cur)
 
 
-def fetch_confirmed_synthetic_alert_rows(
+def _synthetic_event_cte() -> tuple[str, list]:
+    synthetic_values = sorted(SYNTHETIC_PROVENANCE_VALUES)
+    raw_payload_value_sql = build_synthetic_json_value_sql("e.raw_payload")
+    return (
+        f"""
+        WITH synthetic_events AS (
+            SELECT e.*
+            FROM events e
+            WHERE host(e.source_ip) = ANY(%s)
+              AND (
+                  LOWER(COALESCE(e.source, '')) = ANY(%s)
+                  OR LOWER(COALESCE(e.source_type, '')) = ANY(%s)
+                  OR LOWER(COALESCE(e.app_name, '')) = ANY(%s)
+                  OR LOWER(COALESCE(e.environment, '')) = ANY(%s)
+                  OR {raw_payload_value_sql} = ANY(%s)
+                  OR COALESCE(e.message, '') ~* %s
+                  OR COALESCE(e.raw_payload::text, '') ~* %s
+              )
+        )
+        """,
+        [
+            synthetic_values,
+            synthetic_values,
+            synthetic_values,
+            synthetic_values,
+            synthetic_values,
+            SYNTHETIC_TEXT_EVIDENCE_REGEX,
+            SYNTHETIC_TEXT_EVIDENCE_REGEX,
+        ],
+    )
+
+
+def fetch_synthetic_event_rows(
+    cur,
+    *,
+    source_ips: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    cte_sql, cte_params = _synthetic_event_cte()
+    return _fetch_dicts(
+        cur,
+        f"""
+        {cte_sql}
+        SELECT *
+        FROM synthetic_events
+        ORDER BY id
+        """,
+        (sorted(source_ips), *cte_params),
+    )
+
+
+def fetch_alert_rows_for_synthetic_events(
     cur,
     *,
     alert_ids: tuple[int, ...],
     source_ips: tuple[str, ...],
 ) -> list[dict[str, Any]]:
-    evidence_sql, evidence_params = build_legacy_synthetic_alert_evidence_sql()
+    cte_sql, cte_params = _synthetic_event_cte()
     return _fetch_dicts(
         cur,
         f"""
-        SELECT *
-        FROM alerts
-        WHERE {evidence_sql}
-          AND (
-              %s::text[] = ARRAY[]::text[]
-              OR host(source_ip) = ANY(%s)
-              OR id = ANY(%s)
-          )
-        ORDER BY id
+        {cte_sql},
+        synthetic_event_batches AS (
+            SELECT
+                host(source_ip) AS source_ip_key,
+                MIN(created_at) AS first_seen,
+                MAX(created_at) AS last_seen
+            FROM synthetic_events
+            GROUP BY host(source_ip)
+        )
+        SELECT DISTINCT a.*
+        FROM alerts a
+        JOIN synthetic_event_batches b
+          ON b.source_ip_key = host(a.source_ip)
+        WHERE a.id = ANY(%s)
+           OR (
+               a.created_at >= b.first_seen - INTERVAL '24 hours'
+               AND a.created_at <= b.last_seen + INTERVAL '24 hours'
+           )
+        ORDER BY a.id
         """,
-        (
-            *evidence_params,
-            list(source_ips),
-            list(source_ips),
-            list(alert_ids),
-        ),
-    )
-
-
-def fetch_associated_synthetic_event_rows(
-    cur,
-    *,
-    source_ips: tuple[str, ...],
-) -> list[dict[str, Any]]:
-    synthetic_values = sorted(SYNTHETIC_PROVENANCE_VALUES)
-    cleanup_ips = sorted(source_ips)
-    return _fetch_dicts(
-        cur,
-        """
-        SELECT *
-        FROM events
-        WHERE host(source_ip) = ANY(%s)
-          AND (
-              LOWER(COALESCE(source, '')) = ANY(%s)
-              OR LOWER(COALESCE(source_type, '')) = ANY(%s)
-              OR LOWER(COALESCE(app_name, '')) = ANY(%s)
-              OR LOWER(COALESCE(environment, '')) = ANY(%s)
-              OR LOWER(COALESCE(raw_payload->>'data_provenance', '')) = ANY(%s)
-              OR LOWER(COALESCE(raw_payload->>'telemetry_provenance', '')) = ANY(%s)
-              OR LOWER(COALESCE(raw_payload->>'provenance', '')) = ANY(%s)
-              OR LOWER(COALESCE(raw_payload#>>'{provenance,classification}', '')) = ANY(%s)
-              OR LOWER(COALESCE(raw_payload#>>'{provenance,source}', '')) = ANY(%s)
-              OR LOWER(COALESCE(raw_payload#>>'{provenance,origin}', '')) = ANY(%s)
-              OR COALESCE(message, '') ~* %s
-              OR COALESCE(raw_payload::text, '') ~* %s
-          )
-        ORDER BY id
-        """,
-        (
-            cleanup_ips,
-            synthetic_values,
-            synthetic_values,
-            synthetic_values,
-            synthetic_values,
-            synthetic_values,
-            synthetic_values,
-            synthetic_values,
-            synthetic_values,
-            synthetic_values,
-            synthetic_values,
-            SYNTHETIC_TEXT_EVIDENCE_REGEX,
-            SYNTHETIC_TEXT_EVIDENCE_REGEX,
-        ),
+        (sorted(source_ips), *cte_params, list(alert_ids)),
     )
 
 
@@ -152,14 +161,25 @@ def fetch_dependency_report(cur, alert_ids: tuple[int, ...]) -> dict[str, list[d
 
 
 def _is_benign_monitor_dependency(table: str, row: dict[str, Any]) -> bool:
+    joined_text = " ".join(str(value or "") for value in row.values())
+    has_synthetic_text = bool(re.search(SYNTHETIC_TEXT_EVIDENCE_REGEX, joined_text, re.I))
+    if table == "alert_notes":
+        return has_synthetic_text
     if table not in BENIGN_MONITOR_DEPENDENCY_TABLES:
         return False
     action = str(row.get("action") or row.get("selected_action") or row.get("requested_action") or "").lower()
-    if action != "monitor":
+    if action not in {"monitor", "escalate", "escalation", "simulated_escalation"}:
+        return False
+    if action != "monitor" and not has_synthetic_text:
         return False
     if table == "soar_response_outcome_events":
         return str(row.get("execution_mode") or "").lower() in {"observed", "simulation", "tracking_only", "read_only"}
     return True
+
+
+def _find_unpaired_selected_alerts(alerts: list[dict[str, Any]], events: list[dict[str, Any]]) -> list[int]:
+    event_source_ips = {str(row["source_ip"]) for row in events}
+    return [int(row["id"]) for row in alerts if str(row["source_ip"]) not in event_source_ips]
 
 
 def _unexpected_dependency_counts(dependencies: dict[str, list[dict[str, Any]]]) -> dict[str, int]:
@@ -180,8 +200,8 @@ def build_cleanup_report(
     alert_ids = normalize_confirmed_synthetic_alert_ids(alert_ids)
     source_ips = tuple(sorted(source_ips or CONFIRMED_SYNTHETIC_CLEANUP_SOURCE_IPS))
     with conn.cursor() as cur:
-        alerts = fetch_confirmed_synthetic_alert_rows(cur, alert_ids=alert_ids, source_ips=source_ips)
-        events = fetch_associated_synthetic_event_rows(cur, source_ips=source_ips)
+        events = fetch_synthetic_event_rows(cur, source_ips=source_ips)
+        alerts = fetch_alert_rows_for_synthetic_events(cur, alert_ids=alert_ids, source_ips=source_ips)
         dependencies = fetch_dependency_report(cur, tuple(row["id"] for row in alerts))
         found_alert_ids = {int(row["id"]) for row in alerts}
         dependency_counts = {table: len(rows) for table, rows in dependencies.items()}
@@ -194,6 +214,11 @@ def build_cleanup_report(
         }
         refusal_reasons = []
         missing_alert_ids = [alert_id for alert_id in alert_ids if alert_id not in found_alert_ids]
+        unpaired_alert_ids = _find_unpaired_selected_alerts(alerts, events)
+        if alerts and not events:
+            refusal_reasons.append({"code": "selected_alerts_without_synthetic_events"})
+        if unpaired_alert_ids:
+            refusal_reasons.append({"code": "selected_alerts_without_matching_events", "alert_ids": unpaired_alert_ids})
         unexpected_dependencies = _unexpected_dependency_counts(dependencies)
         if unexpected_dependencies:
             refusal_reasons.append(
