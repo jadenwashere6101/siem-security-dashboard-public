@@ -214,6 +214,12 @@ def fetch_response_logs_by_alert_id(cur, alert_ids):
 
 
 def fetch_alert_csv_rows(cur, filters=None):
+    query, params = build_alert_csv_query(filters)
+    cur.execute(query, tuple(params))
+    return cur.fetchall()
+
+
+def build_alert_csv_query(filters=None):
     filters = filters or {}
     clauses, params = build_alert_filter_sql(
         filters,
@@ -222,27 +228,53 @@ def fetch_alert_csv_rows(cur, filters=None):
     )
 
     query = """
-        SELECT
-            a.id,
-            a.alert_type,
-            a.severity,
-            a.source_ip,
-            a.status,
-            a.created_at,
-            a.message,
-            latest_event.environment
-        FROM alerts a
-        LEFT JOIN LATERAL (
-            SELECT e.environment
-            FROM events e
-            WHERE e.source_ip = a.source_ip
-            ORDER BY e.created_at DESC
-            LIMIT 1
-        ) AS latest_event ON TRUE
+        WITH filtered_alerts AS (
+            SELECT
+                a.id,
+                a.alert_type,
+                a.severity,
+                a.source_ip,
+                a.status,
+                a.created_at,
+                a.message
+            FROM alerts a
     """
 
     query += build_alerts_where_clause(clauses)
 
-    query += " ORDER BY a.created_at DESC"
-    cur.execute(query, tuple(params))
-    return cur.fetchall()
+    query += """
+        ),
+        distinct_alert_sources AS (
+            SELECT DISTINCT source_ip
+            FROM filtered_alerts
+            WHERE source_ip IS NOT NULL
+        ),
+        latest_event_environment AS (
+            SELECT
+                das.source_ip,
+                latest_event.environment
+            FROM distinct_alert_sources das
+            LEFT JOIN LATERAL (
+                SELECT e.environment
+                FROM events e
+                WHERE e.source_ip = das.source_ip
+                ORDER BY e.created_at DESC, e.id DESC
+                LIMIT 1
+            ) AS latest_event ON TRUE
+        )
+        SELECT
+            fa.id,
+            fa.alert_type,
+            fa.severity,
+            fa.source_ip,
+            fa.status,
+            fa.created_at,
+            fa.message,
+            latest_event_environment.environment
+        FROM filtered_alerts fa
+        LEFT JOIN latest_event_environment
+            ON latest_event_environment.source_ip = fa.source_ip
+    """
+
+    query += " ORDER BY fa.created_at DESC"
+    return query, params

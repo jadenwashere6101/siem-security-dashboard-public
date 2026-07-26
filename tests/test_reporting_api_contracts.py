@@ -1,6 +1,8 @@
 from contextlib import contextmanager
 from unittest.mock import patch
 
+from helpers.query_helpers import build_alert_csv_query
+
 
 ADMIN_USER = "testadmin"
 ADMIN_PASS = "testpassword123!"
@@ -301,3 +303,119 @@ def test_filtered_exports_honor_rule_id_and_existing_filters(client, postgres_db
     assert "filtered export match" in csv_body
     assert "filtered export wrong rule" not in csv_body
     assert "filtered export wrong severity" not in csv_body
+
+
+def test_csv_export_preserves_latest_environment_lookup(client, postgres_db):
+    conn, cur = postgres_db
+    _insert_alert(
+        cur,
+        source_ip="8.8.4.55",
+        message="csv environment lookup",
+        alert_type="failed_login_threshold",
+        severity="high",
+        status="open",
+        source="bank_app",
+    )
+    cur.execute(
+        """
+        INSERT INTO events (
+            event_type,
+            severity,
+            source_ip,
+            source,
+            source_type,
+            message,
+            app_name,
+            environment,
+            raw_payload,
+            created_at
+        )
+        VALUES
+            ('login_failure', 'medium', '8.8.4.55', 'bank_app', 'custom', 'old event', 'auth', 'dev', '{}'::jsonb, NOW() - INTERVAL '2 hours'),
+            ('login_failure', 'medium', '8.8.4.55', 'bank_app', 'custom', 'new event', 'auth', 'prod', '{}'::jsonb, NOW() - INTERVAL '1 minute')
+        """
+    )
+    conn.commit()
+
+    _login_super_admin(client)
+    with _patched_route_db_only(conn):
+        resp = client.get("/alerts/export/csv?rule_id=failed_login_threshold&search=csv%20environment")
+
+    assert resp.status_code == 200
+    body = resp.data.decode("utf-8", errors="replace")
+    assert "csv environment lookup" in body
+    assert ",prod," in body
+
+
+def test_csv_export_query_is_bounded_by_distinct_filtered_sources():
+    query, params = build_alert_csv_query(
+        {
+            "rule_id": "failed_login_threshold",
+            "severity": "high",
+            "search": "export",
+            "operational_scope": "all_history",
+        }
+    )
+
+    assert "FROM alerts a\n        LEFT JOIN LATERAL" not in query
+    assert "distinct_alert_sources" in query
+    assert "SELECT DISTINCT source_ip" in query
+    assert "FROM distinct_alert_sources das" in query
+    assert "LEFT JOIN LATERAL" in query
+    assert "ORDER BY e.created_at DESC, e.id DESC" in query
+    assert params == ["%export%", "%export%", "%export%", "failed_login_threshold", "high"]
+
+
+def test_csv_export_query_plan_uses_latest_environment_index(postgres_db):
+    conn, cur = postgres_db
+    _insert_alert(
+        cur,
+        source_ip="8.8.4.60",
+        message="csv plan alert",
+        alert_type="failed_login_threshold",
+        severity="high",
+        status="open",
+        source="bank_app",
+    )
+    cur.execute(
+        """
+        INSERT INTO events (
+            event_type,
+            severity,
+            source_ip,
+            source,
+            source_type,
+            message,
+            app_name,
+            environment,
+            raw_payload,
+            created_at
+        )
+        SELECT
+            'login_failure',
+            'medium',
+            '8.8.4.60'::inet,
+            'bank_app',
+            'custom',
+            'csv plan event ' || gs,
+            'auth',
+            CASE WHEN gs = 600 THEN 'prod' ELSE 'dev' END,
+            '{}'::jsonb,
+            NOW() - (gs || ' seconds')::interval
+        FROM generate_series(1, 600) AS gs
+        """
+    )
+    cur.execute("ANALYZE alerts")
+    cur.execute("ANALYZE events")
+    cur.execute("SET LOCAL enable_seqscan = off")
+    query, params = build_alert_csv_query(
+        {
+            "rule_id": "failed_login_threshold",
+            "search": "csv plan alert",
+            "operational_scope": "all_history",
+        }
+    )
+    cur.execute(f"EXPLAIN (FORMAT TEXT, COSTS OFF) {query}", tuple(params))
+    plan = "\n".join(row[0] for row in cur.fetchall())
+
+    assert "idx_events_source_ip_created_at_latest" in plan

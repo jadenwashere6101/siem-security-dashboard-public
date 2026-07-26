@@ -1,4 +1,4 @@
--- Schema snapshot version: 0024
+-- Schema snapshot version: 0025
 
 CREATE TABLE IF NOT EXISTS events (
     id SERIAL PRIMARY KEY,
@@ -221,6 +221,8 @@ CREATE INDEX IF NOT EXISTS idx_events_source_ip ON events (source_ip);
 CREATE INDEX IF NOT EXISTS idx_events_source ON events (source);
 CREATE INDEX IF NOT EXISTS idx_events_created_at ON events (created_at);
 CREATE INDEX IF NOT EXISTS idx_events_event_type ON events (event_type);
+CREATE INDEX IF NOT EXISTS idx_events_source_ip_created_at_latest
+ON events (source_ip, created_at DESC, id DESC) INCLUDE (environment);
 
 CREATE INDEX IF NOT EXISTS idx_alerts_source_ip ON alerts (source_ip);
 CREATE INDEX IF NOT EXISTS idx_alerts_created_at ON alerts (created_at);

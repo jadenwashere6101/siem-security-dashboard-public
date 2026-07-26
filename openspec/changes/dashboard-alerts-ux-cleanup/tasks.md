@@ -39,3 +39,11 @@
 - [x] 5.5 Run `openspec validate dashboard-alerts-ux-cleanup --strict`.
 - [x] 5.6 Perform local browser visual verification for the loading indicator and Top Source IPs chart.
 - [ ] 5.7 After implementation is deployed through the documented VM workflow, perform runtime visual verification that loading behavior and Top Source IP filtering match the spec.
+
+## 6. CSV Export Performance Hotfix
+
+- [x] 6.1 Reshape `/alerts/export/csv` environment enrichment to avoid per-alert event-table latest-row lookups.
+- [x] 6.2 Add the additive events index required to support latest environment lookup by source IP.
+- [x] 6.3 Preserve CSV columns, filters including `rule_id`, export authorization, and latest environment semantics.
+- [x] 6.4 Add focused reporting and schema tests for the bounded CSV query and migration snapshot.
+- [x] 6.5 Capture local PostgreSQL before/after query-plan evidence without applying migrations to production or accessing the VM.

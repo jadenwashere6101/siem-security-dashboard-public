@@ -155,7 +155,20 @@ def test_schema_snapshot_marker_matches_latest_migration():
         migrations_dir=repo_root / "migrations",
     )
 
-    assert version == 24
+    assert version == 25
+
+
+def test_events_latest_environment_index_migration_scope():
+    repo_root = Path(__file__).resolve().parent.parent
+    migration_path = repo_root / "migrations" / "0025_events_source_ip_latest_environment_index.sql"
+    migration_sql = migration_path.read_text(encoding="utf-8")
+    schema_sql = (repo_root / "schema.sql").read_text(encoding="utf-8")
+
+    assert "idx_events_source_ip_created_at_latest" in migration_sql
+    assert "ON events (source_ip, created_at DESC, id DESC) INCLUDE (environment)" in migration_sql
+    assert "idx_events_source_ip_created_at_latest" in schema_sql
+    for destructive in ("DROP ", "TRUNCATE ", "DELETE FROM ", "ALTER TABLE "):
+        assert destructive not in migration_sql.upper()
 
 
 def test_pfsense_ingest_config_migration_scope_and_defaults():
