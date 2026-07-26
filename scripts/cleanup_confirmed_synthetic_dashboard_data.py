@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import UTC, date, datetime
+import sys
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from core.db import get_db_connection
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from core.synthetic_data_policy import (
     CONFIRMED_SYNTHETIC_CLEANUP_SOURCE_IPS,
     SYNTHETIC_PROVENANCE_VALUES,
@@ -222,7 +224,7 @@ def write_backup(report: dict[str, Any], backup_dir: str | Path) -> Path:
     backup_path = Path(backup_dir)
     backup_path.mkdir(parents=True, exist_ok=True)
     output_path = backup_path / (
-        f"confirmed_synthetic_dashboard_cleanup_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
+        f"confirmed_synthetic_dashboard_cleanup_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json"
     )
     output_path.write_text(json.dumps(report, indent=2, default=_json_default) + "\n", encoding="utf-8")
     return output_path
@@ -269,6 +271,8 @@ def main() -> int:
     parser.add_argument("--confirm", default="", help=f"Required for --execute: {CONFIRMATION_TOKEN}")
     parser.add_argument("--backup-dir", default="synthetic_cleanup_backups")
     args = parser.parse_args()
+
+    from core.db import get_db_connection
 
     conn = get_db_connection()
     try:

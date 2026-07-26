@@ -1,5 +1,8 @@
 from pathlib import Path
 
+import pytest
+
+from scripts import cleanup_confirmed_synthetic_dashboard_data as cleanup_script
 from core.synthetic_data_policy import CONFIRMED_SYNTHETIC_CLEANUP_SOURCE_IPS
 from scripts.cleanup_confirmed_synthetic_dashboard_data import (
     CONFIRMATION_TOKEN,
@@ -9,6 +12,16 @@ from scripts.cleanup_confirmed_synthetic_dashboard_data import (
 
 
 REVIEWED_SYNTHETIC_IPS = tuple(sorted(CONFIRMED_SYNTHETIC_CLEANUP_SOURCE_IPS))
+
+
+def test_cleanup_script_imports_and_displays_help(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["cleanup_confirmed_synthetic_dashboard_data.py", "--help"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        cleanup_script.main()
+
+    assert exc_info.value.code == 0
+    assert "Dry-run or execute cleanup" in capsys.readouterr().out
 
 
 def _insert_alert(
