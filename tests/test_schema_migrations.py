@@ -155,7 +155,7 @@ def test_schema_snapshot_marker_matches_latest_migration():
         migrations_dir=repo_root / "migrations",
     )
 
-    assert version == 25
+    assert version == 26
 
 
 def test_events_latest_environment_index_migration_scope():
@@ -167,6 +167,37 @@ def test_events_latest_environment_index_migration_scope():
     assert "idx_events_source_ip_created_at_latest" in migration_sql
     assert "ON events (source_ip, created_at DESC, id DESC) INCLUDE (environment)" in migration_sql
     assert "idx_events_source_ip_created_at_latest" in schema_sql
+    for destructive in ("DROP ", "TRUNCATE ", "DELETE FROM ", "ALTER TABLE "):
+        assert destructive not in migration_sql.upper()
+
+
+def test_scheduled_soc_briefing_runtime_migration_scope():
+    repo_root = Path(__file__).resolve().parent.parent
+    migration_path = repo_root / "migrations" / "0026_scheduled_soc_briefing_runtime.sql"
+    migration_sql = migration_path.read_text(encoding="utf-8")
+    schema_sql = (repo_root / "schema.sql").read_text(encoding="utf-8")
+
+    for table in (
+        "soc_briefing_schedules",
+        "soc_briefing_schedule_windows",
+        "soc_briefing_jobs",
+        "soc_briefing_runs",
+        "soc_briefing_run_steps",
+        "soc_briefings",
+    ):
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in migration_sql
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in schema_sql
+
+    assert "enabled BOOLEAN NOT NULL DEFAULT FALSE" in migration_sql
+    assert "idempotency_key TEXT NOT NULL UNIQUE" in migration_sql
+    assert "lease_owner TEXT" in migration_sql
+    assert "lease_expires_at TIMESTAMPTZ" in migration_sql
+    assert "service_actor TEXT NOT NULL DEFAULT 'scheduled_soc_briefing_worker'" in migration_sql
+    assert "UNIQUE (schedule_id, window_start, window_end)" in migration_sql
+    assert "UNIQUE (run_id, step_index)" in migration_sql
+    assert "idx_soc_briefing_jobs_claim" in migration_sql
+    assert "idx_soc_briefing_schedules_due" in migration_sql
+    assert "idx_soc_briefings_schedule_generated" in migration_sql
     for destructive in ("DROP ", "TRUNCATE ", "DELETE FROM ", "ALTER TABLE "):
         assert destructive not in migration_sql.upper()
 

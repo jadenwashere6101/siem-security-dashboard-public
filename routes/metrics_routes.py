@@ -26,6 +26,7 @@ from core.soar_response_outcomes import (
     get_canonical_outcome_retention_policy,
     get_outcome_count_groups,
 )
+from core.ai.soc_briefing_worker import runtime_metrics as get_soc_briefing_runtime_metrics
 from core.worker_heartbeat_store import (
     PLAYBOOK_WORKER_NAME,
     get_worker_heartbeat,
@@ -606,6 +607,18 @@ def playbook_worker_metrics_route():
     finally:
         if conn:
             conn.close()
+
+
+@metrics_bp.route("/metrics/soc-briefing-worker", methods=["GET"])
+@login_required
+@analyst_or_super_admin_required
+def soc_briefing_worker_metrics_route():
+    try:
+        payload = get_soc_briefing_runtime_metrics()
+        return jsonify(payload), 200
+    except Exception as error:
+        current_app.logger.error("Error in soc_briefing_worker_metrics_route: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
 
 
 @metrics_bp.route("/metrics/notifications", methods=["GET"])

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 PLAYBOOK_WORKER_NAME = "playbook_worker"
+SOC_BRIEFING_WORKER_NAME = "soc_briefing_worker"
 WORKER_HEARTBEAT_INTERVAL_SECONDS = 15
 WORKER_HEALTHY_THRESHOLD_SECONDS = 45
 WORKER_OFFLINE_THRESHOLD_SECONDS = 120

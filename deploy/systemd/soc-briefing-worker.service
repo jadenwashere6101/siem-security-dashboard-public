@@ -1,0 +1,23 @@
+[Unit]
+Description=Scheduled SOC Briefing Runtime Worker (bounded read-only foundation)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=jaden
+Group=jaden
+WorkingDirectory=/home/jaden/siem-security-dashboard
+EnvironmentFile=/home/jaden/siem-security-dashboard/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=SOC_BRIEFING_BATCH_SIZE=5
+Environment=SOC_BRIEFING_MATERIALIZE_LIMIT=25
+Environment=SOC_BRIEFING_STALE_RECOVERY_LIMIT=50
+Environment=SOC_BRIEFING_MAX_RUNTIME_SECONDS=55
+# Runtime foundation only: no autonomous investigation, Slack delivery, or production actions.
+ExecStart=/home/jaden/siem-security-dashboard/scripts/run_soc_briefing_worker_service.sh --json
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

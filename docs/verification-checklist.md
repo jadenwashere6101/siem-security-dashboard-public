@@ -191,6 +191,23 @@ Minimum pass criteria:
 - report/export endpoints still respond correctly
 - no new unexpected errors appear in logs during the checks
 
+## Scheduled SOC Briefing Runtime
+
+For changes touching `scheduled-soc-briefing-runtime`, also check:
+
+```bash
+python3 -m py_compile core/ai/soc_briefing_runtime_store.py core/ai/soc_briefing_worker.py scripts/soc_briefing_worker.py
+bash -n scripts/run_soc_briefing_worker_service.sh scripts/install_soc_briefing_worker_service.sh
+python3 scripts/validate_schema_snapshot.py
+```
+
+Pass:
+- schedule tables and schema snapshot are additive and current
+- worker/timer contract is outside Gunicorn
+- schedules are disabled by default unless explicitly configured later
+- runtime states show disabled/unavailable AI outcomes without model calls
+- no Slack delivery, briefing generation, provider setup, or production mutation occurs
+
 ## Suggested Usage
 
 - Run the syntax/build checks first

@@ -278,6 +278,7 @@ install_and_restart_worker_units() {
   log "Installing repository worker units, reloading systemd, and restarting workers..."
   scripts/install_soar_playbook_worker_service.sh --enable --start
   scripts/install_response_action_worker_service.sh --enable --start
+  scripts/install_soc_briefing_worker_service.sh --enable --start
 }
 
 check_backend_service_status() {

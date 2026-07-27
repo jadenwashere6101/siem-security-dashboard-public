@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Scheduled SOC Briefing Runtime Worker periodically
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30s
+Persistent=true
+Unit=soc-briefing-worker.service
+
+[Install]
+WantedBy=timers.target
