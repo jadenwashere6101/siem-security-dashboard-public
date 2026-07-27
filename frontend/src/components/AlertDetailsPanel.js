@@ -166,6 +166,7 @@ function AlertDetailsPanel({
     <div style={{ fontSize: "14px", lineHeight: "1.7", color: "#e6edf3" }}>
       {aiEnabled && typeof onAskAi === "function" ? (
         <div style={aiButtonRowStyle}>
+          <span style={agentClusterLabelStyle}>Anakin analyst tools</span>
           <AiAssistantButton
             onClick={() =>
               onAskAi({
@@ -571,9 +572,18 @@ const whyFiredPanelStyle = {
 
 const aiButtonRowStyle = {
   display: "flex",
+  alignItems: "center",
   flexWrap: "wrap",
   gap: "8px",
   marginBottom: "14px",
+};
+
+const agentClusterLabelStyle = {
+  color: "#93c5fd",
+  fontSize: "11px",
+  fontWeight: 800,
+  letterSpacing: "0.04em",
+  textTransform: "uppercase",
 };
 
 const whyFiredMutedStyle = {

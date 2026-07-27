@@ -16,10 +16,10 @@ function FloatingSiemChat({ onAsk, disabled = false }) {
   return (
     <div style={containerStyle}>
       {open ? (
-        <form onSubmit={submit} style={formStyle} aria-label="General SIEM AI chat">
+        <form onSubmit={submit} style={formStyle} aria-label="General Anakin SIEM chat">
           <div style={formHeaderStyle}>
             <strong>Ask Anakin</strong>
-            <button type="button" onClick={() => setOpen(false)} style={closeButtonStyle} aria-label="Close AI chat">
+            <button type="button" onClick={() => setOpen(false)} style={closeButtonStyle} aria-label="Close Anakin chat">
               ×
             </button>
           </div>
@@ -40,7 +40,7 @@ function FloatingSiemChat({ onAsk, disabled = false }) {
         onClick={() => setOpen((current) => !current)}
         disabled={disabled}
         style={fabStyle(disabled)}
-        aria-label="Open general SIEM AI chat"
+        aria-label="Open general Anakin SIEM chat"
       >
         Ask Anakin
       </button>

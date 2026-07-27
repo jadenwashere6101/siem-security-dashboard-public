@@ -23,7 +23,7 @@ function AiResponsePanel({
     <aside
       role="dialog"
       aria-modal="false"
-      aria-label="AI assistant response"
+      aria-label="Anakin assistant response"
       style={panelStyle}
     >
       <div style={headerStyle}>
@@ -31,7 +31,7 @@ function AiResponsePanel({
           <p style={eyebrowStyle}>Anakin · read-only AI assistant</p>
           <h2 style={titleStyle}>{state.title || "Anakin"}</h2>
         </div>
-        <button type="button" onClick={onDismiss} aria-label="Dismiss AI response" style={iconButtonStyle}>
+        <button type="button" onClick={onDismiss} aria-label="Dismiss Anakin response" style={iconButtonStyle}>
           ×
         </button>
       </div>

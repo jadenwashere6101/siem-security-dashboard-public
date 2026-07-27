@@ -569,7 +569,7 @@ test('renders split administration nav for super_admin and each item loads only 
 
   await userEvent.click(screen.getByRole('button', { name: /repo architecture ai/i }));
   expect(await screen.findByTestId('repo-architecture-assistant-panel')).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: /open general siem ai chat/i })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /open general anakin siem chat/i })).toBeInTheDocument();
   expect(screen.queryByTestId('detection-rules-panel')).not.toBeInTheDocument();
   expect(screen.queryByTestId('admin-users-panel')).not.toBeInTheDocument();
   expect(screen.queryByTestId('audit-log-panel')).not.toBeInTheDocument();

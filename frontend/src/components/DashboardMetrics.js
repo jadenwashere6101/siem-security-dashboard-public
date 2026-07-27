@@ -14,6 +14,7 @@ function DashboardMetrics({
     <>
       {aiEnabled && typeof onAskAi === "function" ? (
         <div style={aiBarStyle}>
+          <span style={agentClusterLabelStyle}>Anakin analyst tools</span>
           <AiAssistantButton
             onClick={() =>
               onAskAi({
@@ -24,7 +25,7 @@ function DashboardMetrics({
               })
             }
           >
-            Ask AI about dashboard
+            Dashboard summary
           </AiAssistantButton>
           <AiAssistantButton
             onClick={() =>
@@ -83,10 +84,19 @@ function DashboardMetrics({
 
 const aiBarStyle = {
   display: "flex",
+  alignItems: "center",
   justifyContent: "flex-end",
   gap: "8px",
   flexWrap: "wrap",
   margin: "0 0 12px",
+};
+
+const agentClusterLabelStyle = {
+  color: "#93c5fd",
+  fontSize: "11px",
+  fontWeight: 800,
+  letterSpacing: "0.04em",
+  textTransform: "uppercase",
 };
 
 export default DashboardMetrics;

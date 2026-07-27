@@ -15,7 +15,7 @@ test("AiAssistantButton exposes loading state and blocks clicks", async () => {
   const onClick = jest.fn();
   render(<AiAssistantButton onClick={onClick} loading>Explain alert</AiAssistantButton>);
 
-  const button = screen.getByRole("button", { name: "Asking AI..." });
+  const button = screen.getByRole("button", { name: "Asking Anakin..." });
   expect(button).toHaveAttribute("aria-busy", "true");
   await userEvent.click(button);
 

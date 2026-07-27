@@ -358,6 +358,7 @@ function PanelHeader({ sourceIp, compact, onAskAi = null, aiEnabled = false }) {
       <div style={headerActionsStyle}>
         {aiEnabled && sourceIp && typeof onAskAi === "function" ? (
           <>
+            <span style={agentClusterLabelStyle}>Anakin analyst tools</span>
             <AiAssistantButton
               onClick={() =>
                 onAskAi({
@@ -503,6 +504,14 @@ const headerActionsStyle = {
   justifyContent: "flex-end",
   gap: "8px",
   flexWrap: "wrap",
+};
+
+const agentClusterLabelStyle = {
+  color: "#93c5fd",
+  fontSize: "11px",
+  fontWeight: 800,
+  letterSpacing: "0.04em",
+  textTransform: "uppercase",
 };
 
 const titleStyle = {

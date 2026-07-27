@@ -902,6 +902,7 @@ function ResponseRegistryPanel({
               <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" }}>
                 {aiEnabled && record && typeof onAskAi === "function" ? (
                   <>
+                    <span style={agentClusterLabelStyle}>Anakin analyst tools</span>
                     <AiAssistantButton
                       onClick={() =>
                         onAskAi({
@@ -1328,5 +1329,13 @@ function ResponseRegistryPanel({
     </section>
   );
 }
+
+const agentClusterLabelStyle = {
+  color: "#93c5fd",
+  fontSize: "11px",
+  fontWeight: 800,
+  letterSpacing: "0.04em",
+  textTransform: "uppercase",
+};
 
 export default ResponseRegistryPanel;

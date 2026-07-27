@@ -21,7 +21,7 @@ function AiAssistantButton({ children, onClick, disabled = false, loading = fals
         boxShadow: unavailable ? "none" : "0 10px 24px rgba(14, 165, 233, 0.18)",
       }}
     >
-      {loading ? "Asking AI..." : children || "Ask AI"}
+      {loading ? "Asking Anakin..." : children || "Ask Anakin"}
     </button>
   );
 }

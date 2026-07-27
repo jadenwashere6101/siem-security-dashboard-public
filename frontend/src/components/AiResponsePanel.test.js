@@ -76,7 +76,7 @@ test("AiResponsePanel supports cancel and dismissal during loading", async () =>
 
   expect(screen.getByText("Anakin is analyzing current SIEM context...")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
-  await userEvent.click(screen.getByRole("button", { name: "Dismiss AI response" }));
+  await userEvent.click(screen.getByRole("button", { name: "Dismiss Anakin response" }));
 
   expect(onCancel).toHaveBeenCalledTimes(1);
   expect(onDismiss).toHaveBeenCalledTimes(1);

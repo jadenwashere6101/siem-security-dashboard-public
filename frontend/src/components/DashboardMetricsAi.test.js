@@ -18,7 +18,9 @@ test("DashboardMetrics exposes contextual dashboard AI action", async () => {
     />
   );
 
-  await userEvent.click(screen.getByRole("button", { name: "Ask AI about dashboard" }));
+  expect(screen.getByText("Anakin analyst tools")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "Dashboard summary" }));
   await userEvent.click(screen.getByRole("button", { name: "Draft checklist" }));
 
   expect(onAskAi).toHaveBeenCalledWith(
