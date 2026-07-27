@@ -8,6 +8,11 @@ import time
 from typing import Callable
 
 from core.ai.config import AiGatewayConfig
+from core.ai.soc_briefing_investigation_engine import (
+    InvestigationBudget,
+    ToolExecutor,
+    run_scheduled_investigation,
+)
 from core.ai.soc_briefing_runtime_store import (
     DEFAULT_LEASE_DURATION_SECONDS,
     JOB_STATUS_INTERRUPTED,
@@ -17,11 +22,9 @@ from core.ai.soc_briefing_runtime_store import (
     SocBriefingPersistenceError,
     as_utc,
     claim_next_job,
-    classify_ai_readiness,
     complete_job,
     complete_run,
     complete_window,
-    create_briefing_lifecycle,
     create_run,
     create_run_step,
     get_runtime_metrics,
@@ -54,6 +57,11 @@ class SocBriefingWorkerConfig:
     max_runtime_seconds: int = DEFAULT_MAX_RUNTIME_SECONDS
     lease_duration_seconds: int = DEFAULT_LEASE_DURATION_SECONDS
     heartbeat_interval_seconds: int = WORKER_HEARTBEAT_INTERVAL_SECONDS
+    investigation_max_runtime_seconds: int = 45
+    investigation_max_entities: int = 8
+    investigation_max_tool_calls: int = 12
+    investigation_max_prompt_chars: int = 8000
+    investigation_max_prompt_tokens: int = 3000
 
 
 class SocBriefingWorkerShutdown:
@@ -83,6 +91,11 @@ def normalize_config(config: SocBriefingWorkerConfig | None = None) -> SocBriefi
         max_runtime_seconds=_clamp(raw.max_runtime_seconds, 1, 300, DEFAULT_MAX_RUNTIME_SECONDS),
         lease_duration_seconds=_clamp(raw.lease_duration_seconds, 30, 900, DEFAULT_LEASE_DURATION_SECONDS),
         heartbeat_interval_seconds=_clamp(raw.heartbeat_interval_seconds, 1, 300, WORKER_HEARTBEAT_INTERVAL_SECONDS),
+        investigation_max_runtime_seconds=_clamp(raw.investigation_max_runtime_seconds, 1, 240, 45),
+        investigation_max_entities=_clamp(raw.investigation_max_entities, 1, 50, 8),
+        investigation_max_tool_calls=_clamp(raw.investigation_max_tool_calls, 1, 50, 12),
+        investigation_max_prompt_chars=_clamp(raw.investigation_max_prompt_chars, 1000, 50000, 8000),
+        investigation_max_prompt_tokens=_clamp(raw.investigation_max_prompt_tokens, 250, 12000, 3000),
     )
 
 
@@ -94,6 +107,7 @@ def run_soc_briefing_worker(
     connect: Callable[[], object] = get_db_connection,
     now_fn: Callable[[], datetime] | None = None,
     gateway_config: AiGatewayConfig | None = None,
+    investigation_tool_executor: ToolExecutor | None = None,
 ) -> dict:
     cfg = normalize_config(config)
     state = shutdown or SocBriefingWorkerShutdown()
@@ -117,6 +131,8 @@ def run_soc_briefing_worker(
         "success": 0,
         "failed": 0,
         "blocked": 0,
+        "partial": 0,
+        "skipped": 0,
         "interrupted": 0,
         "errors": 0,
         "shutdown_reason": None,
@@ -175,6 +191,8 @@ def run_soc_briefing_worker(
                     lease_owner=owner,
                     now=clock(),
                     gateway_config=gateway_config,
+                    worker_config=cfg,
+                    investigation_tool_executor=investigation_tool_executor,
                 )
                 conn.commit()
                 stats["processed"] += 1
@@ -182,6 +200,10 @@ def run_soc_briefing_worker(
                     stats["success"] += 1
                 elif outcome == "blocked":
                     stats["blocked"] += 1
+                elif outcome == "partial":
+                    stats["partial"] += 1
+                elif outcome == "skipped":
+                    stats["skipped"] += 1
                 else:
                     stats["failed"] += 1
             except Exception:
@@ -217,71 +239,59 @@ def _process_job(
     lease_owner: str,
     now: datetime,
     gateway_config: AiGatewayConfig | None,
+    worker_config: SocBriefingWorkerConfig,
+    investigation_tool_executor: ToolExecutor | None,
 ) -> str:
+    budget = InvestigationBudget(
+        max_runtime_seconds=worker_config.investigation_max_runtime_seconds,
+        max_entities=worker_config.investigation_max_entities,
+        max_tool_calls=worker_config.investigation_max_tool_calls,
+        max_prompt_chars=worker_config.investigation_max_prompt_chars,
+        max_prompt_tokens=worker_config.investigation_max_prompt_tokens,
+    )
     run = create_run(
         conn,
         job,
         now=now,
-        budget_policy={
-            "max_runtime_seconds": DEFAULT_MAX_RUNTIME_SECONDS,
-            "max_tool_calls": 0,
-            "content_generation": "out_of_scope",
-        },
+        budget_policy=budget.as_dict(),
     )
     create_run_step(
         conn,
         run["id"],
         step_index=0,
-        step_type="runtime_foundation",
+        step_type="runtime_investigation_start",
         status="success",
         sanitized_input={"job_id": job["id"], "window_id": job["window_id"]},
         evidence_refs=[],
-        decision_summary="Created isolated scheduled briefing runtime run; autonomous investigation is out of scope.",
+        decision_summary="Created isolated scheduled briefing run and started read-only autonomous investigation.",
     )
-    readiness = classify_ai_readiness(gateway_config)
-    create_run_step(
+    outcome = run_scheduled_investigation(
         conn,
-        run["id"],
-        step_index=1,
-        step_type="check_ai_readiness",
-        status=readiness["step_status"],
-        sanitized_input={"service_actor": SERVICE_ACTOR, "read_only": True},
-        evidence_refs=[],
-        decision_summary=readiness["message"],
-        error_code=readiness["error_code"],
-        error_message=readiness["message"] if readiness["error_code"] else None,
+        job=job,
+        run=run,
+        gateway_config=gateway_config or AiGatewayConfig(),
+        budget=budget,
+        tool_executor=investigation_tool_executor,
+        now_fn=lambda: now,
     )
-    final_status = str(readiness["run_status"])
-    job_status = str(readiness["job_status"])
-    error_code = readiness["error_code"]
-    error_message = readiness["message"] if error_code else None
     complete_run(
         conn,
         run["id"],
-        status=final_status,
+        status=outcome.run_status,
         started_at=run["started_at"],
-        ai_gateway_status=readiness["ai_gateway_status"],
-        provider_status=readiness["provider_status"],
-        error_code=error_code,
-        error_message=error_message,
+        ai_gateway_status=outcome.ai_gateway_status,
+        provider_status=outcome.provider_status,
+        error_code=outcome.error_code,
+        error_message=outcome.error_message,
         now=now,
-    )
-    create_briefing_lifecycle(
-        conn,
-        run,
-        status=job_status,
-        lifecycle_status="blocked" if job_status == "blocked" else "content_pending",
-        content_status="blocked" if job_status == "blocked" else "not_generated",
-        error_code=error_code,
-        error_message=error_message,
     )
     updated = complete_job(
         conn,
         int(job["id"]),
         lease_owner=lease_owner,
-        status=job_status,
-        failure_code=error_code,
-        failure_message=error_message,
+        status=outcome.job_status,
+        failure_code=outcome.error_code,
+        failure_message=outcome.error_message,
         now=now,
     )
     if updated is None:
@@ -289,10 +299,10 @@ def _process_job(
     complete_window(
         conn,
         int(job["window_id"]),
-        status=job_status if job_status in {"success", "failed", "blocked", "skipped"} else "partial",
-        skip_reason=error_code,
+        status=outcome.window_status if outcome.window_status in {"success", "failed", "blocked", "skipped", "partial"} else "partial",
+        skip_reason=outcome.error_code,
     )
-    return job_status
+    return outcome.job_status
 
 
 def _interrupt_owned_running_jobs(connect, owner: str, *, now: datetime) -> int:

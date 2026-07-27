@@ -13,8 +13,9 @@ Use this only on the VM after an authorized Mac commit/push. The Mac repository 
 5. Confirm backend health, Gunicorn effective-unit evidence, loopback bind, shared Redis-backed
    Flask-Limiter storage, debugger absence, secure cookies, and worker/timer status without
    triggering playbooks or notifications.
-   The scheduled SOC briefing worker is a runtime foundation only; its timer must not generate
-   briefing content, send Slack, configure providers, or mutate production data.
+   The scheduled SOC briefing worker may run bounded read-only investigations and persist
+   briefing content; its timer must not send Slack, configure providers, execute SOAR actions,
+   approve/deny work, mutate incidents or notes, or mutate production data.
 6. If verification fails, restore the prior authorized revision and unit templates, run
    `systemctl daemon-reload`, restart the affected services, and repeat sanitized checks.
 

@@ -193,10 +193,10 @@ Minimum pass criteria:
 
 ## Scheduled SOC Briefing Runtime
 
-For changes touching `scheduled-soc-briefing-runtime`, also check:
+For changes touching `scheduled-soc-briefing-runtime` or `read-only-autonomous-soc-investigations`, also check:
 
 ```bash
-python3 -m py_compile core/ai/soc_briefing_runtime_store.py core/ai/soc_briefing_worker.py scripts/soc_briefing_worker.py
+python3 -m py_compile core/ai/soc_briefing_runtime_store.py core/ai/soc_briefing_investigation_engine.py core/ai/soc_briefing_worker.py scripts/soc_briefing_worker.py
 bash -n scripts/run_soc_briefing_worker_service.sh scripts/install_soc_briefing_worker_service.sh
 python3 scripts/validate_schema_snapshot.py
 ```
@@ -205,8 +205,10 @@ Pass:
 - schedule tables and schema snapshot are additive and current
 - worker/timer contract is outside Gunicorn
 - schedules are disabled by default unless explicitly configured later
-- runtime states show disabled/unavailable AI outcomes without model calls
-- no Slack delivery, briefing generation, provider setup, or production mutation occurs
+- runtime states show disabled/unavailable AI outcomes without provider calls when gateway policy blocks them
+- investigation evidence is collected only through approved bounded SOC read tools
+- structured briefing content is durable in PostgreSQL before any optional delivery layer
+- no Slack delivery, provider setup, draft generation, SOAR execution, approval decision, incident/note mutation, shell/file/subprocess access, or other production mutation occurs
 
 ## Suggested Usage
 

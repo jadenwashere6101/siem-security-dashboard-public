@@ -194,10 +194,9 @@ def test_worker_persists_ai_disabled_outcome_run_steps_briefing_and_heartbeat(po
         cur.execute("SELECT status, service_actor, ai_gateway_status, error_code FROM soc_briefing_runs")
         assert cur.fetchone() == ("blocked", SERVICE_ACTOR, "disabled", "ai_gateway_disabled")
         cur.execute("SELECT step_type, status, error_code FROM soc_briefing_run_steps ORDER BY step_index")
-        assert cur.fetchall() == [
-            ("runtime_foundation", "success", None),
-            ("check_ai_readiness", "blocked", "ai_gateway_disabled"),
-        ]
+        steps = cur.fetchall()
+        assert steps[0] == ("runtime_investigation_start", "success", None)
+        assert ("ai_synthesis", "blocked", "ai_gateway_disabled") in steps
         cur.execute("SELECT status, lifecycle_status, content_status FROM soc_briefings")
         assert cur.fetchone() == ("blocked", "blocked", "blocked")
 

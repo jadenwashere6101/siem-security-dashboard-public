@@ -37,11 +37,14 @@ WINDOW_STATUS_SKIPPED = "skipped"
 
 RUN_STATUS_RUNNING = "running"
 RUN_STATUS_SUCCESS = "success"
+RUN_STATUS_PARTIAL = "partial"
 RUN_STATUS_FAILED = "failed"
 RUN_STATUS_BLOCKED = "blocked"
+RUN_STATUS_SKIPPED = "skipped"
 RUN_STATUS_INTERRUPTED = "interrupted"
 
 STEP_STATUS_SUCCESS = "success"
+STEP_STATUS_PARTIAL = "partial"
 STEP_STATUS_FAILED = "failed"
 STEP_STATUS_BLOCKED = "blocked"
 STEP_STATUS_SKIPPED = "skipped"
@@ -759,6 +762,111 @@ def create_briefing_lifecycle(
         row = _fetchone_dict(cur)
     if row is None:
         raise SocBriefingPersistenceError("briefing lifecycle insert returned no row")
+    return row
+
+
+def update_briefing_content(
+    conn,
+    run: dict[str, Any],
+    *,
+    status: str,
+    lifecycle_status: str,
+    content_status: str,
+    summary: str | None,
+    sections: dict[str, Any],
+    evidence_refs: list[dict[str, Any]],
+    error_code: str | None = None,
+    error_message: str | None = None,
+    generated_at: datetime | None = None,
+) -> dict[str, Any]:
+    current = as_utc(generated_at) or utc_now()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO soc_briefings (
+                run_id, schedule_id, window_id, status, lifecycle_status,
+                content_status, generated_at, summary, sections, evidence_refs,
+                error_code, error_message, updated_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (run_id) DO UPDATE
+            SET status = EXCLUDED.status,
+                lifecycle_status = EXCLUDED.lifecycle_status,
+                content_status = EXCLUDED.content_status,
+                generated_at = EXCLUDED.generated_at,
+                summary = EXCLUDED.summary,
+                sections = EXCLUDED.sections,
+                evidence_refs = EXCLUDED.evidence_refs,
+                error_code = EXCLUDED.error_code,
+                error_message = EXCLUDED.error_message,
+                updated_at = EXCLUDED.updated_at
+            RETURNING *
+            """,
+            (
+                run["id"],
+                run["schedule_id"],
+                run["window_id"],
+                status,
+                lifecycle_status,
+                content_status,
+                current,
+                summary,
+                Json(redact_sensitive_values(sections or {})),
+                Json(redact_sensitive_values(evidence_refs or [])),
+                error_code,
+                error_message,
+                current,
+            ),
+        )
+        row = _fetchone_dict(cur)
+    if row is None:
+        raise SocBriefingPersistenceError("briefing content upsert returned no row")
+    return row
+
+
+def record_scheduled_investigation_audit(
+    conn,
+    *,
+    event_type: str,
+    run_id: int,
+    schedule_id: int,
+    window_id: int,
+    details: dict[str, Any],
+    target_alert_id: int | None = None,
+) -> dict[str, Any]:
+    safe_details = redact_sensitive_values(
+        {
+            "run_id": run_id,
+            "schedule_id": schedule_id,
+            "window_id": window_id,
+            "service_actor": SERVICE_ACTOR,
+            "service_actor_role": SERVICE_ACTOR_ROLE,
+            "read_only": True,
+            **(details or {}),
+        }
+    )
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO audit_log (
+                event_type, actor_username, actor_role, target_alert_id,
+                request_path, details
+            )
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING *
+            """,
+            (
+                event_type,
+                SERVICE_ACTOR,
+                SERVICE_ACTOR_ROLE,
+                target_alert_id,
+                "scheduled_soc_briefing_worker",
+                Json(safe_details),
+            ),
+        )
+        row = _fetchone_dict(cur)
+    if row is None:
+        raise SocBriefingPersistenceError("scheduled investigation audit insert returned no row")
     return row
 
 

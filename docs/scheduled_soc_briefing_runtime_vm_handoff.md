@@ -16,8 +16,9 @@ Use only after an approved Mac commit/push. Do not edit source on the VM.
 ## Expected Runtime State
 
 - Existing schedules are disabled by default unless deliberately configured later.
-- The timer may run the foundation worker, but it does not generate briefing content, send Slack, call paid providers, or mutate production data.
-- Missing AI Gateway or Mini PC readiness is recorded as blocked/unavailable runtime state.
+- The timer may run bounded read-only investigations and persist structured briefing content.
+- The timer must not send Slack, call paid providers, create drafts, execute SOAR actions, approve/deny work, mutate incidents or notes, or mutate production data.
+- Missing AI Gateway or Mini PC readiness is recorded as blocked/unavailable runtime state, and saved evidence/partial briefing state remains durable.
 
 ## Rollback
 
