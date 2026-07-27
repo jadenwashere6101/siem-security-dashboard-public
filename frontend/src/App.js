@@ -51,6 +51,19 @@ import {
   WORKSPACE_TARGETS,
   createWorkspaceNavigationRequest,
 } from "./utils/workspaceNavigation";
+import {
+  canGoBackWorkspaceHistory,
+  canGoForwardWorkspaceHistory,
+  clearWorkspaceHistory,
+  createWorkspaceBrowserState,
+  createWorkspaceHistory,
+  goBackWorkspaceHistory,
+  goForwardWorkspaceHistory,
+  isWorkspaceBrowserState,
+  pushWorkspaceHistoryEntry,
+  restoreWorkspaceHistoryEntry,
+  updateCurrentWorkspaceHistoryEntry,
+} from "./utils/workspaceHistory";
 import { OPERATIONAL_SCOPE_SINCE_TUNING } from "./components/OperationalScopeToggle";
 import packageJson from "../package.json";
 
@@ -158,6 +171,10 @@ function AppInner() {
   const { settings, updateSettings } = useUiSettings();
   const [activeSection, setActiveSection] = useState("dashboard");
   const [workspaceNavigationRequest, setWorkspaceNavigationRequest] = useState(null);
+  const [workspaceHistory, setWorkspaceHistory] = useState(() =>
+    createWorkspaceHistory({ sectionId: "dashboard", label: "Dashboard", state: {} })
+  );
+  const [workspaceRestoreRequest, setWorkspaceRestoreRequest] = useState(null);
   const [registryInitialView, setRegistryInitialView] = useState("all");
   const [registryNavigationRequest, setRegistryNavigationRequest] = useState(null);
   const [approvalsInitialStatus, setApprovalsInitialStatus] = useState("all");
@@ -180,6 +197,21 @@ function AppInner() {
   const hasCheckedAuthRef = useRef(false);
   const hasAppliedLandingRef = useRef(false);
   const alertsTableRef = useRef(null);
+  const activeSectionRef = useRef(activeSection);
+  const userRoleRef = useRef(userRole);
+  const alertViewRef = useRef(alertView);
+  const selectedAlertIdRef = useRef(selectedAlertId);
+  const registryInitialViewRef = useRef(registryInitialView);
+  const registryNavigationRequestRef = useRef(registryNavigationRequest);
+  const approvalsInitialStatusRef = useRef(approvalsInitialStatus);
+  const approvalsInitialRequestRef = useRef(approvalsInitialRequest);
+  const incidentsInitialRequestRef = useRef(incidentsInitialRequest);
+  const playbooksInitialExecutionRequestRef = useRef(playbooksInitialExecutionRequest);
+  const workspaceHistoryRef = useRef(workspaceHistory);
+  const workspaceChildStateRef = useRef({});
+  const resetWorkspaceHistoryRef = useRef(null);
+  const isRestoringWorkspaceHistoryRef = useRef(false);
+  const ignoreNextPopstateEntryIdRef = useRef(null);
   const [aiPanelState, setAiPanelState] = useState({
     status: "idle",
     title: "",
@@ -189,6 +221,149 @@ function AppInner() {
     request: null,
   });
   const [aiChatHistory, setAiChatHistory] = useState([]);
+
+  useEffect(() => {
+    activeSectionRef.current = activeSection;
+  }, [activeSection]);
+
+  useEffect(() => {
+    userRoleRef.current = userRole;
+  }, [userRole]);
+
+  useEffect(() => {
+    alertViewRef.current = alertView;
+  }, [alertView]);
+
+  useEffect(() => {
+    selectedAlertIdRef.current = selectedAlertId;
+  }, [selectedAlertId]);
+
+  useEffect(() => {
+    registryInitialViewRef.current = registryInitialView;
+  }, [registryInitialView]);
+
+  useEffect(() => {
+    registryNavigationRequestRef.current = registryNavigationRequest;
+  }, [registryNavigationRequest]);
+
+  useEffect(() => {
+    approvalsInitialStatusRef.current = approvalsInitialStatus;
+  }, [approvalsInitialStatus]);
+
+  useEffect(() => {
+    approvalsInitialRequestRef.current = approvalsInitialRequest;
+  }, [approvalsInitialRequest]);
+
+  useEffect(() => {
+    incidentsInitialRequestRef.current = incidentsInitialRequest;
+  }, [incidentsInitialRequest]);
+
+  useEffect(() => {
+    playbooksInitialExecutionRequestRef.current = playbooksInitialExecutionRequest;
+  }, [playbooksInitialExecutionRequest]);
+
+  useEffect(() => {
+    workspaceHistoryRef.current = workspaceHistory;
+  }, [workspaceHistory]);
+
+  const getMainScrollTop = useCallback(() => {
+    if (typeof document === "undefined") return null;
+    const main = document.querySelector("main");
+    return main && Number.isFinite(Number(main.scrollTop)) ? Number(main.scrollTop) : null;
+  }, []);
+
+  const buildWorkspaceHistoryEntry = useCallback((sectionId, overrides = {}) => {
+    const normalizedSectionId = String(sectionId || activeSectionRef.current || "dashboard").trim() || "dashboard";
+    const childState = workspaceChildStateRef.current[normalizedSectionId] || {};
+    const baseState = {
+      alertView: alertViewRef.current,
+      selectedAlertId: selectedAlertIdRef.current,
+      registryInitialView: registryInitialViewRef.current,
+      registryNavigationRequest: registryNavigationRequestRef.current,
+      approvalsInitialStatus: approvalsInitialStatusRef.current,
+      approvalsInitialRequest: approvalsInitialRequestRef.current,
+      incidentsInitialRequest: incidentsInitialRequestRef.current,
+      playbooksInitialExecutionRequest: playbooksInitialExecutionRequestRef.current,
+      childState,
+    };
+    return {
+      sectionId: normalizedSectionId,
+      label: overrides.label || normalizedSectionId,
+      target: overrides.target || null,
+      scrollTop: overrides.scrollTop ?? getMainScrollTop(),
+      state: {
+        ...baseState,
+        ...(overrides.state || {}),
+      },
+    };
+  }, [getMainScrollTop]);
+
+  const syncBrowserHistoryEntry = useCallback((entry, mode = "push") => {
+    if (typeof window === "undefined" || !entry?.id) return;
+    const state = createWorkspaceBrowserState(entry);
+    if (mode === "replace") {
+      window.history.replaceState(state, "", window.location.href);
+      return;
+    }
+    window.history.pushState(state, "", window.location.href);
+  }, []);
+
+  const applyWorkspaceHistoryEntry = useCallback((entry) => {
+    if (!entry) return;
+    const currentRole = userRoleRef.current;
+    const visibilityFlags = {
+      isSuperAdmin: currentRole === "super_admin",
+      isAnalyst: currentRole === "analyst",
+      canTakeAlertActions: currentRole === "super_admin" || currentRole === "analyst",
+    };
+    const visibleSection = isSectionVisible(entry.sectionId, visibilityFlags) ? entry.sectionId : "dashboard";
+    const state = visibleSection === entry.sectionId ? entry.state || {} : {};
+    isRestoringWorkspaceHistoryRef.current = true;
+
+    setAlertView(state.alertView || createAlertViewState());
+    setSelectedAlertId(state.selectedAlertId ?? null);
+    setRegistryInitialView(state.registryInitialView || "all");
+    setRegistryNavigationRequest(
+      state.registryNavigationRequest
+        ? { ...state.registryNavigationRequest, nonce: Date.now() }
+        : null
+    );
+    setApprovalsInitialStatus(state.approvalsInitialStatus || "all");
+    setApprovalsInitialRequest(
+      state.approvalsInitialRequest ? { ...state.approvalsInitialRequest, nonce: Date.now() } : null
+    );
+    setIncidentsInitialRequest(
+      state.incidentsInitialRequest ? { ...state.incidentsInitialRequest, nonce: Date.now() } : null
+    );
+    setPlaybooksInitialExecutionRequest(
+      state.playbooksInitialExecutionRequest
+        ? { ...state.playbooksInitialExecutionRequest, nonce: Date.now() }
+        : null
+    );
+    setWorkspaceRestoreRequest({
+      sectionId: visibleSection,
+      state: state.childState || {},
+      nonce: Date.now(),
+    });
+    setWorkspaceNavigationRequest(createWorkspaceNavigationRequest(visibleSection, {
+      destination: entry.target?.destination || NAVIGATION_DESTINATIONS.top,
+      targetKey: entry.target?.targetKey || null,
+      context: entry.target?.context || null,
+      restoreScrollTop: entry.scrollTop,
+      historyEntryId: entry.id,
+      historyAction: "restore",
+    }));
+    setActiveSection(visibleSection);
+    const clearRestoring = () => {
+      isRestoringWorkspaceHistoryRef.current = false;
+    };
+    if (typeof window !== "undefined") {
+      window.setTimeout(clearRestoring, 0);
+    } else {
+      clearRestoring();
+    }
+  }, []);
+
   const applyAlertViewPatch = useCallback((patchOrUpdater, options = {}) => {
     const { resetOffset = true, clearExactPivots = true } = options;
     setAlertView((current) => {
@@ -343,6 +518,7 @@ function AppInner() {
       setAlertsState(createAlertRowsState());
       setAlertSummaryState(createAlertSummaryState());
       setAlertRuleOptions([]);
+      resetWorkspaceHistory("dashboard");
       writeStoredSessionIdentity(null);
     } finally {
       setAuthLoading(false);
@@ -472,6 +648,7 @@ function AppInner() {
       setCurrentUsername(null);
       setUserRole(null);
       setAlertView(createAlertViewState());
+      resetWorkspaceHistory("dashboard");
       writeStoredSessionIdentity(null);
     }
   };
@@ -491,12 +668,15 @@ function AppInner() {
       setAlertsState(createAlertRowsState());
       setAlertSummaryState(createAlertSummaryState());
       setAlertRuleOptions([]);
+      resetWorkspaceHistory("dashboard");
       writeStoredSessionIdentity(null);
     }
   };
 
   useEffect(() => {
     checkAuth();
+    // Auth bootstrap intentionally runs once; session changes are handled by API responses and logout/login flows.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -568,6 +748,7 @@ function AppInner() {
     if (legacyDestination.registryView) {
       setRegistryInitialView(legacyDestination.registryView);
       setActiveSection(legacyDestination.sectionId);
+      resetWorkspaceHistoryRef.current?.(legacyDestination.sectionId);
       hasAppliedLandingRef.current = true;
       return;
     }
@@ -578,6 +759,7 @@ function AppInner() {
       setRegistryInitialView("all");
     }
     setActiveSection(preferredSection);
+    resetWorkspaceHistoryRef.current?.(preferredSection);
     hasAppliedLandingRef.current = true;
   }, [isAuthenticated, settings.defaultLandingPage, userRole]);
 
@@ -599,10 +781,130 @@ function AppInner() {
     [isSuperAdmin, isAnalyst, canTakeAlertActions]
   );
 
-  const navigateWorkspace = useCallback((sectionId, options = {}) => {
+  const applyWorkspaceNavigation = useCallback((sectionId, options = {}) => {
     setWorkspaceNavigationRequest(createWorkspaceNavigationRequest(sectionId, options));
     setActiveSection(sectionId);
   }, []);
+
+  const navigateWorkspace = useCallback((sectionId, options = {}, historyOptions = {}) => {
+    if (!isRestoringWorkspaceHistoryRef.current) {
+      setWorkspaceHistory((current) => {
+        const latestCurrent = buildWorkspaceHistoryEntry(activeSectionRef.current, {
+          target: workspaceNavigationRequest?.targetKey
+            ? {
+                destination: workspaceNavigationRequest.destination,
+                targetKey: workspaceNavigationRequest.targetKey,
+                context: workspaceNavigationRequest.context,
+              }
+            : null,
+        });
+        const withCurrent = updateCurrentWorkspaceHistoryEntry(current, latestCurrent);
+        const target = {
+          destination: options.destination || NAVIGATION_DESTINATIONS.top,
+          targetKey: options.targetKey || null,
+          context: options.context || null,
+        };
+        const next = pushWorkspaceHistoryEntry(
+          withCurrent,
+          buildWorkspaceHistoryEntry(sectionId, {
+            target,
+            state: historyOptions.state || {},
+            scrollTop: 0,
+            label: historyOptions.label,
+          })
+        );
+        if (next.current?.id && next.current.id !== withCurrent.current?.id) {
+          syncBrowserHistoryEntry(next.current, "push");
+        }
+        workspaceHistoryRef.current = next;
+        return next;
+      });
+    }
+    applyWorkspaceNavigation(sectionId, options);
+  }, [applyWorkspaceNavigation, buildWorkspaceHistoryEntry, syncBrowserHistoryEntry, workspaceNavigationRequest]);
+
+  const resetWorkspaceHistory = useCallback((sectionId = "dashboard") => {
+    const entry = buildWorkspaceHistoryEntry(sectionId, { scrollTop: 0 });
+    const next = clearWorkspaceHistory(entry);
+    setWorkspaceHistory(next);
+    workspaceHistoryRef.current = next;
+    if (next.current) {
+      syncBrowserHistoryEntry(next.current, "replace");
+    }
+  }, [buildWorkspaceHistoryEntry, syncBrowserHistoryEntry]);
+  resetWorkspaceHistoryRef.current = resetWorkspaceHistory;
+
+  const restoreWorkspaceHistory = useCallback((entry, nextHistory, { updateBrowser = false } = {}) => {
+    if (!entry || !nextHistory) return;
+    setWorkspaceHistory(nextHistory);
+    workspaceHistoryRef.current = nextHistory;
+    applyWorkspaceHistoryEntry(entry);
+    if (updateBrowser && entry.id) {
+      ignoreNextPopstateEntryIdRef.current = entry.id;
+      syncBrowserHistoryEntry(entry, "push");
+    }
+  }, [applyWorkspaceHistoryEntry, syncBrowserHistoryEntry]);
+
+  const handleWorkspaceBack = useCallback(() => {
+    const { history, entry } = goBackWorkspaceHistory(workspaceHistoryRef.current);
+    if (!entry) return;
+    setWorkspaceHistory(history);
+    workspaceHistoryRef.current = history;
+    applyWorkspaceHistoryEntry(entry);
+    ignoreNextPopstateEntryIdRef.current = entry.id;
+    if (typeof window !== "undefined" && typeof window.history?.back === "function") {
+      window.history.back();
+    }
+  }, [applyWorkspaceHistoryEntry]);
+
+  const handleWorkspaceForward = useCallback(() => {
+    const { history, entry } = goForwardWorkspaceHistory(workspaceHistoryRef.current);
+    if (!entry) return;
+    setWorkspaceHistory(history);
+    workspaceHistoryRef.current = history;
+    applyWorkspaceHistoryEntry(entry);
+    ignoreNextPopstateEntryIdRef.current = entry.id;
+    if (typeof window !== "undefined" && typeof window.history?.forward === "function") {
+      window.history.forward();
+    }
+  }, [applyWorkspaceHistoryEntry]);
+
+  const handleWorkspaceChildStateChange = useCallback((sectionId, nextState) => {
+    const normalizedSectionId = String(sectionId || "").trim();
+    if (!normalizedSectionId || isRestoringWorkspaceHistoryRef.current) return;
+    workspaceChildStateRef.current = {
+      ...workspaceChildStateRef.current,
+      [normalizedSectionId]: nextState && typeof nextState === "object" ? nextState : {},
+    };
+    if (activeSectionRef.current !== normalizedSectionId) return;
+    setWorkspaceHistory((current) => {
+      const next = updateCurrentWorkspaceHistoryEntry(
+        current,
+        buildWorkspaceHistoryEntry(normalizedSectionId)
+      );
+      workspaceHistoryRef.current = next;
+      if (next.current) {
+        syncBrowserHistoryEntry(next.current, "replace");
+      }
+      return next;
+    });
+  }, [buildWorkspaceHistoryEntry, syncBrowserHistoryEntry]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return undefined;
+    const onPopState = (event) => {
+      if (!isWorkspaceBrowserState(event.state)) return;
+      if (ignoreNextPopstateEntryIdRef.current === event.state.entryId) {
+        ignoreNextPopstateEntryIdRef.current = null;
+        return;
+      }
+      const restored = restoreWorkspaceHistoryEntry(workspaceHistoryRef.current, event.state.entryId);
+      if (!restored.entry) return;
+      restoreWorkspaceHistory(restored.entry, restored.history);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [isAuthenticated, restoreWorkspaceHistory]);
 
   const handleNavigate = useCallback((sectionId) => {
     const destination = normalizeWorkspaceDestination(sectionId);
@@ -611,6 +913,10 @@ function AppInner() {
       navigateWorkspace(destination.sectionId, {
         destination: NAVIGATION_DESTINATIONS.element,
         targetKey: WORKSPACE_TARGETS.responseRegistry,
+      }, {
+        state: {
+          registryInitialView: destination.registryView,
+        },
       });
       return;
     }
@@ -631,6 +937,11 @@ function AppInner() {
       destination: NAVIGATION_DESTINATIONS.element,
       targetKey: WORKSPACE_TARGETS.responseRegistry,
       context: target,
+    }, {
+      state: {
+        registryInitialView: target.view || "all",
+        registryNavigationRequest: target,
+      },
     });
   }, [navigateWorkspace]);
 
@@ -643,6 +954,10 @@ function AppInner() {
       destination: NAVIGATION_DESTINATIONS.element,
       targetKey: WORKSPACE_TARGETS.approvals,
       context: target,
+    } : undefined, target.statusFilter ? {
+      state: {
+        approvalsInitialStatus: target.statusFilter,
+      },
     } : undefined);
   }, [navigateWorkspace]);
 
@@ -652,7 +967,11 @@ function AppInner() {
       executionId: Number(executionId),
       nonce: Date.now(),
     });
-    navigateWorkspace("soar-playbooks");
+    navigateWorkspace("soar-playbooks", undefined, {
+      state: {
+        playbooksInitialExecutionRequest: { executionId: Number(executionId) },
+      },
+    });
   }, [navigateWorkspace]);
 
   const handleOpenIncident = useCallback((incidentId) => {
@@ -661,7 +980,11 @@ function AppInner() {
       incidentId: Number(incidentId),
       nonce: Date.now(),
     });
-    navigateWorkspace("soar-incidents");
+    navigateWorkspace("soar-incidents", undefined, {
+      state: {
+        incidentsInitialRequest: { incidentId: Number(incidentId) },
+      },
+    });
   }, [navigateWorkspace]);
 
   const handleOpenApproval = useCallback((approvalId) => {
@@ -673,6 +996,10 @@ function AppInner() {
     navigateWorkspace("soar-approvals", {
       destination: NAVIGATION_DESTINATIONS.element,
       targetKey: WORKSPACE_TARGETS.approvals,
+    }, {
+      state: {
+        approvalsInitialRequest: { approvalId: Number(approvalId) },
+      },
     });
   }, [navigateWorkspace]);
 
@@ -690,6 +1017,11 @@ function AppInner() {
       destination: NAVIGATION_DESTINATIONS.element,
       targetKey: WORKSPACE_TARGETS.recentAlerts,
       context: { alertId: Number(alertId), sourceIp: sourceIp || "" },
+    }, {
+      state: {
+        alertView: buildContextualAlertView(alertViewRef.current, { alertId: Number(alertId) }),
+        selectedAlertId: Number(alertId),
+      },
     });
   }, [navigateWorkspace]);
 
@@ -731,6 +1063,15 @@ function AppInner() {
         sourceIp: normalizedSourceIp,
         targetIp: normalizedTargetIp,
         alertId: Number.isFinite(normalizedAlertId) ? normalizedAlertId : null,
+      },
+    }, {
+      state: {
+        alertView: buildContextualAlertView(alertViewRef.current, {
+          sourceIp: normalizedSourceIp,
+          targetIp: normalizedTargetIp,
+          alertId: Number.isFinite(normalizedAlertId) ? normalizedAlertId : null,
+        }),
+        selectedAlertId: null,
       },
     });
   }, [navigateWorkspace]);
@@ -1180,6 +1521,34 @@ function AppInner() {
       eyebrow="SIEM"
       statusLabel="Operational"
       versionLabel={`v${packageJson.version}`}
+      navigationControls={
+        <div style={workspaceHistoryControlsStyle} aria-label="Workspace history controls">
+          <button
+            type="button"
+            onClick={handleWorkspaceBack}
+            disabled={!canGoBackWorkspaceHistory(workspaceHistory)}
+            style={{
+              ...workspaceHistoryButtonStyle,
+              ...(!canGoBackWorkspaceHistory(workspaceHistory) ? workspaceHistoryButtonDisabledStyle : null),
+            }}
+            aria-label="Back"
+          >
+            ← Back
+          </button>
+          <button
+            type="button"
+            onClick={handleWorkspaceForward}
+            disabled={!canGoForwardWorkspaceHistory(workspaceHistory)}
+            style={{
+              ...workspaceHistoryButtonStyle,
+              ...(!canGoForwardWorkspaceHistory(workspaceHistory) ? workspaceHistoryButtonDisabledStyle : null),
+            }}
+            aria-label="Forward"
+          >
+            Forward →
+          </button>
+        </div>
+      }
       topBarActions={
         <div style={sessionActionsStyle}>
           <div style={identityBlockStyle}>
@@ -1319,6 +1688,12 @@ function AppInner() {
             selectStyle={selectStyle}
             onViewRelatedAlerts={handleViewRelatedAlerts}
             onOpenResponseRegistry={handleOpenResponseRegistry}
+            restoreRequest={
+              workspaceRestoreRequest?.sectionId === "threat-hunt" ? workspaceRestoreRequest : null
+            }
+            onHistoryStateChange={(state) =>
+              handleWorkspaceChildStateChange("threat-hunt", { threatHunt: state })
+            }
           />
         )}
 
@@ -1339,6 +1714,12 @@ function AppInner() {
             onOpenReconWorkspace={() => handleNavigate("recon-history")}
             onAskAi={handleAskAi}
             aiEnabled={canTakeAlertActions}
+            restoreRequest={
+              workspaceRestoreRequest?.sectionId === "soc-command-center" ? workspaceRestoreRequest : null
+            }
+            onHistoryStateChange={(state) =>
+              handleWorkspaceChildStateChange("soc-command-center", { socCommandCenter: state })
+            }
           />
         )}
 
@@ -1346,6 +1727,12 @@ function AppInner() {
           <ReconWorkspace
             onViewRelatedAlerts={handleViewRelatedAlerts}
             onOpenIncident={handleOpenIncident}
+            restoreRequest={
+              workspaceRestoreRequest?.sectionId === "recon-history" ? workspaceRestoreRequest : null
+            }
+            onHistoryStateChange={(state) =>
+              handleWorkspaceChildStateChange("recon-history", { recon: state })
+            }
           />
         )}
 
@@ -1508,6 +1895,12 @@ function AppInner() {
             filterLabelStyle={filterLabelStyle}
             selectStyle={selectStyle}
             onOpenResponseRegistry={handleOpenResponseRegistry}
+            restoreRequest={
+              workspaceRestoreRequest?.sectionId === "soar-queue" ? workspaceRestoreRequest : null
+            }
+            onHistoryStateChange={(state) =>
+              handleWorkspaceChildStateChange("soar-queue", { soarQueue: state })
+            }
           />
         )}
 
@@ -1622,6 +2015,30 @@ const sessionActionsStyle = {
   gap: "12px",
   flexWrap: "wrap",
   justifyContent: "flex-end",
+};
+
+const workspaceHistoryControlsStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "6px",
+};
+
+const workspaceHistoryButtonStyle = {
+  border: "1px solid #30363d",
+  backgroundColor: "#161b22",
+  color: "#e6edf3",
+  borderRadius: "8px",
+  padding: "8px 10px",
+  fontSize: "12px",
+  fontWeight: 700,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+};
+
+const workspaceHistoryButtonDisabledStyle = {
+  color: "#6e7681",
+  cursor: "not-allowed",
+  opacity: 0.55,
 };
 
 const identityBlockStyle = {

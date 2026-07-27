@@ -60,6 +60,20 @@ test("renders caller-supplied content in the right-side slot", () => {
   expect(screen.getByRole("button", { name: "Log out" })).toBeInTheDocument();
 });
 
+test("renders navigation controls between the hamburger and title", () => {
+  render(
+    <TopBar
+      isCollapsed={false}
+      onToggleCollapse={() => {}}
+      title="SIEM Dashboard"
+      navigationControls={<button type="button">Back</button>}
+    />
+  );
+
+  expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "SIEM Dashboard" })).toBeInTheDocument();
+});
+
 test("renders eyebrow above title when provided", () => {
   render(
     <TopBar

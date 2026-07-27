@@ -112,3 +112,53 @@ test("renders paginated recon history with filters, evidence, linked alerts, and
   await userEvent.click(screen.getByRole("button", { name: "Open incident" }));
   expect(onOpenIncident).toHaveBeenCalledWith(7);
 });
+
+test("restores lightweight history state and emits snapshot updates", async () => {
+  const onHistoryStateChange = jest.fn();
+
+  render(
+    <ReconWorkspace
+      restoreRequest={{
+        sectionId: "recon-history",
+        nonce: 4,
+        state: {
+          recon: {
+            filters: {
+              search: "203.0.113.44",
+              status: "",
+              severity: "",
+              confidence: "",
+              classification: "campaign_recon",
+              timeRange: "30d",
+              sort: "last_seen_desc",
+            },
+            draftSearch: "203.0.113.44",
+            offset: 20,
+            selectedId: 90,
+            alertOffset: 10,
+          },
+        },
+      }}
+      onHistoryStateChange={onHistoryStateChange}
+    />
+  );
+
+  await waitFor(() =>
+    expect(loadReconActivities).toHaveBeenCalledWith(
+      expect.objectContaining({ search: "203.0.113.44", classification: "campaign_recon", offset: 20 })
+    )
+  );
+  await waitFor(() =>
+    expect(loadReconActivityAlerts).toHaveBeenCalledWith(90, expect.objectContaining({ offset: 10 }))
+  );
+  await waitFor(() =>
+    expect(onHistoryStateChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filters: expect.objectContaining({ search: "203.0.113.44", classification: "campaign_recon" }),
+        offset: 20,
+        selectedId: 90,
+        alertOffset: 10,
+      })
+    )
+  );
+});

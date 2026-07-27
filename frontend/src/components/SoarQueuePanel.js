@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   loadSoarQueueItem,
   loadRecentSoarQueueItems,
@@ -45,6 +45,8 @@ function SoarQueuePanel({
   filterLabelStyle,
   selectStyle,
   onOpenResponseRegistry = null,
+  restoreRequest = null,
+  onHistoryStateChange = null,
 }) {
   const [statusSummary, setStatusSummary] = useState(null);
   const [queueItems, setQueueItems] = useState([]);
@@ -62,6 +64,7 @@ function SoarQueuePanel({
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const { detailRef, rememberTrigger, restoreTriggerFocus } = useMasterDetailFocus(selectedQueueId);
+  const handledRestoreNonceRef = useRef(null);
 
   const loadQueueVisibility = useCallback(async ({ quiet = false } = {}) => {
     try {
@@ -144,6 +147,35 @@ function SoarQueuePanel({
   useEffect(() => {
     loadQueueVisibility();
   }, [loadQueueVisibility]);
+
+  useEffect(() => {
+    if (!restoreRequest || handledRestoreNonceRef.current === restoreRequest.nonce) return;
+    const state = restoreRequest.state?.soarQueue || {};
+    handledRestoreNonceRef.current = restoreRequest.nonce;
+    if (state.statusFilter) {
+      setStatusFilter(state.statusFilter);
+    }
+    if (Number.isFinite(Number(state.recentLimit))) {
+      setRecentLimit(Number(state.recentLimit));
+    }
+    if (state.selectedQueueId != null) {
+      handleViewQueueItem(state.selectedQueueId);
+    } else {
+      setSelectedQueueId(null);
+      setSelectedQueueItem(null);
+      setDetailError("");
+      setDetailLoading(false);
+    }
+  }, [handleViewQueueItem, restoreRequest]);
+
+  useEffect(() => {
+    if (typeof onHistoryStateChange !== "function") return;
+    onHistoryStateChange({
+      statusFilter,
+      recentLimit,
+      selectedQueueId,
+    });
+  }, [onHistoryStateChange, recentLimit, selectedQueueId, statusFilter]);
 
   const counts = statusSummary?.counts || {};
   const total = statusSummary?.total ?? QUEUE_STATUSES.reduce(

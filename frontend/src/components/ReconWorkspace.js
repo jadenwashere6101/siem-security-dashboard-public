@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   loadReconActivities,
@@ -47,7 +47,12 @@ function EmptyState({ children }) {
   return <div style={emptyStateStyle}>{children}</div>;
 }
 
-function ReconWorkspace({ onViewRelatedAlerts = null, onOpenIncident = null }) {
+function ReconWorkspace({
+  onViewRelatedAlerts = null,
+  onOpenIncident = null,
+  restoreRequest = null,
+  onHistoryStateChange = null,
+}) {
   const [filters, setFilters] = useState(defaultFilters);
   const [draftSearch, setDraftSearch] = useState("");
   const [offset, setOffset] = useState(0);
@@ -56,6 +61,7 @@ function ReconWorkspace({ onViewRelatedAlerts = null, onOpenIncident = null }) {
   const [detailState, setDetailState] = useState({ detail: null, loading: false, error: "" });
   const [alertOffset, setAlertOffset] = useState(0);
   const [linkedAlerts, setLinkedAlerts] = useState({ items: [], total: 0, loading: false, error: "" });
+  const handledRestoreNonceRef = useRef(null);
 
   const loadList = useCallback(() => {
     setListState((current) => ({ ...current, loading: true, error: "" }));
@@ -108,7 +114,6 @@ function ReconWorkspace({ onViewRelatedAlerts = null, onOpenIncident = null }) {
       .then((detail) => {
         if (!isCurrent) return;
         setDetailState({ detail, loading: false, error: "" });
-        setAlertOffset(0);
       })
       .catch((error) => {
         if (!isCurrent) return;
@@ -118,6 +123,35 @@ function ReconWorkspace({ onViewRelatedAlerts = null, onOpenIncident = null }) {
       isCurrent = false;
     };
   }, [selectedId]);
+
+  useEffect(() => {
+    if (!restoreRequest || handledRestoreNonceRef.current === restoreRequest.nonce) return;
+    const state = restoreRequest.state?.recon || {};
+    handledRestoreNonceRef.current = restoreRequest.nonce;
+    if (state.filters && typeof state.filters === "object") {
+      const nextFilters = { ...defaultFilters, ...state.filters };
+      setFilters(nextFilters);
+      setDraftSearch(nextFilters.search || "");
+    }
+    if (Number.isFinite(Number(state.offset))) {
+      setOffset(Math.max(0, Number(state.offset)));
+    }
+    setSelectedId(state.selectedId ?? null);
+    if (Number.isFinite(Number(state.alertOffset))) {
+      setAlertOffset(Math.max(0, Number(state.alertOffset)));
+    }
+  }, [restoreRequest]);
+
+  useEffect(() => {
+    if (typeof onHistoryStateChange !== "function") return;
+    onHistoryStateChange({
+      filters,
+      draftSearch,
+      offset,
+      selectedId,
+      alertOffset,
+    });
+  }, [alertOffset, draftSearch, filters, offset, onHistoryStateChange, selectedId]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -267,7 +301,10 @@ function ReconWorkspace({ onViewRelatedAlerts = null, onOpenIncident = null }) {
                 <button
                   key={activity.id}
                   type="button"
-                  onClick={() => setSelectedId(activity.id)}
+                  onClick={() => {
+                    setSelectedId(activity.id);
+                    setAlertOffset(0);
+                  }}
                   style={{
                     ...activityButtonStyle,
                     ...(String(selectedId) === String(activity.id) ? activityButtonActiveStyle : {}),

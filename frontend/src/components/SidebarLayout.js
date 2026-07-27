@@ -12,6 +12,7 @@ function SidebarLayout({
   onNavigate,
   title,
   eyebrow,
+  navigationControls,
   topBarActions,
   statusLabel,
   versionLabel,
@@ -59,7 +60,13 @@ function SidebarLayout({
       const focusTarget = requestedTarget || primaryHeading || main;
       const mainRect = main.getBoundingClientRect();
       const targetRect = requestedTarget?.getBoundingClientRect();
-      const top = targetRect
+      const hasRestoredScroll =
+        navigationRequest.restoreScrollTop !== null &&
+        navigationRequest.restoreScrollTop !== undefined &&
+        Number.isFinite(Number(navigationRequest.restoreScrollTop));
+      const top = hasRestoredScroll
+        ? Math.max(0, Number(navigationRequest.restoreScrollTop))
+        : targetRect
         ? Math.max(0, main.scrollTop + targetRect.top - mainRect.top)
         : 0;
 
@@ -99,6 +106,7 @@ function SidebarLayout({
         onToggleCollapse={toggleCollapsed}
         title={title}
         eyebrow={eyebrow}
+        navigationControls={navigationControls}
       >
         {topBarActions}
       </TopBar>

@@ -391,6 +391,58 @@ describe("SocCommandCenter", () => {
     await waitFor(() => expect(loadIncidentDetail).toHaveBeenCalledWith(8));
   });
 
+  test("restores selected SOC context and emits lightweight history snapshots", async () => {
+    const onHistoryStateChange = jest.fn();
+    loadReconActivities.mockResolvedValue({
+      items: [
+        {
+          id: 90,
+          label: "Distributed Internet Reconnaissance Activity",
+          status: "open",
+          last_seen: "2026-05-18T12:00:00Z",
+          display: { headline: "Restored recon activity" },
+        },
+      ],
+    });
+    loadReconActivity.mockResolvedValue({
+      id: 90,
+      display: { headline: "Restored recon activity" },
+      summary: {},
+    });
+
+    renderPanel({
+      restoreRequest: {
+        sectionId: "soc-command-center",
+        nonce: 8,
+        state: {
+          socCommandCenter: {
+            selectedIncidentId: 8,
+            selectedReconActivityId: 90,
+            selectedSourceIp: "203.0.113.20",
+            operationalScope: "all_history",
+          },
+        },
+      },
+      onHistoryStateChange,
+    });
+
+    await waitFor(() =>
+      expect(loadIncidents).toHaveBeenCalledWith({ limit: 12, operationalScope: "all_history" })
+    );
+    await waitFor(() => expect(loadIncidentDetail).toHaveBeenCalledWith(8));
+    expect(await screen.findByTestId("source-ip-context")).toHaveTextContent("203.0.113.20");
+    await waitFor(() =>
+      expect(onHistoryStateChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          selectedIncidentId: 8,
+          selectedReconActivityId: 90,
+          selectedSourceIp: "203.0.113.20",
+          operationalScope: "all_history",
+        })
+      )
+    );
+  });
+
   test("wraps long linked alert names without truncating them", async () => {
     renderPanel();
 

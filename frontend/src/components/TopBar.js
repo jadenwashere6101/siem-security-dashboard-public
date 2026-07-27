@@ -2,7 +2,7 @@ import React from "react";
 
 import { SIDEBAR_NAV_ID } from "./Sidebar";
 
-function TopBar({ isCollapsed = false, onToggleCollapse, title, eyebrow, children }) {
+function TopBar({ isCollapsed = false, onToggleCollapse, title, eyebrow, navigationControls = null, children }) {
   return (
     <header style={topBarStyle}>
       <div style={leftGroupStyle}>
@@ -16,6 +16,8 @@ function TopBar({ isCollapsed = false, onToggleCollapse, title, eyebrow, childre
         >
           <span aria-hidden="true">☰</span>
         </button>
+
+        {navigationControls ? <div style={navigationControlsStyle}>{navigationControls}</div> : null}
 
         {(eyebrow || title) && (
           <div>
@@ -61,6 +63,13 @@ const hamburgerButtonStyle = {
   color: "#e6edf3",
   fontSize: "16px",
   cursor: "pointer",
+  flexShrink: 0,
+};
+
+const navigationControlsStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "6px",
   flexShrink: 0,
 };
 

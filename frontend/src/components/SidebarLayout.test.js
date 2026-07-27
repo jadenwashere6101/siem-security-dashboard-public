@@ -453,6 +453,42 @@ test("element navigation preserves the deep destination and background rerenders
   expect(main.scrollTo).not.toHaveBeenCalled();
 });
 
+test("history restoration scrolls to the saved main offset", () => {
+  const { rerender } = render(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      title="SIEM Dashboard"
+    >
+      <h2>Alpha workspace</h2>
+    </SidebarLayout>
+  );
+  const main = screen.getByRole("main");
+  main.scrollTo = jest.fn();
+
+  rerender(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      title="SIEM Dashboard"
+      navigationRequest={{
+        sectionId: "alpha",
+        destination: "top",
+        restoreScrollTop: 240,
+        nonce: 22,
+      }}
+    >
+      <h2>Alpha workspace</h2>
+    </SidebarLayout>
+  );
+
+  expect(main.scrollTo).toHaveBeenCalledWith({ top: 240, left: 0, behavior: "smooth" });
+});
+
 test("waits for a conditionally mounted deep target before consuming the request", () => {
   jest.useFakeTimers();
   const request = {

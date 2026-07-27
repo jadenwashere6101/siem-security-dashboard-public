@@ -14,7 +14,14 @@ let navigationNonce = 0;
 
 export function createWorkspaceNavigationRequest(
   sectionId,
-  { destination = NAVIGATION_DESTINATIONS.top, targetKey = null, context = null } = {}
+  {
+    destination = NAVIGATION_DESTINATIONS.top,
+    targetKey = null,
+    context = null,
+    restoreScrollTop = null,
+    historyEntryId = null,
+    historyAction = null,
+  } = {}
 ) {
   const normalizedSectionId = String(sectionId || "").trim();
   if (!normalizedSectionId) throw new Error("Workspace navigation requires a sectionId");
@@ -32,6 +39,12 @@ export function createWorkspaceNavigationRequest(
     destination,
     targetKey: normalizedTargetKey,
     context,
+    restoreScrollTop:
+      restoreScrollTop == null || !Number.isFinite(Number(restoreScrollTop))
+        ? null
+        : Math.max(0, Number(restoreScrollTop)),
+    historyEntryId,
+    historyAction,
     nonce: navigationNonce,
   };
 }

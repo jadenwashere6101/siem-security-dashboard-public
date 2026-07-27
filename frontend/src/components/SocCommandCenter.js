@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { listApprovals } from "../services/approvalService";
 import { getDeadLetterMetrics, getDeadLetters } from "../services/deadLetterService";
@@ -653,6 +653,8 @@ function SocCommandCenter({
   onOpenReconWorkspace = null,
   onAskAi = null,
   aiEnabled = false,
+  restoreRequest = null,
+  onHistoryStateChange = null,
 }) {
   const canOperate = ACTION_ROLES.has(userRole);
   const [data, setData] = useState(emptyCommandData);
@@ -677,6 +679,7 @@ function SocCommandCenter({
   });
   const [selectedSourceIp, setSelectedSourceIp] = useState(null);
   const [reconReviewState, setReconReviewState] = useState(() => loadReconReviewState(currentUsername));
+  const handledRestoreNonceRef = useRef(null);
   const viewportWidth = useViewportWidth();
   const useSingleColumn = viewportWidth < 980;
   const useCompactWorkspace = viewportWidth < 760;
@@ -798,6 +801,34 @@ function SocCommandCenter({
   useEffect(() => {
     setReconReviewState(loadReconReviewState(currentUsername));
   }, [currentUsername]);
+
+  useEffect(() => {
+    if (!restoreRequest || handledRestoreNonceRef.current === restoreRequest.nonce) return;
+    const state = restoreRequest.state?.socCommandCenter || {};
+    handledRestoreNonceRef.current = restoreRequest.nonce;
+    setSelectedIncidentId(state.selectedIncidentId ?? null);
+    setSelectedReconActivityId(state.selectedReconActivityId ?? null);
+    setSelectedSourceIp(state.selectedSourceIp ?? null);
+    if (state.operationalScope) {
+      setOperationalScope(state.operationalScope);
+    }
+  }, [restoreRequest]);
+
+  useEffect(() => {
+    if (typeof onHistoryStateChange !== "function") return;
+    onHistoryStateChange({
+      selectedIncidentId,
+      selectedReconActivityId,
+      selectedSourceIp,
+      operationalScope,
+    });
+  }, [
+    onHistoryStateChange,
+    operationalScope,
+    selectedIncidentId,
+    selectedReconActivityId,
+    selectedSourceIp,
+  ]);
 
   useEffect(() => {
     persistReconReviewState(currentUsername, reconReviewState);

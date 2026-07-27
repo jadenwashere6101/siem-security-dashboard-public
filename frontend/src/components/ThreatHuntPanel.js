@@ -21,6 +21,8 @@ function ThreatHuntPanel({
   onViewRelatedAlerts,
   onOpenResponseRegistry,
   displaySettings,
+  restoreRequest = null,
+  onHistoryStateChange = null,
 }) {
   const [sourceIp, setSourceIp] = useState("");
   const [source, setSource] = useState("");
@@ -35,10 +37,43 @@ function ThreatHuntPanel({
   const [pivotFeedback, setPivotFeedback] = useState("");
   const [pivotHighlightActive, setPivotHighlightActive] = useState(false);
   const sourceIpInputRef = useRef(null);
+  const handledRestoreNonceRef = useRef(null);
 
   useEffect(() => {
     sourceIpInputRef.current?.focus();
   }, []);
+
+  useEffect(() => {
+    if (!restoreRequest || handledRestoreNonceRef.current === restoreRequest.nonce) return;
+    const state = restoreRequest.state?.threatHunt || {};
+    handledRestoreNonceRef.current = restoreRequest.nonce;
+    setSourceIp(state.sourceIp || "");
+    setSource(state.source || "");
+    setEventType(state.eventType || "");
+    setStartTime(state.startTime || "");
+    setEndTime(state.endTime || "");
+    setExpandedEventId(state.expandedEventId ?? null);
+  }, [restoreRequest]);
+
+  useEffect(() => {
+    if (typeof onHistoryStateChange !== "function") return;
+    onHistoryStateChange({
+      sourceIp,
+      source,
+      eventType,
+      startTime,
+      endTime,
+      expandedEventId,
+    });
+  }, [
+    endTime,
+    eventType,
+    expandedEventId,
+    onHistoryStateChange,
+    source,
+    sourceIp,
+    startTime,
+  ]);
 
   const runSearch = async ({
     sourceIpValue = sourceIp,

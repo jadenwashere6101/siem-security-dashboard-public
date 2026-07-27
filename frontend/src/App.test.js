@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from './App';
 import { loadCurrentSession } from './services/authService';
@@ -273,6 +273,68 @@ test('renders SOC Command Center nav for analyst and loads command center when s
   await userEvent.click(screen.getByRole('button', { name: /soc command center/i }));
 
   expect(await screen.findByTestId('soc-command-center')).toHaveTextContent(/analyst analyst1/i);
+});
+
+test('workspace Back and Forward buttons restore prior workspaces and disabled state', async () => {
+  loadCurrentSession.mockResolvedValue({
+    authenticated: true,
+    user: 'analyst1',
+    role: 'analyst',
+  });
+  const historyBack = jest.spyOn(window.history, 'back').mockImplementation(() => {});
+  const historyForward = jest.spyOn(window.history, 'forward').mockImplementation(() => {});
+
+  render(<App />);
+
+  const backButton = await screen.findByRole('button', { name: /^back$/i });
+  const forwardButton = screen.getByRole('button', { name: /^forward$/i });
+  expect(backButton).toBeDisabled();
+  expect(forwardButton).toBeDisabled();
+
+  await userEvent.click(screen.getByRole('button', { name: /soar operations/i }));
+  expect(await screen.findByTestId('dead-letters-panel')).toBeInTheDocument();
+  expect(backButton).not.toBeDisabled();
+  expect(forwardButton).toBeDisabled();
+
+  await userEvent.click(backButton);
+  expect(await screen.findByTestId('dashboard-section')).toBeInTheDocument();
+  expect(historyBack).toHaveBeenCalled();
+  expect(backButton).toBeDisabled();
+  expect(forwardButton).not.toBeDisabled();
+
+  await userEvent.click(forwardButton);
+  expect(await screen.findByTestId('dead-letters-panel')).toBeInTheDocument();
+  expect(historyForward).toHaveBeenCalled();
+
+  historyBack.mockRestore();
+  historyForward.mockRestore();
+});
+
+test('browser popstate restores SIEM-owned workspace history entries', async () => {
+  loadCurrentSession.mockResolvedValue({
+    authenticated: true,
+    user: 'analyst1',
+    role: 'analyst',
+  });
+
+  render(<App />);
+
+  expect(await screen.findByTestId('dashboard-section')).toBeInTheDocument();
+  const dashboardState = window.history.state;
+
+  await userEvent.click(screen.getByRole('button', { name: /soar operations/i }));
+  expect(await screen.findByTestId('dead-letters-panel')).toBeInTheDocument();
+  const operationsState = window.history.state;
+
+  act(() => {
+    window.dispatchEvent(new PopStateEvent('popstate', { state: dashboardState }));
+  });
+  expect(await screen.findByTestId('dashboard-section')).toBeInTheDocument();
+
+  act(() => {
+    window.dispatchEvent(new PopStateEvent('popstate', { state: operationsState }));
+  });
+  expect(await screen.findByTestId('dead-letters-panel')).toBeInTheDocument();
 });
 
 test('passes dashboard loading state before the first alerts requests resolve', async () => {

@@ -181,7 +181,7 @@ const queueDetailNoEventsFixture = {
   approval_events: [],
 };
 
-const renderPanel = () =>
+const renderPanel = (props = {}) =>
   render(
     <SoarQueuePanel
       cardStyle={{}}
@@ -190,6 +190,7 @@ const renderPanel = () =>
       cardSubtitleStyle={{}}
       filterLabelStyle={{}}
       selectStyle={{}}
+      {...props}
     />
   );
 
@@ -217,6 +218,45 @@ test("shows loading state while initial queue requests are pending", () => {
     renderPanel();
 
     expect(screen.getByText("Loading SOAR queue...")).toBeInTheDocument();
+  });
+
+  test("restores queue filters and selected item while emitting history snapshots", async () => {
+    const onHistoryStateChange = jest.fn();
+    loadSoarQueueStatus.mockResolvedValue(statusFixture);
+    loadRecentSoarQueueItems.mockResolvedValue({ items: [awaitingApprovalRowFixture] });
+    loadSoarQueueItem.mockResolvedValue(awaitingApprovalDetailFixture);
+
+    renderPanel({
+      restoreRequest: {
+        sectionId: "soar-queue",
+        nonce: 2,
+        state: {
+          soarQueue: {
+            statusFilter: "awaiting_approval",
+            recentLimit: 25,
+            selectedQueueId: 202,
+          },
+        },
+      },
+      onHistoryStateChange,
+    });
+
+    await waitFor(() =>
+      expect(loadRecentSoarQueueItems).toHaveBeenCalledWith({
+        limit: 25,
+        status: "awaiting_approval",
+      })
+    );
+    await waitFor(() => expect(loadSoarQueueItem).toHaveBeenCalledWith(202));
+    await waitFor(() =>
+      expect(onHistoryStateChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          statusFilter: "awaiting_approval",
+          recentLimit: 25,
+          selectedQueueId: 202,
+        })
+      )
+    );
   });
 
   test("shows frozen historical queue banner", async () => {
