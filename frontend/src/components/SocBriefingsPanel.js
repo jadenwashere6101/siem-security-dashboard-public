@@ -5,14 +5,15 @@ import { formatTimestamp } from "../utils/displayFormatting";
 const PAGE_SIZE = 10;
 const CONTENT_STATUSES = ["all", "ready", "pending", "blocked", "failed", "skipped", "not_generated"];
 const DELIVERY_STATUSES = ["all", "sent", "retry_scheduled", "failed", "blocked", "skipped"];
-const SECTION_LABELS = {
-  alerts_reviewed: "Alerts reviewed",
-  dismissed_low_priority_findings: "Dismissed / low priority",
-  escalations: "Escalations",
-  critical_findings: "Critical findings",
-  evidence: "Evidence",
-  recommendations: "Recommendations",
-};
+const NO_DATA = "No Data";
+
+const SECTION_CONFIG = [
+  { key: "critical_findings", label: "Critical Findings" },
+  { key: "escalations", label: "Escalations" },
+  { key: "dismissed_low_priority_findings", label: "Low Priority Findings" },
+  { key: "evidence", label: "Evidence Reviewed" },
+  { key: "recommendations", label: "Recommendations" },
+];
 
 function labelize(value) {
   return String(value || "unknown")
@@ -20,55 +21,145 @@ function labelize(value) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function badgeStyle(status) {
-  const normalized = String(status || "none");
-  if (["success", "ready", "sent"].includes(normalized)) {
-    return { color: "#7ee787", borderColor: "rgba(126, 231, 135, 0.35)", backgroundColor: "rgba(126, 231, 135, 0.1)" };
+function statusLabel(status) {
+  const normalized = String(status || "none").toLowerCase();
+  if (["success", "ready", "sent"].includes(normalized)) return "Completed";
+  if (normalized === "retry_scheduled") return "Retry Scheduled";
+  if (normalized === "not_generated") return "No Data";
+  if (normalized === "none") return "No Data";
+  return labelize(normalized);
+}
+
+function statusTone(status) {
+  const normalized = String(status || "none").toLowerCase();
+  if (["success", "ready", "sent", "completed"].includes(normalized)) {
+    return { fg: "#7dd3fc", border: "rgba(125, 211, 252, 0.45)", bg: "rgba(14, 165, 233, 0.12)" };
   }
-  if (["partial", "retry_scheduled", "pending", "not_generated"].includes(normalized)) {
-    return { color: "#f5d487", borderColor: "rgba(245, 212, 135, 0.35)", backgroundColor: "rgba(245, 212, 135, 0.1)" };
+  if (["running", "pending", "retry_scheduled", "partial", "not_generated"].includes(normalized)) {
+    return { fg: "#fde68a", border: "rgba(253, 230, 138, 0.38)", bg: "rgba(253, 230, 138, 0.1)" };
   }
-  if (["failed", "blocked"].includes(normalized)) {
-    return { color: "#fca5a5", borderColor: "rgba(248, 113, 113, 0.35)", backgroundColor: "rgba(248, 113, 113, 0.1)" };
+  if (["failed", "blocked", "degraded"].includes(normalized)) {
+    return { fg: "#fca5a5", border: "rgba(248, 113, 113, 0.38)", bg: "rgba(248, 113, 113, 0.1)" };
   }
-  return { color: "#c9d1d9", borderColor: "rgba(201, 209, 217, 0.28)", backgroundColor: "rgba(201, 209, 217, 0.08)" };
+  if (normalized === "skipped") {
+    return { fg: "#c4b5fd", border: "rgba(196, 181, 253, 0.34)", bg: "rgba(139, 92, 246, 0.1)" };
+  }
+  return { fg: "#c9d1d9", border: "rgba(201, 209, 217, 0.26)", bg: "rgba(201, 209, 217, 0.07)" };
 }
 
 function StatusBadge({ label, status }) {
+  const tone = statusTone(status);
   return (
     <span
       style={{
-        ...badgeStyle(status),
+        color: tone.fg,
+        backgroundColor: tone.bg,
+        borderColor: tone.border,
         borderStyle: "solid",
         borderWidth: 1,
-        borderRadius: 6,
+        borderRadius: 999,
         display: "inline-flex",
         alignItems: "center",
         gap: 6,
         fontSize: "0.72rem",
-        fontWeight: 700,
+        fontWeight: 800,
         lineHeight: 1,
-        padding: "5px 7px",
+        padding: "6px 8px",
         whiteSpace: "nowrap",
       }}
     >
       {label ? `${label}: ` : ""}
-      {labelize(status || "none")}
+      {statusLabel(status)}
     </span>
+  );
+}
+
+function formatMetricValue(value) {
+  if (value === null || value === undefined || value === "") return NO_DATA;
+  return value;
+}
+
+function formatRuntime(ms) {
+  const value = Number(ms);
+  if (!Number.isFinite(value) || value <= 0) return NO_DATA;
+  if (value < 1000) return `${Math.round(value)} ms`;
+  return `${(value / 1000).toFixed(1)} sec`;
+}
+
+function inferSeverity(briefing, detail) {
+  const source = detail || briefing || {};
+  const sections = source.sections || {};
+  const criticalCount = Array.isArray(sections.critical_findings) ? sections.critical_findings.length : 0;
+  const escalationCount = Array.isArray(sections.escalations) ? sections.escalations.length : 0;
+  if (criticalCount > 0) return "Critical";
+  if (escalationCount > 0 || source.status === "partial") return "High";
+  if (source.content_status === "failed" || source.status === "failed") return "Degraded";
+  return "Advisory";
+}
+
+function severityTone(severity) {
+  const normalized = String(severity || "").toLowerCase();
+  if (normalized === "critical") return { color: "#fca5a5", border: "rgba(248, 113, 113, 0.4)", bg: "rgba(248, 113, 113, 0.1)" };
+  if (normalized === "high") return { color: "#fde68a", border: "rgba(253, 230, 138, 0.38)", bg: "rgba(253, 230, 138, 0.1)" };
+  if (normalized === "degraded") return { color: "#c4b5fd", border: "rgba(196, 181, 253, 0.34)", bg: "rgba(139, 92, 246, 0.1)" };
+  return { color: "#7dd3fc", border: "rgba(125, 211, 252, 0.34)", bg: "rgba(14, 165, 233, 0.08)" };
+}
+
+function MiniAiMark() {
+  return (
+    <div aria-hidden="true" style={aiMarkStyle}>
+      <div style={aiMarkCoreStyle}>AI</div>
+      <span style={{ ...aiNodeStyle, top: 10, left: 18 }} />
+      <span style={{ ...aiNodeStyle, top: 18, right: 12 }} />
+      <span style={{ ...aiNodeStyle, bottom: 14, left: 32 }} />
+    </div>
+  );
+}
+
+function SummaryCard({ label, value, detail, status }) {
+  const tone = statusTone(status || value);
+  return (
+    <div style={summaryCardStyle}>
+      <span style={summaryLabelStyle}>{label}</span>
+      <strong style={{ ...summaryValueStyle, color: value === NO_DATA ? "#8b949e" : "#f0f9ff" }}>
+        {formatMetricValue(value)}
+      </strong>
+      <span style={{ ...summaryDetailStyle, color: detail ? tone.fg : "#8b949e" }}>{detail || "Awaiting data"}</span>
+    </div>
+  );
+}
+
+function EmptyState() {
+  return (
+    <div style={emptyStateStyle}>
+      <MiniAiMark />
+      <div>
+        <h3 style={emptyTitleStyle}>Morning SOC Briefings</h3>
+        <p style={emptyTextStyle}>
+          AI-generated analyst summaries appear here after scheduled investigations complete.
+        </p>
+        <p style={emptyFinePrintStyle}>
+          Includes critical findings, dismissals, escalations, evidence reviewed, and recommendations.
+        </p>
+      </div>
+    </div>
   );
 }
 
 function SectionList({ title, items }) {
   const safeItems = Array.isArray(items) ? items : [];
   return (
-    <section style={{ borderTop: "1px solid rgba(139, 148, 158, 0.22)", paddingTop: 14 }}>
-      <h3 style={{ color: "#f0f6fc", fontSize: "0.95rem", margin: "0 0 8px" }}>{title}</h3>
+    <section style={detailSectionStyle}>
+      <div style={detailSectionHeaderStyle}>
+        <h3 style={detailSectionTitleStyle}>{title}</h3>
+        <span style={detailCountStyle}>{safeItems.length}</span>
+      </div>
       {safeItems.length === 0 ? (
-        <p style={{ color: "#8b949e", margin: 0, fontSize: "0.85rem" }}>No entries recorded.</p>
+        <p style={mutedTextStyle}>No entries recorded.</p>
       ) : (
-        <ul style={{ margin: 0, paddingLeft: 18, color: "#c9d1d9", display: "grid", gap: 7 }}>
+        <ul style={sectionListStyle}>
           {safeItems.map((item, index) => (
-            <li key={`${title}-${index}`} style={{ lineHeight: 1.45 }}>
+            <li key={`${title}-${index}`} style={sectionItemStyle}>
               {typeof item === "object" ? JSON.stringify(item) : String(item)}
             </li>
           ))}
@@ -78,39 +169,59 @@ function SectionList({ title, items }) {
   );
 }
 
-function BriefingRow({ briefing, selected, onSelect }) {
+function BriefingRow({ briefing, selected, onSelect, detail }) {
   const deliveryStatus = briefing.delivery?.latest_status || "none";
+  const generatedAt = briefing.generated_at || briefing.created_at;
+  const severity = inferSeverity(briefing, selected ? detail : null);
+  const severityStyle = severityTone(severity);
+  const provider = briefing.run?.provider_status || (selected ? detail?.run?.provider_status : null);
+  const runtime = selected ? detail?.run?.runtime_ms : briefing.run?.runtime_ms;
+
   return (
     <button
       type="button"
       onClick={() => onSelect(briefing.id)}
       style={{
-        width: "100%",
-        textAlign: "left",
-        border: selected ? "1px solid rgba(88, 166, 255, 0.58)" : "1px solid rgba(139, 148, 158, 0.22)",
-        borderRadius: 8,
-        background: selected ? "rgba(31, 111, 235, 0.16)" : "rgba(13, 17, 23, 0.64)",
-        color: "#c9d1d9",
-        padding: 12,
-        cursor: "pointer",
+        ...briefingCardStyle,
+        borderColor: selected ? "rgba(125, 211, 252, 0.62)" : "rgba(125, 211, 252, 0.16)",
+        background: selected
+          ? "linear-gradient(135deg, rgba(14, 165, 233, 0.16), rgba(15, 23, 42, 0.92))"
+          : "rgba(13, 17, 23, 0.76)",
+        boxShadow: selected ? "0 16px 36px rgba(14, 165, 233, 0.12)" : "none",
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "start" }}>
-        <div>
-          <div style={{ color: "#f0f6fc", fontWeight: 800 }}>Briefing #{briefing.id}</div>
-          <div style={{ color: "#8b949e", fontSize: "0.78rem", marginTop: 3 }}>
-            {briefing.schedule?.name || "Scheduled SOC briefing"} · {formatTimestamp(briefing.generated_at || briefing.created_at)}
+      <div style={briefingCardHeaderStyle}>
+        <div style={{ minWidth: 0 }}>
+          <div style={briefingTitleStyle}>Morning SOC Briefing #{briefing.id}</div>
+          <div style={briefingSubTitleStyle}>
+            {formatTimestamp(generatedAt)} · {briefing.schedule?.name || "Scheduled SOC briefing"}
           </div>
         </div>
-        <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: 6 }}>
-          <StatusBadge label="Content" status={briefing.content_status} />
-          <StatusBadge label="Slack" status={deliveryStatus} />
-        </div>
+        <span style={{ ...severityPillStyle, color: severityStyle.color, borderColor: severityStyle.border, backgroundColor: severityStyle.bg }}>
+          {severity}
+        </span>
       </div>
-      <p style={{ color: "#adbac7", fontSize: "0.84rem", lineHeight: 1.4, margin: "8px 0 0" }}>
-        {briefing.summary || "No summary recorded."}
-      </p>
+      <p style={briefingSummaryStyle}>{briefing.summary || "No summary recorded."}</p>
+      <div style={briefingMetaGridStyle}>
+        <MetaItem label="Schedule" value={briefing.schedule?.name} />
+        <MetaItem label="Runtime" value={formatRuntime(runtime)} />
+        <MetaItem label="Provider" value={provider} />
+        <MetaItem label="Model" value={briefing.run?.model || detail?.run?.model} />
+      </div>
+      <div style={briefingStatusRowStyle}>
+        <StatusBadge label="Status" status={briefing.content_status || briefing.status} />
+        <StatusBadge label="Slack" status={deliveryStatus} />
+      </div>
     </button>
+  );
+}
+
+function MetaItem({ label, value }) {
+  return (
+    <span style={metaItemStyle}>
+      <span style={metaLabelStyle}>{label}</span>
+      <strong style={metaValueStyle}>{formatMetricValue(value)}</strong>
+    </span>
   );
 }
 
@@ -143,10 +254,14 @@ export default function SocBriefingsPanel() {
     setError("");
     try {
       const payload = await listSocBriefings(filters);
-      setItems(payload.items || []);
+      const nextItems = payload.items || [];
+      setItems(nextItems);
       setTotal(Number(payload.total || 0));
-      if (!selectedId && payload.items?.length) {
-        setSelectedId(payload.items[0].id);
+      if (!selectedId && nextItems.length) {
+        setSelectedId(nextItems[0].id);
+      }
+      if (selectedId && !nextItems.some((item) => item.id === selectedId)) {
+        setSelectedId(nextItems[0]?.id || null);
       }
     } catch (err) {
       setError(err.message || "Unable to load SOC briefings.");
@@ -181,102 +296,670 @@ export default function SocBriefingsPanel() {
     };
   }, [selectedId]);
 
+  const selectedBriefing = items.find((item) => item.id === selectedId);
+  const latestBriefing = items[0];
+  const latestGeneratedAt = latestBriefing?.generated_at || latestBriefing?.created_at;
+  const latestSlackStatus = latestBriefing?.delivery?.latest_status || detail?.deliveries?.[0]?.status;
+  const agentStatus = detail?.run?.status || latestBriefing?.run?.status || (total > 0 ? "completed" : null);
   const canPrevious = offset > 0;
   const canNext = offset + PAGE_SIZE < total;
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16, alignItems: "start" }}>
-      <section style={{ display: "grid", gap: 12 }}>
-        <div style={{ display: "grid", gap: 10, border: "1px solid rgba(139, 148, 158, 0.22)", borderRadius: 8, padding: 12, background: "rgba(13, 17, 23, 0.58)" }}>
-          <h2 style={{ color: "#f0f6fc", fontSize: "1rem", margin: 0 }}>SOC Briefing History</h2>
-          <input
-            aria-label="Search briefings"
-            value={search}
-            onChange={(event) => {
-              setSearch(event.target.value);
-              setOffset(0);
-            }}
-            placeholder="Search summaries, schedules, errors"
-            style={{ background: "#0d1117", border: "1px solid rgba(139, 148, 158, 0.36)", borderRadius: 6, color: "#f0f6fc", padding: "9px 10px" }}
-          />
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <label style={{ color: "#8b949e", display: "grid", gap: 5, fontSize: "0.76rem", fontWeight: 700 }}>
-              Content
-              <select aria-label="Content status" value={contentStatus} onChange={(event) => { setContentStatus(event.target.value); setOffset(0); }} style={{ background: "#0d1117", color: "#f0f6fc", border: "1px solid rgba(139, 148, 158, 0.36)", borderRadius: 6, padding: 8 }}>
-                {CONTENT_STATUSES.map((status) => <option key={status} value={status}>{labelize(status)}</option>)}
-              </select>
-            </label>
-            <label style={{ color: "#8b949e", display: "grid", gap: 5, fontSize: "0.76rem", fontWeight: 700 }}>
-              Slack
-              <select aria-label="Slack delivery status" value={deliveryStatus} onChange={(event) => { setDeliveryStatus(event.target.value); setOffset(0); }} style={{ background: "#0d1117", color: "#f0f6fc", border: "1px solid rgba(139, 148, 158, 0.36)", borderRadius: 6, padding: 8 }}>
-                {DELIVERY_STATUSES.map((status) => <option key={status} value={status}>{labelize(status)}</option>)}
-              </select>
-            </label>
+    <div style={pageStyle}>
+      <section style={heroStyle}>
+        <div style={heroContentStyle}>
+          <MiniAiMark />
+          <div>
+            <p style={eyebrowStyle}>Read-only autonomous SOC agent</p>
+            <h2 style={heroTitleStyle}>Morning SOC Briefings</h2>
+            <p style={heroTextStyle}>
+              Scheduled AI investigations summarize critical findings, dismissals, escalations, evidence reviewed, and analyst recommendations.
+            </p>
           </div>
         </div>
-        {error && <div role="alert" style={{ color: "#fca5a5", border: "1px solid rgba(248, 113, 113, 0.28)", borderRadius: 8, padding: 10 }}>{error}</div>}
-        <div style={{ display: "grid", gap: 10 }}>
-          {loading ? <div style={{ color: "#8b949e" }}>Loading briefings...</div> : null}
-          {!loading && items.length === 0 ? <div style={{ color: "#8b949e" }}>No saved briefings match the current filters.</div> : null}
-          {items.map((item) => (
-            <BriefingRow key={item.id} briefing={item} selected={item.id === selectedId} onSelect={setSelectedId} />
-          ))}
-        </div>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: "#8b949e", fontSize: "0.82rem" }}>
-          <span>{total ? `${offset + 1}-${Math.min(offset + PAGE_SIZE, total)} of ${total}` : "0 of 0"}</span>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button type="button" disabled={!canPrevious} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>Previous</button>
-            <button type="button" disabled={!canNext} onClick={() => setOffset(offset + PAGE_SIZE)}>Next</button>
-          </div>
+        <div style={heroStatusStyle}>
+          <StatusBadge label="Agent" status={agentStatus || "none"} />
+          <StatusBadge label="Slack" status={latestSlackStatus || "none"} />
         </div>
       </section>
 
-      <section style={{ border: "1px solid rgba(139, 148, 158, 0.22)", borderRadius: 8, background: "rgba(13, 17, 23, 0.58)", padding: 16, minHeight: 420 }}>
-        {detailLoading && <div style={{ color: "#8b949e" }}>Loading briefing detail...</div>}
-        {!detailLoading && !detail && <div style={{ color: "#8b949e" }}>Select a saved briefing.</div>}
-        {!detailLoading && detail && (
-          <div style={{ display: "grid", gap: 16 }}>
-            <header style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "start" }}>
-              <div>
-                <h2 style={{ color: "#f0f6fc", margin: 0, fontSize: "1.12rem" }}>Briefing #{detail.id}</h2>
-                <p style={{ color: "#8b949e", margin: "4px 0 0", fontSize: "0.82rem" }}>
-                  {detail.schedule?.name || "Scheduled SOC briefing"} · {formatTimestamp(detail.generated_at || detail.created_at)}
-                </p>
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: 6 }}>
-                <StatusBadge label="Content" status={detail.content_status} />
-                <StatusBadge label="Run" status={detail.run?.status} />
-                <StatusBadge label="Slack" status={detail.deliveries?.[0]?.status || "none"} />
-              </div>
-            </header>
-            <p style={{ color: "#c9d1d9", lineHeight: 1.5, margin: 0 }}>{detail.summary || "No summary recorded."}</p>
-            {(detail.error_code || detail.error_message || detail.run?.error_code) && (
-              <div style={{ border: "1px solid rgba(248, 113, 113, 0.28)", borderRadius: 8, color: "#fca5a5", padding: 10 }}>
-                {detail.error_code || detail.run?.error_code || "degraded"}: {detail.error_message || detail.run?.error_message || "Briefing completed in a degraded state."}
-              </div>
-            )}
-            {Object.entries(SECTION_LABELS).map(([key, label]) => (
-              <SectionList key={key} title={label} items={detail.sections?.[key]} />
-            ))}
-            <section style={{ borderTop: "1px solid rgba(139, 148, 158, 0.22)", paddingTop: 14 }}>
-              <h3 style={{ color: "#f0f6fc", fontSize: "0.95rem", margin: "0 0 8px" }}>Delivery attempts</h3>
-              {(detail.deliveries || []).length === 0 ? (
-                <p style={{ color: "#8b949e", margin: 0 }}>No Slack delivery attempt recorded.</p>
-              ) : (
-                <div style={{ display: "grid", gap: 8 }}>
-                  {detail.deliveries.map((attempt) => (
-                    <div key={attempt.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, color: "#c9d1d9", border: "1px solid rgba(139, 148, 158, 0.18)", borderRadius: 8, padding: 10 }}>
-                      <StatusBadge status={attempt.status} />
-                      <span>{formatTimestamp(attempt.last_attempted_at || attempt.created_at)}</span>
-                      <span>{attempt.failure_code || "no failure"}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
-          </div>
-        )}
+      <section style={summaryGridStyle} aria-label="SOC briefing summary">
+        <SummaryCard label="Total Briefings" value={total || NO_DATA} detail={total ? `${items.length} visible` : ""} />
+        <SummaryCard label="Latest Briefing" value={latestGeneratedAt ? formatTimestamp(latestGeneratedAt) : NO_DATA} detail={latestBriefing ? `#${latestBriefing.id}` : ""} status={latestBriefing?.content_status} />
+        <SummaryCard label="Next Scheduled Run" value={NO_DATA} detail="Schedule metadata unavailable" />
+        <SummaryCard label="Agent Status" value={agentStatus ? statusLabel(agentStatus) : NO_DATA} detail={detail?.run?.provider_status || ""} status={agentStatus} />
+        <SummaryCard label="Slack Delivery Status" value={latestSlackStatus ? statusLabel(latestSlackStatus) : NO_DATA} detail={latestBriefing?.delivery?.latest_attempted_at ? formatTimestamp(latestBriefing.delivery.latest_attempted_at) : ""} status={latestSlackStatus} />
       </section>
+
+      <div style={workspaceStyle}>
+        <section style={historyPaneStyle}>
+          <div style={filterPanelStyle}>
+            <div>
+              <h3 style={paneTitleStyle}>Briefing History</h3>
+              <p style={paneSubtitleStyle}>Browse saved advisory briefings without triggering new investigations.</p>
+            </div>
+            <div style={filterGridStyle}>
+              <input
+                aria-label="Search briefings"
+                value={search}
+                onChange={(event) => {
+                  setSearch(event.target.value);
+                  setOffset(0);
+                }}
+                placeholder="Search summaries, schedules, errors"
+                style={inputStyle}
+              />
+              <label style={filterLabelStyle}>
+                Content
+                <select
+                  aria-label="Content status"
+                  value={contentStatus}
+                  onChange={(event) => {
+                    setContentStatus(event.target.value);
+                    setOffset(0);
+                  }}
+                  style={selectStyle}
+                >
+                  {CONTENT_STATUSES.map((status) => (
+                    <option key={status} value={status}>{labelize(status)}</option>
+                  ))}
+                </select>
+              </label>
+              <label style={filterLabelStyle}>
+                Slack
+                <select
+                  aria-label="Slack delivery status"
+                  value={deliveryStatus}
+                  onChange={(event) => {
+                    setDeliveryStatus(event.target.value);
+                    setOffset(0);
+                  }}
+                  style={selectStyle}
+                >
+                  {DELIVERY_STATUSES.map((status) => (
+                    <option key={status} value={status}>{labelize(status)}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </div>
+
+          {error ? <div role="alert" style={errorPanelStyle}>{error}</div> : null}
+
+          <div style={historyListStyle}>
+            {loading ? <div style={loadingStyle}>Loading briefings...</div> : null}
+            {!loading && items.length === 0 ? <EmptyState /> : null}
+            {items.map((item) => (
+              <BriefingRow
+                key={item.id}
+                briefing={item}
+                selected={item.id === selectedId}
+                detail={item.id === selectedId ? detail : null}
+                onSelect={setSelectedId}
+              />
+            ))}
+          </div>
+          <div style={paginationStyle}>
+            <span>{total ? `${offset + 1}-${Math.min(offset + PAGE_SIZE, total)} of ${total}` : "0 of 0"}</span>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button type="button" disabled={!canPrevious} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))} style={pagerButtonStyle}>Previous</button>
+              <button type="button" disabled={!canNext} onClick={() => setOffset(offset + PAGE_SIZE)} style={pagerButtonStyle}>Next</button>
+            </div>
+          </div>
+        </section>
+
+        <section style={detailPaneStyle}>
+          {detailLoading ? <div style={loadingStyle}>Loading briefing detail...</div> : null}
+          {!detailLoading && !detail ? <EmptyState /> : null}
+          {!detailLoading && detail ? (
+            <div style={detailContentStyle}>
+              <header style={detailHeaderStyle}>
+                <div>
+                  <p style={eyebrowStyle}>Executive Summary</p>
+                  <h2 style={detailTitleStyle}>Briefing #{detail.id}</h2>
+                  <p style={detailSubTitleStyle}>
+                    {detail.schedule?.name || "Scheduled SOC briefing"} · {formatTimestamp(detail.generated_at || detail.created_at)}
+                  </p>
+                </div>
+                <div style={detailBadgeGroupStyle}>
+                  <StatusBadge label="Content" status={detail.content_status} />
+                  <StatusBadge label="Run" status={detail.run?.status} />
+                  <StatusBadge label="Slack" status={detail.deliveries?.[0]?.status || "none"} />
+                </div>
+              </header>
+
+              <section style={executiveSummaryStyle}>
+                <p style={summaryLeadStyle}>{detail.summary || "No summary recorded."}</p>
+              </section>
+
+              {(detail.error_code || detail.error_message || detail.run?.error_code) ? (
+                <div style={degradedPanelStyle}>
+                  <strong>{detail.error_code || detail.run?.error_code || "degraded"}</strong>
+                  <span>{detail.error_message || detail.run?.error_message || "Briefing completed in a degraded state."}</span>
+                </div>
+              ) : null}
+
+              {SECTION_CONFIG.map((section) => (
+                <SectionList key={section.key} title={section.label} items={detail.sections?.[section.key]} />
+              ))}
+
+              <section style={detailSectionStyle}>
+                <div style={detailSectionHeaderStyle}>
+                  <h3 style={detailSectionTitleStyle}>Investigation Metadata</h3>
+                </div>
+                <div style={metadataGridStyle}>
+                  <MetaItem label="Severity" value={inferSeverity(selectedBriefing, detail)} />
+                  <MetaItem label="Runtime" value={formatRuntime(detail.run?.runtime_ms)} />
+                  <MetaItem label="Provider" value={detail.run?.provider_status} />
+                  <MetaItem label="Model" value={detail.run?.model} />
+                  <MetaItem label="Window" value={detail.window?.window_end ? formatTimestamp(detail.window.window_end) : null} />
+                  <MetaItem label="Service Actor" value={detail.run?.service_actor} />
+                </div>
+              </section>
+
+              <section style={detailSectionStyle}>
+                <div style={detailSectionHeaderStyle}>
+                  <h3 style={detailSectionTitleStyle}>Slack Delivery Attempts</h3>
+                  <span style={detailCountStyle}>{(detail.deliveries || []).length}</span>
+                </div>
+                {(detail.deliveries || []).length === 0 ? (
+                  <p style={mutedTextStyle}>No Slack delivery attempt recorded.</p>
+                ) : (
+                  <div style={deliveryListStyle}>
+                    {detail.deliveries.map((attempt) => (
+                      <div key={attempt.id} style={deliveryRowStyle}>
+                        <StatusBadge status={attempt.status} />
+                        <span>{formatTimestamp(attempt.last_attempted_at || attempt.created_at)}</span>
+                        <span>{attempt.failure_code || "no failure"}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            </div>
+          ) : null}
+        </section>
+      </div>
     </div>
   );
 }
+
+const pageStyle = {
+  display: "grid",
+  gap: 16,
+};
+
+const heroStyle = {
+  alignItems: "center",
+  background: "linear-gradient(135deg, rgba(8, 47, 73, 0.72), rgba(13, 17, 23, 0.9))",
+  border: "1px solid rgba(125, 211, 252, 0.22)",
+  borderRadius: 8,
+  display: "flex",
+  gap: 18,
+  justifyContent: "space-between",
+  padding: 18,
+};
+
+const heroContentStyle = {
+  alignItems: "center",
+  display: "flex",
+  gap: 14,
+  minWidth: 0,
+};
+
+const heroStatusStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 8,
+  justifyContent: "flex-end",
+};
+
+const aiMarkStyle = {
+  alignItems: "center",
+  background: "radial-gradient(circle at 35% 30%, rgba(186, 230, 253, 0.28), rgba(14, 165, 233, 0.08) 46%, rgba(15, 23, 42, 0.9) 72%)",
+  border: "1px solid rgba(125, 211, 252, 0.42)",
+  borderRadius: 8,
+  boxShadow: "0 14px 28px rgba(14, 165, 233, 0.14)",
+  display: "flex",
+  flex: "0 0 64px",
+  height: 64,
+  justifyContent: "center",
+  position: "relative",
+  width: 64,
+};
+
+const aiMarkCoreStyle = {
+  alignItems: "center",
+  border: "1px solid rgba(125, 211, 252, 0.55)",
+  borderRadius: 999,
+  color: "#e0f2fe",
+  display: "flex",
+  fontSize: "0.82rem",
+  fontWeight: 900,
+  height: 34,
+  justifyContent: "center",
+  letterSpacing: 0,
+  width: 34,
+};
+
+const aiNodeStyle = {
+  backgroundColor: "#7dd3fc",
+  borderRadius: 999,
+  boxShadow: "0 0 16px rgba(125, 211, 252, 0.6)",
+  height: 5,
+  position: "absolute",
+  width: 5,
+};
+
+const eyebrowStyle = {
+  color: "#7dd3fc",
+  fontSize: "0.72rem",
+  fontWeight: 900,
+  letterSpacing: 0,
+  margin: "0 0 4px",
+  textTransform: "uppercase",
+};
+
+const heroTitleStyle = {
+  color: "#f0f9ff",
+  fontSize: "1.22rem",
+  lineHeight: 1.15,
+  margin: 0,
+};
+
+const heroTextStyle = {
+  color: "#adbac7",
+  fontSize: "0.9rem",
+  lineHeight: 1.45,
+  margin: "6px 0 0",
+  maxWidth: 780,
+};
+
+const summaryGridStyle = {
+  display: "grid",
+  gap: 10,
+  gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+};
+
+const summaryCardStyle = {
+  background: "rgba(13, 17, 23, 0.78)",
+  border: "1px solid rgba(125, 211, 252, 0.16)",
+  borderRadius: 8,
+  display: "grid",
+  gap: 5,
+  minHeight: 78,
+  padding: "12px 13px",
+};
+
+const summaryLabelStyle = {
+  color: "#8b949e",
+  fontSize: "0.72rem",
+  fontWeight: 800,
+  textTransform: "uppercase",
+};
+
+const summaryValueStyle = {
+  fontSize: "0.98rem",
+  lineHeight: 1.15,
+};
+
+const summaryDetailStyle = {
+  fontSize: "0.76rem",
+};
+
+const workspaceStyle = {
+  alignItems: "start",
+  display: "grid",
+  gap: 16,
+  gridTemplateColumns: "minmax(320px, 0.82fr) minmax(420px, 1.18fr)",
+};
+
+const historyPaneStyle = {
+  display: "grid",
+  gap: 12,
+  minWidth: 0,
+};
+
+const detailPaneStyle = {
+  background: "rgba(13, 17, 23, 0.7)",
+  border: "1px solid rgba(125, 211, 252, 0.16)",
+  borderRadius: 8,
+  minHeight: 520,
+  minWidth: 0,
+  padding: 16,
+};
+
+const filterPanelStyle = {
+  background: "rgba(13, 17, 23, 0.72)",
+  border: "1px solid rgba(125, 211, 252, 0.16)",
+  borderRadius: 8,
+  display: "grid",
+  gap: 12,
+  padding: 14,
+};
+
+const paneTitleStyle = {
+  color: "#f0f9ff",
+  fontSize: "1rem",
+  margin: 0,
+};
+
+const paneSubtitleStyle = {
+  color: "#8b949e",
+  fontSize: "0.8rem",
+  lineHeight: 1.4,
+  margin: "4px 0 0",
+};
+
+const filterGridStyle = {
+  display: "grid",
+  gap: 10,
+  gridTemplateColumns: "minmax(180px, 1.4fr) repeat(2, minmax(120px, 0.8fr))",
+};
+
+const inputStyle = {
+  background: "#0d1117",
+  border: "1px solid rgba(125, 211, 252, 0.24)",
+  borderRadius: 6,
+  color: "#f0f9ff",
+  minWidth: 0,
+  padding: "10px 11px",
+};
+
+const selectStyle = {
+  background: "#0d1117",
+  border: "1px solid rgba(125, 211, 252, 0.24)",
+  borderRadius: 6,
+  color: "#f0f9ff",
+  padding: "9px 10px",
+};
+
+const filterLabelStyle = {
+  color: "#8b949e",
+  display: "grid",
+  fontSize: "0.72rem",
+  fontWeight: 800,
+  gap: 5,
+  minWidth: 0,
+};
+
+const historyListStyle = {
+  display: "grid",
+  gap: 10,
+};
+
+const briefingCardStyle = {
+  borderStyle: "solid",
+  borderWidth: 1,
+  borderRadius: 8,
+  color: "#c9d1d9",
+  cursor: "pointer",
+  display: "grid",
+  gap: 10,
+  padding: 13,
+  textAlign: "left",
+  width: "100%",
+};
+
+const briefingCardHeaderStyle = {
+  alignItems: "start",
+  display: "flex",
+  gap: 12,
+  justifyContent: "space-between",
+};
+
+const briefingTitleStyle = {
+  color: "#f0f9ff",
+  fontSize: "0.96rem",
+  fontWeight: 900,
+  lineHeight: 1.25,
+};
+
+const briefingSubTitleStyle = {
+  color: "#8b949e",
+  fontSize: "0.76rem",
+  lineHeight: 1.35,
+  marginTop: 4,
+};
+
+const severityPillStyle = {
+  borderStyle: "solid",
+  borderWidth: 1,
+  borderRadius: 999,
+  flex: "0 0 auto",
+  fontSize: "0.72rem",
+  fontWeight: 900,
+  padding: "5px 8px",
+};
+
+const briefingSummaryStyle = {
+  color: "#adbac7",
+  fontSize: "0.84rem",
+  lineHeight: 1.45,
+  margin: 0,
+};
+
+const briefingMetaGridStyle = {
+  display: "grid",
+  gap: 8,
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+};
+
+const metaItemStyle = {
+  background: "rgba(22, 27, 34, 0.58)",
+  border: "1px solid rgba(139, 148, 158, 0.13)",
+  borderRadius: 7,
+  display: "grid",
+  gap: 3,
+  minWidth: 0,
+  padding: "8px 9px",
+};
+
+const metaLabelStyle = {
+  color: "#8b949e",
+  fontSize: "0.68rem",
+  fontWeight: 800,
+  textTransform: "uppercase",
+};
+
+const metaValueStyle = {
+  color: "#dbeafe",
+  fontSize: "0.8rem",
+  lineHeight: 1.25,
+  overflowWrap: "anywhere",
+};
+
+const briefingStatusRowStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 7,
+};
+
+const paginationStyle = {
+  alignItems: "center",
+  color: "#8b949e",
+  display: "flex",
+  fontSize: "0.82rem",
+  justifyContent: "space-between",
+};
+
+const pagerButtonStyle = {
+  background: "rgba(13, 17, 23, 0.82)",
+  border: "1px solid rgba(125, 211, 252, 0.22)",
+  borderRadius: 6,
+  color: "#dbeafe",
+  cursor: "pointer",
+  padding: "7px 10px",
+};
+
+const errorPanelStyle = {
+  border: "1px solid rgba(248, 113, 113, 0.3)",
+  borderRadius: 8,
+  color: "#fca5a5",
+  padding: 11,
+};
+
+const loadingStyle = {
+  color: "#8b949e",
+  padding: 12,
+};
+
+const emptyStateStyle = {
+  alignItems: "center",
+  background: "linear-gradient(135deg, rgba(8, 47, 73, 0.34), rgba(13, 17, 23, 0.78))",
+  border: "1px solid rgba(125, 211, 252, 0.18)",
+  borderRadius: 8,
+  display: "flex",
+  gap: 14,
+  padding: 18,
+};
+
+const emptyTitleStyle = {
+  color: "#f0f9ff",
+  fontSize: "1rem",
+  margin: 0,
+};
+
+const emptyTextStyle = {
+  color: "#c9d1d9",
+  fontSize: "0.88rem",
+  lineHeight: 1.45,
+  margin: "6px 0 0",
+};
+
+const emptyFinePrintStyle = {
+  color: "#8b949e",
+  fontSize: "0.78rem",
+  lineHeight: 1.45,
+  margin: "6px 0 0",
+};
+
+const detailContentStyle = {
+  display: "grid",
+  gap: 15,
+};
+
+const detailHeaderStyle = {
+  alignItems: "start",
+  borderBottom: "1px solid rgba(125, 211, 252, 0.16)",
+  display: "flex",
+  gap: 14,
+  justifyContent: "space-between",
+  paddingBottom: 14,
+};
+
+const detailTitleStyle = {
+  color: "#f0f9ff",
+  fontSize: "1.1rem",
+  lineHeight: 1.2,
+  margin: 0,
+};
+
+const detailSubTitleStyle = {
+  color: "#8b949e",
+  fontSize: "0.82rem",
+  lineHeight: 1.4,
+  margin: "5px 0 0",
+};
+
+const detailBadgeGroupStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 7,
+  justifyContent: "flex-end",
+};
+
+const executiveSummaryStyle = {
+  background: "rgba(14, 165, 233, 0.08)",
+  border: "1px solid rgba(125, 211, 252, 0.18)",
+  borderRadius: 8,
+  padding: 14,
+};
+
+const summaryLeadStyle = {
+  color: "#dbeafe",
+  fontSize: "0.94rem",
+  lineHeight: 1.55,
+  margin: 0,
+};
+
+const degradedPanelStyle = {
+  background: "rgba(248, 113, 113, 0.08)",
+  border: "1px solid rgba(248, 113, 113, 0.28)",
+  borderRadius: 8,
+  color: "#fca5a5",
+  display: "grid",
+  gap: 5,
+  padding: 12,
+};
+
+const detailSectionStyle = {
+  borderTop: "1px solid rgba(125, 211, 252, 0.14)",
+  display: "grid",
+  gap: 10,
+  paddingTop: 14,
+};
+
+const detailSectionHeaderStyle = {
+  alignItems: "center",
+  display: "flex",
+  gap: 10,
+  justifyContent: "space-between",
+};
+
+const detailSectionTitleStyle = {
+  color: "#f0f9ff",
+  fontSize: "0.96rem",
+  margin: 0,
+};
+
+const detailCountStyle = {
+  background: "rgba(125, 211, 252, 0.1)",
+  border: "1px solid rgba(125, 211, 252, 0.24)",
+  borderRadius: 999,
+  color: "#7dd3fc",
+  fontSize: "0.7rem",
+  fontWeight: 900,
+  padding: "3px 8px",
+};
+
+const sectionListStyle = {
+  color: "#c9d1d9",
+  display: "grid",
+  gap: 8,
+  margin: 0,
+  paddingLeft: 18,
+};
+
+const sectionItemStyle = {
+  lineHeight: 1.5,
+  paddingLeft: 2,
+};
+
+const mutedTextStyle = {
+  color: "#8b949e",
+  fontSize: "0.84rem",
+  margin: 0,
+};
+
+const metadataGridStyle = {
+  display: "grid",
+  gap: 9,
+  gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+};
+
+const deliveryListStyle = {
+  display: "grid",
+  gap: 8,
+};
+
+const deliveryRowStyle = {
+  alignItems: "center",
+  border: "1px solid rgba(125, 211, 252, 0.13)",
+  borderRadius: 8,
+  color: "#c9d1d9",
+  display: "grid",
+  gap: 10,
+  gridTemplateColumns: "minmax(110px, 0.8fr) minmax(130px, 1fr) minmax(90px, 0.8fr)",
+  padding: 10,
+};

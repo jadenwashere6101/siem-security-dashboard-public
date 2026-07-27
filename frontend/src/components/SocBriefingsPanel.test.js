@@ -20,6 +20,7 @@ const listPayload = {
       generated_at: "2026-07-27T08:02:00Z",
       created_at: "2026-07-27T08:02:00Z",
       schedule: { name: "Morning SOC briefing" },
+      run: { status: "success", provider_status: "local" },
       delivery: { latest_status: "sent", attempt_count: 1 },
     },
   ],
@@ -35,7 +36,7 @@ const detailPayload = {
   generated_at: "2026-07-27T08:02:00Z",
   created_at: "2026-07-27T08:02:00Z",
   schedule: { name: "Morning SOC briefing" },
-  run: { status: "success" },
+  run: { status: "success", provider_status: "local", runtime_ms: 1234, service_actor: "scheduled_soc_briefing_worker" },
   sections: {
     alerts_reviewed: ["Alert #1001 reviewed"],
     dismissed_low_priority_findings: ["Known scanner dismissed"],
@@ -68,10 +69,15 @@ describe("SocBriefingsPanel", () => {
   test("renders history list, structured detail, and separate status badges", async () => {
     render(<SocBriefingsPanel />);
 
-    expect(await screen.findByText("SOC Briefing History")).toBeInTheDocument();
-    expect(await screen.findByText("Critical auth anomaly reviewed.")).toBeInTheDocument();
-    expect(await screen.findByText("Alerts reviewed")).toBeInTheDocument();
-    expect(screen.getByText("Critical findings")).toBeInTheDocument();
+    expect(await screen.findByText("Morning SOC Briefings")).toBeInTheDocument();
+    expect(screen.getByText("Read-only autonomous SOC agent")).toBeInTheDocument();
+    expect(screen.getByText("Total Briefings")).toBeInTheDocument();
+    expect(screen.getByText("Latest Briefing")).toBeInTheDocument();
+    expect(screen.getByText("Next Scheduled Run")).toBeInTheDocument();
+    expect((await screen.findAllByText("Critical auth anomaly reviewed.")).length).toBeGreaterThanOrEqual(2);
+    expect(await screen.findByText("Executive Summary")).toBeInTheDocument();
+    expect(screen.getByText("Critical Findings")).toBeInTheDocument();
+    expect(screen.getByText("Investigation Metadata")).toBeInTheDocument();
     expect(screen.getAllByText(/Content:/)[0]).toBeInTheDocument();
     expect(screen.getAllByText(/Slack:/)[0]).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
@@ -115,5 +121,14 @@ describe("SocBriefingsPanel", () => {
     expect(await screen.findByText(/provider_timeout/i)).toBeInTheDocument();
     expect(screen.getByText("timeout")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
+  });
+
+  test("renders polished empty state and no-data summary values", async () => {
+    listSocBriefings.mockResolvedValueOnce({ items: [], limit: 10, offset: 0, total: 0 });
+    render(<SocBriefingsPanel />);
+
+    expect(await screen.findAllByText("Morning SOC Briefings")).toHaveLength(2);
+    expect(screen.getByText(/AI-generated analyst summaries appear here/i)).toBeInTheDocument();
+    expect(screen.getAllByText("No Data").length).toBeGreaterThanOrEqual(3);
   });
 });
