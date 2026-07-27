@@ -8,10 +8,10 @@ test("FloatingSiemChat submits a general SIEM question", async () => {
 
   await userEvent.click(screen.getByRole("button", { name: "Open general SIEM AI chat" }));
   await userEvent.type(
-    screen.getByPlaceholderText("Ask a general question about what you are seeing..."),
+    screen.getByPlaceholderText("Ask Anakin a general question about what you are seeing..."),
     "What does this graph mean?"
   );
-  await userEvent.click(screen.getByRole("button", { name: "Ask AI" }));
+  await userEvent.click(screen.getByRole("button", { name: "Send to Anakin" }));
 
   expect(onAsk).toHaveBeenCalledWith("What does this graph mean?");
 });
@@ -22,10 +22,10 @@ test("FloatingSiemChat does not persist chat text to local storage", async () =>
 
   await userEvent.click(screen.getByRole("button", { name: "Open general SIEM AI chat" }));
   await userEvent.type(
-    screen.getByPlaceholderText("Ask a general question about what you are seeing..."),
+    screen.getByPlaceholderText("Ask Anakin a general question about what you are seeing..."),
     "Do not persist this"
   );
-  await userEvent.click(screen.getByRole("button", { name: "Ask AI" }));
+  await userEvent.click(screen.getByRole("button", { name: "Send to Anakin" }));
 
   expect(setItem).not.toHaveBeenCalled();
 });

@@ -28,8 +28,8 @@ function AiResponsePanel({
     >
       <div style={headerStyle}>
         <div>
-          <p style={eyebrowStyle}>Read-only AI assistant</p>
-          <h2 style={titleStyle}>{state.title || "SIEM AI"}</h2>
+          <p style={eyebrowStyle}>Anakin · read-only AI assistant</p>
+          <h2 style={titleStyle}>{state.title || "Anakin"}</h2>
         </div>
         <button type="button" onClick={onDismiss} aria-label="Dismiss AI response" style={iconButtonStyle}>
           ×
@@ -38,7 +38,7 @@ function AiResponsePanel({
 
       {busy ? (
         <div style={bodyStyle}>
-          <p style={mutedStyle}>Analyzing current SIEM context...</p>
+          <p style={mutedStyle}>Anakin is analyzing current SIEM context...</p>
           <button type="button" onClick={onCancel} style={secondaryButtonStyle}>Cancel</button>
         </div>
       ) : null}
@@ -58,7 +58,7 @@ function AiResponsePanel({
           {investigation ? <InvestigationReview investigation={investigation} /> : null}
           {draft ? <DraftReview draft={draft} response={response} userRole={userRole} /> : null}
           {!draft && !investigation ? (
-            <div style={answerStyle}>{response.answer || response.error || "No AI answer was returned."}</div>
+            <div style={answerStyle}>{response.answer || response.error || "No answer was returned from Anakin."}</div>
           ) : response.error && !investigation ? (
             <p style={warningStyle}>{response.error}</p>
           ) : null}

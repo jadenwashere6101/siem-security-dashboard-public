@@ -6,6 +6,7 @@ const PAGE_SIZE = 10;
 const CONTENT_STATUSES = ["all", "ready", "pending", "blocked", "failed", "skipped", "not_generated"];
 const DELIVERY_STATUSES = ["all", "sent", "retry_scheduled", "failed", "blocked", "skipped"];
 const NO_DATA = "No Data";
+const AGENT_NAME = "Anakin";
 
 const SECTION_CONFIG = [
   { key: "critical_findings", label: "Critical Findings" },
@@ -108,7 +109,7 @@ function severityTone(severity) {
 function MiniAiMark() {
   return (
     <div aria-hidden="true" style={aiMarkStyle}>
-      <div style={aiMarkCoreStyle}>AI</div>
+      <div style={aiMarkCoreStyle}>A</div>
       <span style={{ ...aiNodeStyle, top: 10, left: 18 }} />
       <span style={{ ...aiNodeStyle, top: 18, right: 12 }} />
       <span style={{ ...aiNodeStyle, bottom: 14, left: 32 }} />
@@ -136,7 +137,7 @@ function EmptyState() {
       <div>
         <h3 style={emptyTitleStyle}>Morning SOC Briefings</h3>
         <p style={emptyTextStyle}>
-          AI-generated analyst summaries appear here after scheduled investigations complete.
+          Anakin's analyst summaries appear here after scheduled investigations complete.
         </p>
         <p style={emptyFinePrintStyle}>
           Includes critical findings, dismissals, escalations, evidence reviewed, and recommendations.
@@ -303,6 +304,7 @@ export default function SocBriefingsPanel() {
   const agentStatus = detail?.run?.status || latestBriefing?.run?.status || (total > 0 ? "completed" : null);
   const canPrevious = offset > 0;
   const canNext = offset + PAGE_SIZE < total;
+  const empty = !loading && items.length === 0;
 
   return (
     <div style={pageStyle}>
@@ -313,12 +315,12 @@ export default function SocBriefingsPanel() {
             <p style={eyebrowStyle}>Read-only autonomous SOC agent</p>
             <h2 style={heroTitleStyle}>Morning SOC Briefings</h2>
             <p style={heroTextStyle}>
-              Scheduled AI investigations summarize critical findings, dismissals, escalations, evidence reviewed, and analyst recommendations.
+              Anakin summarizes scheduled investigations, critical findings, dismissals, escalations, evidence reviewed, and analyst recommendations.
             </p>
           </div>
         </div>
         <div style={heroStatusStyle}>
-          <StatusBadge label="Agent" status={agentStatus || "none"} />
+          <StatusBadge label={AGENT_NAME} status={agentStatus || "none"} />
           <StatusBadge label="Slack" status={latestSlackStatus || "none"} />
         </div>
       </section>
@@ -327,10 +329,15 @@ export default function SocBriefingsPanel() {
         <SummaryCard label="Total Briefings" value={total || NO_DATA} detail={total ? `${items.length} visible` : ""} />
         <SummaryCard label="Latest Briefing" value={latestGeneratedAt ? formatTimestamp(latestGeneratedAt) : NO_DATA} detail={latestBriefing ? `#${latestBriefing.id}` : ""} status={latestBriefing?.content_status} />
         <SummaryCard label="Next Scheduled Run" value={NO_DATA} detail="Schedule metadata unavailable" />
-        <SummaryCard label="Agent Status" value={agentStatus ? statusLabel(agentStatus) : NO_DATA} detail={detail?.run?.provider_status || ""} status={agentStatus} />
+        <SummaryCard label={`${AGENT_NAME} Status`} value={agentStatus ? statusLabel(agentStatus) : NO_DATA} detail={detail?.run?.provider_status || ""} status={agentStatus} />
         <SummaryCard label="Slack Delivery Status" value={latestSlackStatus ? statusLabel(latestSlackStatus) : NO_DATA} detail={latestBriefing?.delivery?.latest_attempted_at ? formatTimestamp(latestBriefing.delivery.latest_attempted_at) : ""} status={latestSlackStatus} />
       </section>
 
+      {empty ? (
+        <section style={singleEmptyPanelStyle}>
+          <EmptyState />
+        </section>
+      ) : (
       <div style={workspaceStyle}>
         <section style={historyPaneStyle}>
           <div style={filterPanelStyle}>
@@ -388,7 +395,6 @@ export default function SocBriefingsPanel() {
 
           <div style={historyListStyle}>
             {loading ? <div style={loadingStyle}>Loading briefings...</div> : null}
-            {!loading && items.length === 0 ? <EmptyState /> : null}
             {items.map((item) => (
               <BriefingRow
                 key={item.id}
@@ -410,7 +416,13 @@ export default function SocBriefingsPanel() {
 
         <section style={detailPaneStyle}>
           {detailLoading ? <div style={loadingStyle}>Loading briefing detail...</div> : null}
-          {!detailLoading && !detail ? <EmptyState /> : null}
+          {!detailLoading && !detail ? (
+            <div style={selectBriefingStateStyle}>
+              <MiniAiMark />
+              <h3 style={emptyTitleStyle}>Select a briefing</h3>
+              <p style={emptyTextStyle}>Open a saved briefing to read Anakin's executive summary, findings, evidence, and recommendations.</p>
+            </div>
+          ) : null}
           {!detailLoading && detail ? (
             <div style={detailContentStyle}>
               <header style={detailHeaderStyle}>
@@ -452,6 +464,7 @@ export default function SocBriefingsPanel() {
                   <MetaItem label="Runtime" value={formatRuntime(detail.run?.runtime_ms)} />
                   <MetaItem label="Provider" value={detail.run?.provider_status} />
                   <MetaItem label="Model" value={detail.run?.model} />
+                  <MetaItem label="Agent" value={AGENT_NAME} />
                   <MetaItem label="Window" value={detail.window?.window_end ? formatTimestamp(detail.window.window_end) : null} />
                   <MetaItem label="Service Actor" value={detail.run?.service_actor} />
                 </div>
@@ -480,6 +493,7 @@ export default function SocBriefingsPanel() {
           ) : null}
         </section>
       </div>
+      )}
     </div>
   );
 }
@@ -618,6 +632,14 @@ const historyPaneStyle = {
   display: "grid",
   gap: 12,
   minWidth: 0,
+};
+
+const singleEmptyPanelStyle = {
+  background: "rgba(13, 17, 23, 0.7)",
+  border: "1px solid rgba(125, 211, 252, 0.16)",
+  borderRadius: 8,
+  minHeight: 360,
+  padding: 16,
 };
 
 const detailPaneStyle = {
@@ -812,6 +834,17 @@ const emptyStateStyle = {
   display: "flex",
   gap: 14,
   padding: 18,
+};
+
+const selectBriefingStateStyle = {
+  alignItems: "center",
+  color: "#c9d1d9",
+  display: "grid",
+  gap: 10,
+  justifyItems: "center",
+  minHeight: 280,
+  padding: 20,
+  textAlign: "center",
 };
 
 const emptyTitleStyle = {

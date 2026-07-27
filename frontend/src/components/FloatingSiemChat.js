@@ -18,7 +18,7 @@ function FloatingSiemChat({ onAsk, disabled = false }) {
       {open ? (
         <form onSubmit={submit} style={formStyle} aria-label="General SIEM AI chat">
           <div style={formHeaderStyle}>
-            <strong>Ask about this SIEM</strong>
+            <strong>Ask Anakin</strong>
             <button type="button" onClick={() => setOpen(false)} style={closeButtonStyle} aria-label="Close AI chat">
               ×
             </button>
@@ -26,12 +26,12 @@ function FloatingSiemChat({ onAsk, disabled = false }) {
           <textarea
             value={message}
             onChange={(event) => setMessage(event.target.value)}
-            placeholder="Ask a general question about what you are seeing..."
+            placeholder="Ask Anakin a general question about what you are seeing..."
             rows={3}
             style={textareaStyle}
           />
           <button type="submit" disabled={disabled || !message.trim()} style={submitButtonStyle(disabled || !message.trim())}>
-            Ask AI
+            Send to Anakin
           </button>
         </form>
       ) : null}
@@ -42,7 +42,7 @@ function FloatingSiemChat({ onAsk, disabled = false }) {
         style={fabStyle(disabled)}
         aria-label="Open general SIEM AI chat"
       >
-        Ask AI
+        Ask Anakin
       </button>
     </div>
   );

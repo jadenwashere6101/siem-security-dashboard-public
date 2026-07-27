@@ -71,10 +71,12 @@ describe("SocBriefingsPanel", () => {
 
     expect(await screen.findByText("Morning SOC Briefings")).toBeInTheDocument();
     expect(screen.getByText("Read-only autonomous SOC agent")).toBeInTheDocument();
+    expect(screen.getByText(/Anakin summarizes scheduled investigations/i)).toBeInTheDocument();
     expect(screen.getByText("Total Briefings")).toBeInTheDocument();
     expect(screen.getByText("Latest Briefing")).toBeInTheDocument();
     expect(screen.getByText("Next Scheduled Run")).toBeInTheDocument();
-    expect((await screen.findAllByText("Critical auth anomaly reviewed.")).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("Anakin Status")).toBeInTheDocument();
+    expect(await screen.findByText("Critical auth anomaly reviewed.")).toBeInTheDocument();
     expect(await screen.findByText("Executive Summary")).toBeInTheDocument();
     expect(screen.getByText("Critical Findings")).toBeInTheDocument();
     expect(screen.getByText("Investigation Metadata")).toBeInTheDocument();
@@ -127,8 +129,8 @@ describe("SocBriefingsPanel", () => {
     listSocBriefings.mockResolvedValueOnce({ items: [], limit: 10, offset: 0, total: 0 });
     render(<SocBriefingsPanel />);
 
-    expect(await screen.findAllByText("Morning SOC Briefings")).toHaveLength(2);
-    expect(screen.getByText(/AI-generated analyst summaries appear here/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Anakin's analyst summaries appear here/i)).toBeInTheDocument();
     expect(screen.getAllByText("No Data").length).toBeGreaterThanOrEqual(3);
+    expect(screen.queryByText("Select a briefing")).not.toBeInTheDocument();
   });
 });

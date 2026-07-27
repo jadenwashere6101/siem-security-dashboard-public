@@ -40,6 +40,7 @@ test("AiResponsePanel displays answer, source metadata, and local no-cost label"
   );
 
   expect(screen.getByText("Alert #1")).toBeInTheDocument();
+  expect(screen.getByText("Anakin · read-only AI assistant")).toBeInTheDocument();
   expect(screen.getByText("Review the failed login spike.")).toBeInTheDocument();
   expect(screen.getByText("Local model · no API cost")).toBeInTheDocument();
   expect(screen.getByText("1 sources")).toBeInTheDocument();
@@ -73,6 +74,7 @@ test("AiResponsePanel supports cancel and dismissal during loading", async () =>
     />
   );
 
+  expect(screen.getByText("Anakin is analyzing current SIEM context...")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
   await userEvent.click(screen.getByRole("button", { name: "Dismiss AI response" }));
 
