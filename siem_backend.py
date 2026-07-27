@@ -20,6 +20,7 @@ from routes.incident_routes import incident_bp
 from routes.integration_routes import integration_bp
 from routes.metrics_routes import metrics_bp
 from routes.notification_delivery_routes import notification_delivery_bp
+from routes.soc_briefing_routes import soc_briefing_bp
 from routes.playbook_routes import playbook_bp
 from engines.ingest_engine import ingest_normalized_event
 from core.extensions import limiter
@@ -144,6 +145,7 @@ def create_app():
     app.register_blueprint(integration_bp)
     app.register_blueprint(metrics_bp)
     app.register_blueprint(notification_delivery_bp)
+    app.register_blueprint(soc_briefing_bp)
     app.register_blueprint(dead_letter_bp)
     app.register_blueprint(source_ip_context_bp)
     app.register_blueprint(source_health_bp)

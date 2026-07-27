@@ -19,6 +19,11 @@ layer in a staging environment. Its goal is to verify that the four-guard real-m
 works as designed — one message sent, delivery record created, circuit breaker healthy, all
 other adapters untouched — and that the system returns to simulation mode immediately after.
 
+Scheduled SOC briefing Slack summaries use the same Slack readiness and secret-handling
+boundaries, but they are a separate optional delivery ledger (`soc_briefing_delivery_attempts`).
+Briefing summaries must be sanitized, concise, and independent from saved briefing persistence:
+Slack failure never invalidates or removes a saved SIEM briefing.
+
 This document is **documentation only**. It does not modify code, tests, schema, queues,
 adapters, or any integration behavior. It does not send a Slack message by itself.
 

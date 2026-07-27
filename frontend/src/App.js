@@ -21,6 +21,7 @@ import ResponseRegistryPanel from "./components/ResponseRegistryPanel";
 import LiveLogsPanel from "./components/LiveLogsPanel";
 import SourceHealthPanel from "./components/SourceHealthPanel";
 import DetectionSimulatorPanel from "./components/DetectionSimulatorPanel";
+import SocBriefingsPanel from "./components/SocBriefingsPanel";
 import SettingsPanel from "./components/SettingsPanel";
 import SidebarLayout from "./components/SidebarLayout";
 import AiResponsePanel from "./components/AiResponsePanel";
@@ -1721,6 +1722,10 @@ function AppInner() {
               handleWorkspaceChildStateChange("soc-command-center", { socCommandCenter: state })
             }
           />
+        )}
+
+        {activeSection === "soc-briefings" && isSectionVisible("soc-briefings", roleFlags) && (
+          <SocBriefingsPanel />
         )}
 
         {activeSection === "recon-history" && isSectionVisible("recon-history", roleFlags) && (

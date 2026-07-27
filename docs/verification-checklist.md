@@ -210,6 +210,25 @@ Pass:
 - structured briefing content is durable in PostgreSQL before any optional delivery layer
 - no Slack delivery, provider setup, draft generation, SOAR execution, approval decision, incident/note mutation, shell/file/subprocess access, or other production mutation occurs
 
+For changes touching `soc-briefing-history-and-delivery`, also check:
+
+```bash
+python3 -m py_compile core/ai/soc_briefing_history_store.py routes/soc_briefing_routes.py
+.venv/bin/python -m pytest tests/test_soc_briefing_history_and_delivery.py -q
+cd frontend && npm test -- --runInBand --watchAll=false src/services/socBriefingService.test.js src/components/SocBriefingsPanel.test.js
+cd frontend && npm run build
+```
+
+Pass:
+- `soc_briefings` remains the briefing history source of truth
+- list/detail APIs are read-only, paginated, filtered, and analyst/super-admin protected
+- viewer and unauthenticated users are denied
+- structured sections and bounded run-step summaries display without hidden chain-of-thought
+- Slack delivery state is independent from briefing content lifecycle
+- disabled, blocked, failed, retry-scheduled, sent, and duplicate-suppressed delivery outcomes are explicit
+- Slack payloads are sanitized and do not include raw evidence, webhook URLs, secrets, prompts, or provider internals
+- no Microsoft Teams, SOAR execution, approval decision, note write, incident mutation, provider setup, or production mutation path is introduced
+
 ## Suggested Usage
 
 - Run the syntax/build checks first

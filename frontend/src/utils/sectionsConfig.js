@@ -20,6 +20,12 @@ export const sectionsConfig = [
     visibleWhen: ({ canTakeAlertActions }) => canTakeAlertActions,
   },
   {
+    id: "soc-briefings",
+    label: "SOC Briefings",
+    group: "soc",
+    visibleWhen: ({ canTakeAlertActions }) => canTakeAlertActions,
+  },
+  {
     id: "recon-history",
     label: "Recon History",
     group: "soc",

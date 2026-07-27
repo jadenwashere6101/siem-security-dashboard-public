@@ -92,7 +92,8 @@ def test_migration_0012_is_pending_when_db_at_0011(capsys):
     assert "Would apply migration 0019 0019_playbook_worker_daemon_health" in output
     assert "Would apply migration 0020 0020_notification_policy" in output
     assert "Would apply migration 0021 0021_notification_policy_critical_cross_source" in output
-    assert "Dry run complete. 15 pending migration(s)." in output
+    assert "Would apply migration 0027 0027_soc_briefing_delivery_attempts" in output
+    assert "Dry run complete. 16 pending migration(s)." in output
 
 
 def test_migration_0013_is_pending_when_db_at_0012(capsys):
@@ -114,7 +115,8 @@ def test_migration_0013_is_pending_when_db_at_0012(capsys):
     assert "Would apply migration 0019 0019_playbook_worker_daemon_health" in output
     assert "Would apply migration 0020 0020_notification_policy" in output
     assert "Would apply migration 0021 0021_notification_policy_critical_cross_source" in output
-    assert "Dry run complete. 14 pending migration(s)." in output
+    assert "Would apply migration 0027 0027_soc_briefing_delivery_attempts" in output
+    assert "Dry run complete. 15 pending migration(s)." in output
 
 
 def test_migration_0018_is_noop_when_already_applied(capsys):
@@ -130,7 +132,8 @@ def test_migration_0018_is_noop_when_already_applied(capsys):
     assert "Would apply migration 0019 0019_playbook_worker_daemon_health" in output
     assert "Would apply migration 0020 0020_notification_policy" in output
     assert "Would apply migration 0021 0021_notification_policy_critical_cross_source" in output
-    assert "Dry run complete. 8 pending migration(s)." in output
+    assert "Would apply migration 0027 0027_soc_briefing_delivery_attempts" in output
+    assert "Dry run complete. 9 pending migration(s)." in output
 
 
 def test_migration_0014_is_pending_when_db_at_0013(capsys):
@@ -151,7 +154,8 @@ def test_migration_0014_is_pending_when_db_at_0013(capsys):
     assert "Would apply migration 0019 0019_playbook_worker_daemon_health" in output
     assert "Would apply migration 0020 0020_notification_policy" in output
     assert "Would apply migration 0021 0021_notification_policy_critical_cross_source" in output
-    assert "Dry run complete. 13 pending migration(s)." in output
+    assert "Would apply migration 0027 0027_soc_briefing_delivery_attempts" in output
+    assert "Dry run complete. 14 pending migration(s)." in output
 
 
 def test_migration_0015_is_pending_when_db_at_0014(capsys):
@@ -171,7 +175,8 @@ def test_migration_0015_is_pending_when_db_at_0014(capsys):
     assert "Would apply migration 0019 0019_playbook_worker_daemon_health" in output
     assert "Would apply migration 0020 0020_notification_policy" in output
     assert "Would apply migration 0021 0021_notification_policy_critical_cross_source" in output
-    assert "Dry run complete. 12 pending migration(s)." in output
+    assert "Would apply migration 0027 0027_soc_briefing_delivery_attempts" in output
+    assert "Dry run complete. 13 pending migration(s)." in output
 
 
 def test_migration_0016_is_pending_when_db_at_0015(capsys):
@@ -190,7 +195,8 @@ def test_migration_0016_is_pending_when_db_at_0015(capsys):
     assert "Would apply migration 0019 0019_playbook_worker_daemon_health" in output
     assert "Would apply migration 0020 0020_notification_policy" in output
     assert "Would apply migration 0021 0021_notification_policy_critical_cross_source" in output
-    assert "Dry run complete. 11 pending migration(s)." in output
+    assert "Would apply migration 0027 0027_soc_briefing_delivery_attempts" in output
+    assert "Dry run complete. 12 pending migration(s)." in output
 
 
 def test_migration_0018_is_pending_when_db_at_0017(capsys):
@@ -207,7 +213,8 @@ def test_migration_0018_is_pending_when_db_at_0017(capsys):
     assert "Would apply migration 0019 0019_playbook_worker_daemon_health" in output
     assert "Would apply migration 0020 0020_notification_policy" in output
     assert "Would apply migration 0021 0021_notification_policy_critical_cross_source" in output
-    assert "Dry run complete. 9 pending migration(s)." in output
+    assert "Would apply migration 0027 0027_soc_briefing_delivery_attempts" in output
+    assert "Dry run complete. 10 pending migration(s)." in output
 
 
 def test_migration_0020_and_0021_are_pending_when_db_at_0019(capsys):
@@ -222,7 +229,8 @@ def test_migration_0020_and_0021_are_pending_when_db_at_0019(capsys):
     output = capsys.readouterr().out
     assert "Would apply migration 0020 0020_notification_policy" in output
     assert "Would apply migration 0021 0021_notification_policy_critical_cross_source" in output
-    assert "Dry run complete. 7 pending migration(s)." in output
+    assert "Would apply migration 0027 0027_soc_briefing_delivery_attempts" in output
+    assert "Dry run complete. 8 pending migration(s)." in output
 
 
 def test_migration_0018_execution_mode_sql_targets_membership_check_not_boolean_guards():

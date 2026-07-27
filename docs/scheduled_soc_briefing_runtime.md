@@ -1,6 +1,6 @@
 # Scheduled SOC Briefing Runtime
 
-This runtime schedules and runs read-only SOC briefing jobs. It can perform bounded autonomous investigation and generate structured advisory briefing content, but it does not send Slack messages, configure AI providers, create drafts, or execute production actions.
+This runtime schedules and runs read-only SOC briefing jobs. It can perform bounded autonomous investigation, generate structured advisory briefing content, expose saved briefing history, and optionally record/send sanitized Slack summaries. It does not configure AI providers, create drafts, or execute production actions.
 
 ## Runtime Boundary
 
@@ -16,6 +16,7 @@ The scheduled service actor is `scheduled_soc_briefing_worker`. It is read-only 
 - `soc_briefing_runs`: isolated run records with service actor, gateway/provider outcome, budget policy, and runtime metadata.
 - `soc_briefing_run_steps`: durable sanitized step records with candidate planning, tool calls, evidence references, concise decisions, timing, status, and errors.
 - `soc_briefings`: structured briefing lifecycle and content rows with sections, summary, evidence references, and degraded-state errors.
+- `soc_briefing_delivery_attempts`: optional Slack summary delivery ledger with idempotency keys, delivery status, bounded attempts, retry/backoff timestamps, provider metadata, sanitized failures, and audit attribution.
 - `soar_worker_heartbeats`: also stores the logical `soc_briefing_worker` heartbeat.
 
 ## Worker Behavior
@@ -29,6 +30,16 @@ After a job is claimed and an isolated run is created, the worker invokes the re
 ## AI Boundary
 
 The AI Gateway is used only for bounded briefing synthesis from sanitized evidence summaries and references. Providers never receive database handles, tool dispatch handles, shell/file access, approval callbacks, or production mutation authority. Provider output is parsed as structured advisory data; malformed output becomes a partial briefing. Disabled, invalid, unavailable, timeout, and paid-fallback-blocked states are persisted explicitly. Automatic paid fallback remains blocked for scheduled autonomous work.
+
+## Briefing History and Delivery
+
+`soc_briefings` is the briefing history source of truth. Authenticated analysts and super admins can list and read saved briefings through read-only APIs and the SOC Briefings workspace. Viewer and unauthenticated access is denied. Reads never trigger investigation, AI synthesis, Slack delivery, SOAR, approvals, notes, incident changes, provider setup, or production mutation.
+
+Briefing detail presents the saved structured sections: `alerts_reviewed`, `dismissed_low_priority_findings`, `escalations`, `critical_findings`, `evidence`, and `recommendations`. Run steps are bounded and expose only sanitized inputs, evidence references, concise summaries, timing, status, and errors. Hidden model chain-of-thought is not stored or displayed.
+
+Slack summary delivery is optional and independent from briefing persistence. Disabled or unavailable Slack policy records `skipped` or `blocked` delivery state without changing the saved briefing status. Failed Slack delivery records failure and bounded retry metadata but must not invalidate, delete, or mark the briefing content failed. Slack payloads are built from allowlisted summary fields and sanitized section snippets only; raw evidence rows, webhook URLs, secrets, prompts, and hidden reasoning are excluded.
+
+Briefing, delivery, run-step, evidence-reference, and audit history should be retained for at least 180 days by default. No automatic destructive cleanup is part of this runtime; future cleanup requires a separate approved change.
 
 ## Rollout
 

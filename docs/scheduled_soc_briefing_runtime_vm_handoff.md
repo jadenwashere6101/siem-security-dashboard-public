@@ -8,17 +8,22 @@ Use only after an approved Mac commit/push. Do not edit source on the VM.
 2. Sync only the approved commit using the Mac/VM source-of-truth policy.
 3. Run `bash scripts/deploy_backend_vm.sh --dry-run-migrations`.
 4. Run `bash scripts/deploy_backend_vm.sh`.
-5. Confirm `soc-briefing-worker.timer` and `soc-briefing-worker.service` were installed by the deployment helper.
-6. Inspect `systemctl status soc-briefing-worker.timer --no-pager`.
-7. Inspect `systemctl cat soc-briefing-worker.service soc-briefing-worker.timer --no-pager`.
-8. Confirm backend health and `/metrics/soc-briefing-worker` through an authenticated analyst or super-admin session.
+5. Confirm migration `0027_soc_briefing_delivery_attempts.sql` is present in the approved source before applying migrations.
+6. Confirm `soc-briefing-worker.timer` and `soc-briefing-worker.service` were installed by the deployment helper.
+7. Inspect `systemctl status soc-briefing-worker.timer --no-pager`.
+8. Inspect `systemctl cat soc-briefing-worker.service soc-briefing-worker.timer --no-pager`.
+9. Confirm backend health and `/metrics/soc-briefing-worker` through an authenticated analyst or super-admin session.
+10. Confirm an analyst or super-admin can open the SOC Briefings workspace and read saved history/detail records after migrations are applied.
 
 ## Expected Runtime State
 
 - Existing schedules are disabled by default unless deliberately configured later.
 - The timer may run bounded read-only investigations and persist structured briefing content.
-- The timer must not send Slack, call paid providers, create drafts, execute SOAR actions, approve/deny work, mutate incidents or notes, or mutate production data.
+- Saved briefing history is sourced from `soc_briefings`; Slack delivery status is sourced from `soc_briefing_delivery_attempts`.
+- Optional Slack summaries are best-effort. Disabled, blocked, failed, or retry-scheduled Slack state must not change or remove the saved briefing.
+- The timer and briefing UI must not call paid providers outside policy, create drafts, execute SOAR actions, approve/deny work, mutate incidents or notes, or mutate production data.
 - Missing AI Gateway or Mini PC readiness is recorded as blocked/unavailable runtime state, and saved evidence/partial briefing state remains durable.
+- Microsoft Teams delivery remains out of scope.
 
 ## Rollback
 
