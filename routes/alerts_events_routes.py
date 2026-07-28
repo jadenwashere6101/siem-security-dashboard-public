@@ -90,7 +90,9 @@ VALID_ALERT_SORT_OPTIONS = frozenset({"newest", "oldest", "severity"})
 VALID_RECON_STATUS_FILTERS = frozenset({"open", "monitoring", "resolved"})
 VALID_RECON_SEVERITY_FILTERS = frozenset({"low", "medium", "high"})
 VALID_RECON_CONFIDENCE_FILTERS = frozenset({"low", "medium", "high"})
-VALID_RECON_CLASSIFICATION_FILTERS = frozenset({"recon_cluster", "possible_campaign", "campaign_recon"})
+VALID_RECON_CLASSIFICATION_FILTERS = frozenset(
+    {"recon_candidate", "recon_cluster", "possible_campaign", "campaign_recon"}
+)
 VALID_RECON_SORT_OPTIONS = frozenset({"last_seen_desc", "last_seen_asc", "first_seen_desc", "severity_desc"})
 VALID_RECON_ALERT_SORT_OPTIONS = frozenset({"newest", "oldest"})
 VALID_ALERT_SOURCE_FILTERS = VALID_EVENT_SOURCES | {"legacy"}

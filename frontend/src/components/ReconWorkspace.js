@@ -255,7 +255,8 @@ function ReconWorkspace({
           <option value="low">Low</option>
         </SelectFilter>
         <SelectFilter label="Tier" value={filters.classification} onChange={(value) => updateFilter("classification", value)}>
-          <option value="">All</option>
+          <option value="">Material activity</option>
+          <option value="recon_candidate">Recon Candidate</option>
           <option value="campaign_recon">Campaign Recon</option>
           <option value="possible_campaign">Possible Campaign</option>
           <option value="recon_cluster">Recon Cluster</option>
@@ -314,6 +315,9 @@ function ReconWorkspace({
                   <span style={activityMetaStyle}>
                     {titleCase(itemIntel.classification || "recon_cluster")} · {titleCase(itemIntel.confidence || "low")} confidence
                   </span>
+                  {activity.display?.visibility_label ? (
+                    <span style={activityMetaStyle}>{activity.display.visibility_label}</span>
+                  ) : null}
                   <span style={activityMetaStyle}>
                     {activity.display?.target_summary || activity.protected_range_key || "Target unavailable"} · {formatDate(activity.last_seen)}
                   </span>
@@ -352,6 +356,11 @@ function ReconWorkspace({
                   <Badge tone={intelligence.confidence === "high" ? "warning" : "neutral"}>
                     {titleCase(intelligence.confidence || "low")} confidence
                   </Badge>
+                  {selectedDetail.display?.visibility_label ? (
+                    <Badge tone={selectedDetail.display.primary_view_visible ? "info" : "neutral"}>
+                      {selectedDetail.display.visibility_label}
+                    </Badge>
+                  ) : null}
                 </div>
               </div>
 

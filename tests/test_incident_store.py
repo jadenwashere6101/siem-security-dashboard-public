@@ -677,6 +677,97 @@ def test_honeypot_credential_stuffing_remains_incident_eligible_as_p3(postgres_d
     assert incident["priority"] == "P3"
 
 
+def test_p3_incident_keeps_stored_high_but_presents_medium_triage(postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_custom_alert(
+        conn,
+        cur,
+        source_ip="203.0.113.75",
+        alert_type="honeypot_credential_stuffing_threshold",
+        severity="HIGH",
+        source="honeypot",
+        source_type="honeypot",
+    )
+    incident = maybe_create_or_link_incident(
+        conn,
+        alert_id,
+        "HIGH",
+        "203.0.113.75",
+        alert_type="honeypot_credential_stuffing_threshold",
+        context={},
+    )
+    conn.commit()
+
+    listed = list_incidents(conn)
+    detail = get_incident_detail(conn, incident["id"])
+
+    assert listed[0]["severity"] == "HIGH"
+    assert listed[0]["stored_severity"] == "HIGH"
+    assert listed[0]["max_linked_alert_severity"] == "HIGH"
+    assert listed[0]["incident_severity"] == "MEDIUM"
+    assert listed[0]["priority"] == "P3"
+    assert detail["incident_severity"] == "MEDIUM"
+    assert detail["severity_presentation"]["mode"] == "derived_triage"
+
+
+def test_linked_low_medium_alerts_do_not_present_as_high_incident(postgres_db):
+    conn, cur = postgres_db
+    low_id = _insert_custom_alert(
+        conn,
+        cur,
+        source_ip="203.0.113.76",
+        alert_type="failed_login_threshold",
+        severity="LOW",
+    )
+    medium_id = _insert_custom_alert(
+        conn,
+        cur,
+        source_ip="203.0.113.76",
+        alert_type="port_scan_threshold",
+        severity="MEDIUM",
+    )
+    incident = create_incident(conn, "Manual low/medium case", "MEDIUM", "203.0.113.76", priority="P3")
+    link_alert_to_incident(conn, incident["id"], low_id)
+    link_alert_to_incident(conn, incident["id"], medium_id)
+    conn.commit()
+
+    detail = get_incident_detail(conn, incident["id"])
+
+    assert detail["severity"] == "MEDIUM"
+    assert detail["max_linked_alert_severity"] == "MEDIUM"
+    assert detail["incident_severity"] == "MEDIUM"
+    assert detail["priority"] == "P3"
+
+
+def test_critical_linked_alert_presents_critical_incident_and_priority(postgres_db):
+    conn, cur = postgres_db
+    first_alert_id = _insert_custom_alert(
+        conn,
+        cur,
+        source_ip="203.0.113.77",
+        alert_type="failed_login_threshold",
+        severity="HIGH",
+    )
+    incident = maybe_create_or_link_incident(conn, first_alert_id, "HIGH", "203.0.113.77")
+    second_alert_id = _insert_custom_alert(
+        conn,
+        cur,
+        source_ip="203.0.113.77",
+        alert_type="malware_confirmed",
+        severity="CRITICAL",
+    )
+    linked = maybe_create_or_link_incident(conn, second_alert_id, "CRITICAL", "203.0.113.77")
+    conn.commit()
+
+    detail = get_incident_detail(conn, incident["id"])
+
+    assert linked["id"] == incident["id"]
+    assert detail["severity"] == "CRITICAL"
+    assert detail["max_linked_alert_severity"] == "CRITICAL"
+    assert detail["incident_severity"] == "CRITICAL"
+    assert detail["priority"] == "P1"
+
+
 def test_grouped_recon_incident_reuses_recon_activity_owner(postgres_db):
     conn, cur = postgres_db
     cur.execute(

@@ -289,7 +289,7 @@ function IncidentsPanel({
             </select>
           </label>
           <label style={filterWrapperStyle}>
-            <span style={filterLabelStyle}>Severity</span>
+            <span style={filterLabelStyle}>Stored Severity</span>
             <select
               value={severityFilter}
               onChange={(event) => setSeverityFilter(event.target.value)}
@@ -353,7 +353,7 @@ function IncidentsPanel({
                     <th style={{ ...headerCellStyle, width: "8%" }}>ID</th>
                     {visibleColumns.title && <th style={{ ...headerCellStyle, width: "28%" }}>Title</th>}
                     {visibleColumns.severity && (
-                      <th style={{ ...headerCellStyle, width: "12%" }}>Severity</th>
+                      <th style={{ ...headerCellStyle, width: "12%" }}>Incident Severity</th>
                     )}
                     {visibleColumns.priority && (
                       <th style={{ ...headerCellStyle, width: "10%" }}>Priority</th>
@@ -406,13 +406,18 @@ function IncidentsPanel({
                           style={{
                             ...badgeStyle,
                             ...getSeverityBadgeStyle(
-                              incident.severity,
+                              getIncidentSeverity(incident),
                               displaySettings?.severityColorPreset
                             ),
                           }}
                         >
-                          {formatSeverity(incident.severity)}
+                          {formatSeverity(getIncidentSeverity(incident))}
                         </span>
+                        {getMaxLinkedAlertSeverity(incident) ? (
+                          <div style={{ fontSize: "12px", color: "#94a3b8", marginTop: "4px" }}>
+                            Max alert: {formatSeverity(getMaxLinkedAlertSeverity(incident))}
+                          </div>
+                        ) : null}
                       </td>}
                       {visibleColumns.priority && <td style={bodyCellStyle}>{incident.priority || "N/A"}</td>}
                       {visibleColumns.status && <td style={bodyCellStyle}>
@@ -546,7 +551,12 @@ function IncidentsPanel({
             ) : selectedIncident ? (
               <>
                 <div style={detailGridStyle}>
-                  <DetailField label="Severity" value={formatSeverity(selectedIncident.severity)} />
+                  <DetailField label="Incident Severity" value={formatSeverity(getIncidentSeverity(selectedIncident))} />
+                  <DetailField
+                    label="Max Linked Alert Severity"
+                    value={formatSeverity(getMaxLinkedAlertSeverity(selectedIncident) || selectedIncident.severity)}
+                  />
+                  <DetailField label="Stored Severity" value={formatSeverity(selectedIncident.stored_severity || selectedIncident.severity)} />
                   <DetailField label="Priority" value={selectedIncident.priority || "N/A"} />
                   <DetailField label="Status" value={formatLabel(selectedIncident.status)} />
                   <DetailField label="Source IP" value={selectedIncident.source_ip || "N/A"} mono />
@@ -794,6 +804,16 @@ const formatLabel = (value) =>
   String(value || "unknown").replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
 
 const formatSeverity = (value) => String(value || "N/A").toUpperCase();
+
+const getIncidentSeverity = (incident) =>
+  incident?.incident_severity ||
+  incident?.severity_presentation?.incident_severity ||
+  incident?.severity;
+
+const getMaxLinkedAlertSeverity = (incident) =>
+  incident?.max_linked_alert_severity ||
+  incident?.severity_presentation?.max_linked_alert_severity ||
+  null;
 
 const formatEventType = (value) => {
   const labels = {

@@ -19,7 +19,9 @@ from core.pfsense_recon import (
 )
 
 VPN_PORTS = frozenset({500, 1194, 1197, 1701, 4500, 51820})
-VALID_RECON_CLASSIFICATIONS = frozenset({"recon_cluster", "possible_campaign", "campaign_recon"})
+VALID_RECON_CLASSIFICATIONS = frozenset(
+    {"recon_candidate", "recon_cluster", "possible_campaign", "campaign_recon"}
+)
 VALID_RECON_CONFIDENCE_LEVELS = frozenset({"low", "medium", "high"})
 VALID_RECON_SORT_OPTIONS = frozenset({"last_seen_desc", "last_seen_asc", "first_seen_desc", "severity_desc"})
 MAX_RECON_PAGE_SIZE = 100
@@ -370,7 +372,7 @@ def build_recon_intelligence_projection(
         and not coordination_supported
     )
     if weak_singleton:
-        classification = "recon_cluster"
+        classification = "recon_candidate"
         confidence = "low"
     elif score >= 7 and evidence_categories >= 3 and (has_incident or progression_observed or coordination_supported or source_count >= 3):
         classification = "campaign_recon"
@@ -385,6 +387,7 @@ def build_recon_intelligence_projection(
     return {
         "classification": classification,
         "confidence": confidence,
+        "primary_view_visible": classification != "recon_candidate",
         "score": score,
         "reasons": reasons[:5],
         "missing_evidence": missing[:5],
@@ -409,6 +412,8 @@ def _build_recon_story(
         headline = "Campaign-grade recon"
     elif classification == "possible_campaign":
         headline = "Possible recon campaign"
+    elif classification == "recon_candidate":
+        headline = "Recon candidate"
     elif source_count > 1 and service_label and "VPN" in service_label:
         headline = "VPN recon cluster"
     elif source_count > 1:
@@ -459,6 +464,7 @@ def _build_display_projection(
     if protected_range_key and primary_target and primary_target != protected_range_key:
         target_summary = f"{primary_target} ({protected_range_key})"
 
+    primary_view_visible = bool(recon_intelligence.get("primary_view_visible"))
     scope_bits: list[str] = []
     if source_count > 0:
         scope_bits.append(f"{source_count} source" if source_count == 1 else f"{source_count} sources")
@@ -491,6 +497,9 @@ def _build_display_projection(
         "coordination_label": coordination_assessment.get("label") or "Current assessment unavailable",
         "classification": recon_intelligence.get("classification") or "recon_cluster",
         "confidence": recon_intelligence.get("confidence") or "low",
+        "stage": recon_intelligence.get("classification") or "recon_cluster",
+        "primary_view_visible": primary_view_visible,
+        "visibility_label": "Primary view" if primary_view_visible else "Evidence pivot only",
         "action_recommendation": story.get("disposition") or "No immediate investigation recommended",
         "review_state_version": "|".join(version_parts),
     }
@@ -753,7 +762,8 @@ def list_recon_activities(
         search_value = f"%{search}%"
         params.extend([search_value, search_value, search_value, search_value, search_value])
 
-    needs_projection_filter = bool(confidence or classification)
+    hide_candidates_from_primary = not search and not classification
+    needs_projection_filter = bool(confidence or classification or hide_candidates_from_primary)
     with conn.cursor() as cur:
         cur.execute(
             f"""
@@ -785,6 +795,12 @@ def list_recon_activities(
 
         if needs_projection_filter:
             serialized = [_serialize_recon_activity_row(row) for row in rows]
+            if hide_candidates_from_primary:
+                serialized = [
+                    item
+                    for item in serialized
+                    if item.get("recon_intelligence", {}).get("classification") != "recon_candidate"
+                ]
             if confidence:
                 serialized = [item for item in serialized if item.get("recon_intelligence", {}).get("confidence") == confidence]
             if classification:

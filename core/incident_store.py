@@ -23,6 +23,7 @@ from core.investigation_intelligence import (
 logger = logging.getLogger(__name__)
 
 SEVERITY_TO_PRIORITY = {"CRITICAL": "P1", "HIGH": "P2"}
+SEVERITY_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
 
 ALL_INCIDENT_STATUSES = frozenset({"open", "investigating", "resolved", "closed"})
 
@@ -90,6 +91,57 @@ def _priority_summary(priority: str | None) -> tuple[str, str]:
         "This case is valid but not urgent",
         "Priority P3 is used for case-worthy activity that does not require immediate action",
     )
+
+
+def _normalize_severity(value: Any) -> str | None:
+    normalized = str(value or "").upper()
+    return normalized if normalized in SEVERITY_RANK else None
+
+
+def _max_alert_severity(linked_alerts: list[dict[str, Any]] | None, fallback: Any = None) -> str | None:
+    severities = [
+        normalized
+        for alert in linked_alerts or []
+        if (normalized := _normalize_severity(alert.get("severity")))
+    ]
+    if not severities:
+        fallback_normalized = _normalize_severity(fallback)
+        return fallback_normalized
+    return max(severities, key=lambda value: SEVERITY_RANK[value])
+
+
+def _derive_incident_severity(incident: dict[str, Any], max_linked_alert_severity: str | None) -> tuple[str, str]:
+    priority = str(incident.get("priority") or "").upper()
+    stored_severity = _normalize_severity(incident.get("severity"))
+    if max_linked_alert_severity == "CRITICAL" or stored_severity == "CRITICAL" or priority == "P1":
+        return "CRITICAL", "Critical linked-alert evidence or P1 priority requires critical incident handling"
+    if priority == "P2":
+        return "HIGH", "P2 priority represents prompt analyst action, independent of the stored alert maximum"
+    if max_linked_alert_severity in {"HIGH", "CRITICAL"} or stored_severity in {"HIGH", "CRITICAL"}:
+        return "MEDIUM", "High alert evidence is retained as linked-alert context; incident handling remains non-urgent P3"
+    return "MEDIUM", "Low/medium linked evidence supports case tracking without high-severity presentation"
+
+
+def _apply_incident_semantics(
+    incident: dict[str, Any],
+    linked_alerts: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    stored_severity = _normalize_severity(incident.get("severity")) or str(incident.get("severity") or "")
+    max_linked_alert_severity = _max_alert_severity(linked_alerts, stored_severity)
+    incident_severity, rationale = _derive_incident_severity(incident, max_linked_alert_severity)
+    incident["stored_severity"] = stored_severity
+    incident["max_linked_alert_severity"] = max_linked_alert_severity
+    incident["incident_severity"] = incident_severity
+    incident["severity_presentation"] = {
+        "incident_severity": incident_severity,
+        "stored_severity": stored_severity,
+        "max_linked_alert_severity": max_linked_alert_severity,
+        "priority": incident.get("priority"),
+        "mode": "derived_triage",
+        "label": incident_severity,
+        "rationale": rationale,
+    }
+    return incident
 
 
 def _load_recon_activity_incident(conn, recon_activity_id: int) -> dict[str, Any] | None:
@@ -538,6 +590,7 @@ def list_incidents(
         rows = cur.fetchall()
         incident_ids = [row[0] for row in rows]
         legacy_by_incident_id = _build_incident_legacy_map(cur, incident_ids)
+        linked_alerts_by_incident_id = _build_incident_alert_severity_map(cur, incident_ids)
         incidents = [
             _incident_row_to_dict(
                 row,
@@ -546,6 +599,8 @@ def list_incidents(
             for row in rows
         ]
         for incident in incidents:
+            linked_alerts = linked_alerts_by_incident_id.get(int(incident["id"]), [])
+            _apply_incident_semantics(incident, linked_alerts)
             summary, reason = _priority_summary(incident.get("priority"))
             incident["incident_intelligence"] = {
                 "ownership": "Source-specific investigation" if incident.get("source_ip") else "Aggregate investigation",
@@ -554,8 +609,13 @@ def list_incidents(
                     {
                         "id": "priority",
                         "text": reason,
+                    },
+                    {
+                        "id": "severity_presentation",
+                        "text": incident["severity_presentation"]["rationale"],
                     }
                 ],
+                "severity_presentation": incident["severity_presentation"],
                 "auto_close_recommended": False,
                 "auto_close_reason": None,
             }
@@ -625,9 +685,17 @@ def get_incident_detail(conn, incident_id: int) -> dict[str, Any] | None:
             created_at=base["created_at"],
             linked_alerts=alerts,
         )
+        _apply_incident_semantics(base, alerts)
         base["incident_intelligence"] = build_incident_intelligence(
             incident=base,
             linked_alerts=alerts,
+        )
+        base["incident_intelligence"]["severity_presentation"] = base["severity_presentation"]
+        base["incident_intelligence"].setdefault("reasons", []).append(
+            {
+                "id": "severity_presentation",
+                "text": base["severity_presentation"]["rationale"],
+            }
         )
         return base
 
@@ -673,6 +741,47 @@ def _build_incident_legacy_map(cur, incident_ids: list[int]) -> dict[int, dict[s
         )
         for incident_id, bucket in grouped.items()
     }
+
+
+def _build_incident_alert_severity_map(cur, incident_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
+    filtered_ids = [int(incident_id) for incident_id in incident_ids if incident_id is not None]
+    if not filtered_ids:
+        return {}
+    cur.execute(
+        """
+        SELECT
+            ia.incident_id,
+            a.id,
+            a.alert_type,
+            a.severity,
+            host(a.source_ip),
+            a.status,
+            a.created_at,
+            a.source,
+            a.source_type
+        FROM incident_alerts ia
+        JOIN alerts a ON a.id = ia.alert_id
+        WHERE ia.incident_id = ANY(%s)
+        ORDER BY ia.incident_id ASC, ia.linked_at ASC
+        """,
+        (filtered_ids,),
+    )
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    for row in cur.fetchall():
+        incident_id, alert_id, alert_type, severity, source_ip, status, created_at, source, source_type = row
+        grouped.setdefault(int(incident_id), []).append(
+            {
+                "alert_id": alert_id,
+                "alert_type": alert_type,
+                "severity": severity,
+                "source_ip": source_ip,
+                "status": status,
+                "created_at": _iso(created_at),
+                "source": source,
+                "source_type": source_type,
+            }
+        )
+    return grouped
 
 
 def update_incident_status(

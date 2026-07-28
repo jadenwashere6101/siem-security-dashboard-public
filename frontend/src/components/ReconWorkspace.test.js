@@ -32,6 +32,8 @@ const activity = {
     representative_source: "198.51.100.10",
     primary_target: "203.0.113.44",
     linked_alert_count: 14,
+    primary_view_visible: true,
+    visibility_label: "Primary view",
   },
 };
 
@@ -161,4 +163,48 @@ test("restores lightweight history state and emits snapshot updates", async () =
       })
     )
   );
+});
+
+test("allows explicit review of recon candidates as evidence pivots", async () => {
+  const candidate = {
+    ...activity,
+    id: 91,
+    severity: "low",
+    status: "monitoring",
+    recon_intelligence: {
+      classification: "recon_candidate",
+      confidence: "low",
+    },
+    display: {
+      ...activity.display,
+      headline: "Recon candidate",
+      primary_view_visible: false,
+      visibility_label: "Evidence pivot only",
+    },
+  };
+  loadReconActivities.mockResolvedValueOnce({ items: [], total: 0, limit: 20, offset: 0 });
+  loadReconActivities.mockResolvedValueOnce({ items: [candidate], total: 1, limit: 20, offset: 0 });
+  loadReconActivity.mockResolvedValueOnce({
+    ...candidate,
+    assessment_text: "Only one linked alert is present.",
+    summary: { source_ip_count: 1 },
+    recon_intelligence: {
+      classification: "recon_candidate",
+      confidence: "low",
+      duration_minutes: 5,
+      reasons: [],
+      missing_evidence: [{ id: "linked_alert_volume", text: "Only one linked alert is present" }],
+    },
+  });
+
+  render(<ReconWorkspace />);
+  expect(await screen.findByText("No recon activity matches the current filters.")).toBeInTheDocument();
+
+  await userEvent.selectOptions(screen.getByLabelText("Tier"), "recon_candidate");
+
+  await waitFor(() =>
+    expect(loadReconActivities).toHaveBeenLastCalledWith(expect.objectContaining({ classification: "recon_candidate" }))
+  );
+  expect(await screen.findByText("Recon candidate")).toBeInTheDocument();
+  expect(screen.getAllByText("Evidence pivot only").length).toBeGreaterThan(0);
 });

@@ -198,6 +198,9 @@ def test_azure_batch_enqueue_called_once_with_full_alert_list(client, monkeypatc
         "routes.ingest_routes._get_azure_app_name",
         return_value="azure-test-app",
     ), patch(
+        "routes.ingest_routes._azure_event_already_ingested",
+        return_value=False,
+    ), patch(
         "routes.ingest_routes.ingest_normalized_event",
         return_value=[{"alert_id": 21, "source_ip": "5.6.7.8", "response_action": "block_ip", "severity": "high"}],
     ), patch("routes.ingest_routes.enqueue_committed_alerts", return_value=[]) as enqueue_mock:
@@ -252,9 +255,9 @@ def test_incident_creation_runs_after_enqueue_commit_for_high_alert(client, monk
     mock_conn = _build_mock_connection()
     commit_count_at_incident = {"value": 0}
 
-    def incident_side_effect(conn, alert_id, severity, source_ip):
+    def incident_side_effect(conn, alert_id, severity, source_ip, **_kwargs):
         commit_count_at_incident["value"] = conn.commit.call_count
-        return {"id": 99}
+        return {"id": 99, "created": True}
 
     with patch("routes.ingest_routes.get_db_connection", return_value=mock_conn), patch(
         "routes.ingest_routes.ingest_normalized_event",
@@ -270,7 +273,7 @@ def test_incident_creation_runs_after_enqueue_commit_for_high_alert(client, monk
         )
 
     assert resp.status_code == 201
-    incident_mock.assert_called_once_with(mock_conn, 51, "high", "8.8.8.8")
+    incident_mock.assert_called_once_with(mock_conn, 51, "high", "8.8.8.8", alert_type=None, context=None)
     assert commit_count_at_incident["value"] >= 2
 
 
@@ -283,6 +286,7 @@ def test_incident_creation_skips_medium_alert(client, monkeypatch):
         return_value=[{"alert_id": 52, "source_ip": "8.8.4.4", "response_action": "monitor", "severity": "medium"}],
     ), patch("routes.ingest_routes.enqueue_committed_alerts", return_value=[]), patch(
         "routes.ingest_routes.maybe_create_or_link_incident",
+        return_value=None,
     ) as incident_mock:
         resp = client.post(
             "/ingest",
@@ -291,7 +295,7 @@ def test_incident_creation_skips_medium_alert(client, monkeypatch):
         )
 
     assert resp.status_code == 201
-    incident_mock.assert_not_called()
+    incident_mock.assert_called_once_with(mock_conn, 52, "medium", "8.8.4.4", alert_type=None, context=None)
 
 
 def test_incident_failure_after_commit_still_returns_201(client, monkeypatch):
@@ -328,7 +332,7 @@ def test_incident_creation_runs_even_when_enqueue_fails_after_alert_commit(clien
     ), patch(
         "routes.ingest_routes.enqueue_committed_alerts",
         side_effect=RuntimeError("queue unavailable"),
-    ), patch("routes.ingest_routes.maybe_create_or_link_incident", return_value={"id": 100}) as incident_mock:
+    ), patch("routes.ingest_routes.maybe_create_or_link_incident", return_value={"id": 100, "created": True}) as incident_mock:
         resp = client.post(
             "/ingest",
             json=_build_ingest_payload(),
@@ -336,7 +340,7 @@ def test_incident_creation_runs_even_when_enqueue_fails_after_alert_commit(clien
         )
 
     assert resp.status_code == 201
-    incident_mock.assert_called_once_with(mock_conn, 54, "high", "1.0.0.1")
+    incident_mock.assert_called_once_with(mock_conn, 54, "high", "1.0.0.1", alert_type=None, context=None)
 
 
 def test_create_incidents_for_alerts_creates_high_incident_and_link(postgres_db):

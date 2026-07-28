@@ -204,6 +204,39 @@ describe("IncidentsPanel", () => {
     expect(screen.getAllByText("203.0.113.10").length).toBeGreaterThan(0);
   });
 
+  test("renders incident severity separately from stored and max alert severity", async () => {
+    const semanticIncident = {
+      ...incidentFixture,
+      incident_severity: "MEDIUM",
+      stored_severity: "HIGH",
+      max_linked_alert_severity: "HIGH",
+      severity_presentation: {
+        incident_severity: "MEDIUM",
+        stored_severity: "HIGH",
+        max_linked_alert_severity: "HIGH",
+      },
+    };
+    loadIncidents.mockResolvedValue({ incidents: [semanticIncident], count: 1 });
+    loadIncidentDetail.mockResolvedValue({
+      incident: {
+        ...incidentDetailFixture,
+        ...semanticIncident,
+      },
+    });
+
+    renderPanel();
+    await screen.findByText(semanticIncident.title);
+
+    expect(screen.getAllByText("MEDIUM").length).toBeGreaterThan(1);
+    expect(screen.getByText("Max alert: HIGH")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByText(semanticIncident.title));
+
+    await waitFor(() => expect(screen.getAllByText("Incident Severity").length).toBeGreaterThan(1));
+    expect(screen.getByText("Max Linked Alert Severity")).toBeInTheDocument();
+    expect(screen.getAllByText("Stored Severity").length).toBeGreaterThan(1);
+  });
+
   test("renders incident AI entry points in the selected detail pane", async () => {
     const onAskAi = jest.fn();
     loadIncidents.mockResolvedValue({ incidents: [incidentFixture], count: 1 });

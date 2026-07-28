@@ -111,7 +111,6 @@ function AlertsToolbar({
           type="text"
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          disabled={alertsBusy}
           placeholder="Search IP or message"
           style={{
             ...selectStyle,
@@ -131,7 +130,6 @@ function AlertsToolbar({
           id="sortAlerts"
           value={sortOption}
           onChange={(e) => setSortOption(e.target.value)}
-          disabled={alertsBusy}
           style={selectStyle}
         >
           <option value="newest">Newest</option>
@@ -148,7 +146,6 @@ function AlertsToolbar({
           id="severityFilter"
           value={severityFilter}
           onChange={(e) => setSeverityFilter(e.target.value)}
-          disabled={alertsBusy}
           style={selectStyle}
         >
           <option value="all">ALL</option>
@@ -166,7 +163,6 @@ function AlertsToolbar({
           id="sourceFilter"
           value={sourceFilter}
           onChange={(e) => setSourceFilter(e.target.value)}
-          disabled={alertsBusy}
           style={selectStyle}
         >
           <option value="all">All Sources</option>
@@ -184,7 +180,6 @@ function AlertsToolbar({
           id="ruleFilter"
           value={ruleFilter}
           onChange={(e) => setRuleFilter(e.target.value)}
-          disabled={alertsBusy}
           style={selectStyle}
         >
           <option value="all">All Rules</option>
@@ -204,7 +199,6 @@ function AlertsToolbar({
           id="statusFilter"
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
-          disabled={alertsBusy}
           style={selectStyle}
         >
           <option value="all">All</option>

@@ -928,15 +928,22 @@ def test_get_recon_activities_and_detail_return_bounded_payloads(client, postgre
     list_resp = _fetch_recon_activities_response(client, conn)
     assert list_resp.status_code == 200
     payload = list_resp.get_json()
-    assert payload["count"] == 1
-    assert payload["total"] == 1
+    assert payload["count"] == 0
+    assert payload["total"] == 0
     assert payload["limit"] == 20
     assert payload["offset"] == 0
-    assert payload["items"][0]["label"] == "Distributed Internet Reconnaissance Activity"
-    assert payload["items"][0]["display"]["target_summary"] == "203.0.113.20 (203.0.113.0/24)"
-    assert payload["items"][0]["recon_intelligence"]["classification"] == "recon_cluster"
-    assert payload["items"][0]["recon_intelligence"]["confidence"] == "low"
-    assert "Campaign" not in payload["items"][0]["display"]["headline"]
+
+    candidate_resp = _fetch_recon_activities_response(client, conn, "/recon-activities?classification=recon_candidate")
+    assert candidate_resp.status_code == 200
+    candidate_payload = candidate_resp.get_json()
+    assert candidate_payload["count"] == 1
+    assert candidate_payload["total"] == 1
+    assert candidate_payload["items"][0]["label"] == "Distributed Internet Reconnaissance Activity"
+    assert candidate_payload["items"][0]["display"]["target_summary"] == "203.0.113.20 (203.0.113.0/24)"
+    assert candidate_payload["items"][0]["recon_intelligence"]["classification"] == "recon_candidate"
+    assert candidate_payload["items"][0]["recon_intelligence"]["confidence"] == "low"
+    assert candidate_payload["items"][0]["display"]["primary_view_visible"] is False
+    assert candidate_payload["items"][0]["display"]["headline"] == "Recon candidate"
 
     detail_resp = _fetch_recon_activities_response(client, conn, f"/recon-activities/{activity_id}")
     assert detail_resp.status_code == 200
@@ -945,6 +952,8 @@ def test_get_recon_activities_and_detail_return_bounded_payloads(client, postgre
     assert detail["alerts"][0]["id"] == alert_id
     assert detail["alerts_total"] == 1
     assert detail["display"]["coordination_label"] == "Coordination not established"
+    assert detail["recon_intelligence"]["classification"] == "recon_candidate"
+    assert detail["display"]["visibility_label"] == "Evidence pivot only"
 
     linked_resp = _fetch_recon_activities_response(client, conn, f"/recon-activities/{activity_id}/alerts?limit=1&offset=0")
     assert linked_resp.status_code == 200

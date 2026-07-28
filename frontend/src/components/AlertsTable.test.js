@@ -184,6 +184,71 @@ test("exports include rule filter and exact alert filters", () => {
   expect(pdfHref).toContain("exact_source_ip=8.8.8.8");
 });
 
+test("search input accepts continuous typing while alerts refresh", async () => {
+  function RefreshingSearchHarness() {
+    const [searchTerm, setSearchTerm] = useState("");
+    return (
+      <AlertsTable
+        alerts={[baseAlert]}
+        canTakeAlertActions={true}
+        searchTerm={searchTerm}
+        setSearchTerm={setSearchTerm}
+        sortOption="newest"
+        setSortOption={() => {}}
+        severityFilter="all"
+        setSeverityFilter={() => {}}
+        sourceFilter="all"
+        setSourceFilter={() => {}}
+        ruleFilter="all"
+        setRuleFilter={() => {}}
+        ruleFilterOptions={[
+          { rule_id: "failed_login_threshold", label: "Failed Login Threshold" },
+        ]}
+        statusFilter="all"
+        setStatusFilter={() => {}}
+        selectedAlertId={null}
+        setSelectedAlertId={() => {}}
+        getSeverityBadgeStyle={() => ({})}
+        cardStyle={styles}
+        cardHeaderStyle={styles}
+        cardTitleStyle={styles}
+        cardSubtitleStyle={styles}
+        filterWrapperStyle={styles}
+        filterLabelStyle={styles}
+        selectStyle={styles}
+        emptyStateStyle={styles}
+        emptyStateTextStyle={styles}
+        tableWrapperStyle={styles}
+        tableStyle={styles}
+        headerCellStyle={styles}
+        bodyCellStyle={styles}
+        onUpdateStatus={() => ({ ok: true })}
+        monoCellStyle={styles}
+        tableRowStyle={styles}
+        expandedCellStyle={styles}
+        expandedContentStyle={styles}
+        expandedLabelStyle={styles}
+        expandedTextStyle={styles}
+        totalAlerts={1}
+        pageOffset={0}
+        pageLimit={50}
+        pageEnd={1}
+        alertsPendingLabel="Updating recent alerts..."
+        alertsBusy={true}
+      />
+    );
+  }
+
+  render(<RefreshingSearchHarness />);
+
+  const searchInput = screen.getByLabelText("Search");
+  await userEvent.click(searchInput);
+  await userEvent.type(searchInput, "8.8");
+
+  expect(searchInput).toHaveFocus();
+  expect(searchInput).toHaveValue("8.8");
+});
+
 function renderAlertsTable(alerts, setAlerts) {
   return render(
     <AlertsTableHarness initialAlerts={alerts} onSetAlerts={setAlerts} />
