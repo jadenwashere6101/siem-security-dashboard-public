@@ -18,6 +18,7 @@ from routes.approval_routes import approval_bp
 from routes.dead_letter_routes import dead_letter_bp
 from routes.incident_routes import incident_bp
 from routes.integration_routes import integration_bp
+from routes.investigation_workspace_routes import investigation_workspace_bp
 from routes.metrics_routes import metrics_bp
 from routes.notification_delivery_routes import notification_delivery_bp
 from routes.soc_briefing_routes import soc_briefing_bp
@@ -143,6 +144,7 @@ def create_app():
     app.register_blueprint(approval_bp)
     app.register_blueprint(playbook_bp)
     app.register_blueprint(integration_bp)
+    app.register_blueprint(investigation_workspace_bp)
     app.register_blueprint(metrics_bp)
     app.register_blueprint(notification_delivery_bp)
     app.register_blueprint(soc_briefing_bp)
