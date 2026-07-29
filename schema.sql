@@ -1,4 +1,4 @@
--- Schema snapshot version: 0028
+-- Schema snapshot version: 0029
 
 CREATE TABLE IF NOT EXISTS events (
     id SERIAL PRIMARY KEY,
@@ -1440,11 +1440,18 @@ CREATE TABLE IF NOT EXISTS investigations (
     workspace_id INTEGER REFERENCES analyst_workspaces(id) ON DELETE SET NULL,
     title TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'open'
-        CHECK (status IN ('open', 'investigating', 'waiting', 'resolved', 'closed')),
+        CHECK (status IN ('open', 'new', 'investigating', 'waiting', 'awaiting_evidence', 'ready_for_review', 'resolved', 'closed')),
     summary TEXT,
     linked_alert_id INTEGER REFERENCES alerts(id) ON DELETE SET NULL,
     linked_incident_id INTEGER REFERENCES incidents(id) ON DELETE SET NULL,
     linked_source_ip INET,
+    disposition TEXT NOT NULL DEFAULT 'undetermined'
+        CHECK (disposition IN ('true_positive', 'false_positive', 'benign_expected', 'needs_monitoring', 'escalated', 'undetermined')),
+    confidence TEXT NOT NULL DEFAULT 'medium'
+        CHECK (confidence IN ('low', 'medium', 'high')),
+    conclusion TEXT,
+    closed_at TIMESTAMPTZ,
+    last_activity_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     visibility TEXT NOT NULL DEFAULT 'private'
         CHECK (visibility IN ('private')),
     saved_state JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -1457,6 +1464,9 @@ CREATE TABLE IF NOT EXISTS investigations (
 
 CREATE INDEX IF NOT EXISTS idx_investigations_owner_updated
     ON investigations (owner_username, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_investigations_owner_last_activity
+    ON investigations (owner_username, last_activity_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_investigations_alert
     ON investigations (linked_alert_id)
@@ -1520,6 +1530,8 @@ CREATE TABLE IF NOT EXISTS investigation_hypotheses (
     title TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'open'
         CHECK (status IN ('open', 'supported', 'rejected', 'unknown')),
+    confidence TEXT NOT NULL DEFAULT 'medium'
+        CHECK (confidence IN ('low', 'medium', 'high')),
     body TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1539,6 +1551,8 @@ CREATE TABLE IF NOT EXISTS investigation_tasks (
     title TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'open'
         CHECK (status IN ('open', 'in_progress', 'done')),
+    hypothesis_id INTEGER REFERENCES investigation_hypotheses(id) ON DELETE SET NULL,
+    evidence_reference_id INTEGER,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CHECK (workspace_id IS NOT NULL OR investigation_id IS NOT NULL),
@@ -1561,6 +1575,9 @@ CREATE TABLE IF NOT EXISTS evidence_references (
     label TEXT NOT NULL,
     source TEXT,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    rationale TEXT,
+    relationship_type TEXT NOT NULL DEFAULT 'context'
+        CHECK (relationship_type IN ('supports', 'refutes', 'context')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CHECK (workspace_id IS NOT NULL OR investigation_id IS NOT NULL),
@@ -1573,3 +1590,29 @@ CREATE TABLE IF NOT EXISTS evidence_references (
 
 CREATE INDEX IF NOT EXISTS idx_evidence_references_owner_created
     ON evidence_references (owner_username, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_evidence_references_investigation_created
+    ON evidence_references (investigation_id, created_at DESC)
+    WHERE investigation_id IS NOT NULL;
+
+ALTER TABLE investigation_tasks
+    ADD CONSTRAINT investigation_tasks_evidence_reference_id_fkey
+    FOREIGN KEY (evidence_reference_id) REFERENCES evidence_references(id) ON DELETE SET NULL;
+
+CREATE TABLE IF NOT EXISTS investigation_hypothesis_evidence (
+    id SERIAL PRIMARY KEY,
+    owner_username TEXT NOT NULL,
+    investigation_id INTEGER NOT NULL REFERENCES investigations(id) ON DELETE CASCADE,
+    hypothesis_id INTEGER NOT NULL REFERENCES investigation_hypotheses(id) ON DELETE CASCADE,
+    evidence_reference_id INTEGER NOT NULL REFERENCES evidence_references(id) ON DELETE CASCADE,
+    relationship_type TEXT NOT NULL DEFAULT 'context'
+        CHECK (relationship_type IN ('supports', 'refutes', 'context')),
+    rationale TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (length(trim(owner_username)) > 0),
+    UNIQUE (hypothesis_id, evidence_reference_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_investigation_hypothesis_evidence_owner
+    ON investigation_hypothesis_evidence (owner_username, investigation_id, created_at DESC);

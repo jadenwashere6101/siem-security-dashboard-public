@@ -93,6 +93,7 @@ def test_investigation_workspace_schema_loaded(postgres_db):
         "investigation_hypotheses",
         "investigation_tasks",
         "evidence_references",
+        "investigation_hypothesis_evidence",
     ]:
         cur.execute("SELECT to_regclass(%s)", (table_name,))
         assert cur.fetchone()[0] == table_name
@@ -204,6 +205,147 @@ def test_analyst_workspace_crud_is_private_and_audited(client, postgres_db):
     assert any(row[1].get("system_mutation") is False for row in events if isinstance(row[1], dict))
 
 
+def test_active_investigation_bundle_relationships_and_lifecycle_are_private(client, postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    incident_id = _insert_incident(cur)
+    conn.commit()
+
+    with _patched_user("investigator_bundle", role="analyst"):
+        _login(client, "investigator_bundle")
+        with _patched_workspace_db(conn):
+            investigation_response = client.post(
+                "/investigations",
+                json={
+                    "title": "Credential spray review",
+                    "linked_alert_id": alert_id,
+                    "linked_incident_id": incident_id,
+                    "linked_source_ip": "203.0.113.40",
+                    "summary": "Initial story",
+                    "confidence": "medium",
+                    "disposition": "undetermined",
+                    "saved_state": {"drawer": "open"},
+                },
+            )
+            investigation = investigation_response.get_json()
+            investigation_id = investigation["id"]
+            note_response = client.post(
+                "/analyst-workspace/notes",
+                json={"investigation_id": investigation_id, "body": "Source IP triggered repeated failed logins"},
+            )
+            hypothesis_response = client.post(
+                "/analyst-workspace/hypotheses",
+                json={
+                    "investigation_id": investigation_id,
+                    "title": "Password spray is likely",
+                    "body": "Failures fan out across users",
+                    "confidence": "medium",
+                },
+            )
+            evidence_response = client.post(
+                "/analyst-workspace/evidence",
+                json={
+                    "investigation_id": investigation_id,
+                    "referenced_object_type": "alert",
+                    "referenced_object_id": str(alert_id),
+                    "label": "Primary alert",
+                    "source": "investigation_drawer",
+                    "rationale": "Primary trigger",
+                    "relationship_type": "context",
+                },
+            )
+            task_response = client.post(
+                "/analyst-workspace/tasks",
+                json={
+                    "investigation_id": investigation_id,
+                    "title": "Review MFA outcome",
+                    "hypothesis_id": hypothesis_response.get_json()["id"],
+                    "evidence_reference_id": evidence_response.get_json()["id"],
+                },
+            )
+            link_response = client.post(
+                f"/investigations/{investigation_id}/hypothesis-evidence",
+                json={
+                    "hypothesis_id": hypothesis_response.get_json()["id"],
+                    "evidence_reference_id": evidence_response.get_json()["id"],
+                    "relationship_type": "supports",
+                    "rationale": "Alert supports spray hypothesis",
+                },
+            )
+            update_link_response = client.patch(
+                f"/investigations/hypothesis-evidence/{link_response.get_json()['id']}",
+                json={"relationship_type": "refutes", "rationale": "Updated relationship"},
+            )
+            update_task_response = client.patch(
+                f"/analyst-workspace/tasks/{task_response.get_json()['id']}",
+                json={"status": "done"},
+            )
+            update_investigation_response = client.patch(
+                f"/investigations/{investigation_id}",
+                json={
+                    "status": "closed",
+                    "confidence": "high",
+                    "disposition": "true_positive",
+                    "conclusion": "Credential spray confirmed.",
+                },
+            )
+            list_response = client.get("/investigations")
+            bundle_response = client.get(f"/investigations/{investigation_id}/workspace")
+            delete_link_response = client.delete(f"/investigations/hypothesis-evidence/{link_response.get_json()['id']}")
+            delete_evidence_response = client.delete(f"/analyst-workspace/evidence/{evidence_response.get_json()['id']}")
+
+    assert investigation_response.status_code == 201
+    assert investigation["owner_username"] == "investigator_bundle"
+    assert investigation["visibility"] == "private"
+    assert note_response.status_code == 201
+    assert hypothesis_response.status_code == 201
+    assert hypothesis_response.get_json()["confidence"] == "medium"
+    assert evidence_response.status_code == 201
+    assert evidence_response.get_json()["rationale"] == "Primary trigger"
+    assert task_response.status_code == 201
+    assert task_response.get_json()["hypothesis_id"] == hypothesis_response.get_json()["id"]
+    assert task_response.get_json()["evidence_reference_id"] == evidence_response.get_json()["id"]
+    assert link_response.status_code == 201
+    assert link_response.get_json()["relationship_type"] == "supports"
+    assert update_link_response.status_code == 200
+    assert update_link_response.get_json()["relationship_type"] == "refutes"
+    assert update_task_response.status_code == 200
+    assert update_task_response.get_json()["status"] == "done"
+    assert update_investigation_response.status_code == 200
+    assert update_investigation_response.get_json()["status"] == "closed"
+    assert update_investigation_response.get_json()["disposition"] == "true_positive"
+    assert update_investigation_response.get_json()["confidence"] == "high"
+    assert update_investigation_response.get_json()["closed_at"] is not None
+    assert list_response.status_code == 200
+    assert list_response.get_json()["investigations"][0]["id"] == investigation_id
+    assert bundle_response.status_code == 200
+    bundle = bundle_response.get_json()
+    assert bundle["investigation"]["id"] == investigation_id
+    assert bundle["source_context"]["alert"]["id"] == alert_id
+    assert bundle["source_context"]["incident"]["id"] == incident_id
+    assert bundle["notes"][0]["investigation_id"] == investigation_id
+    assert bundle["hypotheses"][0]["investigation_id"] == investigation_id
+    assert bundle["tasks"][0]["investigation_id"] == investigation_id
+    assert bundle["hypothesis_evidence"][0]["hypothesis_id"] == hypothesis_response.get_json()["id"]
+    assert any(event["kind"] == "analyst" for event in bundle["timeline"])
+    assert delete_link_response.status_code == 200
+    assert delete_evidence_response.status_code == 200
+
+    cur.execute("SELECT status FROM alerts WHERE id = %s", (alert_id,))
+    assert cur.fetchone()[0] == "open"
+    cur.execute("SELECT status FROM incidents WHERE id = %s", (incident_id,))
+    assert cur.fetchone()[0] == "open"
+    cur.execute(
+        "SELECT event_type, details FROM audit_log WHERE actor_username = 'investigator_bundle' ORDER BY id"
+    )
+    events = cur.fetchall()
+    event_types = [row[0] for row in events]
+    assert "INVESTIGATION_HYPOTHESIS_EVIDENCE_LINK" in event_types
+    assert "INVESTIGATION_HYPOTHESIS_EVIDENCE_UPDATE" in event_types
+    assert "INVESTIGATION_HYPOTHESIS_EVIDENCE_DELETE" in event_types
+    assert any(row[1].get("system_mutation") is False for row in events if isinstance(row[1], dict))
+
+
 def test_non_owner_delete_fails_closed_and_does_not_reveal_private_content(client, postgres_db):
     conn, cur = postgres_db
     alert_id = _insert_alert(cur)
@@ -236,6 +378,65 @@ def test_non_owner_delete_fails_closed_and_does_not_reveal_private_content(clien
         "SELECT COUNT(*) FROM audit_log WHERE actor_username = 'owner2' AND event_type = 'INVESTIGATION_WORKSPACE_ACCESS_DENIED'"
     )
     assert cur.fetchone()[0] == 1
+
+
+def test_non_owner_cannot_load_active_investigation_or_cross_link_relationships(client, postgres_db):
+    conn, cur = postgres_db
+    alert_id = _insert_alert(cur)
+    conn.commit()
+
+    with _patched_user("bundle_owner", role="analyst"):
+        _login(client, "bundle_owner")
+        with _patched_workspace_db(conn):
+            investigation_response = client.post(
+                "/investigations",
+                json={"title": "Private investigation", "linked_alert_id": alert_id},
+            )
+            investigation_id = investigation_response.get_json()["id"]
+            hypothesis_response = client.post(
+                "/analyst-workspace/hypotheses",
+                json={"investigation_id": investigation_id, "title": "Private hypothesis"},
+            )
+            evidence_response = client.post(
+                "/analyst-workspace/evidence",
+                json={
+                    "investigation_id": investigation_id,
+                    "referenced_object_type": "alert",
+                    "referenced_object_id": str(alert_id),
+                    "label": "Private evidence",
+                },
+            )
+            missing_ids_response = client.post(
+                f"/investigations/{investigation_id}/hypothesis-evidence",
+                json={"relationship_type": "supports"},
+            )
+
+    assert investigation_response.status_code == 201
+    assert missing_ids_response.status_code == 400
+
+    with client.session_transaction() as session:
+        session.clear()
+    with _patched_user("bundle_intruder", role="analyst"):
+        _login(client, "bundle_intruder")
+        with _patched_workspace_db(conn):
+            bundle_response = client.get(f"/investigations/{investigation_id}/workspace")
+            cross_link_response = client.post(
+                f"/investigations/{investigation_id}/hypothesis-evidence",
+                json={
+                    "hypothesis_id": hypothesis_response.get_json()["id"],
+                    "evidence_reference_id": evidence_response.get_json()["id"],
+                    "relationship_type": "supports",
+                },
+            )
+
+    assert bundle_response.status_code == 403
+    assert cross_link_response.status_code == 403
+    assert "Private investigation" not in str(bundle_response.get_json())
+    assert "Private evidence" not in str(cross_link_response.get_json())
+    cur.execute(
+        "SELECT COUNT(*) FROM audit_log WHERE actor_username = 'bundle_intruder' AND event_type = 'INVESTIGATION_WORKSPACE_ACCESS_DENIED'"
+    )
+    assert cur.fetchone()[0] >= 1
 
 
 def test_viewer_cannot_access_analyst_workspace(client, mock_db):

@@ -52,12 +52,20 @@ import {
   createWorkspaceHypothesis,
   createWorkspaceNote,
   createWorkspaceTask,
+  deleteEvidenceReference,
+  deleteHypothesisEvidenceLink,
+  deleteInvestigation,
   deleteWorkspaceHypothesis,
   deleteWorkspaceNote,
   deleteWorkspaceTask,
+  linkHypothesisEvidence,
   loadAnalystWorkspace,
+  loadInvestigationWorkspace,
   pinWorkspaceItem,
   removeWorkspacePin,
+  updateEvidenceReference,
+  updateInvestigation,
+  updateWorkspaceTask,
 } from "./services/investigationWorkspaceService";
 import {
   loadCurrentSession,
@@ -251,6 +259,8 @@ function AppInner() {
   const [investigationDrawerOpen, setInvestigationDrawerOpen] = useState(false);
   const [investigationAlert, setInvestigationAlert] = useState(null);
   const [workspaceState, setWorkspaceState] = useState(null);
+  const [activeInvestigationBundle, setActiveInvestigationBundle] = useState(null);
+  const [activeInvestigationId, setActiveInvestigationId] = useState(null);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const [workspaceError, setWorkspaceError] = useState("");
   const [workspaceActionBusy, setWorkspaceActionBusy] = useState("");
@@ -1188,11 +1198,16 @@ function AppInner() {
 
   const findEvidenceReference = useCallback((referencedObjectType, referencedObjectId) => {
     const ref = String(referencedObjectId || "");
-    return (workspaceState?.evidence || []).find((item) =>
+    const workspaceMatch = (workspaceState?.evidence || []).find((item) =>
       item.referenced_object_type === referencedObjectType &&
       String(item.referenced_object_id) === ref
     ) || null;
-  }, [workspaceState?.evidence]);
+    const activeMatch = (activeInvestigationBundle?.evidence || []).find((item) =>
+      item.referenced_object_type === referencedObjectType &&
+      String(item.referenced_object_id) === ref
+    ) || null;
+    return activeMatch || workspaceMatch;
+  }, [activeInvestigationBundle?.evidence, workspaceState?.evidence]);
 
   const findSavedInvestigation = useCallback((context = {}) => {
     const alert = context?.alert;
@@ -1223,6 +1238,36 @@ function AppInner() {
       setWorkspaceLoading(false);
     }
   }, [canTakeAlertActions]);
+
+  const loadActiveInvestigation = useCallback(async (investigationId) => {
+    if (!investigationId || !canTakeAlertActions) {
+      setActiveInvestigationBundle(null);
+      setActiveInvestigationId(null);
+      return null;
+    }
+    setWorkspaceLoading(true);
+    setWorkspaceError("");
+    try {
+      const bundle = await loadInvestigationWorkspace(investigationId);
+      setActiveInvestigationBundle(bundle);
+      setActiveInvestigationId(investigationId);
+      return bundle;
+    } catch (error) {
+      setWorkspaceError(error.message || "Unable to load investigation workspace");
+      showWorkspaceFeedback(error.message || "Unable to load investigation workspace", "error");
+      return null;
+    } finally {
+      setWorkspaceLoading(false);
+    }
+  }, [canTakeAlertActions, showWorkspaceFeedback]);
+
+  const refreshWorkspaceContext = useCallback(async (investigationId = activeInvestigationId) => {
+    const workspace = await refreshAnalystWorkspace();
+    if (investigationId) {
+      await loadActiveInvestigation(investigationId);
+    }
+    return workspace;
+  }, [activeInvestigationId, loadActiveInvestigation, refreshAnalystWorkspace]);
 
   const pinAlertToWorkspace = useCallback(async (alert) => {
     if (!alert) return null;
@@ -1257,6 +1302,7 @@ function AppInner() {
     const incident = context?.incident;
     const existingInvestigation = findSavedInvestigation(context);
     if (existingInvestigation) {
+      await loadActiveInvestigation(existingInvestigation.id);
       showWorkspaceFeedback("Investigation is already saved in Analyst Workspace.", "info");
       return existingInvestigation;
     }
@@ -1275,6 +1321,7 @@ function AppInner() {
         },
       });
       await refreshAnalystWorkspace();
+      await loadActiveInvestigation(investigation.id);
       showWorkspaceFeedback("Investigation saved to Analyst Workspace.", "success");
       return investigation;
     } catch (error) {
@@ -1284,13 +1331,14 @@ function AppInner() {
     } finally {
       setWorkspaceActionBusy("");
     }
-  }, [findSavedInvestigation, refreshAnalystWorkspace, showWorkspaceFeedback]);
+  }, [findSavedInvestigation, loadActiveInvestigation, refreshAnalystWorkspace, showWorkspaceFeedback]);
 
-  const createPrivateNote = useCallback(async (body) => {
+  const createPrivateNote = useCallback(async (bodyOrPayload) => {
+    const payload = typeof bodyOrPayload === "object" ? bodyOrPayload : { body: bodyOrPayload };
     setWorkspaceActionBusy("create-note");
     try {
-      await createWorkspaceNote({ body });
-      await refreshAnalystWorkspace();
+      await createWorkspaceNote(payload);
+      await refreshWorkspaceContext(payload.investigation_id);
       showWorkspaceFeedback("Note added to Analyst Workspace.", "success");
     } catch (error) {
       setWorkspaceError(error.message || "Unable to create note");
@@ -1298,13 +1346,14 @@ function AppInner() {
     } finally {
       setWorkspaceActionBusy("");
     }
-  }, [refreshAnalystWorkspace, showWorkspaceFeedback]);
+  }, [refreshWorkspaceContext, showWorkspaceFeedback]);
 
-  const createPrivateHypothesis = useCallback(async (title) => {
+  const createPrivateHypothesis = useCallback(async (titleOrPayload) => {
+    const payload = typeof titleOrPayload === "object" ? titleOrPayload : { title: titleOrPayload };
     setWorkspaceActionBusy("create-hypothesis");
     try {
-      await createWorkspaceHypothesis({ title });
-      await refreshAnalystWorkspace();
+      await createWorkspaceHypothesis(payload);
+      await refreshWorkspaceContext(payload.investigation_id);
       showWorkspaceFeedback("Hypothesis added to Analyst Workspace.", "success");
     } catch (error) {
       setWorkspaceError(error.message || "Unable to create hypothesis");
@@ -1312,13 +1361,14 @@ function AppInner() {
     } finally {
       setWorkspaceActionBusy("");
     }
-  }, [refreshAnalystWorkspace, showWorkspaceFeedback]);
+  }, [refreshWorkspaceContext, showWorkspaceFeedback]);
 
-  const createPrivateTask = useCallback(async (title) => {
+  const createPrivateTask = useCallback(async (titleOrPayload) => {
+    const payload = typeof titleOrPayload === "object" ? titleOrPayload : { title: titleOrPayload };
     setWorkspaceActionBusy("create-task");
     try {
-      await createWorkspaceTask({ title });
-      await refreshAnalystWorkspace();
+      await createWorkspaceTask(payload);
+      await refreshWorkspaceContext(payload.investigation_id);
       showWorkspaceFeedback("Task added to Analyst Workspace.", "success");
     } catch (error) {
       setWorkspaceError(error.message || "Unable to create task");
@@ -1326,7 +1376,7 @@ function AppInner() {
     } finally {
       setWorkspaceActionBusy("");
     }
-  }, [refreshAnalystWorkspace, showWorkspaceFeedback]);
+  }, [refreshWorkspaceContext, showWorkspaceFeedback]);
 
   const deletePrivatePin = useCallback(async (itemId) => {
     setWorkspaceActionBusy(`pin:${itemId}`);
@@ -1346,7 +1396,7 @@ function AppInner() {
     setWorkspaceActionBusy(`note:${noteId}`);
     try {
       await deleteWorkspaceNote(noteId);
-      await refreshAnalystWorkspace();
+      await refreshWorkspaceContext();
       showWorkspaceFeedback("Note deleted from Analyst Workspace.", "success");
     } catch (error) {
       setWorkspaceError(error.message || "Unable to delete note");
@@ -1354,13 +1404,13 @@ function AppInner() {
     } finally {
       setWorkspaceActionBusy("");
     }
-  }, [refreshAnalystWorkspace, showWorkspaceFeedback]);
+  }, [refreshWorkspaceContext, showWorkspaceFeedback]);
 
   const deletePrivateHypothesis = useCallback(async (hypothesisId) => {
     setWorkspaceActionBusy(`hypothesis:${hypothesisId}`);
     try {
       await deleteWorkspaceHypothesis(hypothesisId);
-      await refreshAnalystWorkspace();
+      await refreshWorkspaceContext();
       showWorkspaceFeedback("Hypothesis deleted from Analyst Workspace.", "success");
     } catch (error) {
       setWorkspaceError(error.message || "Unable to delete hypothesis");
@@ -1368,13 +1418,13 @@ function AppInner() {
     } finally {
       setWorkspaceActionBusy("");
     }
-  }, [refreshAnalystWorkspace, showWorkspaceFeedback]);
+  }, [refreshWorkspaceContext, showWorkspaceFeedback]);
 
   const deletePrivateTask = useCallback(async (taskId) => {
     setWorkspaceActionBusy(`task:${taskId}`);
     try {
       await deleteWorkspaceTask(taskId);
-      await refreshAnalystWorkspace();
+      await refreshWorkspaceContext();
       showWorkspaceFeedback("Task deleted from Analyst Workspace.", "success");
     } catch (error) {
       setWorkspaceError(error.message || "Unable to delete task");
@@ -1382,7 +1432,107 @@ function AppInner() {
     } finally {
       setWorkspaceActionBusy("");
     }
+  }, [refreshWorkspaceContext, showWorkspaceFeedback]);
+
+  const updatePrivateTask = useCallback(async (taskId, updates) => {
+    setWorkspaceActionBusy(`task:${taskId}`);
+    try {
+      await updateWorkspaceTask(taskId, updates);
+      await refreshWorkspaceContext();
+      showWorkspaceFeedback("Task updated.", "success");
+    } catch (error) {
+      setWorkspaceError(error.message || "Unable to update task");
+      showWorkspaceFeedback(error.message || "Unable to update task", "error");
+    } finally {
+      setWorkspaceActionBusy("");
+    }
+  }, [refreshWorkspaceContext, showWorkspaceFeedback]);
+
+  const updateInvestigationDetails = useCallback(async (investigationId, updates) => {
+    setWorkspaceActionBusy(`investigation:${investigationId}`);
+    try {
+      await updateInvestigation(investigationId, updates);
+      await refreshWorkspaceContext(investigationId);
+      showWorkspaceFeedback("Investigation updated.", "success");
+    } catch (error) {
+      setWorkspaceError(error.message || "Unable to update investigation");
+      showWorkspaceFeedback(error.message || "Unable to update investigation", "error");
+    } finally {
+      setWorkspaceActionBusy("");
+    }
+  }, [refreshWorkspaceContext, showWorkspaceFeedback]);
+
+  const deletePrivateInvestigation = useCallback(async (investigationId) => {
+    setWorkspaceActionBusy(`investigation:${investigationId}`);
+    try {
+      await deleteInvestigation(investigationId);
+      setActiveInvestigationBundle(null);
+      setActiveInvestigationId(null);
+      await refreshAnalystWorkspace();
+      showWorkspaceFeedback("Investigation deleted from Analyst Workspace.", "success");
+    } catch (error) {
+      setWorkspaceError(error.message || "Unable to delete investigation");
+      showWorkspaceFeedback(error.message || "Unable to delete investigation", "error");
+    } finally {
+      setWorkspaceActionBusy("");
+    }
   }, [refreshAnalystWorkspace, showWorkspaceFeedback]);
+
+  const updateEvidenceDetails = useCallback(async (evidenceId, updates) => {
+    setWorkspaceActionBusy(`evidence:${evidenceId}`);
+    try {
+      await updateEvidenceReference(evidenceId, updates);
+      await refreshWorkspaceContext();
+      showWorkspaceFeedback("Evidence updated.", "success");
+    } catch (error) {
+      setWorkspaceError(error.message || "Unable to update evidence");
+      showWorkspaceFeedback(error.message || "Unable to update evidence", "error");
+    } finally {
+      setWorkspaceActionBusy("");
+    }
+  }, [refreshWorkspaceContext, showWorkspaceFeedback]);
+
+  const deletePrivateEvidence = useCallback(async (evidenceId) => {
+    setWorkspaceActionBusy(`evidence:${evidenceId}`);
+    try {
+      await deleteEvidenceReference(evidenceId);
+      await refreshWorkspaceContext();
+      showWorkspaceFeedback("Evidence reference deleted.", "success");
+    } catch (error) {
+      setWorkspaceError(error.message || "Unable to delete evidence reference");
+      showWorkspaceFeedback(error.message || "Unable to delete evidence reference", "error");
+    } finally {
+      setWorkspaceActionBusy("");
+    }
+  }, [refreshWorkspaceContext, showWorkspaceFeedback]);
+
+  const linkEvidenceToHypothesis = useCallback(async (investigationId, payload) => {
+    setWorkspaceActionBusy("link-evidence");
+    try {
+      await linkHypothesisEvidence(investigationId, payload);
+      await refreshWorkspaceContext(investigationId);
+      showWorkspaceFeedback("Evidence relationship updated.", "success");
+    } catch (error) {
+      setWorkspaceError(error.message || "Unable to link evidence");
+      showWorkspaceFeedback(error.message || "Unable to link evidence", "error");
+    } finally {
+      setWorkspaceActionBusy("");
+    }
+  }, [refreshWorkspaceContext, showWorkspaceFeedback]);
+
+  const unlinkEvidenceFromHypothesis = useCallback(async (linkId) => {
+    setWorkspaceActionBusy(`hypothesis-evidence:${linkId}`);
+    try {
+      await deleteHypothesisEvidenceLink(linkId);
+      await refreshWorkspaceContext();
+      showWorkspaceFeedback("Evidence relationship removed.", "success");
+    } catch (error) {
+      setWorkspaceError(error.message || "Unable to remove evidence relationship");
+      showWorkspaceFeedback(error.message || "Unable to remove evidence relationship", "error");
+    } finally {
+      setWorkspaceActionBusy("");
+    }
+  }, [refreshWorkspaceContext, showWorkspaceFeedback]);
 
   const saveAlertEvidenceReference = useCallback(async (alert) => {
     if (!alert) return;
@@ -1394,12 +1544,15 @@ function AppInner() {
     setWorkspaceActionBusy("save-evidence");
     try {
       await createEvidenceReference({
+        investigation_id: activeInvestigationId || null,
         referenced_object_type: "alert",
         referenced_object_id: String(alertId),
         label: `Evidence for alert #${alertId}`,
         source: "investigation_drawer",
+        rationale: activeInvestigationId ? "Saved as evidence while working the active investigation." : "",
+        relationship_type: "context",
       });
-      await refreshAnalystWorkspace();
+      await refreshWorkspaceContext(activeInvestigationId);
       showWorkspaceFeedback(`Evidence for alert #${alertId} saved.`, "success");
     } catch (error) {
       setWorkspaceError(error.message || "Unable to save evidence reference");
@@ -1407,7 +1560,28 @@ function AppInner() {
     } finally {
       setWorkspaceActionBusy("");
     }
-  }, [findEvidenceReference, refreshAnalystWorkspace, showWorkspaceFeedback]);
+  }, [activeInvestigationId, findEvidenceReference, refreshWorkspaceContext, showWorkspaceFeedback]);
+
+  const handleWorkspaceEvidenceSource = useCallback((evidence) => {
+    if (!evidence) return;
+    const objectType = String(evidence.referenced_object_type || "").toLowerCase();
+    const objectId = evidence.referenced_object_id;
+    if (objectType === "alert") {
+      handleOpenAlert(objectId, evidence.metadata?.source_ip || "");
+      return;
+    }
+    if (objectType === "incident") {
+      handleOpenIncident(objectId);
+      return;
+    }
+    if (objectType === "source_ip" || objectType === "source ip") {
+      handleViewRelatedAlerts(String(objectId || ""));
+      return;
+    }
+    if (objectType === "response_registry" || objectType === "indicator" || objectType === "source-ip") {
+      handleOpenResponseRegistry({ exactIndicator: objectId });
+    }
+  }, [handleOpenAlert, handleOpenIncident, handleOpenResponseRegistry, handleViewRelatedAlerts]);
 
   const metrics = useMemo(() => {
     if (!alertSummaryState.metrics) {
@@ -1544,6 +1718,23 @@ function AppInner() {
     ],
     [handleNavigate, pinAlertToWorkspace, refreshAnalystWorkspace, selectedAlert]
   );
+
+  useEffect(() => {
+    if (activeSection !== "analyst-workspace") return;
+    if (!canTakeAlertActions || activeInvestigationId || workspaceLoading) return;
+    const firstInvestigationId = workspaceState?.investigations?.[0]?.id;
+    if (firstInvestigationId) {
+      loadActiveInvestigation(firstInvestigationId);
+    }
+  }, [
+    activeInvestigationId,
+    activeSection,
+    canTakeAlertActions,
+    loadActiveInvestigation,
+    workspaceLoading,
+    workspaceState?.investigations,
+  ]);
+
   const anakinRegistry = useMemo(
     () => createCommandRegistry([...createDefaultAnakinCommands(), ...createExtensionCommandSlots(), ...investigationCommands]),
     [investigationCommands]
@@ -2157,9 +2348,14 @@ function AppInner() {
         {activeSection === "analyst-workspace" && isSectionVisible("analyst-workspace", roleFlags) && (
           <AnalystWorkspace
             workspaceState={workspaceState}
+            activeInvestigationBundle={activeInvestigationBundle}
+            activeInvestigationId={activeInvestigationId}
             loading={workspaceLoading}
             error={workspaceError}
             onRefresh={refreshAnalystWorkspace}
+            onSelectInvestigation={loadActiveInvestigation}
+            onUpdateInvestigation={updateInvestigationDetails}
+            onDeleteInvestigation={deletePrivateInvestigation}
             onCreateNote={createPrivateNote}
             onCreateHypothesis={createPrivateHypothesis}
             onCreateTask={createPrivateTask}
@@ -2167,6 +2363,12 @@ function AppInner() {
             onDeleteNote={deletePrivateNote}
             onDeleteHypothesis={deletePrivateHypothesis}
             onDeleteTask={deletePrivateTask}
+            onUpdateTask={updatePrivateTask}
+            onUpdateEvidence={updateEvidenceDetails}
+            onDeleteEvidence={deletePrivateEvidence}
+            onLinkEvidenceToHypothesis={linkEvidenceToHypothesis}
+            onUnlinkEvidenceFromHypothesis={unlinkEvidenceFromHypothesis}
+            onOpenEvidenceSource={handleWorkspaceEvidenceSource}
             actionBusy={workspaceActionBusy}
             actionStatus={workspaceActionStatus}
           />

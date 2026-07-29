@@ -9,12 +9,20 @@ import {
   createWorkspaceHypothesis,
   createWorkspaceNote,
   createWorkspaceTask,
+  deleteEvidenceReference,
+  deleteHypothesisEvidenceLink,
+  deleteInvestigation,
   deleteWorkspaceHypothesis,
   deleteWorkspaceNote,
   deleteWorkspaceTask,
+  linkHypothesisEvidence,
   loadAnalystWorkspace,
+  loadInvestigationWorkspace,
   pinWorkspaceItem,
   removeWorkspacePin,
+  updateEvidenceReference,
+  updateInvestigation,
+  updateWorkspaceTask,
 } from './services/investigationWorkspaceService';
 import { UI_SETTINGS_STORAGE_KEY } from './utils/uiSettings';
 
@@ -36,12 +44,20 @@ jest.mock('./services/investigationWorkspaceService', () => ({
   createWorkspaceHypothesis: jest.fn(),
   createWorkspaceNote: jest.fn(),
   createWorkspaceTask: jest.fn(),
+  deleteEvidenceReference: jest.fn(),
+  deleteHypothesisEvidenceLink: jest.fn(),
+  deleteInvestigation: jest.fn(),
   deleteWorkspaceHypothesis: jest.fn(),
   deleteWorkspaceNote: jest.fn(),
   deleteWorkspaceTask: jest.fn(),
+  linkHypothesisEvidence: jest.fn(),
   loadAnalystWorkspace: jest.fn(),
+  loadInvestigationWorkspace: jest.fn(),
   pinWorkspaceItem: jest.fn(),
   removeWorkspacePin: jest.fn(),
+  updateEvidenceReference: jest.fn(),
+  updateInvestigation: jest.fn(),
+  updateWorkspaceTask: jest.fn(),
 }));
 
 jest.mock('./components/DashboardSection', () => (props) => (
@@ -251,10 +267,29 @@ beforeEach(() => {
   createWorkspaceNote.mockResolvedValue({ id: 4 });
   createWorkspaceHypothesis.mockResolvedValue({ id: 5 });
   createWorkspaceTask.mockResolvedValue({ id: 6 });
+  deleteEvidenceReference.mockResolvedValue({ deleted: true });
+  deleteHypothesisEvidenceLink.mockResolvedValue({ deleted: true });
+  deleteInvestigation.mockResolvedValue({ deleted: true });
   deleteWorkspaceNote.mockResolvedValue({ deleted: true });
   deleteWorkspaceHypothesis.mockResolvedValue({ deleted: true });
   deleteWorkspaceTask.mockResolvedValue({ deleted: true });
+  linkHypothesisEvidence.mockResolvedValue({ id: 7 });
+  loadInvestigationWorkspace.mockResolvedValue({
+    workspace: { id: 1, visibility: 'private' },
+    investigation: { id: 3, title: 'Investigation for alert #101', status: 'open', linked_alert_id: 101, confidence: 'medium', disposition: 'undetermined' },
+    source_context: { alert: { id: 101, alert_type: 'failed_login_threshold', severity: 'high', source_ip: '8.8.8.8', message: 'failed login burst', created_at: '2026-07-29T20:00:00Z' }, incident: null, source_ip: '8.8.8.8', partial: [] },
+    notes: [],
+    hypotheses: [],
+    tasks: [],
+    evidence: [],
+    hypothesis_evidence: [],
+    timeline: [],
+    unassigned: { items: [], notes: [], hypotheses: [], tasks: [], evidence: [] },
+  });
   removeWorkspacePin.mockResolvedValue({ deleted: true });
+  updateEvidenceReference.mockResolvedValue({ id: 8 });
+  updateInvestigation.mockResolvedValue({ id: 3 });
+  updateWorkspaceTask.mockResolvedValue({ id: 9 });
 });
 
 test('renders without crashing', async () => {
@@ -350,8 +385,8 @@ test('workspace investigation actions show feedback, saved state, and avoid dupl
   expect(createInvestigation).toHaveBeenCalledTimes(1);
 
   await userEvent.click(screen.getByRole('button', { name: /^Analyst Workspace$/i }));
-  expect(await screen.findByText('Investigation for alert #101')).toBeInTheDocument();
-  expect(screen.getByText(/alert:101/i)).toBeInTheDocument();
+  expect((await screen.findAllByText('Investigation for alert #101')).length).toBeGreaterThan(1);
+  expect(screen.getAllByText(/alert:101/i).length).toBeGreaterThan(1);
 });
 
 test('keeps the login card inside a narrow mobile viewport', async () => {

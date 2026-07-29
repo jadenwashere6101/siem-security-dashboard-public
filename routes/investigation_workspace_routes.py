@@ -17,6 +17,10 @@ from core.investigation_workspace_store import (
     create_task,
     delete_owned_record,
     get_or_create_default_workspace,
+    link_hypothesis_evidence,
+    list_hypothesis_evidence_links,
+    list_investigations,
+    load_active_investigation_bundle,
     load_workspace_bundle,
     pin_workspace_item,
     reorder_workspace_items,
@@ -208,10 +212,51 @@ def create_investigation_route():
             linked_incident_id=data.get("linked_incident_id"),
             linked_source_ip=data.get("linked_source_ip"),
             saved_state=data.get("saved_state") if isinstance(data.get("saved_state"), dict) else {},
+            disposition=data.get("disposition") or "undetermined",
+            confidence=data.get("confidence") or "medium",
+            conclusion=data.get("conclusion"),
         )
         conn.commit()
         _audit("INVESTIGATION_CREATE", details={"investigation_id": investigation["id"], "workspace_id": workspace["id"], "system_mutation": False})
         return jsonify(investigation), 201
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        return _handle_error(error)
+    finally:
+        if conn:
+            conn.close()
+
+
+@investigation_workspace_bp.route("/investigations", methods=["GET"])
+@login_required
+@analyst_or_super_admin_required
+def list_investigations_route():
+    conn = None
+    try:
+        conn = get_db_connection()
+        investigations = list_investigations(conn, _owner())
+        conn.commit()
+        return jsonify({"investigations": investigations}), 200
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        return _handle_error(error)
+    finally:
+        if conn:
+            conn.close()
+
+
+@investigation_workspace_bp.route("/investigations/<int:investigation_id>/workspace", methods=["GET"])
+@login_required
+@analyst_or_super_admin_required
+def get_active_investigation_workspace(investigation_id):
+    conn = None
+    try:
+        conn = get_db_connection()
+        bundle = load_active_investigation_bundle(conn, _owner(), investigation_id)
+        conn.commit()
+        return jsonify(bundle), 200
     except Exception as error:
         if conn:
             conn.rollback()
@@ -329,6 +374,7 @@ def _create_child_record(kind: str):
                 title=data.get("title"),
                 body=data.get("body"),
                 status=data.get("status") or "open",
+                confidence=data.get("confidence") or "medium",
             )
             event_type = "INVESTIGATION_WORKSPACE_HYPOTHESIS_CREATE"
         elif kind == "task":
@@ -339,6 +385,8 @@ def _create_child_record(kind: str):
                 investigation_id=investigation_id,
                 title=data.get("title"),
                 status=data.get("status") or "open",
+                hypothesis_id=data.get("hypothesis_id"),
+                evidence_reference_id=data.get("evidence_reference_id"),
             )
             event_type = "INVESTIGATION_WORKSPACE_TASK_CREATE"
         elif kind == "evidence":
@@ -352,6 +400,8 @@ def _create_child_record(kind: str):
                 label=data.get("label"),
                 source=data.get("source"),
                 metadata=data.get("metadata") if isinstance(data.get("metadata"), dict) else {},
+                rationale=data.get("rationale"),
+                relationship_type=data.get("relationship_type") or "context",
             )
             event_type = "INVESTIGATION_WORKSPACE_EVIDENCE_CREATE"
         else:
@@ -366,6 +416,60 @@ def _create_child_record(kind: str):
     finally:
         if conn:
             conn.close()
+
+
+@investigation_workspace_bp.route("/investigations/<int:investigation_id>/hypothesis-evidence", methods=["GET", "POST"])
+@login_required
+@analyst_or_super_admin_required
+def hypothesis_evidence_links_route(investigation_id):
+    conn = None
+    try:
+        conn = get_db_connection()
+        if request.method == "GET":
+            links = list_hypothesis_evidence_links(conn, _owner(), investigation_id=investigation_id)
+            conn.commit()
+            return jsonify({"hypothesis_evidence": links}), 200
+        data = _json()
+        try:
+            hypothesis_id = int(data.get("hypothesis_id"))
+            evidence_reference_id = int(data.get("evidence_reference_id"))
+        except (TypeError, ValueError):
+            raise ValueError("hypothesis_id and evidence_reference_id are required")
+        link = link_hypothesis_evidence(
+            conn,
+            owner_username=_owner(),
+            investigation_id=investigation_id,
+            hypothesis_id=hypothesis_id,
+            evidence_reference_id=evidence_reference_id,
+            relationship_type=data.get("relationship_type") or "context",
+            rationale=data.get("rationale"),
+        )
+        conn.commit()
+        _audit(
+            "INVESTIGATION_HYPOTHESIS_EVIDENCE_LINK",
+            details={
+                "investigation_id": investigation_id,
+                "hypothesis_id": link["hypothesis_id"],
+                "evidence_reference_id": link["evidence_reference_id"],
+                "relationship_type": link["relationship_type"],
+                "system_mutation": False,
+            },
+        )
+        return jsonify(link), 201
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        return _handle_error(error)
+    finally:
+        if conn:
+            conn.close()
+
+
+@investigation_workspace_bp.route("/investigations/hypothesis-evidence/<int:link_id>", methods=["PATCH", "DELETE"])
+@login_required
+@analyst_or_super_admin_required
+def mutate_hypothesis_evidence_link(link_id):
+    return _mutate_child_record("investigation_hypothesis_evidence", link_id, "INVESTIGATION_HYPOTHESIS_EVIDENCE")
 
 
 def _mutate_child_record(table: str, record_id: int, event_prefix: str):

@@ -7,6 +7,7 @@ from scripts import migrate
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MIGRATION_PATH = REPO_ROOT / "migrations" / "0012_soar_response_outcomes.sql"
 EVENTS_SOURCE_INDEX_MIGRATION_PATH = REPO_ROOT / "migrations" / "0014_events_source_index.sql"
+INVESTIGATION_CENTERED_WORKSPACE_MIGRATION_PATH = REPO_ROOT / "migrations" / "0029_investigation_centered_workspace.sql"
 
 
 def test_soar_response_outcomes_migration_scope():
@@ -71,6 +72,25 @@ def test_events_source_index_migration_scope():
     assert "DELETE FROM" not in sql.upper()
 
 
+def test_investigation_centered_workspace_migration_scope():
+    sql = INVESTIGATION_CENTERED_WORKSPACE_MIGRATION_PATH.read_text(encoding="utf-8")
+
+    assert "ALTER TABLE investigations" in sql
+    assert "ADD COLUMN IF NOT EXISTS disposition TEXT" in sql
+    assert "ADD COLUMN IF NOT EXISTS confidence TEXT" in sql
+    assert "ADD COLUMN IF NOT EXISTS conclusion TEXT" in sql
+    assert "ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ" in sql
+    assert "ALTER TABLE evidence_references" in sql
+    assert "ADD COLUMN IF NOT EXISTS rationale TEXT" in sql
+    assert "ADD COLUMN IF NOT EXISTS relationship_type TEXT" in sql
+    assert "CREATE TABLE IF NOT EXISTS investigation_hypothesis_evidence" in sql
+    assert "UNIQUE (hypothesis_id, evidence_reference_id)" in sql
+    assert "ON DELETE CASCADE" in sql
+
+    assert "TRUNCATE" not in sql.upper()
+    assert "DELETE FROM" not in sql.upper()
+
+
 def test_migration_0012_is_pending_when_db_at_0011(capsys):
     conn = MagicMock()
     cur = MagicMock()
@@ -94,7 +114,8 @@ def test_migration_0012_is_pending_when_db_at_0011(capsys):
     assert "Would apply migration 0021 0021_notification_policy_critical_cross_source" in output
     assert "Would apply migration 0027 0027_soc_briefing_delivery_attempts" in output
     assert "Would apply migration 0028 0028_investigation_workflow" in output
-    assert "Dry run complete. 17 pending migration(s)." in output
+    assert "Would apply migration 0029 0029_investigation_centered_workspace" in output
+    assert "Dry run complete. 18 pending migration(s)." in output
 
 
 def test_migration_0013_is_pending_when_db_at_0012(capsys):
@@ -118,7 +139,8 @@ def test_migration_0013_is_pending_when_db_at_0012(capsys):
     assert "Would apply migration 0021 0021_notification_policy_critical_cross_source" in output
     assert "Would apply migration 0027 0027_soc_briefing_delivery_attempts" in output
     assert "Would apply migration 0028 0028_investigation_workflow" in output
-    assert "Dry run complete. 16 pending migration(s)." in output
+    assert "Would apply migration 0029 0029_investigation_centered_workspace" in output
+    assert "Dry run complete. 17 pending migration(s)." in output
 
 
 def test_migration_0018_is_noop_when_already_applied(capsys):
@@ -136,7 +158,8 @@ def test_migration_0018_is_noop_when_already_applied(capsys):
     assert "Would apply migration 0021 0021_notification_policy_critical_cross_source" in output
     assert "Would apply migration 0027 0027_soc_briefing_delivery_attempts" in output
     assert "Would apply migration 0028 0028_investigation_workflow" in output
-    assert "Dry run complete. 10 pending migration(s)." in output
+    assert "Would apply migration 0029 0029_investigation_centered_workspace" in output
+    assert "Dry run complete. 11 pending migration(s)." in output
 
 
 def test_migration_0014_is_pending_when_db_at_0013(capsys):
@@ -159,7 +182,8 @@ def test_migration_0014_is_pending_when_db_at_0013(capsys):
     assert "Would apply migration 0021 0021_notification_policy_critical_cross_source" in output
     assert "Would apply migration 0027 0027_soc_briefing_delivery_attempts" in output
     assert "Would apply migration 0028 0028_investigation_workflow" in output
-    assert "Dry run complete. 15 pending migration(s)." in output
+    assert "Would apply migration 0029 0029_investigation_centered_workspace" in output
+    assert "Dry run complete. 16 pending migration(s)." in output
 
 
 def test_migration_0015_is_pending_when_db_at_0014(capsys):
@@ -181,7 +205,8 @@ def test_migration_0015_is_pending_when_db_at_0014(capsys):
     assert "Would apply migration 0021 0021_notification_policy_critical_cross_source" in output
     assert "Would apply migration 0027 0027_soc_briefing_delivery_attempts" in output
     assert "Would apply migration 0028 0028_investigation_workflow" in output
-    assert "Dry run complete. 14 pending migration(s)." in output
+    assert "Would apply migration 0029 0029_investigation_centered_workspace" in output
+    assert "Dry run complete. 15 pending migration(s)." in output
 
 
 def test_migration_0016_is_pending_when_db_at_0015(capsys):
@@ -202,7 +227,8 @@ def test_migration_0016_is_pending_when_db_at_0015(capsys):
     assert "Would apply migration 0021 0021_notification_policy_critical_cross_source" in output
     assert "Would apply migration 0027 0027_soc_briefing_delivery_attempts" in output
     assert "Would apply migration 0028 0028_investigation_workflow" in output
-    assert "Dry run complete. 13 pending migration(s)." in output
+    assert "Would apply migration 0029 0029_investigation_centered_workspace" in output
+    assert "Dry run complete. 14 pending migration(s)." in output
 
 
 def test_migration_0018_is_pending_when_db_at_0017(capsys):
@@ -221,7 +247,8 @@ def test_migration_0018_is_pending_when_db_at_0017(capsys):
     assert "Would apply migration 0021 0021_notification_policy_critical_cross_source" in output
     assert "Would apply migration 0027 0027_soc_briefing_delivery_attempts" in output
     assert "Would apply migration 0028 0028_investigation_workflow" in output
-    assert "Dry run complete. 11 pending migration(s)." in output
+    assert "Would apply migration 0029 0029_investigation_centered_workspace" in output
+    assert "Dry run complete. 12 pending migration(s)." in output
 
 
 def test_migration_0020_and_0021_are_pending_when_db_at_0019(capsys):
@@ -238,7 +265,8 @@ def test_migration_0020_and_0021_are_pending_when_db_at_0019(capsys):
     assert "Would apply migration 0021 0021_notification_policy_critical_cross_source" in output
     assert "Would apply migration 0027 0027_soc_briefing_delivery_attempts" in output
     assert "Would apply migration 0028 0028_investigation_workflow" in output
-    assert "Dry run complete. 9 pending migration(s)." in output
+    assert "Would apply migration 0029 0029_investigation_centered_workspace" in output
+    assert "Dry run complete. 10 pending migration(s)." in output
 
 
 def test_migration_0018_execution_mode_sql_targets_membership_check_not_boolean_guards():

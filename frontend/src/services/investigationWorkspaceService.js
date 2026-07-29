@@ -20,6 +20,14 @@ export function loadAnalystWorkspace() {
   return requestJson("/analyst-workspace");
 }
 
+export function loadInvestigations() {
+  return requestJson("/investigations");
+}
+
+export function loadInvestigationWorkspace(investigationId) {
+  return requestJson(`/investigations/${investigationId}/workspace`);
+}
+
 export function pinWorkspaceItem(payload) {
   return requestJson("/analyst-workspace/pins", { method: "POST", body: payload });
 }
@@ -45,6 +53,10 @@ export function createInvestigation(payload) {
 
 export function updateInvestigation(investigationId, updates) {
   return requestJson(`/investigations/${investigationId}`, { method: "PATCH", body: updates });
+}
+
+export function deleteInvestigation(investigationId) {
+  return requestJson(`/investigations/${investigationId}`, { method: "DELETE" });
 }
 
 export function createWorkspaceNote(payload) {
@@ -93,4 +105,16 @@ export function updateEvidenceReference(evidenceId, updates) {
 
 export function deleteEvidenceReference(evidenceId) {
   return requestJson(`/analyst-workspace/evidence/${evidenceId}`, { method: "DELETE" });
+}
+
+export function linkHypothesisEvidence(investigationId, payload) {
+  return requestJson(`/investigations/${investigationId}/hypothesis-evidence`, { method: "POST", body: payload });
+}
+
+export function updateHypothesisEvidenceLink(linkId, updates) {
+  return requestJson(`/investigations/hypothesis-evidence/${linkId}`, { method: "PATCH", body: updates });
+}
+
+export function deleteHypothesisEvidenceLink(linkId) {
+  return requestJson(`/investigations/hypothesis-evidence/${linkId}`, { method: "DELETE" });
 }
