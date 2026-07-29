@@ -64,7 +64,9 @@ const buttonRowStyle = {
 const buttonStyle = {
   padding: "7px 12px",
   borderRadius: "999px",
-  border: "1px solid #30363d",
+  borderWidth: "1px",
+  borderStyle: "solid",
+  borderColor: "#30363d",
   backgroundColor: "#0d1117",
   color: "#c9d1d9",
   cursor: "pointer",

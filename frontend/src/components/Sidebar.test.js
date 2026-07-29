@@ -95,7 +95,7 @@ test("calls onNavigate with the clicked section's id", async () => {
   expect(onNavigate).toHaveBeenCalledWith("gamma");
 });
 
-test("does not render hidden nav buttons when collapsed", () => {
+test("collapsed sidebar keeps accessible icon navigation without visible labels", () => {
   render(
     <Sidebar
       sections={mockSections}
@@ -106,9 +106,11 @@ test("does not render hidden nav buttons when collapsed", () => {
     />
   );
 
-  expect(screen.queryByRole("button", { name: "Alpha" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Beta" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Gamma" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Alpha" })).toHaveAttribute("title", "Alpha");
+  expect(screen.getByRole("button", { name: "Beta" })).toHaveAttribute("title", "Beta");
+  expect(screen.getByRole("button", { name: "Gamma" })).toHaveAttribute("title", "Gamma");
+  expect(screen.queryByText("Overview")).not.toBeInTheDocument();
+  expect(screen.queryByText("Admin")).not.toBeInTheDocument();
 });
 
 test("renders a bottom status/version panel from props", () => {
@@ -157,7 +159,7 @@ test("renders no broken footer row when statusLabel and versionLabel are omitted
   expect(screen.getByTestId("sidebar-status-panel").querySelector("[title]")).toBeNull();
 });
 
-test("hides nav groups entirely when collapsed", () => {
+test("hides nav group headings when collapsed while preserving accessible groups", () => {
   render(
     <Sidebar
       sections={mockSections}
@@ -170,11 +172,11 @@ test("hides nav groups entirely when collapsed", () => {
 
   expect(screen.queryByText("Overview")).not.toBeInTheDocument();
   expect(screen.queryByText("Admin")).not.toBeInTheDocument();
-  expect(screen.queryByRole("group", { name: "Overview" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("group", { name: "Admin" })).not.toBeInTheDocument();
+  expect(screen.getByRole("group", { name: "Overview" })).toBeInTheDocument();
+  expect(screen.getByRole("group", { name: "Admin" })).toBeInTheDocument();
 });
 
-test("collapsed sidebar has no invisible navigation click targets", async () => {
+test("collapsed sidebar icon targets remain keyboard and pointer operable", async () => {
   const onNavigate = jest.fn();
 
   render(
@@ -187,9 +189,9 @@ test("collapsed sidebar has no invisible navigation click targets", async () => 
     />
   );
 
-  await userEvent.click(screen.getByRole("navigation", { name: "Primary" }));
+  await userEvent.click(screen.getByRole("button", { name: "Gamma" }));
 
-  expect(onNavigate).not.toHaveBeenCalled();
+  expect(onNavigate).toHaveBeenCalledWith("gamma");
 });
 
 test("locks the sidebar to a fixed width that cannot shrink or grow from sibling content", () => {
@@ -217,8 +219,8 @@ test("locks the sidebar to a fixed width that cannot shrink or grow from sibling
 
   expect(aside).toHaveStyle({
     flex: "0 0 auto",
-    width: "0px",
-    borderRight: "none",
+    width: "68px",
+    borderRight: "1px solid #30363d",
   });
 });
 

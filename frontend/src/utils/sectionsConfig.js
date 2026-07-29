@@ -50,6 +50,12 @@ export const sectionsConfig = [
     visibleWhen: ({ canTakeAlertActions }) => canTakeAlertActions,
   },
   {
+    id: "analyst-workspace",
+    label: "Analyst Workspace",
+    group: "soc",
+    visibleWhen: ({ canTakeAlertActions }) => canTakeAlertActions,
+  },
+  {
     id: "detection-simulator",
     label: "Detection Simulator",
     group: "soc",

@@ -341,17 +341,22 @@ describe("SocCommandCenter", () => {
     expect(getIntegrationStatus).toHaveBeenCalled();
   });
 
-  test("renders global activity feed newest-first with bounded operational sources", async () => {
+  test("renders a grouped live operations feed with bounded operational sources", async () => {
     renderPanel();
 
     const feed = await screen.findByRole("heading", { name: "Live operations feed" });
     const feedSection = feed.closest("section");
-    const text = feedSection.textContent;
 
-    expect(text.indexOf("containment")).toBeLessThan(text.indexOf("Block Ip"));
-    expect(within(feedSection).getByText("Notification")).toBeInTheDocument();
-    expect(within(feedSection).getByText("Dead letter")).toBeInTheDocument();
-    expect(within(feedSection).getByText("Worker")).toBeInTheDocument();
+    expect(within(feedSection).getByRole("heading", { name: "Incident" })).toBeInTheDocument();
+    expect(within(feedSection).getByRole("heading", { name: "Worker" })).toBeInTheDocument();
+    expect(within(feedSection).getByRole("heading", { name: "Approval" })).toBeInTheDocument();
+    expect(within(feedSection).getByRole("heading", { name: "Notification" })).toBeInTheDocument();
+    expect(within(feedSection).getByRole("heading", { name: "Playbook" })).toBeInTheDocument();
+    expect(within(feedSection).getByText("High-risk identity incident")).toBeInTheDocument();
+    expect(within(feedSection).getByText("adapter_timeout")).toBeInTheDocument();
+    expect(within(feedSection).getByText("Block Ip")).toBeInTheDocument();
+    expect(within(feedSection).getByText("email")).toBeInTheDocument();
+    expect(within(feedSection).getByText("containment")).toBeInTheDocument();
   });
 
   test("isolates partial source failures without blanking the console", async () => {

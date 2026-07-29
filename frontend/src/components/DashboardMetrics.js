@@ -1,12 +1,48 @@
 import React from "react";
 import AiAssistantButton from "./AiAssistantButton";
+import { MetricCard } from "./uiPrimitives";
+
+function dashboardMetricModels(metrics) {
+  const high = Number(metrics.highCount) || 0;
+  const total = Number(metrics.totalAlerts) || 0;
+  const medium = Number(metrics.mediumCount) || 0;
+  const low = Number(metrics.lowCount) || 0;
+  const unique = Number(metrics.uniqueIPs) || 0;
+  return [
+    {
+      label: "Total Alerts",
+      value: total,
+      tone: total > 0 ? "info" : "neutral",
+      summary: total > 0 ? "Current filtered alert volume." : "No alerts in the current filtered view.",
+      why: total > 0 ? "Volume sets the triage workload for this dashboard view." : "An empty view can indicate filters are narrow or ingestion is quiet.",
+    },
+    {
+      label: "High Severity",
+      value: high,
+      tone: high > 0 ? "danger" : "neutral",
+      summary: high > 0 ? "High-priority alerts are present." : "No high-severity alerts in view.",
+      why: high > 0 ? "High-severity alerts are the first candidates for analyst review." : null,
+    },
+    {
+      label: "Unique Source IPs",
+      value: unique,
+      tone: unique > 0 ? "info" : "neutral",
+      summary: unique > 0 ? "Distinct sources represented in the current data." : "No source diversity to evaluate.",
+      why: unique > 1 ? "Multiple sources can indicate distributed activity or broad scanning." : null,
+    },
+    {
+      label: "Medium / Low",
+      value: `${medium} / ${low}`,
+      tone: medium > 0 ? "warning" : low > 0 ? "success" : "neutral",
+      summary: "Lower-priority workload split.",
+      why: medium > 0 ? "Medium alerts may contain early indicators that deserve review after urgent items." : null,
+    },
+  ];
+}
 
 function DashboardMetrics({
   metrics,
   metricsGridStyle,
-  metricCardStyle,
-  metricLabelStyle,
-  metricValueStyle,
   onAskAi = null,
   aiEnabled = false,
 }) {
@@ -56,27 +92,16 @@ function DashboardMetrics({
         </div>
       ) : null}
       <section style={metricsGridStyle}>
-        <div style={metricCardStyle}>
-          <p style={metricLabelStyle}>Total Alerts</p>
-          <h3 style={metricValueStyle}>{metrics.totalAlerts}</h3>
-        </div>
-
-        <div style={metricCardStyle}>
-          <p style={metricLabelStyle}>High Severity</p>
-          <h3 style={metricValueStyle}>{metrics.highCount}</h3>
-        </div>
-
-        <div style={metricCardStyle}>
-          <p style={metricLabelStyle}>Unique Source IPs</p>
-          <h3 style={metricValueStyle}>{metrics.uniqueIPs}</h3>
-        </div>
-
-        <div style={metricCardStyle}>
-          <p style={metricLabelStyle}>Medium / Low</p>
-          <h3 style={metricValueStyle}>
-            {metrics.mediumCount} / {metrics.lowCount}
-          </h3>
-        </div>
+        {dashboardMetricModels(metrics).map((item) => (
+          <MetricCard
+            key={item.label}
+            label={item.label}
+            value={item.value}
+            tone={item.tone}
+            summary={item.summary}
+            why={item.why}
+          />
+        ))}
       </section>
     </>
   );

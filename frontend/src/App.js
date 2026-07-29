@@ -25,8 +25,13 @@ import SocBriefingsPanel from "./components/SocBriefingsPanel";
 import SettingsPanel from "./components/SettingsPanel";
 import SidebarLayout from "./components/SidebarLayout";
 import AiResponsePanel from "./components/AiResponsePanel";
-import FloatingSiemChat from "./components/FloatingSiemChat";
+import AnakinCommandSurface from "./components/AnakinCommandSurface";
+import CommandPalette from "./components/CommandPalette";
+import AnalystWorkspace from "./components/AnalystWorkspace";
+import InvestigationDrawer from "./components/InvestigationDrawer";
+import ThreatBrief, { buildThreatBriefModel } from "./components/ThreatBrief";
 import RepoArchitectureAssistantPanel from "./components/RepoArchitectureAssistantPanel";
+import { theme } from "./theme";
 import { UiSettingsProvider, useUiSettings } from "./context/UiSettingsContext";
 import { ResponseSyncProvider } from "./context/ResponseSyncContext";
 import {
@@ -40,6 +45,16 @@ import {
 import { updateAlertStatusRequest } from "./services/alertStatusService";
 import { loadAlertDashboardSummary, loadAlertRuleOptions, loadAlerts } from "./services/alertsService";
 import { requestAiChat, requestAiDraft, requestAiExplanation, requestAiInvestigation } from "./services/aiService";
+import {
+  createEvidenceReference,
+  createInvestigation,
+  createWorkspaceHypothesis,
+  createWorkspaceNote,
+  createWorkspaceTask,
+  loadAnalystWorkspace,
+  pinWorkspaceItem,
+  removeWorkspacePin,
+} from "./services/investigationWorkspaceService";
 import {
   loadCurrentSession,
   loginToDashboard,
@@ -66,6 +81,15 @@ import {
   updateCurrentWorkspaceHistoryEntry,
 } from "./utils/workspaceHistory";
 import { OPERATIONAL_SCOPE_SINCE_TUNING } from "./components/OperationalScopeToggle";
+import {
+  ANAKIN_COMMAND_INTENTS,
+  buildCommandContext,
+  commandToAiOptions,
+  createCommandRegistry,
+  createDefaultAnakinCommands,
+  createExtensionCommandSlots,
+  normalizeContextualAiOptions,
+} from "./utils/anakinCommandRegistry";
 import packageJson from "../package.json";
 
 const DEFAULT_ALERT_PAGE_SIZE = 50;
@@ -222,6 +246,10 @@ function AppInner() {
     request: null,
   });
   const [aiChatHistory, setAiChatHistory] = useState([]);
+  const [investigationDrawerOpen, setInvestigationDrawerOpen] = useState(false);
+  const [workspaceState, setWorkspaceState] = useState(null);
+  const [workspaceLoading, setWorkspaceLoading] = useState(false);
+  const [workspaceError, setWorkspaceError] = useState("");
 
   useEffect(() => {
     activeSectionRef.current = activeSection;
@@ -1115,6 +1143,125 @@ function AppInner() {
     }
   }, [fetchAlertRows, fetchAlertSummary]);
 
+  const selectedAlert = useMemo(
+    () =>
+      selectedAlertId !== null && selectedAlertId !== undefined
+        ? alertsState.items.find((alert) => String(alert.id ?? alert.alert_id) === String(selectedAlertId)) || null
+        : null,
+    [alertsState.items, selectedAlertId]
+  );
+
+  const refreshAnalystWorkspace = useCallback(async () => {
+    if (!canTakeAlertActions) return null;
+    setWorkspaceLoading(true);
+    setWorkspaceError("");
+    try {
+      const data = await loadAnalystWorkspace();
+      setWorkspaceState(data);
+      return data;
+    } catch (error) {
+      setWorkspaceError(error.message || "Unable to load analyst workspace");
+      return null;
+    } finally {
+      setWorkspaceLoading(false);
+    }
+  }, [canTakeAlertActions]);
+
+  const pinAlertToWorkspace = useCallback(async (alert) => {
+    if (!alert) return null;
+    const alertId = alert.id ?? alert.alert_id;
+    try {
+      const item = await pinWorkspaceItem({
+        item_type: "alert",
+        referenced_object_type: "alert",
+        referenced_object_id: String(alertId),
+        label: `Alert #${alertId} ${alert.alert_type || ""}`.trim(),
+        metadata: { source_ip: alert.source_ip || "", severity: alert.severity || "" },
+      });
+      await refreshAnalystWorkspace();
+      return item;
+    } catch (error) {
+      setWorkspaceError(error.message || "Unable to pin alert");
+      return null;
+    }
+  }, [refreshAnalystWorkspace]);
+
+  const saveInvestigationState = useCallback(async (context) => {
+    const alert = context?.alert;
+    const incident = context?.incident;
+    try {
+      const investigation = await createInvestigation({
+        title: alert ? `Investigation for alert #${alert.id ?? alert.alert_id}` : incident?.title || "Investigation",
+        linked_alert_id: alert?.id ?? alert?.alert_id ?? null,
+        linked_incident_id: incident?.id ?? null,
+        linked_source_ip: context?.sourceIp || alert?.source_ip || incident?.source_ip || null,
+        summary: "Saved from Investigation Drawer",
+        saved_state: {
+          source: "investigation_drawer",
+          has_timeline: Boolean(context?.timeline?.length),
+          has_response_history: Boolean(context?.responseHistory?.length),
+        },
+      });
+      await refreshAnalystWorkspace();
+      return investigation;
+    } catch (error) {
+      setWorkspaceError(error.message || "Unable to save investigation");
+      return null;
+    }
+  }, [refreshAnalystWorkspace]);
+
+  const createPrivateNote = useCallback(async (body) => {
+    try {
+      await createWorkspaceNote({ body });
+      await refreshAnalystWorkspace();
+    } catch (error) {
+      setWorkspaceError(error.message || "Unable to create note");
+    }
+  }, [refreshAnalystWorkspace]);
+
+  const createPrivateHypothesis = useCallback(async (title) => {
+    try {
+      await createWorkspaceHypothesis({ title });
+      await refreshAnalystWorkspace();
+    } catch (error) {
+      setWorkspaceError(error.message || "Unable to create hypothesis");
+    }
+  }, [refreshAnalystWorkspace]);
+
+  const createPrivateTask = useCallback(async (title) => {
+    try {
+      await createWorkspaceTask({ title });
+      await refreshAnalystWorkspace();
+    } catch (error) {
+      setWorkspaceError(error.message || "Unable to create task");
+    }
+  }, [refreshAnalystWorkspace]);
+
+  const deletePrivatePin = useCallback(async (itemId) => {
+    try {
+      await removeWorkspacePin(itemId);
+      await refreshAnalystWorkspace();
+    } catch (error) {
+      setWorkspaceError(error.message || "Unable to remove workspace item");
+    }
+  }, [refreshAnalystWorkspace]);
+
+  const saveAlertEvidenceReference = useCallback(async (alert) => {
+    if (!alert) return;
+    const alertId = alert.id ?? alert.alert_id;
+    try {
+      await createEvidenceReference({
+        referenced_object_type: "alert",
+        referenced_object_id: String(alertId),
+        label: `Evidence for alert #${alertId}`,
+        source: "investigation_drawer",
+      });
+      await refreshAnalystWorkspace();
+    } catch (error) {
+      setWorkspaceError(error.message || "Unable to save evidence reference");
+    }
+  }, [refreshAnalystWorkspace]);
+
   const metrics = useMemo(() => {
     if (!alertSummaryState.metrics) {
       return {
@@ -1175,6 +1322,172 @@ function AppInner() {
   const alertPageEnd = Math.min(alertsState.offset + alertsState.items.length, alertsState.total);
   const canGoToPreviousAlertPage = alertsState.offset > 0;
   const canGoToNextAlertPage = alertsState.offset + alertsState.limit < alertsState.total;
+  const threatBriefModel = useMemo(
+    () =>
+      buildThreatBriefModel({
+        alerts: alertsState.items,
+        metrics,
+        sourceErrors: dashboardRefreshError ? ["dashboard"] : [],
+        stale: dashboardRefreshing,
+      }),
+    [alertsState.items, dashboardRefreshError, dashboardRefreshing, metrics]
+  );
+  const anakinCommandContext = useMemo(
+    () =>
+      buildCommandContext({
+        activeSection,
+        alertView,
+        selectedAlertId,
+        alerts: alertsState.items,
+        metrics,
+        currentUsername,
+        userRole,
+        canTakeAlertActions,
+        threatBrief: threatBriefModel,
+      }),
+    [
+      activeSection,
+      alertView,
+      alertsState.items,
+      canTakeAlertActions,
+      currentUsername,
+      metrics,
+      selectedAlertId,
+      threatBriefModel,
+      userRole,
+    ]
+  );
+  const investigationCommands = useMemo(
+    () => [
+      {
+        id: "investigation.open-drawer",
+        label: "Open Investigation Drawer",
+        group: "Investigation",
+        intent: ANAKIN_COMMAND_INTENTS.extension,
+        readOnly: true,
+        description: "Open the focused investigation drawer for the selected alert context.",
+        availability: (context) => Boolean(context.object?.alert),
+        execute: () => {
+          setInvestigationDrawerOpen(true);
+          refreshAnalystWorkspace();
+        },
+      },
+      {
+        id: "investigation.pin-selected-alert",
+        label: "Pin selected alert",
+        group: "Investigation",
+        intent: ANAKIN_COMMAND_INTENTS.extension,
+        readOnly: false,
+        description: "Manually pin the selected alert to the private Analyst Workspace.",
+        availability: (context) => Boolean(context.object?.alert),
+        execute: () => pinAlertToWorkspace(selectedAlert),
+      },
+      {
+        id: "investigation.open-workspace",
+        label: "Open Analyst Workspace",
+        group: "Investigation",
+        intent: ANAKIN_COMMAND_INTENTS.navigate,
+        readOnly: true,
+        description: "Open the private analyst investigation notebook.",
+        execute: () => {
+          handleNavigate("analyst-workspace");
+          refreshAnalystWorkspace();
+        },
+      },
+    ],
+    [handleNavigate, pinAlertToWorkspace, refreshAnalystWorkspace, selectedAlert]
+  );
+  const anakinRegistry = useMemo(
+    () => createCommandRegistry([...createDefaultAnakinCommands(), ...createExtensionCommandSlots(), ...investigationCommands]),
+    [investigationCommands]
+  );
+  const anakinCommands = useMemo(
+    () => anakinRegistry.available(anakinCommandContext),
+    [anakinCommandContext, anakinRegistry]
+  );
+  useEffect(() => {
+    if (activeSection === "analyst-workspace" && canTakeAlertActions) {
+      refreshAnalystWorkspace();
+    }
+  }, [activeSection, canTakeAlertActions, refreshAnalystWorkspace]);
+  const paletteCommands = useMemo(() => {
+    const visibleSections = sectionsConfig
+      .filter((section) => section.visibleWhen(roleFlags))
+      .map((section) => ({
+        id: `navigate.${section.id}`,
+        label: section.label,
+        group: "Navigation",
+        intent: ANAKIN_COMMAND_INTENTS.navigate,
+        readOnly: true,
+        description: `Open ${section.label}`,
+        execute: () => handleNavigate(section.id),
+        keywords: [section.id, section.group],
+      }));
+    const filterCommands = [
+      {
+        id: "filter.severity.high",
+        label: "Filter high severity alerts",
+        group: "Quick filters",
+        intent: ANAKIN_COMMAND_INTENTS.filter,
+        readOnly: true,
+        description: "Show high severity alerts on the dashboard.",
+        execute: () => {
+          handleNavigate("dashboard");
+          setSeverityFilter("high");
+        },
+        keywords: ["alert", "severity", "high"],
+      },
+      {
+        id: "filter.reset-dashboard",
+        label: "Reset dashboard filters",
+        group: "Quick filters",
+        intent: ANAKIN_COMMAND_INTENTS.filter,
+        readOnly: true,
+        description: "Reset dashboard filters without changing backend state.",
+        execute: resetAlertView,
+        keywords: ["dashboard", "filter", "reset"],
+      },
+      {
+        id: "action.open-recent-alerts",
+        label: "Open recent alerts",
+        group: "Common actions",
+        intent: ANAKIN_COMMAND_INTENTS.navigate,
+        readOnly: true,
+        description: "Navigate to the dashboard recent alerts target.",
+        execute: () =>
+          navigateWorkspace("dashboard", {
+            destination: NAVIGATION_DESTINATIONS.element,
+            targetKey: "recent-alerts",
+          }),
+        keywords: ["alerts", "recent"],
+      },
+    ];
+    return [...anakinCommands, ...visibleSections, ...filterCommands];
+  }, [anakinCommands, handleNavigate, navigateWorkspace, resetAlertView, roleFlags, setSeverityFilter]);
+  const paletteObjects = useMemo(() => {
+    const alertObjects = alertsState.items.slice(0, 25).map((alert) => ({
+      id: `alert.${alert.alert_id ?? alert.id}`,
+      label: alert.alert_type || `Alert ${alert.alert_id ?? alert.id}`,
+      group: "Alert lookup",
+      description: [alert.severity, alert.source_ip, alert.status].filter(Boolean).join(" • "),
+      meta: [alert.severity, alert.source_ip].filter(Boolean).join(" • "),
+      keywords: [String(alert.alert_id ?? alert.id ?? ""), alert.source_ip, alert.alert_type],
+      execute: () => {
+        handleOpenAlert(alert.alert_id ?? alert.id);
+      },
+    }));
+    const sourceObjects = Array.from(new Set(alertsState.items.map((alert) => alert.source_ip).filter(Boolean)))
+      .slice(0, 20)
+      .map((sourceIp) => ({
+        id: `source-ip.${sourceIp}`,
+        label: sourceIp,
+        group: "IP lookup",
+        description: "Open related alerts for this source IP.",
+        keywords: [sourceIp, "ip", "source"],
+        execute: () => handleViewRelatedAlerts(sourceIp),
+      }));
+    return [...alertObjects, ...sourceObjects];
+  }, [alertsState.items, handleOpenAlert, handleViewRelatedAlerts]);
 
   const handleNextAlertPage = useCallback(() => {
     if (!canGoToNextAlertPage || alertsBusy) return;
@@ -1297,13 +1610,21 @@ function AppInner() {
     (options) => {
       if (!options) return;
       const visibleContext = buildVisibleAiContext();
+      const contextualCommand = normalizeContextualAiOptions(options);
       const contextKey = JSON.stringify({
         section: activeSection,
         selectedAlertId,
         filters: visibleContext.visible_filters,
+        command: contextualCommand.id,
       });
       const context = {
         ...visibleContext,
+        command: {
+          id: contextualCommand.id,
+          label: contextualCommand.label,
+          intent: contextualCommand.intent,
+          read_only: contextualCommand.readOnly,
+        },
         ...(options.context || {}),
       };
       const payload = options.draftType
@@ -1336,23 +1657,48 @@ function AppInner() {
     [activeSection, buildVisibleAiContext, runAiRequest, selectedAlertId]
   );
 
-  const handleAskAiChat = useCallback(
-    (message) => {
-      const visibleContext = buildVisibleAiContext();
-      runAiRequest({
-        title: "General SIEM question",
-        request: {
-          message,
-          visible_context: visibleContext,
-          client_history: aiChatHistory,
-          use_tools: true,
-          tool_policy: { max_tool_calls: 5, time_window_hours: 24 },
-        },
-        executor: requestAiChat,
-        contextKey: JSON.stringify({ section: activeSection, filters: visibleContext.visible_filters }),
-      });
+  const executeAnakinCommand = useCallback(
+    (command, runtime = {}) => {
+      if (!command) return;
+      if (typeof command.execute === "function") {
+        command.execute();
+        return;
+      }
+      if (command.intent === ANAKIN_COMMAND_INTENTS.ask && runtime.question?.trim()) {
+        const visibleContext = buildVisibleAiContext();
+        runAiRequest({
+          title: "Ask Anakin",
+          request: {
+            message: runtime.question.trim(),
+            visible_context: {
+              ...visibleContext,
+              command_context: anakinCommandContext,
+            },
+            client_history: aiChatHistory,
+            use_tools: true,
+            tool_policy: { max_tool_calls: 5, time_window_hours: 24 },
+          },
+          executor: requestAiChat,
+          contextKey: JSON.stringify({
+            section: activeSection,
+            filters: visibleContext.visible_filters,
+            command: command.id,
+          }),
+        });
+        return;
+      }
+      const options = commandToAiOptions(command, anakinCommandContext, runtime.question || "");
+      handleAskAi(options);
     },
-    [activeSection, aiChatHistory, buildVisibleAiContext, runAiRequest]
+    [activeSection, aiChatHistory, anakinCommandContext, buildVisibleAiContext, handleAskAi, runAiRequest]
+  );
+
+  const executePaletteCommand = useCallback(
+    (command) => {
+      if (!command) return;
+      executeAnakinCommand(command);
+    },
+    [executeAnakinCommand]
   );
 
   const retryAiRequest = useCallback(() => {
@@ -1383,55 +1729,33 @@ function AppInner() {
   if (authLoading) {
     return (
       <div
-        style={{
-          minHeight: "100vh",
-          backgroundColor: "#0b1020",
-          color: "white",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontFamily: "Arial, sans-serif",
-        }}
+        style={loginShellStyle}
       >
-        Checking authentication...
+        <div style={loginStatusStyle}>Checking authentication...</div>
       </div>
     );
   }
 
   if (!isAuthenticated) {
     return (
-      <div
-        style={{
-          minHeight: "100vh",
-          backgroundColor: "#0b1020",
-          color: "white",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: "20px",
-          fontFamily: "Arial, sans-serif",
-        }}
-      >
+      <div style={loginShellStyle}>
         <form
           onSubmit={handleLogin}
-          style={{
-            width: "100%",
-            maxWidth: "400px",
-            backgroundColor: "#111827",
-            border: "1px solid #1f2937",
-            borderRadius: "12px",
-            padding: "24px",
-            boxShadow: "0 10px 30px rgba(0,0,0,0.35)",
-          }}
+          style={loginCardStyle}
+          aria-labelledby="siem-login-title"
         >
-          <h2 style={{ marginTop: 0, marginBottom: "8px" }}>SIEM Dashboard Login</h2>
-          <p style={{ marginTop: 0, marginBottom: "20px", color: "#9ca3af" }}>
-            Sign in to access alerts and response actions.
-          </p>
+          <div style={loginIdentityStyle}>
+            <span aria-hidden="true" style={loginMarkStyle}>SIEM</span>
+            <div>
+              <p style={loginEyebrowStyle}>Anakin analyst console</p>
+              <h2 id="siem-login-title" style={loginTitleStyle}>SIEM Dashboard Login</h2>
+            </div>
+          </div>
+          <p style={loginSubtitleStyle}>Sign in to access alerts and response actions.</p>
 
           <label
             htmlFor="login-username"
-            style={{ display: "block", marginBottom: "6px", fontSize: "14px" }}
+            style={loginLabelStyle}
           >
             Username
           </label>
@@ -1440,21 +1764,12 @@ function AppInner() {
             type="text"
             value={loginUsername}
             onChange={(e) => setLoginUsername(e.target.value)}
-            style={{
-              width: "100%",
-              padding: "10px 12px",
-              marginBottom: "16px",
-              borderRadius: "8px",
-              border: "1px solid #374151",
-              backgroundColor: "#0f172a",
-              color: "white",
-              boxSizing: "border-box",
-            }}
+            style={loginInputStyle}
           />
 
           <label
             htmlFor="login-password"
-            style={{ display: "block", marginBottom: "6px", fontSize: "14px" }}
+            style={loginLabelStyle}
           >
             Password
           </label>
@@ -1463,29 +1778,12 @@ function AppInner() {
             type="password"
             value={loginPassword}
             onChange={(e) => setLoginPassword(e.target.value)}
-            style={{
-              width: "100%",
-              padding: "10px 12px",
-              marginBottom: "16px",
-              borderRadius: "8px",
-              border: "1px solid #374151",
-              backgroundColor: "#0f172a",
-              color: "white",
-              boxSizing: "border-box",
-            }}
+            style={loginInputStyle}
           />
 
           {loginError && (
             <div
-              style={{
-                marginBottom: "16px",
-                padding: "10px 12px",
-                borderRadius: "8px",
-                backgroundColor: "rgba(239, 68, 68, 0.15)",
-                border: "1px solid rgba(239, 68, 68, 0.35)",
-                color: "#fca5a5",
-                fontSize: "14px",
-              }}
+              style={loginErrorStyle}
             >
               {loginError}
             </div>
@@ -1493,19 +1791,14 @@ function AppInner() {
 
           <button
             type="submit"
-            style={{
-              width: "100%",
-              padding: "10px 12px",
-              borderRadius: "8px",
-              border: "none",
-              backgroundColor: "#2563eb",
-              color: "white",
-              fontWeight: "600",
-              cursor: "pointer",
-            }}
+            style={loginButtonStyle}
           >
             Log In
           </button>
+          <div style={loginFooterStyle}>
+            <span>Operational console</span>
+            <span>v{packageJson.version}</span>
+          </div>
         </form>
       </div>
     );
@@ -1575,6 +1868,13 @@ function AppInner() {
     >
       {sessionNotice && <div style={sessionNoticeStyle}>{sessionNotice}</div>}
 
+        {canTakeAlertActions ? (
+          <ThreatBrief
+            model={threatBriefModel}
+            loading={dashboardInitialLoading}
+          />
+        ) : null}
+
         {activeSection === "dashboard" && isSectionVisible("dashboard", roleFlags) && (
           <DashboardSection
             metrics={metrics}
@@ -1641,6 +1941,11 @@ function AppInner() {
             displaySettings={settings.display}
             onOpenResponseRegistry={handleOpenResponseRegistry}
             onReviewIncident={handleOpenIncidentWorkspace}
+            onOpenInvestigation={(alert) => {
+              setSelectedAlertId(alert?.id ?? alert?.alert_id ?? null);
+              setInvestigationDrawerOpen(true);
+              refreshAnalystWorkspace();
+            }}
             loading={dashboardInitialLoading}
             error={dashboardInitialError}
             refreshing={dashboardRefreshing}
@@ -1695,6 +2000,19 @@ function AppInner() {
             onHistoryStateChange={(state) =>
               handleWorkspaceChildStateChange("threat-hunt", { threatHunt: state })
             }
+          />
+        )}
+
+        {activeSection === "analyst-workspace" && isSectionVisible("analyst-workspace", roleFlags) && (
+          <AnalystWorkspace
+            workspaceState={workspaceState}
+            loading={workspaceLoading}
+            error={workspaceError}
+            onRefresh={refreshAnalystWorkspace}
+            onCreateNote={createPrivateNote}
+            onCreateHypothesis={createPrivateHypothesis}
+            onCreateTask={createPrivateTask}
+            onRemovePin={deletePrivatePin}
           />
         )}
 
@@ -1999,7 +2317,26 @@ function AppInner() {
           />
         )}
         {canTakeAlertActions ? (
+          <InvestigationDrawer
+            open={investigationDrawerOpen}
+            onClose={() => setInvestigationDrawerOpen(false)}
+            alert={selectedAlert}
+            timeline={alertTimelineData}
+            workspace={workspaceState}
+            observations={workspaceState?.notes || []}
+            onPinAlert={pinAlertToWorkspace}
+            onSaveEvidence={saveAlertEvidenceReference}
+            onCreateInvestigation={saveInvestigationState}
+          />
+        ) : null}
+        {canTakeAlertActions ? (
           <>
+            <CommandPalette
+              commands={paletteCommands}
+              objects={paletteObjects}
+              onExecute={executePaletteCommand}
+              disabled={aiPanelState.status === "loading"}
+            />
             <AiResponsePanel
               state={aiPanelState}
               onDismiss={dismissAiPanel}
@@ -2007,7 +2344,14 @@ function AppInner() {
               onCancel={cancelAiRequest}
               userRole={userRole}
             />
-            <FloatingSiemChat onAsk={handleAskAiChat} disabled={aiPanelState.status === "loading"} />
+            <AnakinCommandSurface
+              commands={anakinCommands}
+              context={anakinCommandContext}
+              onExecute={executeAnakinCommand}
+              disabled={aiPanelState.status === "loading"}
+              status={aiPanelState.status}
+              triggerAriaLabel="Open general Anakin SIEM chat"
+            />
           </>
         ) : null}
     </SidebarLayout>
@@ -2020,6 +2364,137 @@ const sessionActionsStyle = {
   gap: "12px",
   flexWrap: "wrap",
   justifyContent: "flex-end",
+};
+
+const loginShellStyle = {
+  minHeight: "100dvh",
+  width: "100%",
+  boxSizing: "border-box",
+  backgroundColor: "#0b1020",
+  backgroundImage:
+    "linear-gradient(rgba(88, 166, 255, 0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(88, 166, 255, 0.035) 1px, transparent 1px)",
+  backgroundSize: "36px 36px",
+  color: theme.color.text,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: "16px",
+  fontFamily: "Arial, sans-serif",
+  overflowX: "hidden",
+};
+
+const loginStatusStyle = {
+  color: theme.color.textSoft,
+  fontWeight: 700,
+};
+
+const loginCardStyle = {
+  width: "100%",
+  maxWidth: "420px",
+  minWidth: 0,
+  flexShrink: 1,
+  boxSizing: "border-box",
+  backgroundColor: "#111827",
+  border: "1px solid #1f2937",
+  borderRadius: theme.radius.lg,
+  padding: "clamp(18px, 5vw, 26px)",
+  boxShadow: theme.shadow.raised,
+};
+
+const loginIdentityStyle = {
+  display: "flex",
+  alignItems: "center",
+  gap: "12px",
+  marginBottom: "12px",
+  minWidth: 0,
+};
+
+const loginMarkStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: "44px",
+  height: "44px",
+  borderRadius: theme.radius.sm,
+  border: "1px solid rgba(125, 211, 252, 0.35)",
+  backgroundColor: theme.color.aiBg,
+  color: theme.color.aiSoft,
+  fontSize: "11px",
+  fontWeight: 900,
+  letterSpacing: "0.08em",
+  flexShrink: 0,
+};
+
+const loginEyebrowStyle = {
+  margin: "0 0 2px",
+  color: theme.color.aiSoft,
+  fontSize: "11px",
+  fontWeight: 800,
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+};
+
+const loginTitleStyle = {
+  margin: 0,
+  color: theme.color.text,
+  fontSize: "clamp(21px, 6vw, 25px)",
+  lineHeight: 1.15,
+};
+
+const loginSubtitleStyle = {
+  margin: "0 0 20px",
+  color: "#9ca3af",
+  lineHeight: 1.4,
+};
+
+const loginLabelStyle = {
+  display: "block",
+  marginBottom: "6px",
+  fontSize: "14px",
+  color: theme.color.text,
+};
+
+const loginInputStyle = {
+  width: "100%",
+  minWidth: 0,
+  padding: "11px 12px",
+  marginBottom: "16px",
+  borderRadius: theme.radius.sm,
+  border: "1px solid #374151",
+  backgroundColor: "#0f172a",
+  color: "white",
+  boxSizing: "border-box",
+};
+
+const loginErrorStyle = {
+  marginBottom: "16px",
+  padding: "10px 12px",
+  borderRadius: theme.radius.sm,
+  backgroundColor: theme.color.dangerBg,
+  border: "1px solid rgba(239, 68, 68, 0.35)",
+  color: theme.color.dangerSoft,
+  fontSize: "14px",
+};
+
+const loginButtonStyle = {
+  width: "100%",
+  padding: "11px 12px",
+  borderRadius: theme.radius.sm,
+  border: "none",
+  backgroundColor: "#2563eb",
+  color: "white",
+  fontWeight: "700",
+  cursor: "pointer",
+};
+
+const loginFooterStyle = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: "12px",
+  flexWrap: "wrap",
+  marginTop: "16px",
+  color: theme.color.textMuted,
+  fontSize: "11px",
 };
 
 const workspaceHistoryControlsStyle = {
@@ -2124,7 +2599,7 @@ const metricsGridStyle = {
 
 const chartsGridStyle = {
   display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(400px, 1fr))",
+  gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 400px), 1fr))",
   gap: "20px",
   marginBottom: "24px",
 };

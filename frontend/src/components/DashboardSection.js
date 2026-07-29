@@ -14,6 +14,7 @@ function DashboardSection({
   canTakeAlertActions,
   onOpenResponseRegistry,
   onReviewIncident,
+  onOpenInvestigation,
   searchTerm,
   setSearchTerm,
   sortOption,
@@ -190,6 +191,7 @@ function DashboardSection({
           setStatusFilter={setStatusFilter}
           onOpenResponseRegistry={onOpenResponseRegistry}
           onReviewIncident={onReviewIncident}
+          onOpenInvestigation={onOpenInvestigation}
           totalAlerts={totalAlerts}
           pageOffset={pageOffset}
           pageLimit={pageLimit}

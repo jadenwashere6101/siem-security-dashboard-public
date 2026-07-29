@@ -108,7 +108,9 @@ const titleStyle = {
 const badgeStyle = {
   display: "inline-flex",
   alignItems: "center",
-  border: "1px solid rgba(88, 166, 255, 0.35)",
+  borderWidth: "1px",
+  borderStyle: "solid",
+  borderColor: "rgba(88, 166, 255, 0.35)",
   borderRadius: "999px",
   color: "#79c0ff",
   background: "rgba(56, 139, 253, 0.12)",

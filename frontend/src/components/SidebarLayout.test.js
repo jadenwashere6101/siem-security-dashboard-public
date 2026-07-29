@@ -15,6 +15,11 @@ jest.mock("../utils/sidebarPreference", () => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    writable: true,
+    value: 1280,
+  });
   readStoredSidebarCollapsed.mockReturnValue(null);
 });
 
@@ -106,7 +111,8 @@ test("toggling the hamburger flips collapse state and propagates to both TopBar 
   await userEvent.click(toggleButton);
 
   expect(toggleButton).toHaveAttribute("aria-expanded", "false");
-  expect(screen.queryByRole("button", { name: "Alpha" })).not.toBeInTheDocument();
+  expect(screen.getByRole("main")).toHaveAttribute("data-sidebar-state", "collapsed");
+  expect(screen.getByRole("button", { name: "Alpha" })).toHaveAttribute("title", "Alpha");
 });
 
 test("does not own activeSection state; activeSectionId prop alone controls highlighting", () => {
@@ -309,8 +315,123 @@ test("main content keeps balanced gutters when the sidebar is collapsed", () => 
   const sidebar = mainRegion.previousElementSibling;
   expect(mainRegion).toHaveAttribute("data-sidebar-state", "collapsed");
   expect(mainRegion).toHaveStyle({ paddingLeft: "32px", paddingRight: "32px" });
-  expect(sidebar).toHaveStyle({ width: "0px", borderRight: "none" });
+  expect(sidebar).toHaveStyle({ width: "68px", borderRight: "1px solid #30363d" });
   expect(screen.queryByTestId("sidebar-status-panel")).not.toBeInTheDocument();
+});
+
+test("mobile sidebar opens as an overlay and closes with Escape while content width remains intact", async () => {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    writable: true,
+    value: 430,
+  });
+  window.requestAnimationFrame = (callback) => {
+    callback();
+    return 1;
+  };
+
+  render(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      title="SIEM Dashboard"
+    >
+      <p>Page Content</p>
+    </SidebarLayout>
+  );
+
+  const main = screen.getByRole("main");
+  const sidebar = main.previousElementSibling;
+  const toggleButton = screen.getByRole("button", { name: /toggle navigation/i });
+  expect(main).toHaveAttribute("data-sidebar-state", "overlay");
+  expect(main).toHaveAttribute("data-viewport-mode", "mobile");
+  expect(main).toHaveStyle({ paddingLeft: "16px", paddingRight: "16px" });
+  expect(sidebar).toHaveAttribute("data-overlay", "true");
+  expect(sidebar).toHaveAttribute("aria-hidden", "true");
+  expect(sidebar).toHaveStyle({ width: "280px", transform: "translateX(-100%)" });
+
+  await userEvent.click(toggleButton);
+
+  expect(toggleButton).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByRole("button", { name: "Close navigation overlay" })).toBeInTheDocument();
+  expect(sidebar).not.toHaveAttribute("aria-hidden");
+  expect(sidebar).toHaveStyle({ transform: "translateX(0)" });
+
+  await userEvent.keyboard("{Escape}");
+
+  expect(screen.queryByRole("button", { name: "Close navigation overlay" })).not.toBeInTheDocument();
+  expect(sidebar).toHaveAttribute("aria-hidden", "true");
+  expect(toggleButton).toHaveFocus();
+});
+
+test("tablet shell uses overlay navigation and tablet spacing without content overlap", async () => {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    writable: true,
+    value: 800,
+  });
+  const onNavigate = jest.fn();
+
+  render(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={onNavigate}
+      title="SIEM Dashboard"
+    >
+      <p>Page Content</p>
+    </SidebarLayout>
+  );
+
+  const main = screen.getByRole("main");
+  expect(main).toHaveAttribute("data-sidebar-state", "overlay");
+  expect(main).toHaveAttribute("data-viewport-mode", "tablet");
+  expect(main).toHaveStyle({ paddingLeft: "20px", paddingRight: "20px" });
+
+  await userEvent.click(screen.getByRole("button", { name: /toggle navigation/i }));
+  await userEvent.click(screen.getByRole("button", { name: "Gamma" }));
+
+  expect(onNavigate).toHaveBeenCalledWith("gamma");
+  expect(screen.queryByRole("button", { name: "Close navigation overlay" })).not.toBeInTheDocument();
+});
+
+test("resizing back to desktop clears an open mobile overlay without changing desktop collapse preference", async () => {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    writable: true,
+    value: 430,
+  });
+
+  render(
+    <SidebarLayout
+      sections={mockSections}
+      roleFlags={{ isAdmin: true }}
+      activeSectionId="alpha"
+      onNavigate={() => {}}
+      title="SIEM Dashboard"
+    >
+      <p>Page Content</p>
+    </SidebarLayout>
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: /toggle navigation/i }));
+  expect(screen.getByRole("button", { name: "Close navigation overlay" })).toBeInTheDocument();
+
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    writable: true,
+    value: 1280,
+  });
+  act(() => {
+    window.dispatchEvent(new Event("resize"));
+  });
+
+  expect(screen.queryByRole("button", { name: "Close navigation overlay" })).not.toBeInTheDocument();
+  expect(screen.getByRole("main")).toHaveAttribute("data-sidebar-state", "expanded");
+  expect(screen.getByRole("button", { name: /toggle navigation/i })).toHaveAttribute("aria-expanded", "true");
 });
 
 test("main content keeps its left padding when the sidebar is expanded", () => {

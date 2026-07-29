@@ -4,6 +4,12 @@ import Sidebar from "./Sidebar";
 import TopBar from "./TopBar";
 import { readStoredSidebarCollapsed, writeStoredSidebarCollapsed } from "../utils/sidebarPreference";
 import { NAVIGATION_DESTINATIONS, getWorkspaceNavigationBehavior } from "../utils/workspaceNavigation";
+import { getViewportMode, theme, viewportModes } from "../theme";
+
+function readViewportMode() {
+  if (typeof window === "undefined") return viewportModes.desktop;
+  return getViewportMode(window.innerWidth);
+}
 
 function SidebarLayout({
   sections,
@@ -20,16 +26,61 @@ function SidebarLayout({
   children,
 }) {
   const [isCollapsed, setIsCollapsed] = useState(() => readStoredSidebarCollapsed() ?? false);
+  const [viewportMode, setViewportMode] = useState(readViewportMode);
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const mainRef = useRef(null);
+  const toggleButtonRef = useRef(null);
   const handledNavigationNonceRef = useRef(null);
+  const isOverlayMode = viewportMode !== viewportModes.desktop;
 
   const toggleCollapsed = useCallback(() => {
+    if (isOverlayMode) {
+      setIsMobileNavOpen((previous) => !previous);
+      return;
+    }
     setIsCollapsed((previous) => !previous);
+  }, [isOverlayMode]);
+
+  const closeMobileNav = useCallback(() => {
+    setIsMobileNavOpen(false);
+    window.requestAnimationFrame?.(() => toggleButtonRef.current?.focus());
   }, []);
+
+  const handleNavigate = useCallback((sectionId) => {
+    onNavigate(sectionId);
+    if (isOverlayMode) {
+      closeMobileNav();
+    }
+  }, [closeMobileNav, isOverlayMode, onNavigate]);
 
   useEffect(() => {
     writeStoredSidebarCollapsed(isCollapsed);
   }, [isCollapsed]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const onResize = () => {
+      const nextMode = readViewportMode();
+      setViewportMode(nextMode);
+      if (nextMode === viewportModes.desktop) {
+        setIsMobileNavOpen(false);
+      }
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useEffect(() => {
+    if (!isOverlayMode || !isMobileNavOpen) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeMobileNav();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [closeMobileNav, isMobileNavOpen, isOverlayMode]);
 
   useEffect(() => {
     const main = mainRef.current;
@@ -102,30 +153,59 @@ function SidebarLayout({
   return (
     <div style={shellStyle}>
       <TopBar
-        isCollapsed={isCollapsed}
+        isCollapsed={isOverlayMode ? !isMobileNavOpen : isCollapsed}
         onToggleCollapse={toggleCollapsed}
         title={title}
         eyebrow={eyebrow}
         navigationControls={navigationControls}
+        viewportMode={viewportMode}
+        toggleButtonRef={toggleButtonRef}
       >
         {topBarActions}
       </TopBar>
 
       <div style={bodyStyle}>
+        {isOverlayMode && isMobileNavOpen ? (
+          <button
+            type="button"
+            aria-label="Close navigation overlay"
+            onClick={closeMobileNav}
+            style={mobileBackdropStyle}
+          />
+        ) : null}
         <Sidebar
           sections={sections}
           roleFlags={roleFlags}
           activeSectionId={activeSectionId}
-          onNavigate={onNavigate}
-          isCollapsed={isCollapsed}
+          onNavigate={handleNavigate}
+          isCollapsed={isOverlayMode ? false : isCollapsed}
+          isOverlay={isOverlayMode}
+          isOpen={!isOverlayMode || isMobileNavOpen}
           statusLabel={statusLabel}
           versionLabel={versionLabel}
         />
 
         <main
           ref={mainRef}
-          data-sidebar-state={isCollapsed ? "collapsed" : "expanded"}
-          style={{ ...mainContentStyle, paddingLeft: "32px" }}
+          data-sidebar-state={isOverlayMode ? "overlay" : isCollapsed ? "collapsed" : "expanded"}
+          data-viewport-mode={viewportMode}
+          style={{
+            ...mainContentStyle,
+            paddingLeft:
+              viewportMode === viewportModes.mobile
+                ? theme.spacing.shellMobile
+                : viewportMode === viewportModes.tablet
+                ? theme.spacing.shellTablet
+                : theme.spacing.shellDesktop,
+            paddingRight:
+              viewportMode === viewportModes.mobile
+                ? theme.spacing.shellMobile
+                : viewportMode === viewportModes.tablet
+                ? theme.spacing.shellTablet
+                : theme.spacing.shellDesktop,
+            paddingBottom:
+              viewportMode === viewportModes.mobile ? theme.spacing.shellMobile : theme.spacing.shellDesktop,
+          }}
         >
           {children}
         </main>
@@ -141,7 +221,7 @@ const shellStyle = {
   maxHeight: "100dvh",
   minHeight: 0,
   overflow: "hidden",
-  backgroundColor: "#0d1117",
+  backgroundColor: theme.color.bg,
 };
 
 const bodyStyle = {
@@ -149,7 +229,7 @@ const bodyStyle = {
   flex: "1 1 auto",
   minHeight: 0,
   overflow: "hidden",
-  backgroundColor: "#0d1117",
+  backgroundColor: theme.color.bg,
 };
 
 const mainContentStyle = {
@@ -161,7 +241,17 @@ const mainContentStyle = {
   paddingRight: "32px",
   paddingBottom: "32px",
   boxSizing: "border-box",
-  backgroundColor: "#0d1117",
+  backgroundColor: theme.color.bg,
+};
+
+const mobileBackdropStyle = {
+  position: "fixed",
+  inset: 0,
+  zIndex: theme.zIndex.mobileBackdrop,
+  border: "none",
+  padding: 0,
+  backgroundColor: "rgba(13, 17, 23, 0.58)",
+  cursor: "pointer",
 };
 
 export default SidebarLayout;

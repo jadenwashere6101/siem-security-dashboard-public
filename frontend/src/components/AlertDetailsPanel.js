@@ -97,6 +97,7 @@ function AlertDetailsPanel({
   signalRowStyle,
   sourceTypeTextStyle,
   onOpenResponseRegistry = null,
+  onOpenInvestigation = null,
   onAskAi = null,
   aiEnabled = false,
 }) {
@@ -164,6 +165,17 @@ function AlertDetailsPanel({
 
   return (
     <div style={{ fontSize: "14px", lineHeight: "1.7", color: "#e6edf3" }}>
+      {typeof onOpenInvestigation === "function" ? (
+        <div style={investigationButtonRowStyle}>
+          <button
+            type="button"
+            onClick={() => onOpenInvestigation(selectedAlert)}
+            style={investigationButtonStyle}
+          >
+            Open Investigation Drawer
+          </button>
+        </div>
+      ) : null}
       {aiEnabled && typeof onAskAi === "function" ? (
         <div style={aiButtonRowStyle}>
           <span style={agentClusterLabelStyle}>Anakin analyst tools</span>
@@ -576,6 +588,22 @@ const aiButtonRowStyle = {
   flexWrap: "wrap",
   gap: "8px",
   marginBottom: "14px",
+};
+
+const investigationButtonRowStyle = {
+  display: "flex",
+  justifyContent: "flex-start",
+  marginBottom: "12px",
+};
+
+const investigationButtonStyle = {
+  border: "1px solid rgba(125, 211, 252, 0.45)",
+  borderRadius: "8px",
+  backgroundColor: "rgba(14, 165, 233, 0.14)",
+  color: "#93c5fd",
+  padding: "8px 10px",
+  fontWeight: 800,
+  cursor: "pointer",
 };
 
 const agentClusterLabelStyle = {

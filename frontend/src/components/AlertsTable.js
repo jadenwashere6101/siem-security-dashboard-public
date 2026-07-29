@@ -94,6 +94,7 @@ function AlertsTable({
   displaySettings,
   onOpenResponseRegistry = null,
   onReviewIncident = null,
+  onOpenInvestigation = null,
   totalAlerts = 0,
   pageOffset = 0,
   pageLimit = 50,
@@ -751,6 +752,7 @@ function AlertsTable({
               signalRowStyle={signalRowStyle}
               sourceTypeTextStyle={sourceTypeTextStyle}
               onOpenResponseRegistry={onOpenResponseRegistry}
+              onOpenInvestigation={onOpenInvestigation}
               onAskAi={onAskAi}
               aiEnabled={aiEnabled}
             />

@@ -94,3 +94,26 @@ test("renders without eyebrow when omitted", () => {
   expect(screen.queryByText("SIEM")).not.toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "SIEM Dashboard" })).toBeInTheDocument();
 });
+
+test("uses responsive wrapping for compact top-bar controls", () => {
+  render(
+    <TopBar
+      isCollapsed
+      onToggleCollapse={() => {}}
+      title="SIEM Dashboard"
+      navigationControls={<button type="button">Back</button>}
+      viewportMode="mobile"
+    >
+      <button type="button">Log out</button>
+    </TopBar>
+  );
+
+  const header = screen.getByRole("banner");
+  expect(header).toHaveAttribute("data-viewport-mode", "mobile");
+  expect(screen.getByRole("button", { name: "Back" }).parentElement).toHaveStyle({
+    width: "100%",
+  });
+  expect(screen.getByRole("button", { name: "Log out" }).parentElement).toHaveStyle({
+    width: "100%",
+  });
+});

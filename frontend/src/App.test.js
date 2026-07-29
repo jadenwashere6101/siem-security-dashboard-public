@@ -173,6 +173,11 @@ jest.mock('./components/DetectionSimulatorPanel', () => () => (
 beforeEach(() => {
   jest.clearAllMocks();
   window.localStorage.clear();
+  Object.defineProperty(window, 'innerWidth', {
+    configurable: true,
+    writable: true,
+    value: 1280,
+  });
   loadCurrentSession.mockResolvedValue({ authenticated: false });
   loadAlerts.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0, sort: 'newest' });
   loadAlertDashboardSummary.mockResolvedValue({
@@ -202,11 +207,36 @@ test('renders the login form for unauthenticated users', async () => {
   const { container } = render(<App />);
 
   expect(await screen.findByRole('heading', { name: /siem dashboard login/i })).toBeInTheDocument();
+  expect(screen.getByText(/anakin analyst console/i)).toBeInTheDocument();
+  expect(screen.getByText(/operational console/i)).toBeInTheDocument();
   expect(screen.getByText(/username/i)).toBeInTheDocument();
   expect(container.querySelector('input[type="text"]')).toBeInTheDocument();
   expect(screen.getByText(/password/i)).toBeInTheDocument();
   expect(container.querySelector('input[type="password"]')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: /log in/i })).toBeInTheDocument();
+});
+
+test('keeps the login card inside a narrow mobile viewport', async () => {
+  Object.defineProperty(window, 'innerWidth', {
+    configurable: true,
+    writable: true,
+    value: 360,
+  });
+
+  const { container } = render(<App />);
+
+  const heading = await screen.findByRole('heading', { name: /siem dashboard login/i });
+  const form = heading.closest('form');
+  const shell = container.firstChild;
+
+  expect(shell).toHaveStyle({ overflowX: 'hidden', boxSizing: 'border-box' });
+  expect(form).toHaveStyle({
+    width: '100%',
+    maxWidth: '420px',
+    minWidth: 0,
+    flexShrink: 1,
+    boxSizing: 'border-box',
+  });
 });
 
 test('renders SOAR Operations nav for analyst and loads panel when selected', async () => {

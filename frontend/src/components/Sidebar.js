@@ -1,6 +1,40 @@
 import React from "react";
 
+import { theme } from "../theme";
+
 export const SIDEBAR_NAV_ID = "sidebar-shell-nav";
+
+const SECTION_ICONS = {
+  dashboard: "▦",
+  "source-health": "●",
+  "soc-command-center": "⌁",
+  "soc-briefings": "▤",
+  "recon-history": "⌕",
+  "severity-response-matrix": "◆",
+  "response-registry": "◎",
+  "threat-hunt": "⌖",
+  "detection-simulator": "◇",
+  "detection-rules": "≡",
+  "pfsense-ingest-filters": "▥",
+  "notification-policy": "✉",
+  "admin-users": "◉",
+  "admin-audit-logs": "◷",
+  "repo-architecture-assistant": "AI",
+  "soar-queue": "↻",
+  "soar-incidents": "!",
+  "soar-approvals": "✓",
+  "soar-playbooks": "▶",
+  "soar-playbook-metrics": "▧",
+  "soar-integrations": "⇄",
+  "soar-operations": "⚙",
+  settings: "⚙",
+};
+
+function iconForSection(section) {
+  if (SECTION_ICONS[section.id]) return SECTION_ICONS[section.id];
+  if (section.group === "live logs") return "≋";
+  return "•";
+}
 
 function Sidebar({
   sections = [],
@@ -8,6 +42,8 @@ function Sidebar({
   activeSectionId,
   onNavigate,
   isCollapsed = false,
+  isOverlay = false,
+  isOpen = true,
   statusLabel,
   versionLabel,
 }) {
@@ -33,20 +69,24 @@ function Sidebar({
     <aside
       style={{
         ...asideStyle,
-        width: isCollapsed ? 0 : 256,
-        borderRight: isCollapsed ? "none" : asideStyle.borderRight,
+        ...(isOverlay ? overlayAsideStyle : null),
+        width: isOverlay ? 280 : isCollapsed ? 68 : 256,
+        borderRight: isCollapsed && !isOverlay ? asideStyle.borderRight : asideStyle.borderRight,
+        transform: isOverlay && !isOpen ? "translateX(-100%)" : "translateX(0)",
       }}
+      data-collapsed={isCollapsed ? "true" : "false"}
+      data-overlay={isOverlay ? "true" : "false"}
+      aria-hidden={isOverlay && !isOpen ? "true" : undefined}
     >
-      <nav id={SIDEBAR_NAV_ID} aria-label="Primary" style={navStyle}>
-        {!isCollapsed &&
-          groups.map((group) => (
+      <nav id={SIDEBAR_NAV_ID} aria-label="Primary" style={{ ...navStyle, ...(isCollapsed ? collapsedNavStyle : null) }}>
+        {groups.map((group) => (
             <div
               key={group.name || "ungrouped"}
               role="group"
               aria-label={group.name || undefined}
               style={groupStyle}
             >
-              {group.name && (
+              {group.name && !isCollapsed && (
                 <p aria-hidden="true" style={groupHeadingStyle}>
                   {group.name}
                 </p>
@@ -62,12 +102,15 @@ function Sidebar({
                     onClick={() => onNavigate(section.id)}
                     aria-current={isActive ? "page" : undefined}
                     title={section.label}
+                    aria-label={section.label}
                     style={{
                       ...navButtonStyle,
+                      ...(isCollapsed ? collapsedNavButtonStyle : null),
                       ...(isActive ? activeNavButtonStyle : {}),
                     }}
                   >
-                    <span>{section.label}</span>
+                    <span aria-hidden="true" style={navIconStyle}>{iconForSection(section)}</span>
+                    {!isCollapsed ? <span>{section.label}</span> : null}
                   </button>
                 );
               })}
@@ -75,7 +118,7 @@ function Sidebar({
           ))}
       </nav>
 
-      {!isCollapsed && (
+      {(!isCollapsed || isOverlay) && (
         <div data-testid="sidebar-status-panel" style={statusPanelStyle}>
           {statusLabel && (
             <p style={statusLabelStyle} title={statusLabel}>
@@ -99,11 +142,18 @@ const asideStyle = {
   justifyContent: "space-between",
   flex: "0 0 auto",
   height: "100%",
-  backgroundColor: "#0d1117",
-  borderRight: "1px solid #30363d",
-  transition: "width 120ms ease",
+  backgroundColor: theme.color.bg,
+  borderRight: `1px solid ${theme.color.border}`,
+  transition: "width 120ms ease, transform 160ms ease",
   overflow: "hidden",
   boxSizing: "border-box",
+};
+
+const overlayAsideStyle = {
+  position: "fixed",
+  inset: "0 auto 0 0",
+  zIndex: theme.zIndex.mobileSidebar,
+  boxShadow: theme.shadow.overlay,
 };
 
 const navStyle = {
@@ -114,6 +164,11 @@ const navStyle = {
   overflowY: "auto",
 };
 
+const collapsedNavStyle = {
+  alignItems: "center",
+  gap: "12px",
+};
+
 const groupStyle = {
   display: "flex",
   flexDirection: "column",
@@ -122,7 +177,7 @@ const groupStyle = {
 
 const groupHeadingStyle = {
   margin: "0 0 6px 8px",
-  color: "#8b949e",
+  color: theme.color.textMuted,
   fontSize: "11px",
   fontWeight: "700",
   textTransform: "uppercase",
@@ -132,15 +187,16 @@ const groupHeadingStyle = {
 const navButtonStyle = {
   display: "flex",
   alignItems: "center",
+  gap: "10px",
   width: "100%",
   minHeight: "38px",
   padding: "10px 14px",
   borderWidth: "1px",
   borderStyle: "solid",
   borderColor: "transparent",
-  borderRadius: "8px",
+  borderRadius: theme.radius.sm,
   backgroundColor: "transparent",
-  color: "#c9d1d9",
+  color: theme.color.textSoft,
   fontSize: "13px",
   fontWeight: "600",
   textAlign: "left",
@@ -151,6 +207,23 @@ const navButtonStyle = {
   boxSizing: "border-box",
 };
 
+const collapsedNavButtonStyle = {
+  justifyContent: "center",
+  width: "42px",
+  minHeight: "42px",
+  padding: 0,
+};
+
+const navIconStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: "18px",
+  minWidth: "18px",
+  fontSize: "13px",
+  fontWeight: 900,
+};
+
 const activeNavButtonStyle = {
   backgroundColor: "#1f6feb",
   borderColor: "#1f6feb",
@@ -159,12 +232,12 @@ const activeNavButtonStyle = {
 
 const statusPanelStyle = {
   padding: "14px 12px",
-  borderTop: "1px solid #30363d",
+  borderTop: `1px solid ${theme.color.border}`,
 };
 
 const statusLabelStyle = {
   margin: "0 0 4px 0",
-  color: "#3fb950",
+  color: theme.color.success,
   fontSize: "12px",
   fontWeight: "700",
   whiteSpace: "nowrap",
@@ -174,7 +247,7 @@ const statusLabelStyle = {
 
 const versionLabelStyle = {
   margin: 0,
-  color: "#8b949e",
+  color: theme.color.textMuted,
   fontSize: "11px",
   whiteSpace: "nowrap",
   overflow: "hidden",

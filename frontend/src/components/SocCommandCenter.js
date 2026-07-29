@@ -35,6 +35,8 @@ import { CanonicalOutcomeBreakdown, ResponseOutcomeSummary } from "./ResponseOut
 import { mergeCanonicalOutcomeCounts } from "../utils/responseOutcomeDisplay";
 import { WorkspaceInitialState, WorkspaceRefreshState } from "./WorkspaceAsyncState";
 import AiAssistantButton from "./AiAssistantButton";
+import GroupedOperationsFeed from "./GroupedOperationsFeed";
+import { buildOperationalFeedEntries } from "./groupedOperationsFeedModel";
 
 // spec: SPEC-UI-004 - SOC safety model wording separates real workflows from guarded integrations.
 const SOURCE_LIMIT = 12;
@@ -217,102 +219,7 @@ function deriveIntegrationSummary(status) {
 }
 
 export function buildActivityFeed(data) {
-  const entries = [];
-
-  for (const incident of data.incidents || []) {
-    entries.push({
-      id: `incident-${getId(incident)}`,
-      source: "Incident",
-      tone: "danger",
-      timestamp: firstTimestamp(incident),
-      title: incident.title || `Incident #${getId(incident) || "unknown"}`,
-      detail: joinDefined([
-        titleCase(incident.severity),
-        titleCase(incident.status),
-        incident.source_ip,
-      ]),
-    });
-  }
-
-  for (const execution of data.executions || []) {
-    entries.push({
-      id: `execution-${getId(execution)}`,
-      source: "Playbook",
-      tone: String(execution.status || "").toLowerCase() === "failed" ? "danger" : "info",
-      timestamp: firstTimestamp(execution),
-      title: execution.playbook_id || execution.playbook_name || `Execution #${getId(execution) || "unknown"}`,
-      detail: joinDefined([
-        titleCase(execution.status),
-        execution.incident_id ? `Incident ${execution.incident_id}` : "",
-      ]),
-    });
-  }
-
-  for (const approval of data.approvals || []) {
-    entries.push({
-      id: `approval-${getId(approval)}`,
-      source: "Approval",
-      tone: String(approval.status || "").toLowerCase() === "pending" ? "warning" : "info",
-      timestamp: firstTimestamp(approval),
-      title: approval.action ? titleCase(approval.action) : `Approval #${getId(approval) || "unknown"}`,
-      detail: joinDefined([
-        titleCase(approval.status),
-        approval.incident_id ? `Incident ${approval.incident_id}` : "",
-      ]),
-    });
-  }
-
-  for (const deadLetter of data.deadLetters || []) {
-    entries.push({
-      id: `dead-letter-${getId(deadLetter)}`,
-      source: "Dead letter",
-      tone: "danger",
-      timestamp: firstTimestamp(deadLetter),
-      title: deadLetter.failure_class || deadLetter.error_code || `Dead letter #${getId(deadLetter) || "unknown"}`,
-      detail: joinDefined([
-        titleCase(deadLetter.status),
-        deadLetter.source_type,
-        deadLetter.retryable === true ? "Retryable" : "",
-      ]),
-    });
-  }
-
-  for (const notification of data.notifications || []) {
-    const status = String(notification.status || "").toLowerCase();
-    if (FAILURE_STATUS.has(status)) {
-      entries.push({
-        id: `notification-${getId(notification)}`,
-        source: "Notification",
-        tone: "danger",
-        timestamp: firstTimestamp(notification),
-        title: notification.adapter_name || notification.provider || "Notification delivery",
-        detail: joinDefined([
-          titleCase(notification.status),
-          notification.mode ? `Mode ${notification.mode}` : "",
-          notification.failure_class || notification.failure_code,
-        ]),
-      });
-    }
-  }
-
-  for (const queueItem of data.queueItems || []) {
-    const status = String(queueItem.status || "").toLowerCase();
-    if (["running", "failed", "pending", "awaiting_approval", "recovered"].includes(status)) {
-      entries.push({
-        id: `queue-${getId(queueItem)}`,
-        source: "Worker",
-        tone: status === "failed" ? "danger" : status === "pending" ? "warning" : "info",
-        timestamp: firstTimestamp(queueItem),
-        title: queueItem.playbook_id || queueItem.action || `Queue item #${getId(queueItem) || "unknown"}`,
-        detail: joinDefined([
-          titleCase(queueItem.status),
-          queueItem.incident_id ? `Incident ${queueItem.incident_id}` : "",
-        ]),
-      });
-    }
-  }
-
-  return entries
+  return buildOperationalFeedEntries(data)
     .filter((entry) => entry.timestamp || entry.title)
     .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
     .slice(0, FEED_LIMIT);
@@ -1570,29 +1477,13 @@ function SocCommandCenter({
                 <h3 id="feed-heading" style={cardTitleStyle}>Live operations feed</h3>
               </div>
             </div>
-            <div style={feedListStyle}>
-              {loading && feed.length === 0 ? (
-                <EmptyState>Loading activity...</EmptyState>
-              ) : feed.length === 0 ? (
-                <EmptyState>No recent operational activity found.</EmptyState>
-              ) : (
-                feed.map((entry) => (
-                  <div key={entry.id} style={feedItemStyle}>
-                    <div style={feedRailStyle}>
-                      <span style={{ ...feedDotStyle, ...feedDotToneStyles[entry.tone] }} />
-                    </div>
-                    <div>
-                      <div style={feedHeaderStyle}>
-                        <StatusBadge tone={entry.tone}>{entry.source}</StatusBadge>
-                        <span style={feedTimeStyle}>{formatRelative(entry.timestamp)}</span>
-                      </div>
-                      <p style={feedTitleStyle}>{entry.title}</p>
-                      <p style={feedDetailStyle}>{entry.detail || "No additional metadata"}</p>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
+            <GroupedOperationsFeed
+              entries={feed}
+              loading={loading}
+              error={!loading ? refreshError : ""}
+              stale={loading && hasLoadedOnce}
+              formatTime={formatRelative}
+            />
           </section>
 
           <section style={cardStyle} aria-labelledby="safety-heading">
@@ -2156,65 +2047,6 @@ const timelineMetaStyle = {
   margin: "3px 0 0 0",
   color: "#8b949e",
   fontSize: "12px",
-};
-
-const feedListStyle = {
-  padding: "12px 16px 16px",
-};
-
-const feedItemStyle = {
-  display: "grid",
-  gridTemplateColumns: "18px minmax(0, 1fr)",
-  gap: "10px",
-  padding: "10px 0",
-  borderBottom: "1px solid #30363d",
-};
-
-const feedRailStyle = {
-  display: "flex",
-  justifyContent: "center",
-  paddingTop: "5px",
-};
-
-const feedDotStyle = {
-  width: "9px",
-  height: "9px",
-  borderRadius: "50%",
-  backgroundColor: "#58a6ff",
-};
-
-const feedDotToneStyles = {
-  info: { backgroundColor: "#58a6ff" },
-  warning: { backgroundColor: "#d29922" },
-  danger: { backgroundColor: "#f85149" },
-  success: { backgroundColor: "#3fb950" },
-};
-
-const feedHeaderStyle = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: "8px",
-};
-
-const feedTimeStyle = {
-  color: "#8b949e",
-  fontSize: "11px",
-};
-
-const feedTitleStyle = {
-  margin: "7px 0 3px 0",
-  color: "#e6edf3",
-  fontSize: "13px",
-  fontWeight: "800",
-  lineHeight: 1.35,
-};
-
-const feedDetailStyle = {
-  margin: 0,
-  color: "#8b949e",
-  fontSize: "12px",
-  lineHeight: 1.35,
 };
 
 const safetyBodyStyle = {
