@@ -752,7 +752,11 @@ function AlertsTable({
               signalRowStyle={signalRowStyle}
               sourceTypeTextStyle={sourceTypeTextStyle}
               onOpenResponseRegistry={onOpenResponseRegistry}
-              onOpenInvestigation={onOpenInvestigation}
+              onOpenInvestigation={(alert) => {
+                setSelectedAlert(alert || latestSelectedAlert);
+                setSelectedAlertId(null);
+                onOpenInvestigation?.(alert || latestSelectedAlert);
+              }}
               onAskAi={onAskAi}
               aiEnabled={aiEnabled}
             />

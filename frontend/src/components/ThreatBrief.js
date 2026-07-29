@@ -152,13 +152,13 @@ const titleStyle = {
   lineHeight: 1.2,
 };
 const subtitleStyle = { margin: "6px 0 0", color: theme.color.textMuted, fontSize: "13px" };
-const gridStyle = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: theme.spacing.md, padding: theme.spacing.lg };
-const itemStyle = { border: `1px solid ${theme.color.border}`, borderRadius: theme.radius.sm, padding: theme.spacing.md, backgroundColor: theme.color.bg };
-const itemHeaderStyle = { display: "flex", justifyContent: "space-between", gap: theme.spacing.sm, alignItems: "center" };
-const labelStyle = { color: theme.color.textMuted, fontSize: "11px", fontWeight: 900, textTransform: "uppercase" };
-const valueStyle = { margin: "8px 0 4px", color: theme.color.text, fontSize: "15px", fontWeight: 900 };
-const metaStyle = { margin: 0, color: theme.color.textMuted, fontSize: "12px", lineHeight: 1.4 };
-const emptyStyle = { padding: theme.spacing.lg, color: theme.color.textMuted };
-const warningStyle = { margin: `${theme.spacing.md}px ${theme.spacing.lg}px 0`, color: theme.color.reviewSoft, fontSize: "12px", fontWeight: 700 };
+const gridStyle = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(190px, 100%), 1fr))", gap: theme.spacing.md, padding: theme.spacing.lg, minWidth: 0 };
+const itemStyle = { border: `1px solid ${theme.color.border}`, borderRadius: theme.radius.sm, padding: theme.spacing.md, backgroundColor: theme.color.bg, minWidth: 0 };
+const itemHeaderStyle = { display: "flex", justifyContent: "space-between", gap: theme.spacing.sm, alignItems: "center", minWidth: 0 };
+const labelStyle = { color: theme.color.textMuted, fontSize: "11px", fontWeight: 900, textTransform: "uppercase", minWidth: 0, overflowWrap: "anywhere" };
+const valueStyle = { margin: "8px 0 4px", color: theme.color.text, fontSize: "15px", fontWeight: 900, overflowWrap: "anywhere", wordBreak: "break-word" };
+const metaStyle = { margin: 0, color: theme.color.textMuted, fontSize: "12px", lineHeight: 1.4, overflowWrap: "anywhere", wordBreak: "break-word" };
+const emptyStyle = { padding: theme.spacing.lg, color: theme.color.textMuted, overflowWrap: "anywhere" };
+const warningStyle = { margin: `${theme.spacing.md}px ${theme.spacing.lg}px 0`, color: theme.color.reviewSoft, fontSize: "12px", fontWeight: 700, overflowWrap: "anywhere" };
 
 export default ThreatBrief;

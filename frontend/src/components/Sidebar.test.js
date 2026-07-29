@@ -113,7 +113,7 @@ test("collapsed sidebar keeps accessible icon navigation without visible labels"
   expect(screen.queryByText("Admin")).not.toBeInTheDocument();
 });
 
-test("renders a bottom status/version panel from props", () => {
+test("renders a bottom status panel and still supports an explicit version prop", () => {
   render(
     <Sidebar
       sections={mockSections}
@@ -263,6 +263,36 @@ test("renders LIVE LOGS group from sections config for analysts", () => {
   expect(screen.getByText("live logs")).toBeInTheDocument();
   for (const label of ["Honeypot", "Bank App", "pfSense", "NGINX", "Azure", "OTEL"]) {
     expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
+  }
+});
+
+test("sections config orders SOAR and Administration above Live Logs directly before Settings", () => {
+  render(
+    <Sidebar
+      sections={sectionsConfig}
+      roleFlags={{ isSuperAdmin: true, isAnalyst: false, canTakeAlertActions: true }}
+      activeSectionId="dashboard"
+      onNavigate={() => {}}
+    />
+  );
+
+  const soar = screen.getByRole("group", { name: "soar" });
+  const administration = screen.getByRole("group", { name: "administration" });
+  const liveLogs = screen.getByRole("group", { name: "live logs" });
+  const settings = screen.getByRole("group", { name: "settings" });
+
+  expect(soar.compareDocumentPosition(liveLogs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(administration.compareDocumentPosition(liveLogs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(liveLogs.compareDocumentPosition(settings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  for (const id of [
+    "live-logs-honeypot",
+    "live-logs-bank-app",
+    "live-logs-pfsense",
+    "live-logs-nginx",
+    "live-logs-azure",
+    "live-logs-otel",
+  ]) {
+    expect(sectionsConfig.some((section) => section.id === id && section.group === "live logs")).toBe(true);
   }
 });
 

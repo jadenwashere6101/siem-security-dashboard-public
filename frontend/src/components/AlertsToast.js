@@ -2,6 +2,7 @@ function AlertsToast({ toastMessage, toastType }) {
   return (
     toastMessage && (
       <div
+        role={toastType === "error" ? "alert" : "status"}
         style={{
           position: "fixed",
           top: "20px",
@@ -18,6 +19,7 @@ function AlertsToast({ toastMessage, toastType }) {
           whiteSpace: "pre-line",
           maxWidth: "340px",
           lineHeight: "1.45",
+          overflowWrap: "anywhere",
         }}
       >
         {toastMessage}

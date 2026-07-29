@@ -52,7 +52,7 @@ const styles = {};
 const sidePanelResponseOutcome = () =>
   screen.getAllByText(/Response Outcome:/)[0].parentElement;
 
-function AlertsTableHarness({ initialAlerts, onSetAlerts }) {
+function AlertsTableHarness({ initialAlerts, onSetAlerts, onOpenInvestigation = jest.fn() }) {
   const [alerts, setAlertsState] = useState(initialAlerts);
   const [selectedAlertId, setSelectedAlertId] = useState(null);
   const handleSetAlerts = (nextAlerts) => {
@@ -112,6 +112,7 @@ function AlertsTableHarness({ initialAlerts, onSetAlerts }) {
         const nextItems = Array.isArray(payload?.items) ? payload.items : payload;
         handleSetAlerts(nextItems);
       }}
+      onOpenInvestigation={onOpenInvestigation}
     />
   );
 }
@@ -484,4 +485,33 @@ test("renders bounded-page pagination controls without changing alert interactio
   expect(screen.getByRole("button", { name: "Previous" })).toBeEnabled();
   expect(screen.getByRole("button", { name: "Next" })).toBeEnabled();
   expect(screen.getByText("failed_login_threshold")).toBeInTheDocument();
+});
+
+test("opening Investigation Drawer from Alert Details closes the Alert Details modal and preserves context", async () => {
+  const onOpenInvestigation = jest.fn();
+  global.fetch = jest.fn((url) => {
+    const path = String(url);
+    if (path.endsWith("/alerts/101/response-log") || path.endsWith("/alerts/101/notes")) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve([]),
+      });
+    }
+    return Promise.reject(new Error(`Unexpected fetch: ${path}`));
+  });
+
+  render(
+    <AlertsTableHarness
+      initialAlerts={[baseAlert]}
+      onSetAlerts={jest.fn()}
+      onOpenInvestigation={onOpenInvestigation}
+    />
+  );
+
+  await userEvent.click(screen.getByText("failed_login_threshold"));
+  expect(screen.getByRole("dialog", { name: "Alert Details" })).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "Open Investigation Drawer" }));
+  expect(onOpenInvestigation).toHaveBeenCalledWith(expect.objectContaining({ id: 101 }));
+  expect(screen.queryByRole("dialog", { name: "Alert Details" })).not.toBeInTheDocument();
 });

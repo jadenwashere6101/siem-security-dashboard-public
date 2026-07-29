@@ -16,6 +16,8 @@ function InvestigationDrawer({
   onPinAlert,
   onSaveEvidence,
   onCreateInvestigation,
+  actionBusy = "",
+  actionStatus = null,
 }) {
   const closeButtonRef = useRef(null);
   const priorFocusRef = useRef(null);
@@ -73,8 +75,10 @@ function InvestigationDrawer({
                 variant="secondary"
                 onClick={() => onPinAlert?.(alert)}
                 aria-label="Pin alert to analyst workspace"
+                disabled={Boolean(actionBusy)}
+                aria-busy={actionBusy === "pin-alert" ? "true" : "false"}
               >
-                Pin alert
+                {actionBusy === "pin-alert" ? "Pinning..." : "Pin alert"}
               </Button>
             ) : null}
             {alert ? (
@@ -82,18 +86,30 @@ function InvestigationDrawer({
                 variant="secondary"
                 onClick={() => onSaveEvidence?.(alert)}
                 aria-label="Save alert evidence reference"
+                disabled={Boolean(actionBusy)}
+                aria-busy={actionBusy === "save-evidence" ? "true" : "false"}
               >
-                Save evidence
+                {actionBusy === "save-evidence" ? "Saving..." : "Save evidence"}
               </Button>
             ) : null}
             <Button
               variant="primary"
               onClick={() => onCreateInvestigation?.(context)}
               aria-label="Save investigation state"
+              disabled={Boolean(actionBusy)}
+              aria-busy={actionBusy === "save-investigation" ? "true" : "false"}
             >
-              Save investigation
+              {actionBusy === "save-investigation" ? "Saving..." : "Save investigation"}
             </Button>
           </div>
+          {actionStatus?.message ? (
+            <div
+              role={actionStatus.type === "error" ? "alert" : "status"}
+              style={actionStatus.type === "error" ? actionErrorStyle : actionStatusStyle}
+            >
+              {actionStatus.message}
+            </div>
+          ) : null}
           <div style={sectionGridStyle}>
             {sections.map((section) => (
               <Card key={section.id} style={sectionCardStyle} aria-label={section.title}>
@@ -155,5 +171,7 @@ const valueStyle = { margin: "10px 0 4px", color: theme.color.text, fontWeight: 
 const detailStyle = { margin: 0, color: theme.color.textMuted, fontSize: "12px", lineHeight: 1.45 };
 const evidenceStyle = { margin: `0 ${theme.spacing.lg}px ${theme.spacing.lg}px`, border: `1px solid ${theme.color.border}`, borderRadius: theme.radius.sm, padding: theme.spacing.md, backgroundColor: theme.color.bg };
 const listStyle = { margin: "10px 0 0", color: theme.color.textSoft, paddingLeft: "20px" };
+const actionStatusStyle = { margin: `${theme.spacing.md}px ${theme.spacing.lg}px 0`, color: theme.color.successSoft, fontSize: "12px", fontWeight: 800, overflowWrap: "anywhere" };
+const actionErrorStyle = { ...actionStatusStyle, color: theme.color.dangerSoft };
 
 export default InvestigationDrawer;

@@ -32,3 +32,17 @@ test("ThreatBrief renders populated and partial-error states", () => {
   expect(screen.getByText(/Partial data loaded: approvals/)).toBeInTheDocument();
   expect(screen.getByText(/Showing stale briefing inputs/)).toBeInTheDocument();
 });
+
+test("ThreatBrief applies resilient wrapping styles for long values", () => {
+  const longAlertType = "critical_login_from_extremely_long_source_identifier_without_breaks".repeat(3);
+  const model = buildThreatBriefModel({
+    alerts: [{ alert_id: 9, alert_type: longAlertType, severity: "critical", source_ip: "2001:db8:ffff:ffff:ffff:ffff:ffff:ffff", status: "open" }],
+    metrics: { totalAlerts: 1 },
+  });
+  render(<ThreatBrief model={model} />);
+
+  expect(screen.getByText(longAlertType)).toHaveStyle({
+    overflowWrap: "anywhere",
+    wordBreak: "break-word",
+  });
+});

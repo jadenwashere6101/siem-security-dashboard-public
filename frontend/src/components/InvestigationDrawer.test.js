@@ -42,3 +42,19 @@ test("InvestigationDrawer renders partial states without fabricating evidence", 
   expect(screen.getByText("Timeline incomplete")).toBeInTheDocument();
   expect(screen.queryByText(/spray/i)).not.toBeInTheDocument();
 });
+
+test("InvestigationDrawer exposes action feedback and busy states", () => {
+  render(
+    <InvestigationDrawer
+      open
+      onClose={() => {}}
+      alert={{ id: 7, alert_type: "failed_login_threshold", severity: "HIGH", source_ip: "203.0.113.7", status: "open" }}
+      actionBusy="save-investigation"
+      actionStatus={{ type: "success", message: "Investigation saved to Analyst Workspace." }}
+    />
+  );
+
+  expect(screen.getByRole("button", { name: "Save investigation state" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Save investigation state" })).toHaveAttribute("aria-busy", "true");
+  expect(screen.getByRole("status")).toHaveTextContent("Investigation saved to Analyst Workspace.");
+});

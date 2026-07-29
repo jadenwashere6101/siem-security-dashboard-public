@@ -3,6 +3,19 @@ import userEvent from '@testing-library/user-event';
 import App from './App';
 import { loadCurrentSession } from './services/authService';
 import { loadAlertDashboardSummary, loadAlertRuleOptions, loadAlerts } from './services/alertsService';
+import {
+  createEvidenceReference,
+  createInvestigation,
+  createWorkspaceHypothesis,
+  createWorkspaceNote,
+  createWorkspaceTask,
+  deleteWorkspaceHypothesis,
+  deleteWorkspaceNote,
+  deleteWorkspaceTask,
+  loadAnalystWorkspace,
+  pinWorkspaceItem,
+  removeWorkspacePin,
+} from './services/investigationWorkspaceService';
 import { UI_SETTINGS_STORAGE_KEY } from './utils/uiSettings';
 
 jest.mock('./services/authService', () => ({
@@ -15,6 +28,20 @@ jest.mock('./services/alertsService', () => ({
   loadAlerts: jest.fn(),
   loadAlertDashboardSummary: jest.fn(),
   loadAlertRuleOptions: jest.fn(),
+}));
+
+jest.mock('./services/investigationWorkspaceService', () => ({
+  createEvidenceReference: jest.fn(),
+  createInvestigation: jest.fn(),
+  createWorkspaceHypothesis: jest.fn(),
+  createWorkspaceNote: jest.fn(),
+  createWorkspaceTask: jest.fn(),
+  deleteWorkspaceHypothesis: jest.fn(),
+  deleteWorkspaceNote: jest.fn(),
+  deleteWorkspaceTask: jest.fn(),
+  loadAnalystWorkspace: jest.fn(),
+  pinWorkspaceItem: jest.fn(),
+  removeWorkspacePin: jest.fn(),
 }));
 
 jest.mock('./components/DashboardSection', () => (props) => (
@@ -49,6 +76,20 @@ jest.mock('./components/DashboardSection', () => (props) => (
     </button>
     <button type="button" onClick={() => props.onOpenResponseRegistry({ sourceIp: '8.8.8.8', relatedAlertId: 12 })}>
       Dashboard open registry
+    </button>
+    <button
+      type="button"
+      onClick={() =>
+        props.onOpenInvestigation({
+          id: 101,
+          alert_type: 'failed_login_threshold',
+          severity: 'high',
+          source_ip: '8.8.8.8',
+          status: 'open',
+        })
+      }
+    >
+      Dashboard open investigation
     </button>
     <button type="button" onClick={() => props.onReviewIncident()}>
       Dashboard open incidents
@@ -195,6 +236,25 @@ beforeEach(() => {
   loadAlertRuleOptions.mockResolvedValue([
     { rule_id: 'failed_login_threshold', label: 'Failed Login Threshold' },
   ]);
+  loadAnalystWorkspace.mockResolvedValue({
+    workspace: { id: 1, visibility: 'private' },
+    items: [],
+    investigations: [],
+    notes: [],
+    hypotheses: [],
+    tasks: [],
+    evidence: [],
+  });
+  pinWorkspaceItem.mockResolvedValue({ id: 1 });
+  createEvidenceReference.mockResolvedValue({ id: 2 });
+  createInvestigation.mockResolvedValue({ id: 3, linked_alert_id: 101, status: 'open' });
+  createWorkspaceNote.mockResolvedValue({ id: 4 });
+  createWorkspaceHypothesis.mockResolvedValue({ id: 5 });
+  createWorkspaceTask.mockResolvedValue({ id: 6 });
+  deleteWorkspaceNote.mockResolvedValue({ deleted: true });
+  deleteWorkspaceHypothesis.mockResolvedValue({ deleted: true });
+  deleteWorkspaceTask.mockResolvedValue({ deleted: true });
+  removeWorkspacePin.mockResolvedValue({ deleted: true });
 });
 
 test('renders without crashing', async () => {
@@ -209,11 +269,89 @@ test('renders the login form for unauthenticated users', async () => {
   expect(await screen.findByRole('heading', { name: /siem dashboard login/i })).toBeInTheDocument();
   expect(screen.getByText(/anakin analyst console/i)).toBeInTheDocument();
   expect(screen.getByText(/operational console/i)).toBeInTheDocument();
+  expect(screen.queryByText(/^v0\.1\.0$/i)).not.toBeInTheDocument();
   expect(screen.getByText(/username/i)).toBeInTheDocument();
   expect(container.querySelector('input[type="text"]')).toBeInTheDocument();
   expect(screen.getByText(/password/i)).toBeInTheDocument();
   expect(container.querySelector('input[type="password"]')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: /log in/i })).toBeInTheDocument();
+});
+
+test('renders Threat Brief only on Dashboard for analyst roles', async () => {
+  loadCurrentSession.mockResolvedValue({
+    authenticated: true,
+    user: 'analyst1',
+    role: 'analyst',
+  });
+  loadAlerts.mockResolvedValue({
+    items: [{ id: 101, alert_type: 'critical_login', severity: 'critical', source_ip: '8.8.8.8', status: 'open' }],
+    total: 1,
+    limit: 50,
+    offset: 0,
+  });
+
+  render(<App />);
+
+  expect(await screen.findByRole('region', { name: 'Threat Brief' })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: /soc command center/i }));
+  expect(await screen.findByTestId('soc-command-center')).toBeInTheDocument();
+  expect(screen.queryByRole('region', { name: 'Threat Brief' })).not.toBeInTheDocument();
+});
+
+test('authenticated sidebar omits visible package version label', async () => {
+  loadCurrentSession.mockResolvedValue({
+    authenticated: true,
+    user: 'analyst1',
+    role: 'analyst',
+  });
+
+  render(<App />);
+
+  expect(await screen.findByRole('button', { name: /^dashboard$/i })).toBeInTheDocument();
+  expect(screen.getByText('Operational')).toBeInTheDocument();
+  expect(screen.queryByText(/^v0\.1\.0$/i)).not.toBeInTheDocument();
+});
+
+test('workspace investigation actions show feedback, saved state, and avoid duplicate saves', async () => {
+  loadCurrentSession.mockResolvedValue({
+    authenticated: true,
+    user: 'analyst1',
+    role: 'analyst',
+  });
+  const emptyWorkspace = {
+    workspace: { id: 1, visibility: 'private' },
+    items: [],
+    investigations: [],
+    notes: [],
+    hypotheses: [],
+    tasks: [],
+    evidence: [],
+  };
+  const savedWorkspace = {
+    ...emptyWorkspace,
+    investigations: [{ id: 3, title: 'Investigation for alert #101', status: 'open', linked_alert_id: 101 }],
+  };
+  loadAnalystWorkspace
+    .mockResolvedValueOnce(emptyWorkspace)
+    .mockResolvedValueOnce(savedWorkspace)
+    .mockResolvedValue(savedWorkspace);
+
+  render(<App />);
+
+  await userEvent.click(await screen.findByRole('button', { name: 'Dashboard open investigation' }));
+  expect(await screen.findByRole('dialog', { name: 'Investigation Drawer' })).toHaveTextContent('Alert #101');
+
+  await userEvent.click(screen.getByRole('button', { name: 'Save investigation state' }));
+  expect(await screen.findAllByText(/Investigation saved to Analyst Workspace/i)).toHaveLength(2);
+  expect(createInvestigation).toHaveBeenCalledTimes(1);
+
+  await userEvent.click(screen.getByRole('button', { name: 'Save investigation state' }));
+  expect(await screen.findAllByText(/already saved/i)).toHaveLength(2);
+  expect(createInvestigation).toHaveBeenCalledTimes(1);
+
+  await userEvent.click(screen.getByRole('button', { name: /^Analyst Workspace$/i }));
+  expect(await screen.findByText('Investigation for alert #101')).toBeInTheDocument();
+  expect(screen.getByText(/alert:101/i)).toBeInTheDocument();
 });
 
 test('keeps the login card inside a narrow mobile viewport', async () => {
