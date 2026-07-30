@@ -8,6 +8,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from limits.errors import StorageError
 import logging
 import os
+import secrets
 from routes.admin_routes import admin_bp
 from routes.ai_routes import ai_bp
 from routes.alert_mutation_routes import alert_mutation_bp
@@ -56,9 +57,11 @@ def env_csv(*names, default=None):
 
 def resolve_secret_key():
     secret_key = env_first("SIEM_SECRET_KEY", "SECRET_KEY")
-    if not secret_key and not SIEM_DEBUG:
+    if secret_key:
+        return secret_key
+    if not SIEM_DEBUG:
         raise RuntimeError("Missing SIEM_SECRET_KEY or SECRET_KEY environment variable")
-    return secret_key or "dev-secret-key-not-for-production"
+    return secrets.token_urlsafe(32)
 
 
 # ============================================================================
@@ -93,7 +96,7 @@ def create_app():
     apply_rate_limit_config(app, os.environ, production=not SIEM_DEBUG)
     limiter.init_app(app)
     app.config["FRONTEND_BUILD_DIR"] = os.path.join(app.root_path, "frontend", "build")
-    app.config["SECRET_KEY"] = resolve_secret_key()
+    app.secret_key = resolve_secret_key()
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
     app.config["SESSION_COOKIE_SECURE"] = not SIEM_DEBUG

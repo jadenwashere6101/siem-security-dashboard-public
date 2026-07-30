@@ -130,7 +130,7 @@ export function buildOperationalFeedEntries(data = {}) {
     entries.push(normalizeEntry({
       id: `queue-${getId(queueItem)}`,
       source: "Worker",
-      tone: status === "failed" ? "danger" : status === "pending" ? "warning" : "info",
+      tone: toneForQueueStatus(status),
       timestamp: firstTimestamp(queueItem),
       title: queueItem.playbook_id || queueItem.action || `Queue item #${getId(queueItem) || "unknown"}`,
       detail: joinDefined([titleCase(queueItem.status), queueItem.incident_id ? `Incident ${queueItem.incident_id}` : ""]),
@@ -139,6 +139,12 @@ export function buildOperationalFeedEntries(data = {}) {
   }
 
   return entries.sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
+}
+
+function toneForQueueStatus(status) {
+  if (status === "failed") return "danger";
+  if (status === "pending") return "warning";
+  return "info";
 }
 
 export function groupOperationalFeedEntries(entries = []) {

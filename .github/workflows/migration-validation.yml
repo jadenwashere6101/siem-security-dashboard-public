@@ -39,18 +39,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate workflow YAML syntax
-        run: |
-          python3 -m pip install --disable-pip-version-check pyyaml -q
-          python3 - <<'PY'
-          import yaml
-          from pathlib import Path
-
-          path = Path(".github/workflows/migration-validation.yml")
-          yaml.safe_load(path.read_text(encoding="utf-8"))
-          print(f"Workflow YAML OK: {path}")
-          PY
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -60,6 +48,17 @@ jobs:
 
       - name: Install Python dependencies
         run: python3 -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Validate workflow YAML syntax
+        run: |
+          python3 - <<'PY'
+          import yaml
+          from pathlib import Path
+
+          path = Path(".github/workflows/migration-validation.yml")
+          yaml.safe_load(path.read_text(encoding="utf-8"))
+          print(f"Workflow YAML OK: {path}")
+          PY
 
       - name: Lint migration SQL for prohibited destructive patterns
         run: |

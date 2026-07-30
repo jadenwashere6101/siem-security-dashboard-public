@@ -6,6 +6,7 @@ import {
   createCommandRegistry,
   createDefaultAnakinCommands,
   sanitizeCommandContext,
+  normalizeContextualAiOptions,
 } from "./anakinCommandRegistry";
 
 test("command registry filters by availability and role context", () => {
@@ -62,4 +63,11 @@ test("default Anakin commands map to existing AI option shapes", () => {
     sanitizeCommandContext({ workspace: { activeSection: "dashboard" } })
   );
   expect(draft).toEqual(expect.objectContaining({ draftType: "investigation_checklist" }));
+});
+
+test("contextual AI options choose explicit intents without nested precedence", () => {
+  expect(normalizeContextualAiOptions({ draftType: "case_summary" }).intent).toBe(ANAKIN_COMMAND_INTENTS.draft);
+  expect(normalizeContextualAiOptions({ investigation: true }).intent).toBe(ANAKIN_COMMAND_INTENTS.investigate);
+  expect(normalizeContextualAiOptions({ action: "explain" }).intent).toBe("explain");
+  expect(normalizeContextualAiOptions({}).intent).toBe(ANAKIN_COMMAND_INTENTS.ask);
 });

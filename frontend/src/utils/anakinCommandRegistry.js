@@ -283,14 +283,21 @@ export function commandToAiOptions(command, context = {}, question = "") {
 }
 
 export function normalizeContextualAiOptions(options = {}) {
+  const intent = contextualIntent(options);
   return {
     id: options.commandId || `contextual.${options.contextType || "workspace"}.${options.action || options.draftType || "ask"}`,
     label: options.title || options.action || options.draftType || "Ask Anakin",
     group: "Contextual AI",
-    intent: options.draftType ? ANAKIN_COMMAND_INTENTS.draft : options.investigation ? ANAKIN_COMMAND_INTENTS.investigate : options.action || ANAKIN_COMMAND_INTENTS.ask,
+    intent,
     readOnly: true,
     options,
   };
+}
+
+function contextualIntent(options) {
+  if (options.draftType) return ANAKIN_COMMAND_INTENTS.draft;
+  if (options.investigation) return ANAKIN_COMMAND_INTENTS.investigate;
+  return options.action || ANAKIN_COMMAND_INTENTS.ask;
 }
 
 function sanitizeAlert(alert) {

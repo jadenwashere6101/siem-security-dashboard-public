@@ -132,6 +132,7 @@ export const getReputationBadgeStyle = (label) => {
 
 export const getBehavioralReputation = (alert) => {
   const behavioral = alert?.behavioral_reputation || {};
+  const contributingSignals = behavioralContributingSignals(behavioral, alert);
 
   return {
     score: behavioral.score ?? alert?.reputation_score ?? 0,
@@ -141,12 +142,14 @@ export const getBehavioralReputation = (alert) => {
       behavioral.summary ||
       alert?.reputation_summary ||
       "No behavioral reputation details available.",
-    contributing_signals: Array.isArray(behavioral.contributing_signals)
-      ? behavioral.contributing_signals
-      : Array.isArray(alert?.contributing_signals)
-        ? alert.contributing_signals
-        : [],
+    contributing_signals: contributingSignals,
   };
+};
+
+const behavioralContributingSignals = (behavioral, alert) => {
+  if (Array.isArray(behavioral.contributing_signals)) return behavioral.contributing_signals;
+  if (Array.isArray(alert?.contributing_signals)) return alert.contributing_signals;
+  return [];
 };
 
 export const getExternalReputation = (alert) => ({

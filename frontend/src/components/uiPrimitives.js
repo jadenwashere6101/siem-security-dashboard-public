@@ -121,8 +121,14 @@ export function MetricCard({
 }
 
 export function TrendIndicator({ label, direction = "neutral" }) {
-  const symbol = direction === "up" ? "↑" : direction === "down" ? "↓" : "→";
+  const symbol = trendSymbol(direction);
   return <Chip tone="neutral" aria-label={`Trend ${label}`}>{symbol} {label}</Chip>;
+}
+
+function trendSymbol(direction) {
+  if (direction === "up") return "↑";
+  if (direction === "down") return "↓";
+  return "→";
 }
 
 export function FreshnessIndicator({ label }) {

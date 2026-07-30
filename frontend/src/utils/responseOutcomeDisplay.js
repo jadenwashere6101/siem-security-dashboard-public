@@ -84,7 +84,7 @@ const REASON_EXPLANATIONS = {
 };
 
 export function outcomeLabel(outcome) {
-  if (!outcome || !outcome.execution_mode) {
+  if (!outcome?.execution_mode) {
     return "Observed only";
   }
 
