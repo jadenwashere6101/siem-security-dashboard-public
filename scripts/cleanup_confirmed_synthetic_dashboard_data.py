@@ -8,7 +8,10 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_BACKUP_DIR = "synthetic_cleanup_backups"
+
+sys.path.insert(0, str(REPO_ROOT))
 
 from core.synthetic_data_policy import (
     CONFIRMED_SYNTHETIC_CLEANUP_SOURCE_IPS,
@@ -246,7 +249,7 @@ def build_cleanup_report(
 
 
 def write_backup(report: dict[str, Any], backup_dir: str | Path) -> Path:
-    backup_path = Path(backup_dir)
+    backup_path = _resolve_backup_path(backup_dir)
     backup_path.mkdir(parents=True, exist_ok=True)
     output_path = backup_path / (
         f"confirmed_synthetic_dashboard_cleanup_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json"
@@ -255,12 +258,23 @@ def write_backup(report: dict[str, Any], backup_dir: str | Path) -> Path:
     return output_path
 
 
+def _resolve_backup_path(backup_dir: str | Path) -> Path:
+    backup_path = Path(backup_dir)
+    if not backup_path.is_absolute():
+        backup_path = REPO_ROOT / backup_path
+    resolved_backup_path = backup_path.resolve()
+    allowed_root = (REPO_ROOT / DEFAULT_BACKUP_DIR).resolve()
+    if resolved_backup_path != allowed_root and allowed_root not in resolved_backup_path.parents:
+        raise ValueError(f"backup_dir must stay under {allowed_root}")
+    return resolved_backup_path
+
+
 def execute_cleanup(
     conn,
     *,
     execute: bool = False,
     confirm: str | None = None,
-    backup_dir: str | Path = "synthetic_cleanup_backups",
+    backup_dir: str | Path = DEFAULT_BACKUP_DIR,
 ) -> dict[str, Any]:
     report = build_cleanup_report(conn)
     if not execute:
@@ -294,7 +308,7 @@ def main() -> int:
     )
     parser.add_argument("--execute", action="store_true", help="Delete selected rows transactionally after safety checks.")
     parser.add_argument("--confirm", default="", help=f"Required for --execute: {CONFIRMATION_TOKEN}")
-    parser.add_argument("--backup-dir", default="synthetic_cleanup_backups")
+    parser.add_argument("--backup-dir", default=DEFAULT_BACKUP_DIR)
     args = parser.parse_args()
 
     from core.db import get_db_connection

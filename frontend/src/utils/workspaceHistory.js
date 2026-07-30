@@ -7,7 +7,7 @@ function stableStringify(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
   return `{${Object.keys(value)
-    .sort()
+    .sort((a, b) => a.localeCompare(b))
     .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
     .join(",")}}`;
 }
@@ -38,8 +38,9 @@ export function normalizeWorkspaceHistoryEntry(entry = {}) {
   const state = sanitizeSnapshot(entry.state || {});
   const target = entry.target == null ? null : sanitizeSnapshot(entry.target);
   const scrollTop = Number.isFinite(Number(entry.scrollTop)) ? Math.max(0, Number(entry.scrollTop)) : null;
+  entrySequence += 1;
   const normalized = {
-    id: entry.id || `workspace-history-${Date.now()}-${entrySequence += 1}`,
+    id: entry.id || `workspace-history-${Date.now()}-${entrySequence}`,
     sectionId,
     label: entry.label ? String(entry.label) : sectionId,
     target,
@@ -98,7 +99,7 @@ export function updateCurrentWorkspaceHistoryEntry(history, patch) {
     ...patch,
     state: {
       ...(history.current.state || {}),
-      ...(patch?.state || {}),
+      ...patch?.state,
     },
   });
 }
@@ -164,5 +165,5 @@ export function createWorkspaceBrowserState(entry) {
 }
 
 export function isWorkspaceBrowserState(state) {
-  return Boolean(state && state[SIEM_WORKSPACE_HISTORY_STATE_KEY] && state.entryId);
+  return Boolean(state?.[SIEM_WORKSPACE_HISTORY_STATE_KEY] && state.entryId);
 }

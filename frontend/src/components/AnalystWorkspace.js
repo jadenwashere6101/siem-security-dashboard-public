@@ -272,39 +272,42 @@ function AnalystWorkspace({
               <div style={workGridStyle}>
                 <Card style={cardStyle}>
                   <PanelHeader title="Evidence" count={evidence.length} />
-                  {evidence.length ? evidence.map((item) => (
-                    <div key={item.id} style={recordStyle}>
-                      <div style={recordHeaderStyle}>
-                        <div style={textBlockStyle}>
-                          <strong>{item.label}</strong>
-                          <p style={mutedStyle}>{item.referenced_object_type}:{item.referenced_object_id} • {item.source || "manual"}</p>
+                  {evidence.length ? evidence.map((item) => {
+                    const rationaleId = `evidence-rationale-${item.id}`;
+                    return (
+                      <div key={item.id} style={recordStyle}>
+                        <div style={recordHeaderStyle}>
+                          <div style={textBlockStyle}>
+                            <strong>{item.label}</strong>
+                            <p style={mutedStyle}>{item.referenced_object_type}:{item.referenced_object_id} • {item.source || "manual"}</p>
+                          </div>
+                          <Chip tone={relationshipTone(item.relationship_type)}>{labelize(item.relationship_type || "context")}</Chip>
                         </div>
-                        <Chip tone={relationshipTone(item.relationship_type)}>{labelize(item.relationship_type || "context")}</Chip>
+                        <label htmlFor={rationaleId} style={labelStyle}>Rationale for {item.label}</label>
+                        <textarea
+                          id={rationaleId}
+                          value={evidenceRationaleDrafts[item.id] || ""}
+                          onChange={(event) => setEvidenceRationaleDrafts((current) => ({ ...current, [item.id]: event.target.value }))}
+                          rows={2}
+                          style={textareaStyle}
+                        />
+                        <div style={formActionsStyle}>
+                          <Button
+                            onClick={() => onUpdateEvidence?.(item.id, { rationale: evidenceRationaleDrafts[item.id] || "", relationship_type: item.relationship_type || "context" })}
+                            disabled={actionBusy === `evidence:${item.id}`}
+                          >
+                            Save rationale
+                          </Button>
+                          <button type="button" onClick={() => onOpenEvidenceSource?.(item)} style={linkButtonStyle}>
+                            Open source
+                          </button>
+                          <button type="button" onClick={() => onDeleteEvidence?.(item.id)} disabled={actionBusy === `evidence:${item.id}`} style={dangerLinkStyle}>
+                            Delete
+                          </button>
+                        </div>
                       </div>
-                      <label style={labelStyle}>Analyst rationale</label>
-                      <textarea
-                        aria-label={`Rationale for ${item.label}`}
-                        value={evidenceRationaleDrafts[item.id] || ""}
-                        onChange={(event) => setEvidenceRationaleDrafts((current) => ({ ...current, [item.id]: event.target.value }))}
-                        rows={2}
-                        style={textareaStyle}
-                      />
-                      <div style={formActionsStyle}>
-                        <Button
-                          onClick={() => onUpdateEvidence?.(item.id, { rationale: evidenceRationaleDrafts[item.id] || "", relationship_type: item.relationship_type || "context" })}
-                          disabled={actionBusy === `evidence:${item.id}`}
-                        >
-                          Save rationale
-                        </Button>
-                        <button type="button" onClick={() => onOpenEvidenceSource?.(item)} style={linkButtonStyle}>
-                          Open source
-                        </button>
-                        <button type="button" onClick={() => onDeleteEvidence?.(item.id)} disabled={actionBusy === `evidence:${item.id}`} style={dangerLinkStyle}>
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-                  )) : <p style={mutedStyle}>Save evidence from alert, incident, source IP, or investigation surfaces to explain why it matters.</p>}
+                    );
+                  }) : <p style={mutedStyle}>Save evidence from alert, incident, source IP, or investigation surfaces to explain why it matters.</p>}
                 </Card>
 
                 <Card style={cardStyle}>
@@ -313,6 +316,7 @@ function AnalystWorkspace({
                   {hypotheses.map((hypothesis) => {
                     const grouped = relationshipByHypothesis[hypothesis.id] || { supports: [], refutes: [], context: [] };
                     const draft = relationshipDrafts[hypothesis.id] || { evidence_reference_id: evidence[0]?.id || "", relationship_type: "supports", rationale: "" };
+                    const rationaleId = `relationship-rationale-${hypothesis.id}`;
                     return (
                       <div key={hypothesis.id} style={recordStyle}>
                         <div style={recordHeaderStyle}>
@@ -340,9 +344,9 @@ function AnalystWorkspace({
                               options={RELATIONSHIP_OPTIONS}
                               onChange={(relationship_type) => updateRelationshipDraft(hypothesis.id, { relationship_type })}
                             />
-                            <label style={labelStyle}>Relationship rationale</label>
+                            <label htmlFor={rationaleId} style={labelStyle}>Relationship rationale</label>
                             <input
-                              aria-label={`Relationship rationale for ${hypothesis.title}`}
+                              id={rationaleId}
                               value={draft.rationale}
                               onChange={(event) => updateRelationshipDraft(hypothesis.id, { rationale: event.target.value })}
                               style={inputStyle}
@@ -542,10 +546,11 @@ function SelectControl({ label, value, options, onChange }) {
 }
 
 function DraftBox({ label, value, onChange, onSubmit, buttonLabel }) {
+  const controlId = `draft-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
   return (
     <div style={draftStyle}>
-      <label style={labelStyle}>{label}</label>
-      <textarea aria-label={label} value={value} onChange={(event) => onChange(event.target.value)} rows={2} style={textareaStyle} />
+      <label htmlFor={controlId} style={labelStyle}>{label}</label>
+      <textarea id={controlId} value={value} onChange={(event) => onChange(event.target.value)} rows={2} style={textareaStyle} />
       <Button onClick={onSubmit} disabled={!value.trim()}>{buttonLabel}</Button>
     </div>
   );
@@ -554,8 +559,8 @@ function DraftBox({ label, value, onChange, onSubmit, buttonLabel }) {
 function TaskDraftBox({ value, onChange, linkDraft, onLinkDraftChange, hypotheses, evidence, onSubmit }) {
   return (
     <div style={draftStyle}>
-      <label style={labelStyle}>New task</label>
-      <textarea aria-label="New task" value={value} onChange={(event) => onChange(event.target.value)} rows={2} style={textareaStyle} />
+      <label htmlFor="new-task-draft" style={labelStyle}>New task</label>
+      <textarea id="new-task-draft" value={value} onChange={(event) => onChange(event.target.value)} rows={2} style={textareaStyle} />
       <div style={controlGridStyle}>
         <SelectControl
           label="Task hypothesis"

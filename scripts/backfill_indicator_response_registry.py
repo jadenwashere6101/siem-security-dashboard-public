@@ -26,6 +26,8 @@ from core.response_command_contracts import (
     ORIGIN_BACKFILL,
 )
 
+EXIT_OK = 0
+
 
 def _resolve_actor_user_id(conn, created_by: Any) -> int | None:
     """Resolve legacy blocked_ips.created_by values to users.id.
@@ -167,16 +169,20 @@ def main(argv=None) -> int:
     conn = get_db_connection()
     try:
         if args.dry_run:
-            cur = conn.cursor()
-            cur.execute("SELECT COUNT(*) FROM blocked_ips")
-            count = cur.fetchone()[0]
-            print(f"Dry run: would inspect {count} blocked_ips rows")
-            return 0
+            return _print_dry_run(conn)
         stats = backfill(conn, limit=args.limit)
         print(json.dumps(stats, sort_keys=True))
-        return 0
+        return EXIT_OK
     finally:
         conn.close()
+
+
+def _print_dry_run(conn) -> int:
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM blocked_ips")
+    count = cur.fetchone()[0]
+    print(f"Dry run: would inspect {count} blocked_ips rows")
+    return EXIT_OK
 
 
 if __name__ == "__main__":

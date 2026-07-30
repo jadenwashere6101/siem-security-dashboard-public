@@ -83,19 +83,20 @@ def _safe_adapter_mode_decision(adapter_name: str, configured_mode: str) -> str:
 
 
 def _log_adapter_registry_startup(adapter_name: str, configured_mode: str, mode_decision: str) -> None:
+    safe_adapter_name = adapter_name if adapter_name in _ADAPTERS else "unknown"
     readiness = _adapter_guard_readiness(adapter_name, configured_mode)
     circuit = get_simulated_circuit_breaker_dict(adapter_name)
     _LOGGER.info(
         "integration_adapter_startup adapter=%s mode_decision=%s missing_guards=%s "
         "credential_envs=%s circuit_breaker_reset_to=%s",
-        adapter_name if adapter_name in _ADAPTERS else "unknown",
+        safe_adapter_name,
         mode_decision,
         ",".join(readiness["missing_guards"]) or "none",
         ",".join(readiness["credential_envs"]) or "none",
         circuit["state"],
         extra={
             "event": "integration_adapter_startup",
-            "adapter": adapter_name,
+            "adapter": safe_adapter_name,
             "configured_mode": configured_mode,
             "mode_decision": mode_decision,
             "missing_guards": readiness["missing_guards"],

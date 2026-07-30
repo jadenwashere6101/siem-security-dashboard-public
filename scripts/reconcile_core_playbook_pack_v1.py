@@ -10,6 +10,10 @@ from pathlib import Path
 
 import psycopg2
 
+EXIT_OK = 0
+EXIT_CONFIG_ERROR = 1
+EXIT_RUNTIME_ERROR = 2
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -30,18 +34,10 @@ def parse_args(argv=None):
 
 
 def main(argv=None) -> int:
-    args = parse_args(argv)
+    parse_args(argv)
     db_url = os.getenv("DATABASE_URL", "").strip()
-    if not db_url:
-        print("ERROR: DATABASE_URL is required.", file=sys.stderr)
-        return 1
-
-    errors = validate_core_playbook_pack_v1()
-    if errors:
-        print("ERROR: Core Playbook Pack v1 validation failed.", file=sys.stderr)
-        for error in errors:
-            print(f"- {error}", file=sys.stderr)
-        return 1
+    if not _validate_startup(db_url):
+        return EXIT_CONFIG_ERROR
 
     conn = None
     try:
@@ -51,15 +47,30 @@ def main(argv=None) -> int:
         print("Core Playbook Pack v1 reconciliation summary")
         print("===========================================")
         print(f"Changed definitions ({len(changed)}): {', '.join(changed) if changed else 'none'}")
-        return 0
+        return EXIT_OK
     except Exception as error:
         if conn is not None:
             conn.rollback()
         print(f"ERROR: {error}", file=sys.stderr)
-        return 2
+        return EXIT_RUNTIME_ERROR
     finally:
         if conn is not None:
             conn.close()
+
+
+def _validate_startup(db_url: str) -> bool:
+    if not db_url:
+        print("ERROR: DATABASE_URL is required.", file=sys.stderr)
+        return False
+
+    errors = validate_core_playbook_pack_v1()
+    if errors:
+        print("ERROR: Core Playbook Pack v1 validation failed.", file=sys.stderr)
+        for error in errors:
+            print(f"- {error}", file=sys.stderr)
+        return False
+
+    return True
 
 
 def reconcile_core_playbook_pack_v1(conn) -> list[str]:

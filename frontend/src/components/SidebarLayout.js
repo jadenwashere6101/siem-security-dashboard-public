@@ -115,11 +115,12 @@ function SidebarLayout({
         navigationRequest.restoreScrollTop !== null &&
         navigationRequest.restoreScrollTop !== undefined &&
         Number.isFinite(Number(navigationRequest.restoreScrollTop));
-      const top = hasRestoredScroll
-        ? Math.max(0, Number(navigationRequest.restoreScrollTop))
-        : targetRect
-        ? Math.max(0, main.scrollTop + targetRect.top - mainRect.top)
-        : 0;
+      let top = 0;
+      if (hasRestoredScroll) {
+        top = Math.max(0, Number(navigationRequest.restoreScrollTop));
+      } else if (targetRect) {
+        top = Math.max(0, main.scrollTop + targetRect.top - mainRect.top);
+      }
 
       if (typeof main.scrollTo === "function") {
         main.scrollTo({ top, left: 0, behavior: getWorkspaceNavigationBehavior() });
@@ -149,6 +150,8 @@ function SidebarLayout({
       observer?.disconnect();
     };
   }, [activeSectionId, navigationRequest]);
+
+  const shellPadding = getShellPadding(viewportMode);
 
   return (
     <div style={shellStyle}>
@@ -187,24 +190,13 @@ function SidebarLayout({
 
         <main
           ref={mainRef}
-          data-sidebar-state={isOverlayMode ? "overlay" : isCollapsed ? "collapsed" : "expanded"}
+          data-sidebar-state={getSidebarState(isOverlayMode, isCollapsed)}
           data-viewport-mode={viewportMode}
           style={{
             ...mainContentStyle,
-            paddingLeft:
-              viewportMode === viewportModes.mobile
-                ? theme.spacing.shellMobile
-                : viewportMode === viewportModes.tablet
-                ? theme.spacing.shellTablet
-                : theme.spacing.shellDesktop,
-            paddingRight:
-              viewportMode === viewportModes.mobile
-                ? theme.spacing.shellMobile
-                : viewportMode === viewportModes.tablet
-                ? theme.spacing.shellTablet
-                : theme.spacing.shellDesktop,
-            paddingBottom:
-              viewportMode === viewportModes.mobile ? theme.spacing.shellMobile : theme.spacing.shellDesktop,
+            paddingLeft: shellPadding.inline,
+            paddingRight: shellPadding.inline,
+            paddingBottom: shellPadding.bottom,
           }}
         >
           {children}
@@ -212,6 +204,30 @@ function SidebarLayout({
       </div>
     </div>
   );
+}
+
+function getSidebarState(isOverlayMode, isCollapsed) {
+  if (isOverlayMode) return "overlay";
+  return isCollapsed ? "collapsed" : "expanded";
+}
+
+function getShellPadding(viewportMode) {
+  if (viewportMode === viewportModes.mobile) {
+    return {
+      inline: theme.spacing.shellMobile,
+      bottom: theme.spacing.shellMobile,
+    };
+  }
+  if (viewportMode === viewportModes.tablet) {
+    return {
+      inline: theme.spacing.shellTablet,
+      bottom: theme.spacing.shellDesktop,
+    };
+  }
+  return {
+    inline: theme.spacing.shellDesktop,
+    bottom: theme.spacing.shellDesktop,
+  };
 }
 
 const shellStyle = {

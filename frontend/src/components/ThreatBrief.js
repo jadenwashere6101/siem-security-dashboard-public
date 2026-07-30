@@ -13,11 +13,7 @@ export function buildThreatBriefModel({ alerts = [], metrics = null, sourceError
     String(alert.status || "").toLowerCase().includes("failed") ||
     String(alert.alert_type || "").toLowerCase().includes("exception")
   ) || null;
-  const recommendedNextAction = highestPriorityAlert
-    ? `Review ${highestPriorityAlert.alert_type || "the highest-priority alert"} from ${highestPriorityAlert.source_ip || "unknown source"}.`
-    : riskiestSource
-    ? `Review source ${riskiestSource.sourceIp} across visible alerts.`
-    : "";
+  const recommendedNextAction = deriveRecommendedNextAction(highestPriorityAlert, riskiestSource);
 
   return {
     loading: false,
@@ -35,7 +31,7 @@ export function buildThreatBriefModel({ alerts = [], metrics = null, sourceError
         id: "riskiest-source",
         label: "Riskiest source IP",
         value: riskiestSource?.sourceIp || "Unavailable",
-        meta: riskiestSource ? `${riskiestSource.count} visible alert${riskiestSource.count === 1 ? "" : "s"}` : "No source-IP concentration in visible data.",
+        meta: riskiestSource ? formatVisibleAlertCount(riskiestSource.count) : "No source-IP concentration in visible data.",
         tone: riskiestSource ? "info" : "neutral",
       },
       {
@@ -68,6 +64,21 @@ export function buildThreatBriefModel({ alerts = [], metrics = null, sourceError
       },
     ],
   };
+}
+
+function deriveRecommendedNextAction(highestPriorityAlert, riskiestSource) {
+  if (highestPriorityAlert) {
+    return `Review ${highestPriorityAlert.alert_type || "the highest-priority alert"} from ${highestPriorityAlert.source_ip || "unknown source"}.`;
+  }
+  if (riskiestSource) {
+    return `Review source ${riskiestSource.sourceIp} across visible alerts.`;
+  }
+  return "";
+}
+
+function formatVisibleAlertCount(count) {
+  const suffix = count === 1 ? "" : "s";
+  return `${count} visible alert${suffix}`;
 }
 
 function ThreatBrief({ model, loading = false }) {

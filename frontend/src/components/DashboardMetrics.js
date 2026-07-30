@@ -8,6 +8,7 @@ function dashboardMetricModels(metrics) {
   const medium = Number(metrics.mediumCount) || 0;
   const low = Number(metrics.lowCount) || 0;
   const unique = Number(metrics.uniqueIPs) || 0;
+  const lowerPriorityTone = getLowerPriorityTone(medium, low);
   return [
     {
       label: "Total Alerts",
@@ -33,11 +34,17 @@ function dashboardMetricModels(metrics) {
     {
       label: "Medium / Low",
       value: `${medium} / ${low}`,
-      tone: medium > 0 ? "warning" : low > 0 ? "success" : "neutral",
+      tone: lowerPriorityTone,
       summary: "Lower-priority workload split.",
       why: medium > 0 ? "Medium alerts may contain early indicators that deserve review after urgent items." : null,
     },
   ];
+}
+
+function getLowerPriorityTone(medium, low) {
+  if (medium > 0) return "warning";
+  if (low > 0) return "success";
+  return "neutral";
 }
 
 function DashboardMetrics({

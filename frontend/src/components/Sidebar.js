@@ -47,6 +47,7 @@ function Sidebar({
   statusLabel,
   versionLabel,
 }) {
+  const sidebarWidth = isOverlay ? 280 : getDockedSidebarWidth(isCollapsed);
   const visibleSections = sections.filter((section) =>
     typeof section.visibleWhen === "function" ? section.visibleWhen(roleFlags) : true
   );
@@ -70,8 +71,8 @@ function Sidebar({
       style={{
         ...asideStyle,
         ...(isOverlay ? overlayAsideStyle : null),
-        width: isOverlay ? 280 : isCollapsed ? 68 : 256,
-        borderRight: isCollapsed && !isOverlay ? asideStyle.borderRight : asideStyle.borderRight,
+        width: sidebarWidth,
+        borderRight: asideStyle.borderRight,
         transform: isOverlay && !isOpen ? "translateX(-100%)" : "translateX(0)",
       }}
       data-collapsed={isCollapsed ? "true" : "false"}
@@ -134,6 +135,10 @@ function Sidebar({
       )}
     </aside>
   );
+}
+
+function getDockedSidebarWidth(isCollapsed) {
+  return isCollapsed ? 68 : 256;
 }
 
 const asideStyle = {

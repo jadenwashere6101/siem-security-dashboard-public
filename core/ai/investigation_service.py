@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import logging
+import re
 import time
 import uuid
 from typing import Any, Callable
@@ -60,6 +61,7 @@ from core.ai.soc_tool_executor import (
 from core.ai.soc_tools import SocToolExecutionSummary, redact_sensitive_values
 
 _LOGGER = logging.getLogger(__name__)
+_SAFE_RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,120}$")
 
 
 @dataclass(frozen=True)
@@ -530,7 +532,7 @@ def _question_from_payload(payload: dict[str, Any]) -> str:
 
 def _run_id(value: Any) -> str:
     text = str(value or "").strip()
-    if text and len(text) <= 120:
+    if _SAFE_RUN_ID_PATTERN.fullmatch(text):
         return text
     return f"ai-investigation-{uuid.uuid4().hex[:12]}"
 
