@@ -1,4 +1,11 @@
-import { getSocBriefing, listSocBriefings } from "./socBriefingService";
+import {
+  getSocBriefing,
+  getSocBriefingControl,
+  listSocBriefings,
+  runSocBriefingNow,
+  updateSocBriefingMode,
+  updateSocBriefingPause,
+} from "./socBriefingService";
 
 describe("socBriefingService", () => {
   beforeEach(() => {
@@ -46,6 +53,49 @@ describe("socBriefingService", () => {
 
     expect(result).toEqual(payload);
     expect(global.fetch.mock.calls[0][0]).toContain("/soc-briefings/7");
+  });
+
+  test("loads SOC briefing control status", async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ mode: "manual_only", schedules_paused: true }),
+    });
+
+    await getSocBriefingControl();
+
+    const [url, options] = global.fetch.mock.calls[0];
+    expect(url).toContain("/soc-briefings/control");
+    expect(options.credentials).toBe("include");
+  });
+
+  test("updates mode, pause state, and run-now with explicit methods", async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ ok: true }),
+    });
+
+    await updateSocBriefingMode("scheduled_autonomous");
+    await updateSocBriefingPause(false, "");
+    await runSocBriefingNow();
+
+    expect(global.fetch.mock.calls[0][0]).toContain("/soc-briefings/control/mode");
+    expect(global.fetch.mock.calls[0][1]).toEqual(
+      expect.objectContaining({
+        method: "PUT",
+        credentials: "include",
+        body: JSON.stringify({ mode: "scheduled_autonomous" }),
+      })
+    );
+    expect(global.fetch.mock.calls[1][0]).toContain("/soc-briefings/control/pause");
+    expect(global.fetch.mock.calls[1][1]).toEqual(
+      expect.objectContaining({
+        method: "PUT",
+        credentials: "include",
+        body: JSON.stringify({ schedules_paused: false, pause_reason: "" }),
+      })
+    );
+    expect(global.fetch.mock.calls[2][0]).toContain("/soc-briefings/run-now");
+    expect(global.fetch.mock.calls[2][1]).toEqual(expect.objectContaining({ method: "POST", credentials: "include" }));
   });
 
   test("throws API error messages on failure", async () => {

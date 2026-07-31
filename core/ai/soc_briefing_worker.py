@@ -20,6 +20,7 @@ from core.ai.soc_briefing_runtime_store import (
     SERVICE_ACTOR,
     STEP_STATUS_INTERRUPTED,
     SocBriefingPersistenceError,
+    autonomous_scheduling_enabled,
     as_utc,
     claim_next_job,
     complete_job,
@@ -154,16 +155,19 @@ def run_soc_briefing_worker(
         conn = None
 
         conn = connect()
-        schedules = list_due_schedules(conn, now=clock(), limit=cfg.materialize_limit)
-        for schedule in schedules:
-            if _deadline_reached(deadline) or state.requested:
-                break
-            result = materialize_due_schedule(conn, schedule, now=clock())
-            stats["materialized_windows"] += result.windows_created
-            stats["queued_jobs"] += result.jobs_created
-            stats["duplicate_windows"] += result.duplicate_windows
-            stats["skipped_windows"] += result.skipped_windows
-            stats["blocked_schedules"] += result.blocked_schedules
+        if autonomous_scheduling_enabled(conn):
+            schedules = list_due_schedules(conn, now=clock(), limit=cfg.materialize_limit)
+            for schedule in schedules:
+                if _deadline_reached(deadline) or state.requested:
+                    break
+                result = materialize_due_schedule(conn, schedule, now=clock())
+                stats["materialized_windows"] += result.windows_created
+                stats["queued_jobs"] += result.jobs_created
+                stats["duplicate_windows"] += result.duplicate_windows
+                stats["skipped_windows"] += result.skipped_windows
+                stats["blocked_schedules"] += result.blocked_schedules
+        else:
+            stats["skipped_windows"] += 1
         conn.commit()
         _close(conn)
         conn = None

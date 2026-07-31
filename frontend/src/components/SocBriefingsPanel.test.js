@@ -3,11 +3,22 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import SocBriefingsPanel from "./SocBriefingsPanel";
-import { getSocBriefing, listSocBriefings } from "../services/socBriefingService";
+import {
+  getSocBriefing,
+  getSocBriefingControl,
+  listSocBriefings,
+  runSocBriefingNow,
+  updateSocBriefingMode,
+  updateSocBriefingPause,
+} from "../services/socBriefingService";
 
 jest.mock("../services/socBriefingService", () => ({
   getSocBriefing: jest.fn(),
+  getSocBriefingControl: jest.fn(),
   listSocBriefings: jest.fn(),
+  runSocBriefingNow: jest.fn(),
+  updateSocBriefingMode: jest.fn(),
+  updateSocBriefingPause: jest.fn(),
 }));
 
 const listPayload = {
@@ -56,10 +67,29 @@ const detailPayload = {
   ],
 };
 
+const controlPayload = {
+  mode: "manual_only",
+  schedules_paused: true,
+  next_scheduled_run: { name: "Morning SOC briefing", next_due_at: "2026-07-28T08:00:00Z" },
+  last_successful_run: { generated_at: "2026-07-27T08:02:00Z" },
+  catch_up: { status: "paused", max_windows: 3, max_lookback_hours: 24, coalesce_missed_windows: true },
+  active_jobs: { manual: { pending: 0, running: 0 }, scheduled: { pending: 0, running: 0 } },
+  ai: {
+    local_only: true,
+    no_paid_fallback: true,
+    gateway: { mode: "local_only", local_model: "llama3.1:8b" },
+    local_provider: { provider: "ollama", ready: true, status: "success", model: "llama3.1:8b" },
+  },
+};
+
 describe("SocBriefingsPanel", () => {
   beforeEach(() => {
     listSocBriefings.mockResolvedValue(listPayload);
     getSocBriefing.mockResolvedValue(detailPayload);
+    getSocBriefingControl.mockResolvedValue(controlPayload);
+    runSocBriefingNow.mockResolvedValue({ created: true, status: "queued", job: { id: 44 } });
+    updateSocBriefingMode.mockResolvedValue({ ...controlPayload, mode: "scheduled_autonomous", schedules_paused: false });
+    updateSocBriefingPause.mockResolvedValue({ ...controlPayload, schedules_paused: false });
   });
 
   afterEach(() => {
@@ -74,9 +104,14 @@ describe("SocBriefingsPanel", () => {
     expect(screen.getByText(/Anakin summarizes scheduled investigations/i)).toBeInTheDocument();
     expect(screen.getByText("Total Briefings")).toBeInTheDocument();
     expect(screen.getByText("Latest Briefing")).toBeInTheDocument();
-    expect(screen.getByText("Next Scheduled Run")).toBeInTheDocument();
+    expect(screen.getAllByText("Next Scheduled Run").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Anakin Status")).toBeInTheDocument();
-    expect(await screen.findByText("Critical auth anomaly reviewed.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run Anakin Briefing Now" })).toBeInTheDocument();
+    await screen.findByText("llama3.1:8b");
+    expect(screen.getByLabelText("Briefing mode")).toHaveValue("manual_only");
+    await waitFor(() => expect(screen.getByLabelText("Pause schedules")).toBeChecked());
+    expect(screen.getByText("No Paid Fallback: Completed")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText("Critical auth anomaly reviewed.").length).toBeGreaterThanOrEqual(1));
     expect(await screen.findByText("Executive Summary")).toBeInTheDocument();
     expect(screen.getByText("Critical Findings")).toBeInTheDocument();
     expect(screen.getByText("Investigation Metadata")).toBeInTheDocument();
@@ -103,6 +138,21 @@ describe("SocBriefingsPanel", () => {
         })
       );
     });
+  });
+
+  test("runs manual briefing and updates mode and pause controls", async () => {
+    render(<SocBriefingsPanel />);
+
+    await screen.findByText("Critical auth anomaly reviewed.");
+    await userEvent.selectOptions(screen.getByLabelText("Briefing mode"), "scheduled_autonomous");
+    await waitFor(() => expect(updateSocBriefingMode).toHaveBeenCalledWith("scheduled_autonomous"));
+
+    await userEvent.click(screen.getByRole("button", { name: "Run Anakin Briefing Now" }));
+    expect(await screen.findByText(/Anakin briefing queued/i)).toBeInTheDocument();
+    expect(runSocBriefingNow).toHaveBeenCalledTimes(1);
+
+    await userEvent.click(screen.getByLabelText("Pause schedules"));
+    await waitFor(() => expect(updateSocBriefingPause).toHaveBeenCalledWith(false, ""));
   });
 
   test("renders degraded states without mutation controls", async () => {

@@ -9,10 +9,13 @@ from core.ai.soc_briefing_runtime_store import (
     JOB_STATUS_FAILED,
     JOB_STATUS_PENDING,
     JOB_STATUS_RUNNING,
+    BRIEFING_MODE_SCHEDULED_AUTONOMOUS,
     SERVICE_ACTOR,
     SocBriefingSecurityError,
+    autonomous_scheduling_enabled,
     claim_next_job,
     complete_job,
+    create_manual_briefing_job,
     create_or_get_job,
     create_or_get_window,
     create_schedule,
@@ -21,6 +24,7 @@ from core.ai.soc_briefing_runtime_store import (
     heartbeat_job_lease,
     materialize_due_schedule,
     recover_stale_jobs,
+    update_controls,
 )
 from core.ai.soc_briefing_worker import (
     SocBriefingWorkerConfig,
@@ -56,6 +60,16 @@ def _due_schedule(conn, *, due_at=None, cadence_minutes=60, enabled=True, **kwar
     )
     conn.commit()
     return schedule
+
+
+def _enable_autonomous(conn):
+    update_controls(
+        conn,
+        mode=BRIEFING_MODE_SCHEDULED_AUTONOMOUS,
+        schedules_paused=False,
+        updated_by="test",
+    )
+    conn.commit()
 
 
 def test_duplicate_window_and_job_prevention(postgres_db):
@@ -178,6 +192,7 @@ def test_malformed_and_disabled_schedules_fail_safely(postgres_db):
 def test_worker_persists_ai_disabled_outcome_run_steps_briefing_and_heartbeat(postgres_db):
     conn, _cur = postgres_db
     _due_schedule(conn)
+    _enable_autonomous(conn)
 
     stats = run_soc_briefing_worker(
         config=SocBriefingWorkerConfig(batch_size=1, materialize_limit=5, max_runtime_seconds=10),
@@ -204,6 +219,7 @@ def test_worker_persists_ai_disabled_outcome_run_steps_briefing_and_heartbeat(po
 def test_worker_persists_local_provider_unavailable_without_model_call(postgres_db):
     conn, _cur = postgres_db
     _due_schedule(conn)
+    _enable_autonomous(conn)
 
     run_soc_briefing_worker(
         config=SocBriefingWorkerConfig(batch_size=1, materialize_limit=5, max_runtime_seconds=10),
@@ -221,6 +237,7 @@ def test_worker_persists_local_provider_unavailable_without_model_call(postgres_
 def test_worker_persistence_failure_aborts_without_silent_continue(postgres_db):
     conn, _cur = postgres_db
     _due_schedule(conn)
+    _enable_autonomous(conn)
 
     with patch("core.ai.soc_briefing_worker.create_run_step", side_effect=RuntimeError("persist failed")):
         with pytest.raises(RuntimeError, match="persist failed"):
@@ -236,6 +253,7 @@ def test_worker_persistence_failure_aborts_without_silent_continue(postgres_db):
 def test_graceful_shutdown_stops_new_claims(postgres_db):
     conn, _cur = postgres_db
     _due_schedule(conn)
+    _enable_autonomous(conn)
     shutdown = type("Shutdown", (), {"requested": True, "reason": "test_shutdown"})()
 
     stats = run_soc_briefing_worker(
@@ -250,6 +268,49 @@ def test_graceful_shutdown_stops_new_claims(postgres_db):
     assert stats["processed"] == 0
     with conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM soc_briefing_jobs WHERE status = %s", (JOB_STATUS_PENDING,))
+        assert cur.fetchone()[0] == 1
+
+
+def test_manual_only_controls_block_autonomous_worker_materialization(postgres_db):
+    conn, _cur = postgres_db
+    _due_schedule(conn)
+
+    assert autonomous_scheduling_enabled(conn) is False
+    stats = run_soc_briefing_worker(
+        config=SocBriefingWorkerConfig(batch_size=1, materialize_limit=5, max_runtime_seconds=10),
+        worker_id="soc-worker-manual-only-test",
+        connect=_connect_same(conn),
+        now_fn=lambda: datetime(2026, 7, 27, 8, 1, tzinfo=timezone.utc),
+        gateway_config=AiGatewayConfig(mode=AI_MODE_DISABLED, configured_mode=AI_MODE_DISABLED),
+    )
+
+    assert stats["processed"] == 0
+    assert stats["queued_jobs"] == 0
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM soc_briefing_jobs")
+        assert cur.fetchone()[0] == 0
+
+
+def test_manual_run_creates_one_active_job_despite_pause(postgres_db):
+    conn, _cur = postgres_db
+    first, first_created = create_manual_briefing_job(
+        conn,
+        requested_by="analyst",
+        now=datetime(2026, 7, 27, 8, 1, tzinfo=timezone.utc),
+    )
+    second, second_created = create_manual_briefing_job(
+        conn,
+        requested_by="analyst",
+        now=datetime(2026, 7, 27, 8, 2, tzinfo=timezone.utc),
+    )
+    conn.commit()
+
+    assert first_created is True
+    assert second_created is False
+    assert second["id"] == first["id"]
+    assert first["trigger_type"] == "manual"
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM soc_briefing_jobs WHERE trigger_type = 'manual'")
         assert cur.fetchone()[0] == 1
 
 

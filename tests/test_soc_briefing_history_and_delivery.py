@@ -197,6 +197,85 @@ def test_briefing_history_viewer_forbidden(client, mock_db):
         assert client.get("/soc-briefings").status_code == 403
         assert client.get("/soc-briefings/1").status_code == 403
         assert client.post("/soc-briefings/1/deliveries/slack/retry").status_code == 403
+        assert client.get("/soc-briefings/control").status_code == 403
+        assert client.put("/soc-briefings/control/mode", json={"mode": "manual_only"}).status_code == 403
+        assert client.post("/soc-briefings/run-now").status_code == 403
+
+
+def test_briefing_control_status_route_returns_mode_model_and_fallback(client, mock_db):
+    p1, p2 = _login_role(client, "brief_analyst", "apass", "analyst")
+    payload = {
+        "mode": "manual_only",
+        "schedules_paused": True,
+        "next_scheduled_run": None,
+        "last_successful_run": None,
+        "catch_up": None,
+        "active_jobs": {"manual": {"pending": 0, "running": 0}},
+    }
+    ai_status = {
+        "gateway": {
+            "mode": "local_only",
+            "local_provider": "ollama",
+            "local_model": "llama3.1:8b",
+            "paid_fallback_enabled": False,
+        },
+        "providers": [{"provider": "ollama", "ready": True, "status": "success", "model": "llama3.1:8b"}],
+    }
+    with p1, p2:
+        assert client.post("/login", json={"username": "brief_analyst", "password": "apass"}).status_code == 200
+        with patch("routes.soc_briefing_routes.get_db_connection"), patch(
+            "routes.soc_briefing_routes.get_briefing_control_status", return_value=payload
+        ), patch("routes.soc_briefing_routes.get_ai_gateway_status", return_value=ai_status):
+            resp = client.get("/soc-briefings/control")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["mode"] == "manual_only"
+    assert body["ai"]["local_only"] is True
+    assert body["ai"]["no_paid_fallback"] is True
+    assert body["ai"]["local_provider"]["model"] == "llama3.1:8b"
+
+
+def test_run_now_route_returns_existing_active_job_without_duplicate(client, mock_db):
+    p1, p2 = _login_role(client, "brief_analyst", "apass", "analyst")
+    job = {"id": 42, "schedule_id": 7, "window_id": 8, "status": "pending", "trigger_type": "manual"}
+    with p1, p2:
+        assert client.post("/login", json={"username": "brief_analyst", "password": "apass"}).status_code == 200
+        with patch("routes.soc_briefing_routes.get_db_connection") as get_conn, patch(
+            "routes.soc_briefing_routes.create_manual_briefing_job", return_value=(job, False)
+        ) as create_job, patch("routes.soc_briefing_routes.log_audit_event") as audit:
+            get_conn.return_value = mock_db[0]
+            resp = client.post("/soc-briefings/run-now")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["created"] is False
+    assert body["status"] == "already_running"
+    create_job.assert_called_once()
+    audit.assert_called_once()
+
+
+def test_update_mode_and_pause_routes_validate_payloads(client, mock_db):
+    p1, p2 = _login_role(client, "brief_analyst", "apass", "analyst")
+    payload = {"mode": "scheduled_autonomous", "schedules_paused": False, "active_jobs": {}, "ai": {}}
+    with p1, p2:
+        assert client.post("/login", json={"username": "brief_analyst", "password": "apass"}).status_code == 200
+        bad_mode = client.put("/soc-briefings/control/mode", json={"mode": "bad"})
+        bad_pause = client.put("/soc-briefings/control/pause", json={"schedules_paused": "nope"})
+        with patch("routes.soc_briefing_routes.get_db_connection") as get_conn, patch(
+            "routes.soc_briefing_routes.update_controls", return_value={"mode": "scheduled_autonomous", "schedules_paused": False}
+        ) as update, patch("routes.soc_briefing_routes._control_payload", return_value=payload), patch(
+            "routes.soc_briefing_routes.log_audit_event"
+        ):
+            get_conn.return_value = mock_db[0]
+            mode_resp = client.put("/soc-briefings/control/mode", json={"mode": "scheduled_autonomous"})
+            pause_resp = client.put("/soc-briefings/control/pause", json={"schedules_paused": False})
+
+    assert bad_mode.status_code == 400
+    assert bad_pause.status_code == 400
+    assert mode_resp.status_code == 200
+    assert pause_resp.status_code == 200
+    assert update.call_count == 2
 
 
 def test_list_detail_filters_pagination_and_read_side_effects(client, postgres_db):

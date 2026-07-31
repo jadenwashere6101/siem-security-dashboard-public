@@ -4,6 +4,15 @@ from flask import Blueprint, current_app, jsonify, request
 from flask_login import current_user, login_required
 
 from core.ai import soc_briefing_history_store
+from core.ai.readiness import get_ai_gateway_status
+from core.ai.soc_briefing_runtime_store import (
+    BRIEFING_MODE_MANUAL_ONLY,
+    BRIEFING_MODE_SCHEDULED_AUTONOMOUS,
+    create_manual_briefing_job,
+    get_briefing_control_status,
+    update_controls,
+)
+from core.audit_helpers import log_audit_event
 from core.auth import analyst_or_super_admin_required, super_admin_required
 from core.db import get_db_connection
 
@@ -26,6 +35,44 @@ def _str_param(name: str) -> str | None:
         return None
     normalized = value.strip()
     return normalized if normalized else None
+
+
+def _actor() -> tuple[str | None, str | None]:
+    return getattr(current_user, "id", None), getattr(current_user, "role", None)
+
+
+def _audit(event_type: str, details: dict) -> None:
+    username, role = _actor()
+    log_audit_event(
+        event_type,
+        actor_username=username,
+        actor_role=role,
+        http_method=request.method,
+        request_path=request.path,
+        source_ip=request.remote_addr,
+        details=details,
+    )
+
+
+def _control_payload(conn) -> dict:
+    status = get_briefing_control_status(conn)
+    ai_status = get_ai_gateway_status()
+    gateway = ai_status.get("gateway") if isinstance(ai_status, dict) else {}
+    providers = ai_status.get("providers") if isinstance(ai_status, dict) else []
+    local_provider = None
+    if isinstance(providers, list):
+        for provider in providers:
+            if isinstance(provider, dict) and provider.get("provider") == gateway.get("local_provider"):
+                local_provider = provider
+                break
+    status["ai"] = {
+        "gateway": gateway,
+        "local_provider": local_provider,
+        "providers": providers,
+        "local_only": gateway.get("mode") == "local_only",
+        "no_paid_fallback": gateway.get("paid_fallback_enabled") is False,
+    }
+    return status
 
 
 @soc_briefing_bp.route("/soc-briefings", methods=["GET"])
@@ -64,6 +111,122 @@ def list_soc_briefings():
         return jsonify(payload), 200
     except Exception as error:
         current_app.logger.error("list_soc_briefings: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@soc_briefing_bp.route("/soc-briefings/control", methods=["GET"])
+@login_required
+@analyst_or_super_admin_required
+def get_soc_briefing_control():
+    conn = None
+    try:
+        conn = get_db_connection()
+        payload = _control_payload(conn)
+        conn.commit()
+        return jsonify(payload), 200
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        current_app.logger.error("get_soc_briefing_control: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@soc_briefing_bp.route("/soc-briefings/control/mode", methods=["PUT"])
+@login_required
+@analyst_or_super_admin_required
+def update_soc_briefing_mode():
+    data = request.get_json(silent=True) or {}
+    mode = data.get("mode") if isinstance(data, dict) else None
+    if mode not in {BRIEFING_MODE_MANUAL_ONLY, BRIEFING_MODE_SCHEDULED_AUTONOMOUS}:
+        return jsonify({"error": "invalid_mode", "message": "mode must be manual_only or scheduled_autonomous."}), 400
+    conn = None
+    try:
+        username, _role = _actor()
+        conn = get_db_connection()
+        controls = update_controls(conn, mode=mode, updated_by=username)
+        conn.commit()
+        _audit("soc_briefing_mode_updated", {"mode": controls["mode"], "read_only": True})
+        return jsonify(_control_payload(conn)), 200
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        current_app.logger.error("update_soc_briefing_mode: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@soc_briefing_bp.route("/soc-briefings/control/pause", methods=["PUT"])
+@login_required
+@analyst_or_super_admin_required
+def update_soc_briefing_pause():
+    data = request.get_json(silent=True) or {}
+    paused = data.get("schedules_paused") if isinstance(data, dict) else None
+    if not isinstance(paused, bool):
+        return jsonify({"error": "invalid_pause", "message": "schedules_paused must be true or false."}), 400
+    pause_reason = data.get("pause_reason") if isinstance(data, dict) else None
+    conn = None
+    try:
+        username, _role = _actor()
+        conn = get_db_connection()
+        controls = update_controls(
+            conn,
+            schedules_paused=paused,
+            pause_reason=pause_reason,
+            updated_by=username,
+        )
+        conn.commit()
+        _audit(
+            "soc_briefing_schedules_pause_updated",
+            {"schedules_paused": bool(controls["schedules_paused"]), "read_only": True},
+        )
+        return jsonify(_control_payload(conn)), 200
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        current_app.logger.error("update_soc_briefing_pause: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@soc_briefing_bp.route("/soc-briefings/run-now", methods=["POST"])
+@login_required
+@analyst_or_super_admin_required
+def run_soc_briefing_now():
+    conn = None
+    try:
+        username, role = _actor()
+        conn = get_db_connection()
+        job, created = create_manual_briefing_job(conn, requested_by=username)
+        conn.commit()
+        _audit(
+            "soc_briefing_manual_run_requested",
+            {
+                "job_id": job.get("id"),
+                "schedule_id": job.get("schedule_id"),
+                "window_id": job.get("window_id"),
+                "created": created,
+                "trigger_type": "manual",
+                "actor_role": role,
+                "read_only": True,
+                "writes_performed": False,
+            },
+        )
+        status_code = 201 if created else 200
+        return jsonify({"job": job, "created": created, "status": "queued" if created else "already_running"}), status_code
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        current_app.logger.error("run_soc_briefing_now: %s", error)
         return jsonify({"error": "Internal server error"}), 500
     finally:
         if conn:

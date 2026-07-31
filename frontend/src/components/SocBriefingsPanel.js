@@ -1,5 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { getSocBriefing, listSocBriefings } from "../services/socBriefingService";
+import {
+  getSocBriefing,
+  getSocBriefingControl,
+  listSocBriefings,
+  runSocBriefingNow,
+  updateSocBriefingMode,
+  updateSocBriefingPause,
+} from "../services/socBriefingService";
 import { formatTimestamp } from "../utils/displayFormatting";
 
 const PAGE_SIZE = 10;
@@ -130,6 +137,100 @@ function SummaryCard({ label, value, detail, status }) {
   );
 }
 
+function modeLabel(mode) {
+  return mode === "scheduled_autonomous" ? "Scheduled autonomous" : "Manual only";
+}
+
+function boolStatus(value) {
+  return value ? "success" : "blocked";
+}
+
+function getActiveJobTotal(control, triggerType) {
+  const jobs = control?.active_jobs?.[triggerType] || {};
+  return Number(jobs.pending || 0) + Number(jobs.running || 0);
+}
+
+function ControlPanel({
+  control,
+  loading,
+  actionLoading,
+  message,
+  onRunNow,
+  onModeChange,
+  onTogglePause,
+}) {
+  const gateway = control?.ai?.gateway || {};
+  const localProvider = control?.ai?.local_provider || {};
+  const catchUp = control?.catch_up || {};
+  const activeManual = getActiveJobTotal(control, "manual");
+  const activeScheduled = getActiveJobTotal(control, "scheduled");
+  const modelStatus = localProvider.ready ? "success" : (localProvider.status || "blocked");
+  const nextRun = control?.next_scheduled_run?.next_due_at;
+  const lastRun = control?.last_successful_run?.generated_at || control?.last_successful_run?.created_at;
+
+  return (
+    <section style={controlPanelStyle} aria-label="SOC briefing controls">
+      <div style={controlHeaderStyle}>
+        <div>
+          <p style={eyebrowStyle}>Manual-first controls</p>
+          <h3 style={controlTitleStyle}>Anakin Briefing Control</h3>
+        </div>
+        <button
+          type="button"
+          onClick={onRunNow}
+          disabled={actionLoading || loading}
+          style={primaryActionStyle}
+        >
+          {actionLoading ? "Starting..." : "Run Anakin Briefing Now"}
+        </button>
+      </div>
+
+      <div style={controlGridStyle}>
+        <label style={controlFieldStyle}>
+          Briefing Mode
+          <select
+            aria-label="Briefing mode"
+            value={control?.mode || "manual_only"}
+            onChange={(event) => onModeChange(event.target.value)}
+            disabled={actionLoading || loading}
+            style={selectStyle}
+          >
+            <option value="manual_only">Manual only</option>
+            <option value="scheduled_autonomous">Scheduled autonomous</option>
+          </select>
+        </label>
+        <label style={toggleFieldStyle}>
+          <input
+            aria-label="Pause schedules"
+            type="checkbox"
+            checked={Boolean(control?.schedules_paused)}
+            onChange={(event) => onTogglePause(event.target.checked)}
+            disabled={actionLoading || loading}
+          />
+          Pause schedules
+        </label>
+        <MetaItem label="Mode" value={modeLabel(control?.mode)} />
+        <MetaItem label="Last Successful Run" value={lastRun ? formatTimestamp(lastRun) : null} />
+        <MetaItem label="Next Scheduled Run" value={nextRun ? formatTimestamp(nextRun) : null} />
+        <MetaItem
+          label="Catch-up"
+          value={catchUp.status ? `${statusLabel(catchUp.status)} / ${catchUp.max_windows || 0} windows` : null}
+        />
+        <MetaItem label="Manual Active" value={activeManual ? String(activeManual) : "0"} />
+        <MetaItem label="Scheduled Active" value={activeScheduled ? String(activeScheduled) : "0"} />
+      </div>
+
+      <div style={controlBadgeRowStyle}>
+        <StatusBadge label="Local Model" status={modelStatus} />
+        <StatusBadge label="Local Only" status={boolStatus(control?.ai?.local_only)} />
+        <StatusBadge label="No Paid Fallback" status={boolStatus(control?.ai?.no_paid_fallback)} />
+        <span style={controlHintStyle}>{gateway.local_model || localProvider.model || "No local model configured"}</span>
+      </div>
+      {message ? <div role="status" style={controlMessageStyle}>{message}</div> : null}
+    </section>
+  );
+}
+
 function EmptyState() {
   return (
     <div style={emptyStateStyle}>
@@ -237,6 +338,10 @@ export default function SocBriefingsPanel() {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [control, setControl] = useState(null);
+  const [controlLoading, setControlLoading] = useState(false);
+  const [controlActionLoading, setControlActionLoading] = useState(false);
+  const [controlMessage, setControlMessage] = useState("");
   const [error, setError] = useState("");
 
   const filters = useMemo(
@@ -271,9 +376,25 @@ export default function SocBriefingsPanel() {
     }
   }, [filters, selectedId]);
 
+  const loadControl = useCallback(async () => {
+    setControlLoading(true);
+    try {
+      const payload = await getSocBriefingControl();
+      setControl(payload);
+    } catch (err) {
+      setError(err.message || "Unable to load SOC briefing controls.");
+    } finally {
+      setControlLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadList();
   }, [loadList]);
+
+  useEffect(() => {
+    loadControl();
+  }, [loadControl]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -302,6 +423,56 @@ export default function SocBriefingsPanel() {
   const latestGeneratedAt = latestBriefing?.generated_at || latestBriefing?.created_at;
   const latestSlackStatus = latestBriefing?.delivery?.latest_status || detail?.deliveries?.[0]?.status;
   const agentStatus = detail?.run?.status || latestBriefing?.run?.status || (total > 0 ? "completed" : null);
+  const handleRunNow = useCallback(async () => {
+    setControlActionLoading(true);
+    setControlMessage("");
+    setError("");
+    try {
+      const payload = await runSocBriefingNow();
+      if (payload.created) {
+        setControlMessage("Anakin briefing queued. The worker will persist it into history after processing.");
+      } else {
+        setControlMessage("A manual Anakin briefing is already pending or running.");
+      }
+      await Promise.all([loadControl(), loadList()]);
+    } catch (err) {
+      setControlMessage("");
+      setError(err.message || "Unable to run Anakin briefing now.");
+    } finally {
+      setControlActionLoading(false);
+    }
+  }, [loadControl, loadList]);
+
+  const handleModeChange = useCallback(async (mode) => {
+    setControlActionLoading(true);
+    setControlMessage("");
+    setError("");
+    try {
+      const payload = await updateSocBriefingMode(mode);
+      setControl(payload);
+      setControlMessage(`Briefing mode set to ${modeLabel(mode)}.`);
+    } catch (err) {
+      setError(err.message || "Unable to update briefing mode.");
+    } finally {
+      setControlActionLoading(false);
+    }
+  }, []);
+
+  const handleTogglePause = useCallback(async (paused) => {
+    setControlActionLoading(true);
+    setControlMessage("");
+    setError("");
+    try {
+      const payload = await updateSocBriefingPause(paused, paused ? "Paused from SOC Briefings workspace" : "");
+      setControl(payload);
+      setControlMessage(paused ? "Schedules paused. Manual runs remain available." : "Schedules unpaused.");
+    } catch (err) {
+      setError(err.message || "Unable to update schedule pause state.");
+    } finally {
+      setControlActionLoading(false);
+    }
+  }, []);
+
   const canPrevious = offset > 0;
   const canNext = offset + PAGE_SIZE < total;
   const empty = !loading && items.length === 0;
@@ -325,11 +496,21 @@ export default function SocBriefingsPanel() {
         </div>
       </section>
 
+      <ControlPanel
+        control={control}
+        loading={controlLoading}
+        actionLoading={controlActionLoading}
+        message={controlMessage}
+        onRunNow={handleRunNow}
+        onModeChange={handleModeChange}
+        onTogglePause={handleTogglePause}
+      />
+
       <section style={summaryGridStyle} aria-label="SOC briefing summary">
         <SummaryCard label="Total Briefings" value={total || NO_DATA} detail={total ? `${items.length} visible` : ""} />
         <SummaryCard label="Latest Briefing" value={latestGeneratedAt ? formatTimestamp(latestGeneratedAt) : NO_DATA} detail={latestBriefing ? `#${latestBriefing.id}` : ""} status={latestBriefing?.content_status} />
-        <SummaryCard label="Next Scheduled Run" value={NO_DATA} detail="Schedule metadata unavailable" />
-        <SummaryCard label={`${AGENT_NAME} Status`} value={agentStatus ? statusLabel(agentStatus) : NO_DATA} detail={detail?.run?.provider_status || ""} status={agentStatus} />
+        <SummaryCard label="Next Scheduled Run" value={control?.next_scheduled_run?.next_due_at ? formatTimestamp(control.next_scheduled_run.next_due_at) : NO_DATA} detail={control?.schedules_paused ? "Schedules paused" : modeLabel(control?.mode)} />
+        <SummaryCard label={`${AGENT_NAME} Status`} value={agentStatus ? statusLabel(agentStatus) : NO_DATA} detail={control?.ai?.local_provider?.status || detail?.run?.provider_status || ""} status={agentStatus || control?.ai?.local_provider?.status} />
         <SummaryCard label="Slack Delivery Status" value={latestSlackStatus ? statusLabel(latestSlackStatus) : NO_DATA} detail={latestBriefing?.delivery?.latest_attempted_at ? formatTimestamp(latestBriefing.delivery.latest_attempted_at) : ""} status={latestSlackStatus} />
       </section>
 
@@ -526,6 +707,94 @@ const heroStatusStyle = {
   flexWrap: "wrap",
   gap: 8,
   justifyContent: "flex-end",
+};
+
+const controlPanelStyle = {
+  background: "rgba(13, 17, 23, 0.84)",
+  border: "1px solid rgba(125, 211, 252, 0.2)",
+  borderRadius: 8,
+  display: "grid",
+  gap: 14,
+  padding: 16,
+};
+
+const controlHeaderStyle = {
+  alignItems: "center",
+  display: "flex",
+  gap: 12,
+  justifyContent: "space-between",
+};
+
+const controlTitleStyle = {
+  color: "#f0f9ff",
+  fontSize: "1rem",
+  lineHeight: 1.2,
+  margin: 0,
+};
+
+const primaryActionStyle = {
+  background: "#38bdf8",
+  border: "1px solid rgba(186, 230, 253, 0.6)",
+  borderRadius: 8,
+  color: "#06131f",
+  cursor: "pointer",
+  fontSize: "0.84rem",
+  fontWeight: 900,
+  minHeight: 38,
+  padding: "9px 12px",
+  whiteSpace: "nowrap",
+};
+
+const controlGridStyle = {
+  display: "grid",
+  gap: 10,
+  gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+};
+
+const controlFieldStyle = {
+  color: "#8b949e",
+  display: "grid",
+  fontSize: "0.72rem",
+  fontWeight: 800,
+  gap: 5,
+  textTransform: "uppercase",
+};
+
+const toggleFieldStyle = {
+  alignItems: "center",
+  background: "rgba(2, 6, 23, 0.38)",
+  border: "1px solid rgba(148, 163, 184, 0.16)",
+  borderRadius: 8,
+  color: "#e6edf3",
+  display: "flex",
+  fontSize: "0.84rem",
+  fontWeight: 800,
+  gap: 8,
+  minHeight: 39,
+  padding: "8px 10px",
+};
+
+const controlBadgeRowStyle = {
+  alignItems: "center",
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 8,
+};
+
+const controlHintStyle = {
+  color: "#8b949e",
+  fontSize: "0.78rem",
+  fontWeight: 700,
+};
+
+const controlMessageStyle = {
+  background: "rgba(14, 165, 233, 0.1)",
+  border: "1px solid rgba(125, 211, 252, 0.22)",
+  borderRadius: 8,
+  color: "#bae6fd",
+  fontSize: "0.82rem",
+  fontWeight: 700,
+  padding: "9px 10px",
 };
 
 const aiMarkStyle = {

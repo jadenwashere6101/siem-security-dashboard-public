@@ -1176,6 +1176,22 @@ CREATE TABLE IF NOT EXISTS ai_action_idempotency (
 CREATE INDEX IF NOT EXISTS idx_ai_action_idempotency_action_type
     ON ai_action_idempotency (action_type);
 
+CREATE TABLE IF NOT EXISTS soc_briefing_controls (
+    id INTEGER PRIMARY KEY DEFAULT 1,
+    mode TEXT NOT NULL DEFAULT 'manual_only'
+        CHECK (mode IN ('manual_only', 'scheduled_autonomous')),
+    schedules_paused BOOLEAN NOT NULL DEFAULT TRUE,
+    pause_reason TEXT,
+    updated_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (id = 1)
+);
+
+INSERT INTO soc_briefing_controls (id, mode, schedules_paused, pause_reason)
+VALUES (1, 'manual_only', TRUE, 'manual-first default')
+ON CONFLICT (id) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS soc_briefing_schedules (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
@@ -1257,8 +1273,13 @@ CREATE TABLE IF NOT EXISTS soc_briefing_jobs (
     completed_at TIMESTAMPTZ,
     failure_code TEXT,
     failure_message TEXT,
+    trigger_type TEXT NOT NULL DEFAULT 'scheduled'
+        CHECK (trigger_type IN ('scheduled', 'manual')),
+    requested_by TEXT,
+    request_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (jsonb_typeof(request_metadata) = 'object'),
     CHECK (lease_owner IS NULL OR length(trim(lease_owner)) > 0),
     CHECK (length(trim(service_actor)) > 0)
 );
@@ -1272,6 +1293,9 @@ CREATE INDEX IF NOT EXISTS idx_soc_briefing_jobs_lease_expires
 
 CREATE INDEX IF NOT EXISTS idx_soc_briefing_jobs_schedule_status
     ON soc_briefing_jobs (schedule_id, status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_soc_briefing_jobs_trigger_status
+    ON soc_briefing_jobs (trigger_type, status, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS soc_briefing_runs (
     id SERIAL PRIMARY KEY,

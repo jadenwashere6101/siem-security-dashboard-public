@@ -53,6 +53,13 @@ STEP_STATUS_INTERRUPTED = "interrupted"
 DEFAULT_MAX_CATCH_UP_WINDOWS = 3
 DEFAULT_MAX_LOOKBACK_HOURS = 24
 DEFAULT_LEASE_DURATION_SECONDS = 120
+BRIEFING_MODE_MANUAL_ONLY = "manual_only"
+BRIEFING_MODE_SCHEDULED_AUTONOMOUS = "scheduled_autonomous"
+CONTROL_ROW_ID = 1
+MANUAL_SCHEDULE_NAME = "Manual Anakin briefing"
+TRIGGER_TYPE_SCHEDULED = "scheduled"
+TRIGGER_TYPE_MANUAL = "manual"
+ACTIVE_JOB_STATUSES = (JOB_STATUS_PENDING, JOB_STATUS_RUNNING)
 
 MUTATION_ACTIONS = frozenset(
     {
@@ -187,6 +194,68 @@ def create_schedule(
     return row
 
 
+def get_or_create_controls(conn) -> dict[str, Any]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO soc_briefing_controls (id, mode, schedules_paused, pause_reason)
+            VALUES (%s, %s, TRUE, 'manual-first default')
+            ON CONFLICT (id) DO NOTHING
+            """,
+            (CONTROL_ROW_ID, BRIEFING_MODE_MANUAL_ONLY),
+        )
+        cur.execute("SELECT * FROM soc_briefing_controls WHERE id = %s", (CONTROL_ROW_ID,))
+        row = _fetchone_dict(cur)
+    if row is None:
+        raise SocBriefingPersistenceError("failed to read SOC briefing controls")
+    return row
+
+
+def update_controls(
+    conn,
+    *,
+    mode: str | None = None,
+    schedules_paused: bool | None = None,
+    pause_reason: str | None = None,
+    updated_by: str | None = None,
+) -> dict[str, Any]:
+    current = get_or_create_controls(conn)
+    next_mode = (mode or current["mode"] or BRIEFING_MODE_MANUAL_ONLY).strip()
+    if next_mode not in {BRIEFING_MODE_MANUAL_ONLY, BRIEFING_MODE_SCHEDULED_AUTONOMOUS}:
+        raise ValueError("invalid briefing mode")
+    next_paused = bool(current["schedules_paused"]) if schedules_paused is None else bool(schedules_paused)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE soc_briefing_controls
+            SET mode = %s,
+                schedules_paused = %s,
+                pause_reason = %s,
+                updated_by = %s,
+                updated_at = %s
+            WHERE id = %s
+            RETURNING *
+            """,
+            (
+                next_mode,
+                next_paused,
+                (pause_reason or "").strip()[:500] or None,
+                (updated_by or "").strip()[:255] or None,
+                utc_now(),
+                CONTROL_ROW_ID,
+            ),
+        )
+        row = _fetchone_dict(cur)
+    if row is None:
+        raise SocBriefingPersistenceError("failed to update SOC briefing controls")
+    return row
+
+
+def autonomous_scheduling_enabled(conn) -> bool:
+    controls = get_or_create_controls(conn)
+    return controls["mode"] == BRIEFING_MODE_SCHEDULED_AUTONOMOUS and not bool(controls["schedules_paused"])
+
+
 def list_due_schedules(conn, *, now: datetime | None = None, limit: int = 50) -> list[dict[str, Any]]:
     current = as_utc(now) or utc_now()
     with conn.cursor() as cur:
@@ -203,6 +272,98 @@ def list_due_schedules(conn, *, now: datetime | None = None, limit: int = 50) ->
             (current, max(1, min(int(limit), 200))),
         )
         return _fetchall_dicts(cur)
+
+
+def ensure_manual_schedule(conn, *, created_by: str | None = None) -> dict[str, Any]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT *
+            FROM soc_briefing_schedules
+            WHERE name = %s AND enabled = FALSE
+            ORDER BY id ASC
+            LIMIT 1
+            """,
+            (MANUAL_SCHEDULE_NAME,),
+        )
+        existing = _fetchone_dict(cur)
+        if existing is not None:
+            return existing
+        cur.execute(
+            """
+            INSERT INTO soc_briefing_schedules (
+                name, timezone, cadence_minutes, enabled, catch_up_enabled,
+                max_catch_up_windows, max_lookback_hours, coalesce_missed_windows,
+                next_due_at, created_by, updated_at
+            )
+            VALUES (%s, 'UTC', 1440, FALSE, FALSE, 1, 24, TRUE, NULL, %s, %s)
+            RETURNING *
+            """,
+            (MANUAL_SCHEDULE_NAME, created_by, utc_now()),
+        )
+        row = _fetchone_dict(cur)
+    if row is None:
+        raise SocBriefingPersistenceError("failed to create manual SOC briefing schedule")
+    return row
+
+
+def get_active_manual_job(conn) -> dict[str, Any] | None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT j.*, w.window_start, w.window_end, s.name AS schedule_name
+            FROM soc_briefing_jobs j
+            JOIN soc_briefing_schedule_windows w ON w.id = j.window_id
+            JOIN soc_briefing_schedules s ON s.id = j.schedule_id
+            WHERE j.trigger_type = %s
+              AND j.status IN ('pending', 'running')
+            ORDER BY j.created_at ASC, j.id ASC
+            LIMIT 1
+            """,
+            (TRIGGER_TYPE_MANUAL,),
+        )
+        return _fetchone_dict(cur)
+
+
+def create_manual_briefing_job(
+    conn,
+    *,
+    requested_by: str | None = None,
+    now: datetime | None = None,
+    window_minutes: int = 60,
+) -> tuple[dict[str, Any], bool]:
+    existing = get_active_manual_job(conn)
+    if existing is not None:
+        return existing, False
+
+    current = as_utc(now) or utc_now()
+    minutes = max(5, min(int(window_minutes or 60), 24 * 60))
+    schedule = ensure_manual_schedule(conn, created_by=requested_by)
+    window, _window_created = create_or_get_window(
+        conn,
+        schedule_id=int(schedule["id"]),
+        window_start=current - timedelta(minutes=minutes),
+        window_end=current,
+        status=WINDOW_STATUS_QUEUED,
+        coalesced=False,
+    )
+    job, job_created = create_or_get_job(
+        conn,
+        schedule_id=int(schedule["id"]),
+        window_id=int(window["id"]),
+        max_attempts=1,
+        trigger_type=TRIGGER_TYPE_MANUAL,
+        requested_by=requested_by,
+        request_metadata={
+            "trigger_type": TRIGGER_TYPE_MANUAL,
+            "requested_by": requested_by,
+            "window_minutes": minutes,
+            "read_only": True,
+            "writes_performed": False,
+        },
+        priority=25,
+    )
+    return job, job_created
 
 
 def validate_schedule(schedule: dict[str, Any]) -> None:
@@ -391,19 +552,44 @@ def _create_skipped_window(
     )
 
 
-def create_or_get_job(conn, *, schedule_id: int, window_id: int, max_attempts: int = 3) -> tuple[dict[str, Any], bool]:
+def create_or_get_job(
+    conn,
+    *,
+    schedule_id: int,
+    window_id: int,
+    max_attempts: int = 3,
+    trigger_type: str = TRIGGER_TYPE_SCHEDULED,
+    requested_by: str | None = None,
+    request_metadata: dict[str, Any] | None = None,
+    priority: int = 100,
+) -> tuple[dict[str, Any], bool]:
+    normalized_trigger = (trigger_type or TRIGGER_TYPE_SCHEDULED).strip()
+    if normalized_trigger not in {TRIGGER_TYPE_SCHEDULED, TRIGGER_TYPE_MANUAL}:
+        raise ValueError("invalid SOC briefing job trigger_type")
     key = idempotency_key("soc-briefing-job", window_id)
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO soc_briefing_jobs (
-                schedule_id, window_id, idempotency_key, max_attempts, service_actor, updated_at
+                schedule_id, window_id, idempotency_key, max_attempts, service_actor,
+                priority, trigger_type, requested_by, request_metadata, updated_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (window_id) DO NOTHING
             RETURNING *
             """,
-            (schedule_id, window_id, key, max_attempts, SERVICE_ACTOR, utc_now()),
+            (
+                schedule_id,
+                window_id,
+                key,
+                max_attempts,
+                SERVICE_ACTOR,
+                max(1, min(int(priority), 1000)),
+                normalized_trigger,
+                (requested_by or "").strip()[:255] or None,
+                Json(request_metadata or {}),
+                utc_now(),
+            ),
         )
         row = _fetchone_dict(cur)
         if row is not None:
@@ -413,6 +599,98 @@ def create_or_get_job(conn, *, schedule_id: int, window_id: int, max_attempts: i
     if existing is None:
         raise SocBriefingPersistenceError("failed to fetch existing SOC briefing job after conflict")
     return existing, False
+
+
+def get_briefing_control_status(conn, *, now: datetime | None = None) -> dict[str, Any]:
+    controls = get_or_create_controls(conn)
+    current = as_utc(now) or utc_now()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, name, next_due_at, catch_up_enabled, max_catch_up_windows,
+                   max_lookback_hours, coalesce_missed_windows, status, failure_code
+            FROM soc_briefing_schedules
+            WHERE enabled = TRUE
+              AND next_due_at IS NOT NULL
+            ORDER BY next_due_at ASC, id ASC
+            LIMIT 1
+            """
+        )
+        next_schedule = _fetchone_dict(cur)
+        cur.execute(
+            """
+            SELECT b.id AS briefing_id,
+                   b.generated_at,
+                   b.created_at,
+                   b.status AS briefing_status,
+                   b.content_status,
+                   r.id AS run_id,
+                   r.status AS run_status,
+                   r.provider_status,
+                   r.ai_gateway_status,
+                   r.runtime_ms,
+                   r.error_code,
+                   j.trigger_type
+            FROM soc_briefings b
+            JOIN soc_briefing_runs r ON r.id = b.run_id
+            JOIN soc_briefing_jobs j ON j.id = r.job_id
+            WHERE b.status IN ('success', 'partial')
+              AND b.content_status IN ('ready', 'blocked', 'failed')
+            ORDER BY COALESCE(b.generated_at, b.created_at) DESC, b.id DESC
+            LIMIT 1
+            """
+        )
+        last_run = _fetchone_dict(cur)
+        cur.execute(
+            """
+            SELECT trigger_type, status, COUNT(*)
+            FROM soc_briefing_jobs
+            WHERE status IN ('pending', 'running')
+            GROUP BY trigger_type, status
+            """
+        )
+        counts = _fetchall_dicts(cur)
+
+    active_manual = get_active_manual_job(conn)
+
+    active_counts: dict[str, dict[str, int]] = {
+        TRIGGER_TYPE_MANUAL: {JOB_STATUS_PENDING: 0, JOB_STATUS_RUNNING: 0},
+        TRIGGER_TYPE_SCHEDULED: {JOB_STATUS_PENDING: 0, JOB_STATUS_RUNNING: 0},
+    }
+    for row in counts:
+        trigger = row.get("trigger_type") or TRIGGER_TYPE_SCHEDULED
+        status = row.get("status") or JOB_STATUS_PENDING
+        if trigger not in active_counts:
+            active_counts[trigger] = {}
+        active_counts[trigger][status] = int(row.get("count") or 0)
+
+    catch_up = None
+    if next_schedule is not None:
+        catch_up = {
+            "enabled": bool(next_schedule.get("catch_up_enabled")),
+            "max_windows": int(next_schedule.get("max_catch_up_windows") or 0),
+            "max_lookback_hours": int(next_schedule.get("max_lookback_hours") or 0),
+            "coalesce_missed_windows": bool(next_schedule.get("coalesce_missed_windows")),
+            "status": "paused"
+            if bool(controls["schedules_paused"])
+            else ("manual_only" if controls["mode"] == BRIEFING_MODE_MANUAL_ONLY else "active"),
+        }
+
+    return {
+        "mode": controls["mode"],
+        "schedules_paused": bool(controls["schedules_paused"]),
+        "pause_reason": controls.get("pause_reason"),
+        "updated_at": controls.get("updated_at"),
+        "updated_by": controls.get("updated_by"),
+        "autonomous_scheduling_enabled": controls["mode"] == BRIEFING_MODE_SCHEDULED_AUTONOMOUS
+        and not bool(controls["schedules_paused"]),
+        "now": current,
+        "next_scheduled_run": next_schedule,
+        "last_successful_run": last_run,
+        "catch_up": catch_up,
+        "active_jobs": active_counts,
+        "active_manual_job": active_manual,
+    }
 
 
 def update_schedule_due_state(
@@ -609,6 +887,14 @@ def recover_stale_jobs(conn, *, now: datetime | None = None, limit: int = 50) ->
 def create_run(conn, job: dict[str, Any], *, now: datetime | None = None, budget_policy: dict[str, Any] | None = None) -> dict[str, Any]:
     current = as_utc(now) or utc_now()
     run_key = idempotency_key("soc-briefing-run", job["id"], job["attempt_count"], current.isoformat())
+    metadata = {
+        "read_only": True,
+        "writes_performed": False,
+        "trigger_type": job.get("trigger_type") or TRIGGER_TYPE_SCHEDULED,
+        "requested_by": job.get("requested_by"),
+    }
+    if isinstance(job.get("request_metadata"), dict):
+        metadata.update(job["request_metadata"])
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -627,7 +913,7 @@ def create_run(conn, job: dict[str, Any], *, now: datetime | None = None, budget
                 SERVICE_ACTOR,
                 current,
                 Json(budget_policy or {}),
-                Json({"read_only": True, "writes_performed": False}),
+                Json(metadata),
                 current,
             ),
         )
