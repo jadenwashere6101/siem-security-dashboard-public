@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import App from './App';
 import { loadCurrentSession } from './services/authService';
 import { loadAlertDashboardSummary, loadAlertRuleOptions, loadAlerts } from './services/alertsService';
-import { requestAiExplanation } from './services/aiService';
+import { getAiWorkflowRequest, queueAiWorkflowRequest, requestAiExplanation, requestAiWorkflow } from './services/aiService';
 import {
   createEvidenceReference,
   createInvestigation,
@@ -255,6 +255,7 @@ jest.mock('./components/DetectionSimulatorPanel', () => () => (
 beforeEach(() => {
   jest.clearAllMocks();
   window.localStorage.clear();
+  window.sessionStorage.clear();
   Object.defineProperty(window, 'innerWidth', {
     configurable: true,
     writable: true,
@@ -768,15 +769,15 @@ test('SOC entity AI requests do not include full visible dashboard context', asy
     offset: 0,
     sort: 'newest',
   });
-  requestAiExplanation.mockImplementationOnce(() => new Promise(() => {}));
+  queueAiWorkflowRequest.mockImplementationOnce(() => new Promise(() => {}));
 
   render(<App />);
 
   await userEvent.click(await screen.findByRole('button', { name: /soc command center/i }));
   await userEvent.click(await screen.findByRole('button', { name: /soc explain recon/i }));
 
-  await waitFor(() => expect(requestAiExplanation).toHaveBeenCalled());
-  const [payload] = requestAiExplanation.mock.calls[0];
+  await waitFor(() => expect(queueAiWorkflowRequest).toHaveBeenCalled());
+  const [payload] = queueAiWorkflowRequest.mock.calls[0];
   expect(payload.context_type).toBe('recon_activity');
   expect(payload.context.activity_id).toBe(90);
   expect(payload.context.command).toMatchObject({ id: 'contextual.recon_activity.explain_recon_activity', read_only: true });
@@ -784,6 +785,118 @@ test('SOC entity AI requests do not include full visible dashboard context', asy
   expect(payload.context.timeline).toBeUndefined();
   expect(payload.context.map_markers).toBeUndefined();
   expect(payload.context.recent_alerts).toBeUndefined();
+});
+
+test('freeform Ask Anakin auto route queues and polls backend-classified long workflows', async () => {
+  loadCurrentSession.mockResolvedValue({
+    authenticated: true,
+    user: 'analyst1',
+    role: 'analyst',
+  });
+  queueAiWorkflowRequest.mockResolvedValueOnce({
+    status: 'queued',
+    workflow: 'deep_investigate',
+    request_id: 'aiwf_auto_deep',
+    classification: {
+      requested_workflow: 'auto',
+      classified_workflow: 'deep_investigate',
+      confidence: 'high',
+    },
+    lifecycle: { stages: [{ stage: 'queued', status: 'running' }] },
+    metadata: { async: true },
+  });
+  getAiWorkflowRequest.mockResolvedValueOnce({
+    status: 'completed',
+    workflow: 'deep_investigate',
+    request_id: 'aiwf_auto_deep',
+    result: { status: 'success', answer: 'Correlated evidence is ready.', metadata: {}, context: {} },
+    metadata: { async: true },
+    lifecycle: { stages: [{ stage: 'complete', status: 'completed' }] },
+  });
+
+  render(<App />);
+
+  await userEvent.click(await screen.findByRole('button', { name: /open general anakin siem chat/i }));
+  await userEvent.type(screen.getByLabelText(/^ask anakin$/i), 'Deep investigate this alert and evidence gaps');
+  await userEvent.click(screen.getByRole('button', { name: /submit ask anakin question/i }));
+
+  await waitFor(() => expect(queueAiWorkflowRequest).toHaveBeenCalled());
+  expect(queueAiWorkflowRequest.mock.calls[0][0]).toMatchObject({
+    workflow: 'auto',
+    prompt: 'Deep investigate this alert and evidence gaps',
+  });
+  expect(requestAiWorkflow).not.toHaveBeenCalled();
+  await waitFor(() => expect(getAiWorkflowRequest).toHaveBeenCalledWith('aiwf_auto_deep', expect.any(Object)));
+  expect(await screen.findByText(/correlated evidence is ready/i)).toBeInTheDocument();
+});
+
+test('freeform Ask Anakin auto route renders immediate quick result from queue endpoint', async () => {
+  loadCurrentSession.mockResolvedValue({
+    authenticated: true,
+    user: 'analyst1',
+    role: 'analyst',
+  });
+  queueAiWorkflowRequest.mockResolvedValueOnce({
+    status: 'success',
+    workflow: 'quick_explain',
+    classification: {
+      requested_workflow: 'auto',
+      classified_workflow: 'quick_explain',
+      confidence: 'medium',
+    },
+    result: { status: 'success', answer: 'Short answer.', metadata: {}, context: {} },
+    metadata: { async: false, immediate: true },
+  });
+
+  render(<App />);
+
+  await userEvent.click(await screen.findByRole('button', { name: /open general anakin siem chat/i }));
+  await userEvent.type(screen.getByLabelText(/^ask anakin$/i), 'Explain this alert briefly');
+  await userEvent.click(screen.getByRole('button', { name: /submit ask anakin question/i }));
+
+  await waitFor(() => expect(queueAiWorkflowRequest).toHaveBeenCalled());
+  expect(getAiWorkflowRequest).not.toHaveBeenCalled();
+  expect(requestAiWorkflow).not.toHaveBeenCalled();
+  expect(await screen.findByText(/short answer/i)).toBeInTheDocument();
+});
+
+test('recovers stored auto-routed async request after remount and polls terminal result', async () => {
+  loadCurrentSession.mockResolvedValue({
+    authenticated: true,
+    user: 'analyst1',
+    role: 'analyst',
+  });
+  window.sessionStorage.setItem(
+    'anakin.activeWorkflowRequests.v1',
+    JSON.stringify({
+      dashboard_auto: {
+        requestId: 'aiwf_auto_saved',
+        title: 'Ask Anakin',
+        workflow: 'auto',
+        request: {
+          workflow: 'auto',
+          prompt: 'Should I escalate this alert?',
+          context_type: 'dashboard',
+          context: { active_section: 'dashboard' },
+        },
+        savedAt: '2026-08-01T12:00:00.000Z',
+      },
+    })
+  );
+  getAiWorkflowRequest.mockResolvedValueOnce({
+    status: 'completed',
+    workflow: 'decision_support',
+    request_id: 'aiwf_auto_saved',
+    result: { status: 'success', answer: 'Escalate based on confirmed follow-up.', metadata: {}, context: {} },
+    metadata: { async: true },
+    lifecycle: { stages: [{ stage: 'complete', status: 'completed' }] },
+  });
+
+  render(<App />);
+
+  await waitFor(() => expect(getAiWorkflowRequest).toHaveBeenCalledWith('aiwf_auto_saved', expect.any(Object)));
+  expect(queueAiWorkflowRequest).not.toHaveBeenCalled();
+  expect(await screen.findByText(/escalate based on confirmed follow-up/i)).toBeInTheDocument();
 });
 
 test('renders SOAR Metrics nav for super_admin and passes role', async () => {

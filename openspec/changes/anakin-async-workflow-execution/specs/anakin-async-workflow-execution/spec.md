@@ -25,6 +25,27 @@ Deep Investigate, Decision Support, and Generate Artifact SHALL be executable th
 - **THEN** the backend SHALL return the existing active request
 - **AND** SHALL NOT create duplicate long-running execution.
 
+#### Scenario: Auto-routed long workflow is queued
+
+- **GIVEN** an authenticated analyst submits `workflow="auto"` to `POST /ai/workflows/requests`
+- **WHEN** backend classification chooses `deep_investigate`, `decision_support`, or `generate_artifact`
+- **THEN** the backend SHALL create a durable async workflow request
+- **AND** return `202` with request identifier and auditable classification metadata.
+
+#### Scenario: Auto-routed Quick Explain returns immediately
+
+- **GIVEN** an authenticated analyst submits `workflow="auto"` to `POST /ai/workflows/requests`
+- **WHEN** backend classification chooses `quick_explain`
+- **THEN** the backend SHALL return a valid immediate Quick Explain envelope
+- **AND** SHALL NOT create a durable async workflow request.
+
+#### Scenario: Low-confidence auto classification does not enqueue
+
+- **WHEN** auto classification returns a chooser-required state
+- **THEN** the backend SHALL return the chooser immediately
+- **AND** SHALL NOT create a durable async workflow request
+- **AND** SHALL NOT silently invoke SOC Briefing, Repo Assistant, preview, confirm, or mutation paths.
+
 ### Requirement: Polling lifecycle contract
 
 The async request status API SHALL expose truthful lifecycle state, stage, metadata, result, timestamps, and failure details.
@@ -96,6 +117,12 @@ The consolidated frontend SHALL queue long-running workflows, poll status, and r
 
 - **WHEN** the component remounts or page refreshes while a matching request is active
 - **THEN** the frontend SHALL safely recover and continue polling the existing request when the context key still matches.
+
+#### Scenario: Freeform auto uses queue-capable route
+
+- **WHEN** the analyst submits a natural-language Ask Anakin request with `workflow="auto"`
+- **THEN** the frontend SHALL call `POST /ai/workflows/requests`
+- **AND** SHALL handle immediate Quick Explain, chooser-required, and queued async responses.
 
 #### Scenario: Specific errors are visible
 

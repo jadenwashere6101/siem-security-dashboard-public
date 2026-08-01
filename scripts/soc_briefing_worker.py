@@ -13,6 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from core.ai.config import load_ai_gateway_config
 from core.ai.soc_briefing_worker import (
     DEFAULT_BATCH_SIZE,
     DEFAULT_MATERIALIZE_LIMIT,
@@ -76,6 +77,7 @@ def main(argv=None) -> int:
     )
     shutdown = SocBriefingWorkerShutdown()
     install_shutdown_signal_handlers(shutdown)
+    gateway_config = load_ai_gateway_config()
     try:
         stats = run_soc_briefing_worker(
             config=SocBriefingWorkerConfig(
@@ -86,6 +88,7 @@ def main(argv=None) -> int:
             ),
             shutdown=shutdown,
             connect=_connect,
+            gateway_config=gateway_config,
         )
     except Exception as error:
         if args.json:

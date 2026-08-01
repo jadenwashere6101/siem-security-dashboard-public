@@ -68,6 +68,7 @@ FRONTEND_SOURCE_ROOT = REPO_ROOT / "frontend" / "src"
 ENTITY_AI_CONTEXT_TYPES = {"alert", "source_ip", "incident", "recon_activity", "response_registry", "detection"}
 ASYNC_WORKFLOW_REQUEST_ROUTE = "POST /ai/workflows/requests"
 ASYNC_WORKFLOW_REQUESTS = {
+    WORKFLOW_AUTO,
     WORKFLOW_DEEP_INVESTIGATE,
     WORKFLOW_DECISION_SUPPORT,
     WORKFLOW_GENERATE_ARTIFACT,
@@ -718,8 +719,8 @@ def build_production_safe_live_sweep_matrix() -> tuple[dict[str, Any], ...]:
         {"key": "frontend.alert.deep_investigate", "route": ASYNC_WORKFLOW_REQUEST_ROUTE, "workflow": WORKFLOW_DEEP_INVESTIGATE, "mutation": False},
         {"key": "frontend.alert.decision_support", "route": ASYNC_WORKFLOW_REQUEST_ROUTE, "workflow": WORKFLOW_DECISION_SUPPORT, "mutation": False},
         {"key": "frontend.alert.artifact.checklist", "route": ASYNC_WORKFLOW_REQUEST_ROUTE, "workflow": WORKFLOW_GENERATE_ARTIFACT, "mutation": False, "non_persistent": True},
-        {"key": "frontend.floating_anakin.ask", "route": "POST /ai/workflows", "workflow": WORKFLOW_AUTO, "mutation": False},
-        {"key": "frontend.floating_anakin.low_confidence_chooser", "route": "POST /ai/workflows", "workflow": WORKFLOW_AUTO, "expected_status": "chooser_required", "mutation": False},
+        {"key": "frontend.floating_anakin.ask", "route": ASYNC_WORKFLOW_REQUEST_ROUTE, "workflow": WORKFLOW_AUTO, "mutation": False},
+        {"key": "frontend.floating_anakin.low_confidence_chooser", "route": ASYNC_WORKFLOW_REQUEST_ROUTE, "workflow": WORKFLOW_AUTO, "expected_status": "chooser_required", "mutation": False},
         {"key": "frontend.repo_architecture.chat.factual", "route": "POST /ai/repo/chat", "workflow": WORKFLOW_REPO_ASSISTANT, "mutation": False},
         {"key": "frontend.repo_architecture.chat.evaluative", "route": "POST /ai/repo/chat", "workflow": WORKFLOW_REPO_ASSISTANT, "mutation": False},
         {"key": "worker.soc_briefing.manual_run_now", "route": "GET /soc-briefings/control", "workflow": WORKFLOW_SOC_BRIEFING, "mutation": False, "status_only_default": True},

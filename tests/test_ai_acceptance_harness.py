@@ -100,7 +100,7 @@ def test_frontend_realistic_contracts_are_discovered_from_component_sources():
 def test_floating_anakin_builds_auto_workflow_payload_contract():
     payload, route = build_frontend_realistic_request(
         {
-            "route": "POST /ai/workflows",
+            "route": "POST /ai/workflows/requests",
             "workflow": "auto",
             "question": "What should I inspect first?",
             "contextType": "general",
@@ -108,7 +108,7 @@ def test_floating_anakin_builds_auto_workflow_payload_contract():
         }
     )
 
-    assert route == "POST /ai/workflows"
+    assert route == "POST /ai/workflows/requests"
     assert payload["workflow"] == "auto"
     assert payload["prompt"] == "What should I inspect first?"
     assert payload["context_type"] == "general"
@@ -222,8 +222,8 @@ def test_live_representative_plan_uses_unique_safe_backend_paths():
     assert ("POST /ai/workflows/requests", "guided_analysis", "frontend.alert.deep_investigate") in matrix
     assert ("POST /ai/workflows/requests", "guided_analysis", "frontend.alert.decision_support") in matrix
     assert ("POST /ai/workflows/requests", "guided_analysis", "frontend.alert.artifact.checklist") in matrix
-    assert ("POST /ai/workflows", "fast_triage", "frontend.floating_anakin.ask") in matrix
-    assert ("POST /ai/workflows", "fast_triage", "frontend.floating_anakin.low_confidence_chooser") in matrix
+    assert ("POST /ai/workflows/requests", "fast_triage", "frontend.floating_anakin.ask") in matrix
+    assert ("POST /ai/workflows/requests", "fast_triage", "frontend.floating_anakin.low_confidence_chooser") in matrix
     assert ("POST /ai/repo/chat", "developer_assistant", "frontend.repo_architecture.chat.factual") in matrix
     assert ("POST /ai/repo/chat", "developer_assistant", "frontend.repo_architecture.chat.evaluative") in matrix
     assert ("POST /ai/actions/preview", "guided_analysis", "frontend.ai_action.preview.add_incident_note") in matrix
@@ -299,8 +299,8 @@ def test_live_backend_sweep_runs_status_checks_and_representative_plan_only(monk
     assert sweep["representative_calls_planned"] == len(build_production_safe_live_sweep_matrix())
     assert sweep["actions_invoked"] == len(build_production_safe_live_sweep_matrix())
     assert status_paths == ["/ai/status", "/ai/repo/status"]
-    assert representative_paths.count("POST /ai/workflows") == 3
-    assert representative_paths.count("POST /ai/workflows/requests") == 3
+    assert representative_paths.count("POST /ai/workflows") == 1
+    assert representative_paths.count("POST /ai/workflows/requests") == 5
     assert representative_paths.count("POST /ai/repo/chat") == 2
     assert "POST /ai/actions/preview" in representative_paths
     assert "soc_briefing_worker" in representative_paths

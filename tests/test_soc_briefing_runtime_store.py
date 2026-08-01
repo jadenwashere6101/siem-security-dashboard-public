@@ -5,6 +5,7 @@ import pytest
 from psycopg2.extras import Json
 
 from core.ai.config import AI_MODE_DISABLED, AI_MODE_LOCAL_ONLY, AiGatewayConfig
+from core.ai.models import AI_STATUS_SUCCESS, AiGatewayResponse, AiRequestMetadata
 from core.ai.soc_briefing_runtime_store import (
     JOB_STATUS_BLOCKED,
     JOB_STATUS_FAILED,
@@ -76,6 +77,22 @@ def _enable_autonomous(conn):
         updated_by="test",
     )
     conn.commit()
+
+
+class FakeSuccessGateway:
+    def generate(self, _request):
+        return AiGatewayResponse(
+            status=AI_STATUS_SUCCESS,
+            content='{"summary":"Local SOC briefing generated.","sections":{"alerts_reviewed":[],"dismissed_low_priority_findings":[],"escalations":[],"critical_findings":[],"evidence":[],"recommendations":[]}}',
+            metadata=AiRequestMetadata(
+                provider="ollama",
+                model="llama3.1:8b",
+                mode=AI_MODE_LOCAL_ONLY,
+                status=AI_STATUS_SUCCESS,
+                local_request=True,
+                paid_request=False,
+            ),
+        )
 
 
 def test_duplicate_window_and_job_prevention(postgres_db):
@@ -394,6 +411,39 @@ def test_worker_persists_local_provider_unavailable_without_model_call(postgres_
     with conn.cursor() as cur:
         cur.execute("SELECT status, provider_status, error_code FROM soc_briefing_runs")
         assert cur.fetchone() == ("blocked", "local_provider_not_configured", "local_provider_unavailable")
+
+
+def test_worker_uses_configured_local_gateway_without_disabled_fallback(postgres_db):
+    conn, _cur = postgres_db
+    _due_schedule(conn)
+    _enable_autonomous(conn)
+    config = AiGatewayConfig(
+        mode=AI_MODE_LOCAL_ONLY,
+        configured_mode=AI_MODE_LOCAL_ONLY,
+        local_provider="ollama",
+        local_base_url="http://127.0.0.1:11434",
+        local_model="llama3.1:8b",
+        paid_fallback_enabled=False,
+    )
+
+    with patch("core.ai.soc_briefing_investigation_engine.AiGateway", return_value=FakeSuccessGateway()):
+        stats = run_soc_briefing_worker(
+            config=SocBriefingWorkerConfig(batch_size=1, materialize_limit=5, max_runtime_seconds=10),
+            worker_id="soc-worker-local-ready-test",
+            connect=_connect_same(conn),
+            now_fn=lambda: datetime(2026, 7, 27, 8, 1, tzinfo=timezone.utc),
+            gateway_config=config,
+        )
+
+    assert stats["processed"] == 1
+    assert stats["success"] == 1
+    with conn.cursor() as cur:
+        cur.execute("SELECT status, ai_gateway_status, provider_status, error_code FROM soc_briefing_runs")
+        assert cur.fetchone() == ("success", "success", "ollama", None)
+        cur.execute("SELECT sanitized_input FROM soc_briefing_run_steps WHERE step_type = 'ai_synthesis'")
+        persisted_input = cur.fetchone()[0]
+        assert "http://127.0.0.1:11434" not in str(persisted_input)
+        assert persisted_input["paid_request"] is False
 
 
 def test_worker_persistence_failure_aborts_without_silent_continue(postgres_db):

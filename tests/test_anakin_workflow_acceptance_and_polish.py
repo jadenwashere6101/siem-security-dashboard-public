@@ -151,7 +151,7 @@ def test_auto_routing_low_confidence_chooser_cannot_reach_restricted_workflows_o
 
     result = run_workflow(payload)
 
-    assert route == "POST /ai/workflows"
+    assert route == "POST /ai/workflows/requests"
     assert result.status_code == 200
     assert result.payload["status"] == "chooser_required"
     assert result.payload["classification"]["confidence"] == "low"

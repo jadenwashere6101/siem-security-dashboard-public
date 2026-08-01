@@ -38,3 +38,10 @@
 - [x] 6.5 Run `git diff --check`.
 - [x] 6.6 Run `openspec validate anakin-async-workflow-execution --strict`.
 - [x] 6.7 Capture `git status --short`.
+
+## 7. Deployment Correction: Auto Routing And Worker Install
+
+- [x] 7.1 Allow `POST /ai/workflows/requests` to classify `workflow="auto"` before choosing immediate Quick Explain, chooser state, or queued long workflow execution.
+- [x] 7.2 Route frontend freeform Ask Anakin auto requests through the queue-capable endpoint and handle immediate, chooser, and queued responses.
+- [x] 7.3 Add idempotent Anakin workflow worker systemd installer and wire it into `scripts/deploy_backend_vm.sh`.
+- [x] 7.4 Add backend, frontend, remount recovery, duplicate idempotency, restricted-workflow, and deployment-helper regression tests for the production defects.

@@ -120,7 +120,7 @@ const ENTITY_AI_CONTEXT_TYPES = new Set([
   "detection",
 ]);
 
-const ASYNC_ANAKIN_WORKFLOWS = new Set(["deep_investigate", "decision_support", "generate_artifact"]);
+const ASYNC_ANAKIN_WORKFLOWS = new Set(["auto", "deep_investigate", "decision_support", "generate_artifact"]);
 const ASYNC_ANAKIN_STORAGE_KEY = "anakin.activeWorkflowRequests.v1";
 const ASYNC_ANAKIN_TERMINAL_STATES = new Set([
   "completed",

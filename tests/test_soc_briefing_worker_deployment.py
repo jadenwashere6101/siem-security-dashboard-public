@@ -56,3 +56,23 @@ def test_backend_deploy_installs_soc_briefing_worker_units():
     deploy = (REPO_ROOT / "scripts/deploy_backend_vm.sh").read_text()
 
     assert "install_soc_briefing_worker_service.sh --enable --start" in deploy
+
+
+def test_anakin_workflow_worker_install_helper_is_timer_controlled():
+    helper = (REPO_ROOT / "scripts/install_anakin_workflow_worker_service.sh").read_text()
+
+    assert "anakin-workflow-worker.service" in helper
+    assert "anakin-workflow-worker.timer" in helper
+    assert "systemctl stop \"$TIMER_NAME\"" in helper
+    assert "systemctl disable \"$TIMER_NAME\"" in helper
+    assert "systemctl stop \"$SERVICE_NAME\"" in helper
+    assert "deploy/systemd/${SERVICE_NAME}" in helper
+    assert 'systemctl restart "$TIMER_NAME"' in helper
+    assert 'systemctl is-active "$TIMER_NAME" --quiet' in helper
+    assert 'systemctl cat "$SERVICE_NAME" "$TIMER_NAME"' in helper
+
+
+def test_backend_deploy_installs_anakin_workflow_worker_units():
+    deploy = (REPO_ROOT / "scripts/deploy_backend_vm.sh").read_text()
+
+    assert "install_anakin_workflow_worker_service.sh --enable --start" in deploy

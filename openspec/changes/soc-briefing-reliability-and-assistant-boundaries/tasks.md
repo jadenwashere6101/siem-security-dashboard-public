@@ -40,3 +40,9 @@
 - [x] 6.7 Run `git diff --check`.
 - [x] 6.8 Run strict OpenSpec validation for both current changes.
 - [x] 6.9 Capture `git status --short`.
+
+## 7. Deployment Correction: SOC Briefing Gateway Config
+
+- [x] 7.1 Load authoritative environment AI gateway config in `scripts/soc_briefing_worker.py` and pass it explicitly into the worker.
+- [x] 7.2 Preserve disabled fail-closed behavior while preventing configured `local_only` mode from being treated as disabled.
+- [x] 7.3 Add regression tests for local-only config propagation, configured local provider synthesis, disabled fail-closed behavior, and sanitized config persistence/logging boundaries.

@@ -20,9 +20,12 @@ One idempotency key may have at most one active non-terminal request. Repeated q
 
 - Requires authenticated analyst or super-admin.
 - Accepts the existing canonical workflow request envelope.
-- Allows only `deep_investigate`, `decision_support`, and `generate_artifact`.
-- Rejects Quick Explain, SOC Briefing, Repo Assistant, preview/confirm, and mutation fields.
-- Validates classification and workflow safety synchronously.
+- Classifies `workflow="auto"` before choosing execution mode.
+- Queues `deep_investigate`, `decision_support`, and `generate_artifact`.
+- Returns an immediate non-queued Quick Explain result when `workflow="auto"` classifies to `quick_explain`.
+- Returns a chooser immediately for low-confidence auto classification without creating a job.
+- Rejects explicit Quick Explain, SOC Briefing, Repo Assistant, preview/confirm, and mutation fields.
+- Validates classification and workflow safety synchronously before creating durable work.
 - Persists the sanitized request envelope and returns quickly with request ID and initial lifecycle.
 
 `GET /ai/workflows/requests/<id>`
@@ -32,7 +35,7 @@ One idempotency key may have at most one active non-terminal request. Repeated q
 - Does not execute AI work.
 - Hides lease owner and secret-bearing request details.
 
-Existing `POST /ai/workflows` remains available for synchronous compatibility and Quick Explain. New consolidated frontend interactions use the queue API for the three long workflows.
+Existing `POST /ai/workflows` remains available for synchronous compatibility and explicit Quick Explain. New consolidated frontend interactions use the queue-capable API for `workflow="auto"` and for the three long workflows so backend-classified deep requests cannot sit behind nginx as long synchronous requests.
 
 ## Worker Execution
 
@@ -68,4 +71,4 @@ Decision Support remains recommendation-only. Generate Artifact remains preview/
 
 ## Deployment Handoff
 
-Later VM work must apply migration `0031`, install and enable the Anakin workflow worker unit/timer or equivalent approved systemd path, verify worker heartbeat/logs/status, and run the production acceptance policy through nginx `/siem/`.
+Later VM work must apply migration `0031`, install and enable the Anakin workflow worker unit/timer through `scripts/deploy_backend_vm.sh`, verify worker heartbeat/logs/status, and run the production acceptance policy through nginx `/siem/`.

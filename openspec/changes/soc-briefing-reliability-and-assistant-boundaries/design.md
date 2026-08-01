@@ -49,6 +49,12 @@ Manual Run Now remains a queue-only request. Gunicorn must not run briefing AI w
 
 Manual-only mode and paused schedules must not block explicit Run Now. Duplicate active manual jobs remain prevented.
 
+## SOC Briefing Gateway Configuration
+
+The SOC briefing worker runner must load the same authoritative AI gateway configuration path as the backend and pass that configuration explicitly into worker execution. Normal worker execution must not rely on a default `AiGatewayConfig()` because the dataclass default is intentionally disabled for fail-closed safety.
+
+Configured `local_only` mode must reach scheduled/manual briefing synthesis unchanged, including local provider/model/profile settings and paid fallback disabled. Genuinely disabled or invalid configurations still fail closed. Sanitized config reporting may expose boolean presence and model/profile metadata, but must not log or persist provider base URLs, credentials, or secrets.
+
 ## Repo Assistant Boundaries
 
 Repo Assistant remains for source-code, architecture, implementation, and test questions. A boundary classifier detects questions about live SIEM state: current alerts, incidents, source IP activity, firing detections, dashboard metrics, live SOC state, briefings, and investigation data.

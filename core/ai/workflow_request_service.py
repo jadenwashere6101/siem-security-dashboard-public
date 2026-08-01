@@ -3,11 +3,14 @@ from __future__ import annotations
 from typing import Any
 
 from core.ai.workflow_orchestrator import (
+    WORKFLOW_AUTO,
     WORKFLOW_DEEP_INVESTIGATE,
     WORKFLOW_DECISION_SUPPORT,
     WORKFLOW_GENERATE_ARTIFACT,
+    WORKFLOW_QUICK_EXPLAIN,
     WorkflowValidationError,
     classify_workflow,
+    run_workflow,
 )
 from core.ai.workflow_request_store import (
     ASYNC_WORKFLOWS,
@@ -50,6 +53,7 @@ def queue_workflow_request(payload: dict[str, Any], *, actor_username: str, acto
         raise WorkflowValidationError("JSON object body is required.")
     classification = classify_workflow(payload)
     workflow = classification.classified_workflow
+    requested_workflow = str(payload.get("workflow") or "").strip().lower()
     if classification.chooser_required:
         return (
             {
@@ -69,6 +73,18 @@ def queue_workflow_request(payload: dict[str, Any], *, actor_username: str, acto
             },
             200,
         )
+    if requested_workflow == WORKFLOW_AUTO and workflow == WORKFLOW_QUICK_EXPLAIN:
+        result = run_workflow(payload)
+        quick_payload = dict(result.payload)
+        quick_payload.setdefault("metadata", {})
+        if isinstance(quick_payload["metadata"], dict):
+            quick_payload["metadata"] = {
+                **quick_payload["metadata"],
+                "async": False,
+                "request_route": "POST /ai/workflows/requests",
+                "immediate": True,
+            }
+        return quick_payload, result.status_code
     if workflow not in ASYNC_WORKFLOWS:
         raise WorkflowValidationError(
             f"Workflow {workflow} is not available through async workflow requests.",

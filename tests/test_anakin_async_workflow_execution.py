@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from werkzeug.security import generate_password_hash
 
+from core.ai.workflow_orchestrator import WORKFLOW_DEEP_INVESTIGATE, WORKFLOW_QUICK_EXPLAIN
 from core.ai.workflow_request_service import queue_workflow_request
 from core.ai.workflow_request_store import (
     ASYNC_WORKFLOW_DECISION_SUPPORT,
@@ -89,6 +90,18 @@ def _artifact_payload(**overrides):
     return payload
 
 
+def _auto_payload(prompt: str, **overrides):
+    payload = {
+        "workflow": "auto",
+        "prompt": prompt,
+        "context_type": "alert",
+        "context": {"alert_id": 1001, "source_ip": "203.0.113.77"},
+        "client_request_id": f"auto-{abs(hash(prompt))}",
+    }
+    payload.update(overrides)
+    return payload
+
+
 def test_queue_workflow_request_is_durable_idempotent_and_does_not_run_in_request(postgres_db, monkeypatch):
     conn, _cur = postgres_db
     monkeypatch.setattr("core.ai.workflow_request_service.get_db_connection", lambda: NoCloseConnection(conn))
@@ -104,6 +117,120 @@ def test_queue_workflow_request_is_durable_idempotent_and_does_not_run_in_reques
     assert first["workflow"] == ASYNC_WORKFLOW_DECISION_SUPPORT
     assert first["result"] is None
     assert first["metadata"]["async"] is True
+
+
+def test_auto_quick_explain_returns_immediate_result_without_queueing(postgres_db, monkeypatch):
+    conn, _cur = postgres_db
+    monkeypatch.setattr("core.ai.workflow_request_service.get_db_connection", lambda: NoCloseConnection(conn))
+
+    def fake_run_workflow(payload):
+        assert payload["workflow"] == "auto"
+        return SimpleNamespace(
+            status_code=200,
+            payload={
+                "status": "success",
+                "workflow": WORKFLOW_QUICK_EXPLAIN,
+                "classification": {"classified_workflow": WORKFLOW_QUICK_EXPLAIN, "confidence": "medium"},
+                "result": {"answer": "This is a quick explanation."},
+                "metadata": {"profile": "fast_triage"},
+                "error": None,
+            },
+        )
+
+    monkeypatch.setattr("core.ai.workflow_request_service.run_workflow", fake_run_workflow)
+
+    result, status = queue_workflow_request(
+        _auto_payload("Explain this alert briefly.", client_request_id="auto-quick-1"),
+        actor_username="analyst",
+        actor_role="analyst",
+    )
+
+    assert status == 200
+    assert result["workflow"] == WORKFLOW_QUICK_EXPLAIN
+    assert result["metadata"]["async"] is False
+    assert result["metadata"]["immediate"] is True
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM ai_workflow_requests")
+        assert cur.fetchone()[0] == 0
+
+
+def test_auto_deep_investigate_queues_after_backend_classification(postgres_db, monkeypatch):
+    conn, _cur = postgres_db
+    monkeypatch.setattr("core.ai.workflow_request_service.get_db_connection", lambda: NoCloseConnection(conn))
+
+    result, status = queue_workflow_request(
+        _auto_payload("Deep investigate this alert and identify evidence gaps.", client_request_id="auto-deep-1"),
+        actor_username="analyst",
+        actor_role="analyst",
+    )
+
+    assert status == 202
+    assert result["status"] == STATUS_QUEUED
+    assert result["workflow"] == WORKFLOW_DEEP_INVESTIGATE
+    assert result["classification"]["requested_workflow"] == "auto"
+    assert result["classification"]["classified_workflow"] == WORKFLOW_DEEP_INVESTIGATE
+
+
+def test_auto_decision_support_queues_and_is_idempotent(postgres_db, monkeypatch):
+    conn, _cur = postgres_db
+    monkeypatch.setattr("core.ai.workflow_request_service.get_db_connection", lambda: NoCloseConnection(conn))
+    payload = _auto_payload("Should I escalate or monitor this alert?", client_request_id="auto-decision-1")
+
+    first, first_status = queue_workflow_request(payload, actor_username="analyst", actor_role="analyst")
+    second, second_status = queue_workflow_request(payload, actor_username="analyst", actor_role="analyst")
+
+    assert first_status == 202
+    assert second_status == 200
+    assert first["request_id"] == second["request_id"]
+    assert first["workflow"] == ASYNC_WORKFLOW_DECISION_SUPPORT
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM ai_workflow_requests")
+        assert cur.fetchone()[0] == 1
+
+
+def test_low_confidence_auto_returns_chooser_without_queueing(postgres_db, monkeypatch):
+    conn, _cur = postgres_db
+    monkeypatch.setattr("core.ai.workflow_request_service.get_db_connection", lambda: NoCloseConnection(conn))
+
+    result, status = queue_workflow_request(
+        _auto_payload("Please repo deploy and run briefing now.", client_request_id="auto-chooser-1"),
+        actor_username="analyst",
+        actor_role="analyst",
+    )
+
+    assert status == 200
+    assert result["status"] == "chooser_required"
+    assert result["classification"]["chooser_required"] is True
+    assert "request_id" not in result
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM ai_workflow_requests")
+        assert cur.fetchone()[0] == 0
+
+
+def test_restricted_workflows_cannot_be_queued_through_async_auto_path(postgres_db, monkeypatch):
+    conn, _cur = postgres_db
+    monkeypatch.setattr("core.ai.workflow_request_service.get_db_connection", lambda: NoCloseConnection(conn))
+
+    for workflow in ("soc_briefing", "repo_assistant"):
+        try:
+            queue_workflow_request(
+                {
+                    "workflow": workflow,
+                    "prompt": "Run the restricted assistant.",
+                    "context_type": "alert",
+                    "context": {"alert_id": 1},
+                    "client_request_id": f"restricted-{workflow}",
+                },
+                actor_username="analyst",
+                actor_role="analyst",
+            )
+        except Exception as error:
+            assert getattr(error, "error_code", "") == "workflow_not_async"
+        else:
+            raise AssertionError(f"{workflow} should not be queueable")
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM ai_workflow_requests")
+        assert cur.fetchone()[0] == 0
 
 
 def test_worker_claims_and_completes_each_async_workflow_without_persistence(postgres_db, monkeypatch):

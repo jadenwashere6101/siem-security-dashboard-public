@@ -74,6 +74,15 @@ def test_verifies_repo_root_and_migrate_script():
     assert "Missing venv/bin/python" in text
 
 
+def test_deploy_installs_all_source_controlled_anakin_worker_units():
+    text = read_deploy_script()
+    worker_fn = text.split("install_and_restart_worker_units() {", 1)[1].split("\n}\n\ncheck_backend_service_status", 1)[0]
+    assert "scripts/install_soar_playbook_worker_service.sh --enable --start" in worker_fn
+    assert "scripts/install_response_action_worker_service.sh --enable --start" in worker_fn
+    assert "scripts/install_soc_briefing_worker_service.sh --enable --start" in worker_fn
+    assert "scripts/install_anakin_workflow_worker_service.sh --enable --start" in worker_fn
+
+
 def test_loads_env_without_mutating_file():
     text = read_deploy_script()
     assert "load_env_file" in text

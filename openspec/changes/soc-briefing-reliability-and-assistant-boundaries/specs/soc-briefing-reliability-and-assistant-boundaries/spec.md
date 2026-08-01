@@ -82,6 +82,31 @@ Manual SOC briefing Run Now SHALL queue work safely, expose lifecycle, and surfa
 - **THEN** the lifecycle SHALL include the produced briefing identifier when available
 - **AND** the frontend SHALL refresh history and select/open that briefing.
 
+### Requirement: SOC briefing worker uses authoritative AI gateway configuration
+
+SOC briefing worker execution SHALL receive the environment-loaded AI gateway configuration used by the backend instead of relying on a default disabled config.
+
+#### Scenario: Local-only gateway config reaches worker
+
+- **GIVEN** `AI_GATEWAY_MODE=local_only` with a configured local provider
+- **WHEN** the SOC briefing worker runner starts
+- **THEN** it SHALL load the authoritative sanitized gateway configuration
+- **AND** pass that config explicitly into `run_soc_briefing_worker`.
+
+#### Scenario: Configured local provider is not reported disabled
+
+- **GIVEN** the worker receives a configured local-only gateway config
+- **WHEN** briefing synthesis reaches the gateway
+- **THEN** it SHALL NOT report `ai_gateway_disabled`
+- **AND** SHALL preserve local-only/no-paid-fallback behavior.
+
+#### Scenario: Disabled gateway still fails closed
+
+- **GIVEN** the authoritative gateway config is disabled
+- **WHEN** the worker processes a briefing job
+- **THEN** the job SHALL be blocked with `ai_gateway_disabled`
+- **AND** SHALL NOT call a local or paid provider.
+
 ### Requirement: Repo Assistant rejects live SIEM-data questions
 
 Repo Assistant SHALL not answer live SIEM operational-data questions from repository context.
