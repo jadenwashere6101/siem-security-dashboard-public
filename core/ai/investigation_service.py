@@ -44,6 +44,7 @@ from core.ai.investigation_models import (
     STEP_SUGGEST_RESPONSE_PLAN,
     STEP_VALIDATE_EVIDENCE,
 )
+from core.ai.anakin_persona import deep_investigate_policy
 from core.ai.investigation_planner import (
     InvestigationPlan,
     InvestigationPlannerError,
@@ -600,13 +601,8 @@ def _build_correlation_prompt(
     context_json = _correlation_context_json_for_prompt(ai_context, budget=prompt_budget, tools_json=tools_json)
     sources_json = json.dumps(_all_sources(ai_context, tools), default=str, sort_keys=True)
     return (
-        "You are a read-only advanced SIEM SOC assistant.\n"
-        "Use only supplied SIEM context and validated read-only tool evidence.\n"
-        "Cite source paths or record ids for material findings. Distinguish evidence from inference.\n"
-        "Do not claim remediation, blocking, approval, execution, deployment, file changes, shell commands, or database writes happened.\n"
-        "If evidence is missing or partial, say exactly what is missing.\n"
-        "Do not repeat every visible field or give generic definitions. Avoid filler such as 'continue monitoring' unless you name exactly what to inspect.\n"
-        "Identify what stands out, why it matters here, supporting evidence, contradicting or benign evidence, confidence, gaps, and concrete read-only next steps.\n"
+        f"{deep_investigate_policy()}"
+        "Cite source paths or record ids for material findings.\n"
         "Return concise sections: Assessment, Correlated Evidence, Contradictions And Uncertainty, Evidence Gaps, Read-Only Next Steps.\n\n"
         f"Workflow type: {plan.workflow_type}\n"
         f"Context type: {plan.context_type}\n"

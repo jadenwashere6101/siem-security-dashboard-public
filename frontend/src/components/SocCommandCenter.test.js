@@ -634,36 +634,38 @@ describe("SocCommandCenter", () => {
     expect(await screen.findByText("Repeated VPN recon")).toBeInTheDocument();
     await waitFor(() => expect(loadReconActivity).toHaveBeenCalledWith(90));
     expect(await screen.findByText("Distributed commodity scanning.")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Explain recon" }));
-    await userEvent.click(screen.getByRole("button", { name: "Investigate cluster" }));
-    await userEvent.click(screen.getByRole("button", { name: "Draft checklist" }));
-    await userEvent.click(screen.getByRole("button", { name: "Draft response" }));
+    await userEvent.click(screen.getByRole("button", { name: "Deep Investigate" }));
+    await userEvent.click(screen.getByRole("button", { name: "Decision Support" }));
+    await userEvent.selectOptions(screen.getByLabelText("Generate Artifact"), "investigation_checklist");
+    await userEvent.selectOptions(screen.getByLabelText("Generate Artifact"), "response_recommendation");
 
     expect(onAskAi).toHaveBeenCalledWith(
       expect.objectContaining({
         contextType: "recon_activity",
-        action: "explain_recon_activity",
+        workflow: "deep_investigate",
         context: { activity_id: 90 },
       })
     );
     expect(onAskAi).toHaveBeenCalledWith(
       expect.objectContaining({
         contextType: "recon_activity",
-        action: "investigate_cluster",
+        workflow: "decision_support",
         context: { activity_id: 90 },
       })
     );
     expect(onAskAi).toHaveBeenCalledWith(
       expect.objectContaining({
         contextType: "recon_activity",
-        draftType: "investigation_checklist",
+        workflow: "generate_artifact",
+        artifactType: "investigation_checklist",
         context: { activity_id: 90 },
       })
     );
     expect(onAskAi).toHaveBeenCalledWith(
       expect.objectContaining({
         contextType: "recon_activity",
-        draftType: "response_recommendation",
+        workflow: "generate_artifact",
+        artifactType: "response_recommendation",
         context: { activity_id: 90 },
       })
     );

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 
+import AnakinWorkflowControls, { ANAKIN_WORKFLOWS } from "./AnakinWorkflowControls";
 import { Button, Card, Chip, Panel, SectionHeader, StatusPill } from "./uiPrimitives";
 import { theme } from "../theme";
 
@@ -31,6 +32,8 @@ function AnalystWorkspace({
   onLinkEvidenceToHypothesis,
   onUnlinkEvidenceFromHypothesis,
   onOpenEvidenceSource,
+  onAskAi = null,
+  aiEnabled = false,
   actionBusy = "",
   actionStatus = null,
 }) {
@@ -179,6 +182,30 @@ function AnalystWorkspace({
             style={actionStatus.type === "error" ? actionErrorStyle : actionStatusStyle}
           >
             {actionStatus.message}
+          </div>
+        ) : null}
+        {aiEnabled && activeInvestigation && typeof onAskAi === "function" ? (
+          <div style={workspaceAiControlsStyle}>
+            <AnakinWorkflowControls
+              contextType="general"
+              context={{
+                investigation_id: activeInvestigation.id,
+                active_investigation: activeInvestigation,
+                source_context: sourceContext,
+              }}
+              controls={[
+                ANAKIN_WORKFLOWS.deepInvestigate,
+                ANAKIN_WORKFLOWS.decisionSupport,
+              ]}
+              artifacts={[
+                { type: "investigation_checklist", label: "Investigation checklist" },
+                { type: "incident_note", label: "Incident note" },
+                { type: "escalation_summary", label: "Escalation summary" },
+              ]}
+              titlePrefix={activeInvestigation.title || `Investigation #${activeInvestigation.id}`}
+              subject={activeInvestigation.title || `investigation #${activeInvestigation.id}`}
+              onAskAi={onAskAi}
+            />
           </div>
         ) : null}
 
@@ -761,6 +788,11 @@ function relationshipTone(value) {
 }
 
 const panelStyle = { padding: 0, overflow: "hidden" };
+const workspaceAiControlsStyle = {
+  padding: `0 ${theme.spacing.lg}px ${theme.spacing.md}px`,
+  display: "flex",
+  justifyContent: "flex-end",
+};
 const workspaceLayoutStyle = {
   display: "grid",
   gridTemplateColumns: "minmax(220px, 300px) minmax(0, 1fr)",

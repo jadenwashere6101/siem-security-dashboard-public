@@ -20,7 +20,7 @@ import {
   registryRecommendedNextStep,
 } from "../utils/responseRegistryPresentation";
 import { keysOverlap, useResponseSync } from "../context/ResponseSyncContext";
-import AiAssistantButton from "./AiAssistantButton";
+import AnakinWorkflowControls, { ANAKIN_WORKFLOWS } from "./AnakinWorkflowControls";
 
 const PAGE_SIZE = 50;
 
@@ -901,50 +901,20 @@ function ResponseRegistryPanel({
               <h3 style={{ margin: 0, fontSize: "16px" }}>Indicator detail</h3>
               <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" }}>
                 {aiEnabled && record && typeof onAskAi === "function" ? (
-                  <>
-                    <span style={agentClusterLabelStyle}>Anakin analyst tools</span>
-                    <AiAssistantButton
-                      onClick={() =>
-                        onAskAi({
-                          contextType: "response_registry",
-                          action: "explain_response",
-                          title: `Response registry #${record.id}`,
-                          question: "Explain this response registry record and its current response state.",
-                          context: { registry_id: record.id },
-                        })
-                      }
-                    >
-                      Explain this response
-                    </AiAssistantButton>
-                    <AiAssistantButton
-                      onClick={() =>
-                        onAskAi({
-                          contextType: "response_registry",
-                          action: "explain_response",
-                          investigation: true,
-                          title: `Guided registry review #${record.id}`,
-                          question: "Run a bounded, read-only guided investigation of this response registry record and related evidence.",
-                          context: { registry_id: record.id, source_ip: record.indicator_value },
-                          toolPolicy: { max_tool_calls: 5, time_window_hours: 24 },
-                        })
-                      }
-                    >
-                      Guided review
-                    </AiAssistantButton>
-                    <AiAssistantButton
-                      onClick={() =>
-                        onAskAi({
-                          contextType: "response_registry",
-                          draftType: "response_recommendation",
-                          title: `Draft response recommendation for registry #${record.id}`,
-                          instruction: "Draft response recommendation options for analyst review only. Do not execute registry commands.",
-                          context: { registry_id: record.id },
-                        })
-                      }
-                    >
-                      Draft response
-                    </AiAssistantButton>
-                  </>
+                  <AnakinWorkflowControls
+                    contextType="response_registry"
+                    context={{ registry_id: record.id, source_ip: record.indicator_value }}
+                    controls={[
+                      ANAKIN_WORKFLOWS.decisionSupport,
+                      ANAKIN_WORKFLOWS.deepInvestigate,
+                    ]}
+                    artifacts={[
+                      { type: "response_recommendation", label: "Response recommendation" },
+                    ]}
+                    titlePrefix={`Response registry #${record.id}`}
+                    subject={`response registry record #${record.id}`}
+                    onAskAi={onAskAi}
+                  />
                 ) : null}
                 <button type="button" onClick={handleCloseDetail} style={secondaryButtonStyle(false)}>
                   Close
@@ -1329,13 +1299,5 @@ function ResponseRegistryPanel({
     </section>
   );
 }
-
-const agentClusterLabelStyle = {
-  color: "#93c5fd",
-  fontSize: "11px",
-  fontWeight: 800,
-  letterSpacing: "0.04em",
-  textTransform: "uppercase",
-};
 
 export default ResponseRegistryPanel;

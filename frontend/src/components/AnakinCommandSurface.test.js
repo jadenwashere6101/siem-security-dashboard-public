@@ -18,14 +18,17 @@ test("AnakinCommandSurface opens, executes commands, and closes with Escape", as
   await userEvent.click(trigger);
 
   expect(screen.getByRole("dialog", { name: "Anakin command surface" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Summarize" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Quick Explain" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Deep Investigate" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Decision Support" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Generate Artifact" })).toBeInTheDocument();
 
   const dialog = screen.getByRole("dialog", { name: "Anakin command surface" });
   await userEvent.type(within(dialog).getByRole("textbox", { name: "Ask Anakin" }), "What matters?");
   await userEvent.click(within(dialog).getByRole("button", { name: "Submit Ask Anakin question" }));
 
   expect(onExecute).toHaveBeenCalledWith(
-    expect.objectContaining({ id: "anakin.ask" }),
+    expect.objectContaining({ id: "anakin.ask-freeform", workflow: "auto" }),
     expect.objectContaining({ question: "What matters?" })
   );
 

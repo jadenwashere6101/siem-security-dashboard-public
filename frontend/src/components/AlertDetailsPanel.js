@@ -3,7 +3,7 @@ import AlertTimeline from "./AlertTimeline";
 import InternetNoiseSummary, { shouldShowInternetNoise } from "./InternetNoiseSummary";
 import { ResponseOutcomeSummary } from "./ResponseOutcome";
 import SourceIpContext from "./SourceIpContext";
-import AiAssistantButton from "./AiAssistantButton";
+import AnakinWorkflowControls, { ANAKIN_WORKFLOWS } from "./AnakinWorkflowControls";
 import { getBehavioralReputation, getExternalReputation } from "../utils/alertDisplay";
 import { getOperationalHistoryDescription } from "../utils/operationalHistory";
 import { loadPfsenseWhyFired } from "../services/pfsenseAlertInvestigationService";
@@ -178,100 +178,23 @@ function AlertDetailsPanel({
       ) : null}
       {aiEnabled && typeof onAskAi === "function" ? (
         <div style={aiButtonRowStyle}>
-          <span style={agentClusterLabelStyle}>Anakin analyst tools</span>
-          <AiAssistantButton
-            onClick={() =>
-              onAskAi({
-                contextType: "alert",
-                action: "explain_alert",
-                title: `Alert #${selectedAlert.id}`,
-                question: "Explain this alert and the strongest evidence behind it.",
-                context: { alert_id: selectedAlert.id, source_ip: selectedAlert.source_ip },
-              })
-            }
-          >
-            Explain this alert
-          </AiAssistantButton>
-          <AiAssistantButton
-            onClick={() =>
-              onAskAi({
-                contextType: "alert",
-                action: "recommend_investigation",
-                title: `Investigation for alert #${selectedAlert.id}`,
-                question: "Recommend read-only investigation next steps for this alert.",
-                context: { alert_id: selectedAlert.id, source_ip: selectedAlert.source_ip },
-              })
-            }
-          >
-            Recommend investigation
-          </AiAssistantButton>
-          <AiAssistantButton
-            onClick={() =>
-              onAskAi({
-                contextType: "alert",
-                action: "recommend_investigation",
-                investigation: true,
-                title: `Guided investigation for alert #${selectedAlert.id}`,
-                question: "Run a bounded, read-only guided investigation for this alert with source-cited evidence and recommended analyst next steps.",
-                context: { alert_id: selectedAlert.id, source_ip: selectedAlert.source_ip },
-                toolPolicy: { max_tool_calls: 5, time_window_hours: 24 },
-              })
-            }
-          >
-            Guided investigation
-          </AiAssistantButton>
-          <AiAssistantButton
-            onClick={() =>
-              onAskAi({
-                contextType: "alert",
-                action: "why_important",
-                title: `Importance for alert #${selectedAlert.id}`,
-                question: "Explain why this alert is important for an analyst.",
-                context: { alert_id: selectedAlert.id, source_ip: selectedAlert.source_ip },
-              })
-            }
-          >
-            Why is this important?
-          </AiAssistantButton>
-          <AiAssistantButton
-            onClick={() =>
-              onAskAi({
-                contextType: "detection",
-                action: "explain_detection",
-                title: `Detection for alert #${selectedAlert.id}`,
-                question: "Explain why this detection fired using the available detection evidence.",
-                context: { alert_id: selectedAlert.id },
-              })
-            }
-          >
-            Explain detection
-          </AiAssistantButton>
-          <AiAssistantButton
-            onClick={() =>
-              onAskAi({
-                contextType: "detection",
-                draftType: "detection_rule_change",
-                title: `Draft detection change for alert #${selectedAlert.id}`,
-                instruction: "Draft a detection rule change proposal for analyst review only. Do not apply or save anything.",
-                context: { alert_id: selectedAlert.id, source_ip: selectedAlert.source_ip },
-              })
-            }
-          >
-            Draft detection change
-          </AiAssistantButton>
-          <AiAssistantButton
-            onClick={() =>
-              onAskAi({
-                contextType: "alert",
-                draftType: "investigation_checklist",
-                title: `Draft checklist for alert #${selectedAlert.id}`,
-                instruction: "Draft a read-only investigation checklist for this alert. Do not execute any steps.",
-                context: { alert_id: selectedAlert.id, source_ip: selectedAlert.source_ip },
-              })
-            }
-          >
-            Draft checklist
-          </AiAssistantButton>
+          <AnakinWorkflowControls
+            contextType="alert"
+            context={{ alert_id: selectedAlert.id, source_ip: selectedAlert.source_ip }}
+            controls={[
+              ANAKIN_WORKFLOWS.quickExplain,
+              ANAKIN_WORKFLOWS.deepInvestigate,
+              ANAKIN_WORKFLOWS.decisionSupport,
+            ]}
+            artifacts={[
+              { type: "investigation_checklist", label: "Alert checklist" },
+              { type: "detection_rule_change", label: "Detection change", contextType: "detection" },
+              { type: "response_recommendation", label: "Response recommendation" },
+            ]}
+            titlePrefix={`Alert #${selectedAlert.id}`}
+            subject={`alert #${selectedAlert.id}`}
+            onAskAi={onAskAi}
+          />
         </div>
       ) : null}
       {getTargetedAlertMeta(selectedAlert.alert_type) && (
@@ -604,14 +527,6 @@ const investigationButtonStyle = {
   padding: "8px 10px",
   fontWeight: 800,
   cursor: "pointer",
-};
-
-const agentClusterLabelStyle = {
-  color: "#93c5fd",
-  fontSize: "11px",
-  fontWeight: 800,
-  letterSpacing: "0.04em",
-  textTransform: "uppercase",
 };
 
 const whyFiredMutedStyle = {

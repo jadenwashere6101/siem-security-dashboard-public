@@ -1,5 +1,5 @@
 import React from "react";
-import AiAssistantButton from "./AiAssistantButton";
+import AnakinWorkflowControls, { ANAKIN_WORKFLOWS } from "./AnakinWorkflowControls";
 import { MetricCard } from "./uiPrimitives";
 
 function dashboardMetricModels(metrics) {
@@ -57,45 +57,14 @@ function DashboardMetrics({
     <>
       {aiEnabled && typeof onAskAi === "function" ? (
         <div style={aiBarStyle}>
-          <span style={agentClusterLabelStyle}>Anakin analyst tools</span>
-          <AiAssistantButton
-            onClick={() =>
-              onAskAi({
-                contextType: "dashboard",
-                action: "ask_dashboard",
-                title: "Dashboard summary",
-                question: "Explain the current dashboard summary and what an analyst should focus on.",
-              })
-            }
-          >
-            Dashboard summary
-          </AiAssistantButton>
-          <AiAssistantButton
-            onClick={() =>
-              onAskAi({
-                contextType: "dashboard",
-                action: "explain_anomaly",
-                investigation: true,
-                title: "Guided dashboard investigation",
-                question: "Run a bounded, read-only guided investigation of the current dashboard summary and identify source-cited analyst next steps.",
-                toolPolicy: { max_tool_calls: 5, time_window_hours: 24 },
-              })
-            }
-          >
-            Guided investigation
-          </AiAssistantButton>
-          <AiAssistantButton
-            onClick={() =>
-              onAskAi({
-                contextType: "dashboard",
-                draftType: "investigation_checklist",
-                title: "Draft dashboard investigation checklist",
-                instruction: "Draft a read-only investigation checklist from the visible dashboard summary. Do not run or save anything.",
-              })
-            }
-          >
-            Draft checklist
-          </AiAssistantButton>
+          <AnakinWorkflowControls
+            contextType="dashboard"
+            context={{ metrics }}
+            controls={[ANAKIN_WORKFLOWS.auto, ANAKIN_WORKFLOWS.quickExplain, ANAKIN_WORKFLOWS.deepInvestigate]}
+            titlePrefix="Dashboard"
+            subject="the current dashboard"
+            onAskAi={onAskAi}
+          />
         </div>
       ) : null}
       <section style={metricsGridStyle}>
@@ -121,14 +90,6 @@ const aiBarStyle = {
   gap: "8px",
   flexWrap: "wrap",
   margin: "0 0 12px",
-};
-
-const agentClusterLabelStyle = {
-  color: "#93c5fd",
-  fontSize: "11px",
-  fontWeight: 800,
-  letterSpacing: "0.04em",
-  textTransform: "uppercase",
 };
 
 export default DashboardMetrics;

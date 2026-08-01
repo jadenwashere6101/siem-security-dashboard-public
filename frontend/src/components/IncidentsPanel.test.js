@@ -246,44 +246,47 @@ describe("IncidentsPanel", () => {
     await screen.findByText(incidentFixture.title);
     await userEvent.click(screen.getByText(incidentFixture.title));
 
-    await userEvent.click(await screen.findByRole("button", { name: "Summarize incident" }));
-    await userEvent.click(screen.getByRole("button", { name: "Recommend next steps" }));
-    await userEvent.click(screen.getByRole("button", { name: "Draft incident note" }));
-    await userEvent.click(screen.getByRole("button", { name: "Draft escalation" }));
-    await userEvent.click(screen.getByRole("button", { name: "Draft playbook" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Deep Investigate" }));
+    await userEvent.click(screen.getByRole("button", { name: "Decision Support" }));
+    await userEvent.selectOptions(screen.getByLabelText("Generate Artifact"), "incident_note");
+    await userEvent.selectOptions(screen.getByLabelText("Generate Artifact"), "escalation_summary");
+    await userEvent.selectOptions(screen.getByLabelText("Generate Artifact"), "playbook_draft");
 
     expect(onAskAi).toHaveBeenCalledWith(
       expect.objectContaining({
         contextType: "incident",
-        action: "summarize_incident",
+        workflow: "deep_investigate",
         context: { incident_id: 7 },
       })
     );
     expect(onAskAi).toHaveBeenCalledWith(
       expect.objectContaining({
         contextType: "incident",
-        action: "recommend_next_steps",
+        workflow: "decision_support",
         context: { incident_id: 7 },
       })
     );
     expect(onAskAi).toHaveBeenCalledWith(
       expect.objectContaining({
         contextType: "incident",
-        draftType: "incident_note",
+        workflow: "generate_artifact",
+        artifactType: "incident_note",
         context: { incident_id: 7 },
       })
     );
     expect(onAskAi).toHaveBeenCalledWith(
       expect.objectContaining({
         contextType: "incident",
-        draftType: "escalation_summary",
+        workflow: "generate_artifact",
+        artifactType: "escalation_summary",
         context: { incident_id: 7 },
       })
     );
     expect(onAskAi).toHaveBeenCalledWith(
       expect.objectContaining({
         contextType: "incident",
-        draftType: "playbook_draft",
+        workflow: "generate_artifact",
+        artifactType: "playbook_draft",
         context: { incident_id: 7 },
       })
     );

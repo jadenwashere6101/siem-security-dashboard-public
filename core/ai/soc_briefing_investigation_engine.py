@@ -25,6 +25,7 @@ from core.ai.models import (
     AiGatewayRequest,
     estimate_tokens,
 )
+from core.ai.anakin_persona import soc_briefing_policy
 from core.ai.profile_registry import profile_for_soc_briefing
 from core.ai.soc_briefing_runtime_store import (
     JOB_STATUS_BLOCKED,
@@ -468,25 +469,13 @@ def _synthesize_briefing(
     gateway: AiGateway | None,
     budget: InvestigationBudget,
 ) -> dict[str, Any]:
-    prompt_payload = {
-        "task": "Produce structured read-only scheduled SOC briefing content.",
-        "required_sections": list(BRIEFING_SECTIONS),
-        "policy": {
-            "read_only": True,
-            "no_actions": True,
-            "no_tool_calls": True,
-            "no_sql": True,
-            "no_chain_of_thought": True,
-        },
-        "candidates": [candidate.as_ref() for candidate in selected],
-        "skipped": skipped[: budget.max_entities],
-        "evidence": tool_summary_for_prompt(evidence_summary, max_chars=budget.max_prompt_chars),
-        "evidence_refs": evidence_refs,
-        "output_schema": {
-            "summary": "string",
-            "sections": {key: "array" for key in BRIEFING_SECTIONS},
-        },
-    }
+    prompt_payload = _build_synthesis_prompt_payload(
+        selected=selected,
+        skipped=skipped,
+        evidence_summary=evidence_summary,
+        evidence_refs=evidence_refs,
+        budget=budget,
+    )
     prompt = json.dumps(redact_sensitive_values(prompt_payload), default=str, sort_keys=True)
     tokens = estimate_tokens(prompt)
     if len(prompt) > budget.max_prompt_chars or tokens > budget.max_prompt_tokens:
@@ -528,6 +517,7 @@ def _synthesize_briefing(
 
     scheduled_config = _scheduled_gateway_config(gateway_config)
     started = time.monotonic()
+
     response = (gateway or AiGateway(config=scheduled_config)).generate(
         AiGatewayRequest(
             prompt=prompt,
@@ -616,6 +606,39 @@ def _synthesize_briefing(
         "ai_gateway_status": response.status,
         "provider_status": response.metadata.provider,
         "latency_ms": latency_ms,
+    }
+
+
+def _build_synthesis_prompt_payload(
+    *,
+    selected: list[InvestigationCandidate],
+    skipped: list[dict[str, Any]],
+    evidence_summary: SocToolExecutionSummary,
+    evidence_refs: list[dict[str, Any]],
+    budget: InvestigationBudget,
+) -> dict[str, Any]:
+    return {
+        "task": "Produce structured read-only scheduled SOC briefing content.",
+        "anakin_persona_policy": soc_briefing_policy(),
+        "required_sections": list(BRIEFING_SECTIONS),
+        "policy": {
+            "read_only": True,
+            "no_actions": True,
+            "no_tool_calls": True,
+            "no_sql": True,
+            "no_chain_of_thought": True,
+            "prioritize_attention": True,
+            "avoid_raw_alert_inventory": True,
+            "call_out_low_value_noise": True,
+        },
+        "candidates": [candidate.as_ref() for candidate in selected],
+        "skipped": skipped[: budget.max_entities],
+        "evidence": tool_summary_for_prompt(evidence_summary, max_chars=budget.max_prompt_chars),
+        "evidence_refs": evidence_refs,
+        "output_schema": {
+            "summary": "string",
+            "sections": {key: "array" for key in BRIEFING_SECTIONS},
+        },
     }
 
 

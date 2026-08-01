@@ -45,7 +45,7 @@ import {
 } from "./utils/sessionIdentity";
 import { updateAlertStatusRequest } from "./services/alertStatusService";
 import { loadAlertDashboardSummary, loadAlertRuleOptions, loadAlerts } from "./services/alertsService";
-import { requestAiChat, requestAiDraft, requestAiExplanation, requestAiInvestigation } from "./services/aiService";
+import { requestAiDraft, requestAiExplanation, requestAiInvestigation, requestAiWorkflow } from "./services/aiService";
 import {
   createEvidenceReference,
   createInvestigation,
@@ -130,6 +130,38 @@ function stableAiEntityId(context = {}) {
     context.rule_id ??
     null
   );
+}
+
+function normalizeAiWorkflowResponse(response) {
+  if (!response || typeof response !== "object" || !response.workflow) return response;
+  const result = response.result && typeof response.result === "object" ? response.result : {};
+  const resultMetadata = result.metadata && typeof result.metadata === "object" ? result.metadata : {};
+  const workflowMetadata = response.metadata && typeof response.metadata === "object" ? response.metadata : {};
+  return {
+    ...result,
+    status: response.status || result.status,
+    workflow: response.workflow,
+    classification: response.classification,
+    lifecycle: response.lifecycle,
+    result,
+    metadata: {
+      ...resultMetadata,
+      ...workflowMetadata,
+      workflow: response.workflow,
+      classification: response.classification,
+    },
+    error: response.error || result.error,
+  };
+}
+
+function workflowTitleForPanel(workflow) {
+  const labels = {
+    quick_explain: "Quick Explain",
+    deep_investigate: "Deep Investigate",
+    decision_support: "Decision Support",
+    generate_artifact: "Generate Artifact",
+  };
+  return labels[workflow] || "Ask Anakin";
 }
 
 const DEFAULT_ALERT_PAGE_SIZE = 50;
@@ -290,7 +322,6 @@ function AppInner() {
     stale: false,
     request: null,
   });
-  const [aiChatHistory, setAiChatHistory] = useState([]);
   const [investigationDrawerOpen, setInvestigationDrawerOpen] = useState(false);
   const [investigationAlert, setInvestigationAlert] = useState(null);
   const [workspaceState, setWorkspaceState] = useState(null);
@@ -1948,23 +1979,15 @@ function AppInner() {
     try {
       const response = await executor(request, { signal: controller.signal });
       if (aiRequestRef.current.id !== requestId) return;
+      const displayResponse = normalizeAiWorkflowResponse(response);
       setAiPanelState({
         status: "success",
         title,
-        response,
+        response: displayResponse,
         error: "",
         stale: aiRequestRef.current.contextKey !== contextKey,
         request: { title, request, executor, contextKey },
       });
-      if (request.message) {
-        setAiChatHistory((current) =>
-          [
-            ...current,
-            { role: "user", content: request.message },
-            { role: "assistant", content: response.answer || response.error || "" },
-          ].slice(-8)
-        );
-      }
     } catch (error) {
       if (error.name === "AbortError") {
         setAiPanelState((current) => ({
@@ -2001,8 +2024,10 @@ function AppInner() {
       const shouldIncludeVisibleContext = !ENTITY_AI_CONTEXT_TYPES.has(normalizedContextType);
       const contextKey = JSON.stringify({
         contextType: normalizedContextType || "general",
+        workflow: options.workflow || "",
         action: options.action || "",
         draftType: options.draftType || "",
+        artifactType: options.artifactType || "",
         investigation: Boolean(options.investigation),
         entityId: stableAiEntityId(entityContext),
         command: contextualCommand.id,
@@ -2017,7 +2042,23 @@ function AppInner() {
         },
         ...entityContext,
       };
-      const payload = options.draftType
+      const usesWorkflowRoute = Boolean(options.workflow || options.artifactType);
+      const payload = usesWorkflowRoute
+        ? {
+            workflow: options.workflow || "auto",
+            prompt: options.prompt || options.question || options.instruction || "",
+            context_type: options.contextType,
+            entity: entityContext,
+            context,
+            artifact: options.artifactType ? { type: options.artifactType } : options.artifact,
+            tool_policy: options.toolPolicy || (
+              options.workflow === "deep_investigate"
+                ? { max_tool_calls: 5, time_window_hours: 24 }
+                : undefined
+            ),
+            client_request_id: options.clientRequestId,
+          }
+        : options.draftType
         ? {
             draft_type: options.draftType,
             instruction: options.instruction || options.question || "",
@@ -2032,13 +2073,15 @@ function AppInner() {
             question: options.question || "",
             context,
           };
-      const executor = options.investigation
+      const executor = usesWorkflowRoute
+        ? requestAiWorkflow
+        : options.investigation
         ? requestAiInvestigation
         : options.draftType
           ? requestAiDraft
           : requestAiExplanation;
       runAiRequest({
-        title: options.title || (options.investigation ? "Guided AI investigation" : options.draftType ? "AI draft" : "AI explanation"),
+        title: options.title || (usesWorkflowRoute ? "Ask Anakin" : options.investigation ? "Guided AI investigation" : options.draftType ? "AI draft" : "AI explanation"),
         request: payload,
         executor,
         contextKey,
@@ -2054,21 +2097,29 @@ function AppInner() {
         command.execute();
         return;
       }
+      if (command.workflow === "soc_briefing") {
+        handleNavigate("soc-briefings");
+        return;
+      }
+      if (command.workflow === "repo_assistant") {
+        handleNavigate("repo-architecture-assistant");
+        return;
+      }
       if (command.intent === ANAKIN_COMMAND_INTENTS.ask && runtime.question?.trim()) {
         const visibleContext = buildVisibleAiContext();
         runAiRequest({
           title: "Ask Anakin",
           request: {
-            message: runtime.question.trim(),
-            visible_context: {
+            workflow: command.workflow || "auto",
+            prompt: runtime.question.trim(),
+            context_type: activeSection,
+            context: {
               ...visibleContext,
               command_context: anakinCommandContext,
             },
-            client_history: aiChatHistory,
-            use_tools: true,
             tool_policy: { max_tool_calls: 5, time_window_hours: 24 },
           },
-          executor: requestAiChat,
+          executor: requestAiWorkflow,
           contextKey: JSON.stringify({
             section: activeSection,
             filters: visibleContext.visible_filters,
@@ -2080,7 +2131,7 @@ function AppInner() {
       const options = commandToAiOptions(command, anakinCommandContext, runtime.question || "");
       handleAskAi(options);
     },
-    [activeSection, aiChatHistory, anakinCommandContext, buildVisibleAiContext, handleAskAi, runAiRequest]
+    [activeSection, anakinCommandContext, buildVisibleAiContext, handleAskAi, handleNavigate, runAiRequest]
   );
 
   const executePaletteCommand = useCallback(
@@ -2095,6 +2146,19 @@ function AppInner() {
     if (aiPanelState.request) {
       runAiRequest(aiPanelState.request);
     }
+  }, [aiPanelState.request, runAiRequest]);
+
+  const chooseAiWorkflow = useCallback((workflow) => {
+    if (!workflow || !aiPanelState.request?.request) return;
+    runAiRequest({
+      ...aiPanelState.request,
+      title: workflowTitleForPanel(workflow),
+      request: {
+        ...aiPanelState.request.request,
+        workflow,
+      },
+      executor: requestAiWorkflow,
+    });
   }, [aiPanelState.request, runAiRequest]);
 
   const dismissAiPanel = useCallback(() => {
@@ -2422,6 +2486,8 @@ function AppInner() {
             onLinkEvidenceToHypothesis={linkEvidenceToHypothesis}
             onUnlinkEvidenceFromHypothesis={unlinkEvidenceFromHypothesis}
             onOpenEvidenceSource={handleWorkspaceEvidenceSource}
+            onAskAi={handleAskAi}
+            aiEnabled={canTakeAlertActions}
             actionBusy={workspaceActionBusy}
             actionStatus={workspaceActionStatus}
           />
@@ -2757,6 +2823,7 @@ function AppInner() {
               state={aiPanelState}
               onDismiss={dismissAiPanel}
               onRetry={retryAiRequest}
+              onChooseWorkflow={chooseAiWorkflow}
               onCancel={cancelAiRequest}
               userRole={userRole}
             />

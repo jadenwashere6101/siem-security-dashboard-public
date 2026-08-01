@@ -157,52 +157,55 @@ test("AlertDetailsPanel exposes alert and detection AI entry points", async () =
     />
   );
 
-  await userEvent.click(screen.getByRole("button", { name: "Explain this alert" }));
-  await userEvent.click(screen.getByRole("button", { name: "Recommend investigation" }));
-  await userEvent.click(screen.getByRole("button", { name: "Why is this important?" }));
-  await userEvent.click(screen.getByRole("button", { name: "Explain detection" }));
-  await userEvent.click(screen.getByRole("button", { name: "Draft detection change" }));
-  await userEvent.click(screen.getByRole("button", { name: "Draft checklist" }));
+  await userEvent.click(screen.getByRole("button", { name: "Quick Explain" }));
+  await userEvent.click(screen.getByRole("button", { name: "Deep Investigate" }));
+  await userEvent.click(screen.getByRole("button", { name: "Decision Support" }));
+  await userEvent.selectOptions(screen.getByLabelText("Generate Artifact"), "investigation_checklist");
+  await userEvent.selectOptions(screen.getByLabelText("Generate Artifact"), "detection_rule_change");
+  await userEvent.selectOptions(screen.getByLabelText("Generate Artifact"), "response_recommendation");
 
   expect(onAskAi).toHaveBeenCalledWith(
     expect.objectContaining({
       contextType: "alert",
-      action: "explain_alert",
+      workflow: "quick_explain",
       context: { alert_id: 101, source_ip: "8.8.8.8" },
     })
   );
   expect(onAskAi).toHaveBeenCalledWith(
     expect.objectContaining({
       contextType: "alert",
-      action: "recommend_investigation",
+      workflow: "deep_investigate",
       context: { alert_id: 101, source_ip: "8.8.8.8" },
     })
   );
   expect(onAskAi).toHaveBeenCalledWith(
     expect.objectContaining({
       contextType: "alert",
-      action: "why_important",
+      workflow: "decision_support",
+      context: { alert_id: 101, source_ip: "8.8.8.8" },
+    })
+  );
+  expect(onAskAi).toHaveBeenCalledWith(
+    expect.objectContaining({
+      contextType: "alert",
+      workflow: "generate_artifact",
+      artifactType: "investigation_checklist",
       context: { alert_id: 101, source_ip: "8.8.8.8" },
     })
   );
   expect(onAskAi).toHaveBeenCalledWith(
     expect.objectContaining({
       contextType: "detection",
-      action: "explain_detection",
-      context: { alert_id: 101 },
-    })
-  );
-  expect(onAskAi).toHaveBeenCalledWith(
-    expect.objectContaining({
-      contextType: "detection",
-      draftType: "detection_rule_change",
+      workflow: "generate_artifact",
+      artifactType: "detection_rule_change",
       context: { alert_id: 101, source_ip: "8.8.8.8" },
     })
   );
   expect(onAskAi).toHaveBeenCalledWith(
     expect.objectContaining({
       contextType: "alert",
-      draftType: "investigation_checklist",
+      workflow: "generate_artifact",
+      artifactType: "response_recommendation",
       context: { alert_id: 101, source_ip: "8.8.8.8" },
     })
   );

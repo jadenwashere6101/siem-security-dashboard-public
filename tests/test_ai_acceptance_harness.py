@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import replace
 
 from core.ai.acceptance_harness import (
+    LIVE_SWEEP_VM_COMMAND,
     ROOT_CAUSE_FRONTEND_CONTRACT_MISMATCH,
     ROOT_CAUSE_INVALID_RESPONSE,
+    build_production_safe_live_sweep_matrix,
     build_complete_ai_inventory,
     build_frontend_realistic_request,
     build_acceptance_cases,
@@ -18,6 +20,7 @@ from core.ai.acceptance_harness import (
 from core.ai.config import default_ai_profiles
 from core.ai.profile_registry import AI_INVOCATION_INVENTORY, AI_PROFILE_FAST_TRIAGE
 from core.ai.acceptance_harness import _select_live_representative_cases
+from core.ai.workflow_orchestrator import CANONICAL_WORKFLOWS, WORKFLOW_AUTO
 
 
 def test_acceptance_harness_covers_every_inventory_action_without_manual_button_list():
@@ -32,8 +35,11 @@ def test_acceptance_harness_covers_every_inventory_action_without_manual_button_
             for entry in complete_inventory
         )
     assert len(complete_keys) > len(AI_INVOCATION_INVENTORY)
-    assert "frontend.alert.investigation_checklist.draft.line_264" in complete_keys
-    assert "frontend.recon.response_recommendation.draft.line_1114" in complete_keys
+    assert "frontend.alert.artifact.checklist" in complete_keys
+    assert "frontend.recon.artifact.response_recommendation" in complete_keys
+    assert "frontend.dashboard.ask_anakin" in complete_keys
+    assert all(entry.workflow in CANONICAL_WORKFLOWS for entry in complete_inventory)
+    assert all(entry.workflow for entry in complete_inventory)
 
     report = run_offline_contract_tier()
 
@@ -51,6 +57,7 @@ def test_acceptance_rows_include_required_product_debug_fields():
         "POST /ai/chat",
         "POST /ai/drafts",
         "POST /ai/investigations",
+        "POST /ai/workflows",
         "POST /ai/repo/chat",
         "soc_briefing_worker",
     }
@@ -83,33 +90,30 @@ def test_manual_briefing_lifecycle_acceptance_reaches_visible_terminal_state():
 def test_frontend_realistic_contracts_are_discovered_from_component_sources():
     options = discover_frontend_ai_options()
 
-    assert options["frontend.recon.explain_recon_activity"]["contextType"] == "recon_activity"
-    assert options["frontend.source_ip.explain_ip"]["context"] == {"source_ip": "203.0.113.77"}
-    assert options["frontend.incident.summarize_incident"]["context"] == {"incident_id": 2002}
-    assert options["frontend.response_registry.explain_response"]["context"] == {"registry_id": 4004}
+    assert options["frontend.command_registry.quick_explain"]["workflow"] == "quick_explain"
+    assert options["frontend.command_registry.deep_investigate"]["workflow"] == "deep_investigate"
+    assert options["frontend.command_registry.decision_support"]["workflow"] == "decision_support"
+    assert options["frontend.command_registry.generate_artifact"]["artifactType"] == "investigation_checklist"
 
 
-def test_floating_anakin_chat_builds_message_based_payload_contract():
+def test_floating_anakin_builds_auto_workflow_payload_contract():
     payload, route = build_frontend_realistic_request(
         {
-            "route": "POST /ai/chat",
-            "message": "What should I inspect first?",
-            "visible_context": {"active_section": "dashboard", "recent_alerts": [{"id": 1}]},
-            "client_history": [{"role": "user", "content": "previous"}],
+            "route": "POST /ai/workflows",
+            "workflow": "auto",
+            "question": "What should I inspect first?",
+            "contextType": "general",
+            "context": {"active_section": "dashboard", "recent_alerts": [{"id": 1}]},
         }
     )
 
-    assert route == "POST /ai/chat"
-    assert payload == {
-        "message": "What should I inspect first?",
-        "visible_context": {"active_section": "dashboard", "recent_alerts": [{"id": 1}]},
-        "client_history": [{"role": "user", "content": "previous"}],
-        "use_tools": True,
-        "tool_policy": {"max_tool_calls": 5, "time_window_hours": 24},
-    }
-    assert "context_type" not in payload
+    assert route == "POST /ai/workflows"
+    assert payload["workflow"] == "auto"
+    assert payload["prompt"] == "What should I inspect first?"
+    assert payload["context_type"] == "general"
     assert "action" not in payload
-    assert "context" not in payload
+    assert "model" not in payload
+    assert "profile" not in payload
 
 
 def test_repo_architecture_chat_builds_message_based_payload_contract():
@@ -209,13 +213,16 @@ def test_live_representative_plan_uses_unique_safe_backend_paths():
 
     plan = _select_live_representative_cases(inventory, cases)
     matrix = [(entry.backend_path, entry.profile, entry.key) for entry, _case in plan]
+    expected_keys = {row["key"] for row in build_production_safe_live_sweep_matrix() if row["key"].startswith(("frontend.", "worker."))}
 
-    assert len(plan) == 9
-    assert ("POST /ai/explain", "fast_triage", "frontend.alert.explain_alert.line_184") in matrix
-    assert any(path == "POST /ai/explain" and profile == "guided_analysis" for path, profile, _key in matrix)
-    assert any(path == "POST /ai/drafts" for path, _profile, _key in matrix)
-    assert any(path == "POST /ai/investigations" for path, _profile, _key in matrix)
-    assert ("POST /ai/chat", "fast_triage", "frontend.floating_chat.general") in matrix
+    assert {key for _path, _profile, key in matrix} == expected_keys
+    assert len(plan) == 10
+    assert ("POST /ai/workflows", "fast_triage", "frontend.dashboard.quick_explain") in matrix
+    assert ("POST /ai/workflows", "guided_analysis", "frontend.alert.deep_investigate") in matrix
+    assert ("POST /ai/workflows", "guided_analysis", "frontend.alert.decision_support") in matrix
+    assert ("POST /ai/workflows", "guided_analysis", "frontend.alert.artifact.checklist") in matrix
+    assert ("POST /ai/workflows", "fast_triage", "frontend.floating_anakin.ask") in matrix
+    assert ("POST /ai/workflows", "fast_triage", "frontend.floating_anakin.low_confidence_chooser") in matrix
     assert ("POST /ai/repo/chat", "developer_assistant", "frontend.repo_architecture.chat.factual") in matrix
     assert ("POST /ai/repo/chat", "developer_assistant", "frontend.repo_architecture.chat.evaluative") in matrix
     assert ("POST /ai/actions/preview", "guided_analysis", "frontend.ai_action.preview.add_incident_note") in matrix
@@ -287,20 +294,48 @@ def test_live_backend_sweep_runs_status_checks_and_representative_plan_only(monk
 
     sweep = run_live_backend_sweep(throttle_seconds=0)
 
-    assert sweep["offline_actions_covered"] == 43
-    assert sweep["representative_calls_planned"] == 11
-    assert sweep["actions_invoked"] == 11
+    assert sweep["offline_actions_covered"] == len(build_acceptance_cases())
+    assert sweep["representative_calls_planned"] == len(build_production_safe_live_sweep_matrix())
+    assert sweep["actions_invoked"] == len(build_production_safe_live_sweep_matrix())
     assert status_paths == ["/ai/status", "/ai/repo/status"]
-    assert representative_paths.count("POST /ai/explain") == 2
-    assert "POST /ai/drafts" in representative_paths
-    assert "POST /ai/investigations" in representative_paths
-    assert "POST /ai/chat" in representative_paths
+    assert representative_paths.count("POST /ai/workflows") == 6
     assert representative_paths.count("POST /ai/repo/chat") == 2
     assert "POST /ai/actions/preview" in representative_paths
     assert "soc_briefing_worker" in representative_paths
+    assert "POST /ai/explain" not in representative_paths
+    assert "POST /ai/drafts" not in representative_paths
+    assert "POST /ai/investigations" not in representative_paths
     assert "POST /ai/actions/confirm" not in representative_paths
     assert sweep["safety"]["live_strategy"] == "representative_unique_backend_execution_paths"
     assert sweep["safety"]["actions_confirm_route_skipped"] is True
+
+
+def test_production_safe_live_sweep_matrix_is_workflow_based_and_non_mutating():
+    matrix = build_production_safe_live_sweep_matrix()
+
+    assert {row["key"] for row in matrix} == {
+        "status.ai_gateway",
+        "status.repo_assistant",
+        "frontend.dashboard.quick_explain",
+        "frontend.alert.deep_investigate",
+        "frontend.alert.decision_support",
+        "frontend.alert.artifact.checklist",
+        "frontend.floating_anakin.ask",
+        "frontend.floating_anakin.low_confidence_chooser",
+        "frontend.repo_architecture.chat.factual",
+        "frontend.repo_architecture.chat.evaluative",
+        "worker.soc_briefing.manual_run_now",
+        "frontend.ai_action.preview.add_incident_note",
+    }
+    assert all(row["mutation"] is False for row in matrix)
+    assert any(row["workflow"] == WORKFLOW_AUTO for row in matrix)
+    assert any(row.get("expected_status") == "chooser_required" for row in matrix)
+    assert any(row.get("non_persistent") is True for row in matrix)
+    assert any(row.get("status_only_default") is True for row in matrix)
+    assert any(row.get("confirmation_skipped") is True for row in matrix)
+    assert all("confirm" not in row["route"] for row in matrix)
+    assert "AI_ACCEPTANCE_LIVE_BACKEND_SWEEP=1" in LIVE_SWEEP_VM_COMMAND
+    assert "/ai/actions/confirm" not in LIVE_SWEEP_VM_COMMAND
 
 
 def test_acceptance_report_renders_grouped_markdown_summary():
@@ -310,4 +345,4 @@ def test_acceptance_report_renders_grouped_markdown_summary():
     assert "Actions discovered" in markdown
     assert "Failures By Root Cause" in markdown
     assert "Live Smoke" in markdown
-    assert "frontend.dashboard.metrics.ask_dashboard" in markdown
+    assert "frontend.dashboard.ask_anakin" in markdown

@@ -16,6 +16,12 @@ function AnakinCommandSurface({
   const toggleRef = useRef(null);
   const panelRef = useRef(null);
   const availableCommands = useMemo(() => commands.filter((command) => !command.disabled), [commands]);
+  const shortcutCommands = useMemo(
+    () => availableCommands.filter((command) =>
+      ["quick_explain", "deep_investigate", "decision_support", "generate_artifact"].includes(command.workflow)
+    ),
+    [availableCommands]
+  );
 
   useEffect(() => {
     if (!open) return undefined;
@@ -34,6 +40,22 @@ function AnakinCommandSurface({
     if (typeof onExecute !== "function" || command.disabled) return;
     onExecute(command, { question });
     if (command.intent === "ask") setQuestion("");
+  };
+
+  const executeFreeform = () => {
+    if (typeof onExecute !== "function" || !question.trim()) return;
+    onExecute(
+      {
+        id: "anakin.ask-freeform",
+        label: "Ask Anakin",
+        group: "Anakin",
+        intent: "ask",
+        workflow: "auto",
+        readOnly: true,
+      },
+      { question }
+    );
+    setQuestion("");
   };
 
   return (
@@ -78,8 +100,7 @@ function AnakinCommandSurface({
               <form
                 onSubmit={(event) => {
                   event.preventDefault();
-                  const ask = availableCommands.find((command) => command.intent === "ask");
-                  if (ask) execute(ask);
+                  executeFreeform();
                 }}
                 style={askStyle}
               >
@@ -101,18 +122,17 @@ function AnakinCommandSurface({
                   Ask Anakin
                 </Button>
               </form>
-              <div style={commandGridStyle}>
-                {availableCommands.map((command) => (
+              <div style={shortcutRowStyle} aria-label="Anakin workflow shortcuts">
+                {shortcutCommands.map((command) => (
                   <button
                     key={command.id}
                     type="button"
                     aria-label={command.label}
                     onClick={() => execute(command)}
                     disabled={disabled}
-                    style={commandButtonStyle}
+                    style={shortcutButtonStyle}
                   >
-                    <span style={commandLabelStyle}>{command.label}</span>
-                    <span style={commandDescriptionStyle}>{command.description}</span>
+                    {command.label}
                   </button>
                 ))}
               </div>
@@ -170,18 +190,17 @@ const textareaStyle = {
   padding: "10px",
   resize: "vertical",
 };
-const commandGridStyle = { display: "grid", gap: theme.spacing.sm, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" };
-const commandButtonStyle = {
-  textAlign: "left",
+const shortcutRowStyle = { display: "flex", gap: theme.spacing.sm, flexWrap: "wrap" };
+const shortcutButtonStyle = {
   border: `1px solid ${theme.color.border}`,
-  borderRadius: theme.radius.sm,
+  borderRadius: "999px",
   backgroundColor: theme.color.bg,
   color: theme.color.text,
-  padding: "11px",
+  padding: "8px 11px",
   cursor: "pointer",
+  fontSize: "12px",
+  fontWeight: 800,
 };
-const commandLabelStyle = { display: "block", fontWeight: 900, marginBottom: "4px" };
-const commandDescriptionStyle = { display: "block", color: theme.color.textMuted, fontSize: "12px", lineHeight: 1.4 };
 const closeStyle = { border: "none", background: "transparent", color: theme.color.text, fontSize: "18px", cursor: "pointer" };
 
 export default AnakinCommandSurface;

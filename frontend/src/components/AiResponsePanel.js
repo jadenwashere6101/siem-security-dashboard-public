@@ -6,6 +6,7 @@ function AiResponsePanel({
   state,
   onDismiss,
   onRetry,
+  onChooseWorkflow,
   onCancel,
   userRole,
 }) {
@@ -17,6 +18,8 @@ function AiResponsePanel({
   const tools = response.tools;
   const draft = response.draft;
   const investigation = response.investigation;
+  const classification = response.classification || metadata?.classification || null;
+  const lifecycle = response.lifecycle || null;
   const toolCalls = Array.isArray(tools?.calls) ? tools.calls : [];
 
   return (
@@ -38,7 +41,7 @@ function AiResponsePanel({
 
       {busy ? (
         <div style={bodyStyle}>
-          <p style={mutedStyle}>Anakin is analyzing current SIEM context...</p>
+          <p style={mutedStyle}>Anakin request is running. Backend lifecycle stages will appear when returned by the workflow service.</p>
           <button type="button" onClick={onCancel} style={secondaryButtonStyle}>Cancel</button>
         </div>
       ) : null}
@@ -52,12 +55,17 @@ function AiResponsePanel({
 
       {state.status === "success" ? (
         <div style={bodyStyle}>
+          {response.status === "chooser_required" ? (
+            <WorkflowChooser response={response} onChooseWorkflow={onChooseWorkflow} />
+          ) : null}
           {response.insufficient_context ? (
             <p style={warningStyle}>{response.error || "There was not enough SIEM context to answer safely."}</p>
           ) : null}
+          {classification ? <WorkflowMetadata classification={classification} metadata={metadata} workflow={response.workflow} /> : null}
+          {lifecycle ? <LifecycleStages lifecycle={lifecycle} /> : null}
           {investigation ? <InvestigationReview investigation={investigation} /> : null}
           {draft ? <DraftReview draft={draft} response={response} userRole={userRole} /> : null}
-          {!draft && !investigation ? (
+          {!draft && !investigation && response.status !== "chooser_required" ? (
             <div style={answerStyle}>{response.answer || response.error || "No answer was returned from Anakin."}</div>
           ) : response.error && !investigation ? (
             <p style={warningStyle}>{response.error}</p>
@@ -93,6 +101,56 @@ function AiResponsePanel({
         </div>
       ) : null}
     </aside>
+  );
+}
+
+function WorkflowMetadata({ classification, metadata, workflow }) {
+  return (
+    <div style={workflowMetaStyle} aria-label="Anakin workflow metadata">
+      <span>Workflow: {formatDraftKey(classification?.classified_workflow || classification?.workflow || workflow || "unknown")}</span>
+      <span>Confidence: {classification?.confidence == null ? "unknown" : Number(classification.confidence).toFixed(2)}</span>
+      <span>Profile: {metadata?.profile || metadata?.routing_profile || "unknown"}</span>
+      <span>Model: {metadata?.model || "local"}</span>
+      {classification?.reason ? <span>{classification.reason}</span> : null}
+    </div>
+  );
+}
+
+function WorkflowChooser({ response, onChooseWorkflow }) {
+  const allowed = Array.isArray(response?.result?.allowed_workflows) ? response.result.allowed_workflows : [];
+  if (!allowed.length || typeof onChooseWorkflow !== "function") {
+    return <p style={warningStyle}>{response.error || "Anakin could not classify this request confidently."}</p>;
+  }
+  return (
+    <div style={chooserStyle} role="group" aria-label="Choose Anakin workflow">
+      <p style={warningStyle}>{response.error || "Anakin needs a workflow choice for this request."}</p>
+      <div style={chooserButtonsStyle}>
+        {allowed.map((workflow) => (
+          <button key={workflow} type="button" onClick={() => onChooseWorkflow(workflow)} style={secondaryButtonStyle}>
+            {formatDraftKey(workflow)}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function LifecycleStages({ lifecycle }) {
+  const stages = Array.isArray(lifecycle?.stages) ? lifecycle.stages : [];
+  if (!stages.length) return null;
+  return (
+    <div style={toolBoxStyle} aria-label="Anakin workflow lifecycle">
+      <p style={toolTitleStyle}>Workflow progress</p>
+      <ol style={investigationStepListStyle}>
+        {stages.map((stage, index) => (
+          <li key={`${stage.stage || "stage"}-${index}`} style={investigationStepStyle}>
+            <strong>{formatDraftKey(stage.stage || "stage")}</strong>
+            <span>{stage.status || "unknown"}</span>
+            {stage.detail ? <small>{stage.detail}</small> : null}
+          </li>
+        ))}
+      </ol>
+    </div>
   );
 }
 
@@ -471,6 +529,9 @@ const answerStyle = { whiteSpace: "pre-wrap", lineHeight: 1.6, fontSize: "14px" 
 const metadataStyle = { display: "grid", gap: "4px", marginTop: "14px", color: "#94a3b8", fontSize: "12px" };
 const primaryButtonStyle = { border: "none", borderRadius: "8px", padding: "8px 12px", background: "#0ea5e9", color: "#fff", cursor: "pointer" };
 const secondaryButtonStyle = { ...primaryButtonStyle, background: "#334155" };
+const workflowMetaStyle = { display: "flex", gap: "6px", flexWrap: "wrap", color: "#bfdbfe", fontSize: "11px", fontWeight: 800 };
+const chooserStyle = { display: "grid", gap: "8px", marginBottom: "12px" };
+const chooserButtonsStyle = { display: "flex", gap: "8px", flexWrap: "wrap" };
 const toolBoxStyle = { marginTop: "14px", border: "1px solid rgba(148, 163, 184, 0.22)", borderRadius: "12px", padding: "12px", background: "rgba(15, 23, 42, 0.68)" };
 const toolTitleStyle = { margin: "0 0 8px", color: "#bae6fd", fontSize: "12px", fontWeight: 800 };
 const toolListStyle = { listStyle: "none", padding: 0, margin: 0, display: "grid", gap: "8px" };

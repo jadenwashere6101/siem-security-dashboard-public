@@ -18,7 +18,7 @@ import {
   MasterDetailPane,
   useMasterDetailFocus,
 } from "./MasterDetailLayout";
-import AiAssistantButton from "./AiAssistantButton";
+import AnakinWorkflowControls, { ANAKIN_WORKFLOWS } from "./AnakinWorkflowControls";
 
 const INCIDENT_STATUS_FILTERS = ["all", "open", "investigating", "resolved", "closed"];
 const INCIDENT_SEVERITY_FILTERS = ["all", "LOW", "MEDIUM", "HIGH", "CRITICAL"];
@@ -454,89 +454,22 @@ function IncidentsPanel({
               </h3>
               <div style={detailHeaderActionsStyle}>
                 {aiEnabled && selectedIncident && typeof onAskAi === "function" ? (
-                  <>
-                    <span style={agentClusterLabelStyle}>Anakin analyst tools</span>
-                    <AiAssistantButton
-                      onClick={() =>
-                        onAskAi({
-                          contextType: "incident",
-                          action: "summarize_incident",
-                          title: `Incident #${selectedIncident.id}`,
-                          question: "Summarize this incident using SIEM evidence.",
-                          context: { incident_id: selectedIncident.id },
-                        })
-                      }
-                    >
-                      Summarize incident
-                    </AiAssistantButton>
-                    <AiAssistantButton
-                      onClick={() =>
-                        onAskAi({
-                          contextType: "incident",
-                          action: "recommend_next_steps",
-                          title: `Next steps for incident #${selectedIncident.id}`,
-                          question: "Recommend read-only next investigation steps for this incident.",
-                          context: { incident_id: selectedIncident.id },
-                        })
-                      }
-                    >
-                      Recommend next steps
-                    </AiAssistantButton>
-                    <AiAssistantButton
-                      onClick={() =>
-                        onAskAi({
-                          contextType: "incident",
-                          action: "recommend_next_steps",
-                          investigation: true,
-                          title: `Guided investigation for incident #${selectedIncident.id}`,
-                          question: "Run a bounded, read-only guided investigation for this incident with timeline evidence, gaps, and recommended analyst next steps.",
-                          context: { incident_id: selectedIncident.id },
-                          toolPolicy: { max_tool_calls: 5, time_window_hours: 24 },
-                        })
-                      }
-                    >
-                      Guided investigation
-                    </AiAssistantButton>
-                    <AiAssistantButton
-                      onClick={() =>
-                        onAskAi({
-                          contextType: "incident",
-                          draftType: "incident_note",
-                          title: `Draft note for incident #${selectedIncident.id}`,
-                          instruction: "Draft an incident note for analyst review only. Do not save it to the incident.",
-                          context: { incident_id: selectedIncident.id },
-                        })
-                      }
-                    >
-                      Draft incident note
-                    </AiAssistantButton>
-                    <AiAssistantButton
-                      onClick={() =>
-                        onAskAi({
-                          contextType: "incident",
-                          draftType: "escalation_summary",
-                          title: `Draft escalation for incident #${selectedIncident.id}`,
-                          instruction: "Draft an escalation summary for analyst review only. Do not send or save it.",
-                          context: { incident_id: selectedIncident.id },
-                        })
-                      }
-                    >
-                      Draft escalation
-                    </AiAssistantButton>
-                    <AiAssistantButton
-                      onClick={() =>
-                        onAskAi({
-                          contextType: "incident",
-                          draftType: "playbook_draft",
-                          title: `Draft playbook for incident #${selectedIncident.id}`,
-                          instruction: "Draft a playbook outline for analyst review only. Do not create or run a playbook.",
-                          context: { incident_id: selectedIncident.id },
-                        })
-                      }
-                    >
-                      Draft playbook
-                    </AiAssistantButton>
-                  </>
+                  <AnakinWorkflowControls
+                    contextType="incident"
+                    context={{ incident_id: selectedIncident.id }}
+                    controls={[
+                      ANAKIN_WORKFLOWS.deepInvestigate,
+                      ANAKIN_WORKFLOWS.decisionSupport,
+                    ]}
+                    artifacts={[
+                      { type: "incident_note", label: "Incident note" },
+                      { type: "escalation_summary", label: "Escalation summary" },
+                      { type: "playbook_draft", label: "Playbook draft" },
+                    ]}
+                    titlePrefix={`Incident #${selectedIncident.id}`}
+                    subject={`incident #${selectedIncident.id}`}
+                    onAskAi={onAskAi}
+                  />
                 ) : null}
                 <button type="button" style={detailCloseButtonStyle} onClick={handleCloseDetail}>
                   Close
@@ -1122,14 +1055,6 @@ const detailHeaderActionsStyle = {
   justifyContent: "flex-end",
   gap: "8px",
   flexWrap: "wrap",
-};
-
-const agentClusterLabelStyle = {
-  color: "#93c5fd",
-  fontSize: "11px",
-  fontWeight: 800,
-  letterSpacing: "0.04em",
-  textTransform: "uppercase",
 };
 
 const detailTitleStyle = {

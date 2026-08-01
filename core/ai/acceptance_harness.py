@@ -37,6 +37,16 @@ from core.ai.repo_assistant_service import _build_prompt as build_repo_prompt, c
 from core.ai.repo_index import RepoChunk
 from core.ai.soc_briefing_investigation_engine import InvestigationBudget
 from core.ai.soc_tools import SocToolExecutionSummary
+from core.ai.workflow_orchestrator import (
+    WORKFLOW_AUTO,
+    WORKFLOW_DEEP_INVESTIGATE,
+    WORKFLOW_DECISION_SUPPORT,
+    WORKFLOW_GENERATE_ARTIFACT,
+    WORKFLOW_QUICK_EXPLAIN,
+    WORKFLOW_REPO_ASSISTANT,
+    WORKFLOW_SOC_BRIEFING,
+    workflow_for_inventory_path,
+)
 
 ROOT_CAUSE_PROMPT_TOO_LARGE = "prompt_too_large"
 ROOT_CAUSE_STALE_CONTEXT = "stale_context"
@@ -56,6 +66,73 @@ DEFAULT_LIVE_THROTTLE_SECONDS = 2.0
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_SOURCE_ROOT = REPO_ROOT / "frontend" / "src"
 ENTITY_AI_CONTEXT_TYPES = {"alert", "source_ip", "incident", "recon_activity", "response_registry", "detection"}
+CANONICAL_ACCEPTANCE_WORKFLOWS = (
+    WORKFLOW_QUICK_EXPLAIN,
+    WORKFLOW_DEEP_INVESTIGATE,
+    WORKFLOW_DECISION_SUPPORT,
+    WORKFLOW_GENERATE_ARTIFACT,
+    WORKFLOW_SOC_BRIEFING,
+    WORKFLOW_REPO_ASSISTANT,
+)
+REMOVED_FRONTEND_AI_LABELS = (
+    "Dashboard summary",
+    "Guided dashboard investigation",
+    "Draft dashboard investigation checklist",
+    "Explain graph/anomaly",
+    "Explain this alert",
+    "Recommend investigation",
+    "Why is this important?",
+    "Explain detection",
+    "Explain this IP",
+    "Is this reconnaissance?",
+    "Summarize activity",
+    "Summarize incident",
+    "Recommend next steps",
+    "Explain recon",
+    "Investigate cluster",
+    "Guided review",
+    "Explain this response",
+    "Draft checklist",
+    "Draft response",
+    "Draft incident note",
+    "Draft escalation",
+    "Draft playbook",
+    "Draft detection change",
+)
+REMOVED_FRONTEND_ACTION_IDS = (
+    "ask_dashboard",
+    "explain_anomaly",
+    "explain_alert",
+    "why_important",
+    "explain_detection",
+    "explain_ip",
+    "assess_reconnaissance",
+    "summarize_activity",
+    "summarize_incident",
+    "explain_recon_activity",
+    "investigate_cluster",
+    "explain_response",
+    "suggestedactions",
+)
+APPROVED_SURFACE_CONTROL_MATRIX = {
+    "Dashboard": ("Ask Anakin", "Quick Explain", "Deep Investigate"),
+    "Alert Details": ("Quick Explain", "Deep Investigate", "Decision Support", "Generate Artifact"),
+    "Source IP": ("Quick Explain", "Deep Investigate", "Decision Support", "Generate Artifact"),
+    "Incident": ("Deep Investigate", "Decision Support", "Generate Artifact"),
+    "SOC Command Center / Recon": ("Deep Investigate", "Decision Support", "Generate Artifact"),
+    "Response Registry": ("Decision Support", "Deep Investigate", "Generate Artifact"),
+    "Analyst Workspace": ("Deep Investigate", "Decision Support", "Generate Artifact"),
+    "Global Anakin": ("Ask Anakin", "Quick Explain", "Deep Investigate", "Decision Support", "Generate Artifact"),
+    "Command Palette": ("Quick Explain", "Deep Investigate", "Decision Support", "Generate Artifact", "SOC Briefing", "Repo Assistant"),
+    "SOC Briefings": ("Generate/Run Briefing",),
+    "Repo Assistant": ("Dedicated assistant",),
+}
+LIVE_SWEEP_VM_COMMAND = (
+    "AI_ACCEPTANCE_LIVE_BACKEND_SWEEP=1 "
+    "AI_ACCEPTANCE_SESSION_COOKIE='<authenticated-session-cookie>' "
+    ".venv/bin/python -m pytest tests/test_ai_acceptance_harness.py "
+    "-q -k live_backend_sweep_runs_status_checks_and_representative_plan_only"
+)
 
 
 @dataclass(frozen=True)
@@ -74,6 +151,7 @@ class HarnessInventoryEntry:
     selector_type: str
     selector: str
     profile: str
+    workflow: str
     notes: str = ""
 
     def as_dict(self) -> dict[str, str]:
@@ -135,6 +213,18 @@ class AcceptanceReport:
         }
 
 
+@dataclass(frozen=True)
+class GoldenReasoningCase:
+    key: str
+    workflow: str
+    scenario: str
+    question: str
+    context: dict[str, Any]
+    expected_answer: str
+    required_terms: tuple[str, ...]
+    forbidden_terms: tuple[str, ...] = ()
+
+
 def build_acceptance_cases() -> dict[str, AcceptanceCase]:
     inventory, frontend_options = build_complete_ai_inventory()
     return {entry.key: _case_for_entry(entry, frontend_options=frontend_options) for entry in inventory}
@@ -168,6 +258,24 @@ def build_complete_ai_inventory() -> tuple[tuple[HarnessInventoryEntry, ...], di
             continue
         seen.add(entry.key)
         frontend_options[entry.key] = contract
+        entries.append(entry)
+
+    for legacy in AI_INVOCATION_INVENTORY:
+        key = f"legacy_adapter.{legacy.key}"
+        if key in seen:
+            continue
+        entry = HarnessInventoryEntry(
+            key=key,
+            frontend_surface=f"Legacy backend compatibility adapter: {legacy.frontend_surface}",
+            backend_path=legacy.backend_path,
+            selector_type=legacy.selector_type,
+            selector=legacy.selector,
+            profile=legacy.profile,
+            workflow=workflow_for_inventory_path(legacy.backend_path, legacy.selector_type, legacy.selector),
+            notes="Legacy route retained as backend compatibility adapter, not a surviving consolidated frontend control.",
+        )
+        seen.add(key)
+        frontend_options[key] = _legacy_options_for_inventory_entry(legacy)
         entries.append(entry)
 
     return tuple(entries), frontend_options
@@ -242,6 +350,272 @@ def run_offline_contract_tier(config: AiGatewayConfig | None = None) -> Acceptan
         actions_covered=len(set(cases) & set(inventory_by_key)),
         results=results,
         failures_by_root_cause=failures,
+    )
+
+
+def build_golden_reasoning_cases() -> tuple[GoldenReasoningCase, ...]:
+    return (
+        GoldenReasoningCase(
+            key="golden.password_spray_no_success",
+            workflow=WORKFLOW_DEEP_INVESTIGATE,
+            scenario="likely password spray with no successful login",
+            question="Is this a password spray?",
+            context={"failed_logins": 84, "successful_logins": 0, "distinct_users": 39, "window": "12m"},
+            expected_answer=(
+                "Most important: this looks like a password-spray pattern, but the absence of successful logins keeps the recommendation at investigate/escalate-not-contain. "
+                "Fact: many failed logins hit many users in a short window. Inference: a low-and-wide spray is plausible. "
+                "Against it: no success and no post-auth activity are shown. Missing evidence: source reputation, MFA prompts, lockouts, and any success after the window. "
+                "Confidence: medium. Next check: inspect authentication logs for successful login, MFA fatigue, or impossible-travel events from the same source."
+            ),
+            required_terms=("most important", "fact", "inference", "against", "missing evidence", "confidence", "next check", "successful login"),
+            forbidden_terms=("definitely compromised",),
+        ),
+        GoldenReasoningCase(
+            key="golden.commodity_recon_low_value",
+            workflow=WORKFLOW_DEEP_INVESTIGATE,
+            scenario="noisy commodity recon that may not deserve escalation",
+            question="Should this recon be escalated?",
+            context={"scanner_reputation": "commodity", "linked_alerts": 3, "successful_connections": 0},
+            expected_answer=(
+                "Most important: this is probably low-value commodity recon unless it lines up with a protected service or a new internal target. "
+                "Fact: the evidence shows scanning noise and no confirmed access. Inference: escalation is weak right now. "
+                "Against escalation: commodity reputation and no successful follow-up. Missing evidence: target criticality and whether this source repeats across tuned detections. "
+                "Confidence: medium-high. Next check: inspect related alerts for the same source against sensitive destinations before escalating."
+            ),
+            required_terms=("low-value", "fact", "inference", "against", "missing evidence", "confidence", "next check"),
+            forbidden_terms=("escalate immediately",),
+        ),
+        GoldenReasoningCase(
+            key="golden.high_severity_weak_followup",
+            workflow=WORKFLOW_QUICK_EXPLAIN,
+            scenario="high-severity alert with weak follow-up evidence",
+            question="What matters here?",
+            context={"severity": "high", "follow_up_events": 0, "target": "vpn"},
+            expected_answer=(
+                "Most important: the high severity deserves attention, but the follow-up evidence is thin. "
+                "Fact: the alert is high severity and targets VPN. Inference: it may be an early signal rather than proven impact. "
+                "Uncertainty: no related success or lateral movement is shown. Confidence: low-medium. Next check: inspect VPN auth successes and target-side events in the same window."
+            ),
+            required_terms=("most important", "fact", "inference", "uncertainty", "confidence", "next check"),
+            forbidden_terms=("confirmed compromise",),
+        ),
+        GoldenReasoningCase(
+            key="golden.incident_supporting_and_contradicting",
+            workflow=WORKFLOW_DEEP_INVESTIGATE,
+            scenario="incident with supporting and contradicting evidence",
+            question="How strong is this incident?",
+            context={"supports": ["repeated deny", "same source"], "contradicts": ["known scanner", "no successful session"]},
+            expected_answer=(
+                "Most important: the incident is worth keeping open, but the evidence supports investigation more than containment. "
+                "Supporting evidence: repeated denies from the same source. Contradicting evidence: known scanner behavior and no successful session. "
+                "Missing evidence: asset criticality, target logs, and whether the source appears in prior incidents. Confidence: medium. "
+                "Next step: inspect target-side logs and related source-IP history before escalating."
+            ),
+            required_terms=("supporting evidence", "contradicting evidence", "missing evidence", "confidence", "next step"),
+        ),
+        GoldenReasoningCase(
+            key="golden.graph_spike_one_source",
+            workflow=WORKFLOW_QUICK_EXPLAIN,
+            scenario="graph spike dominated by one source",
+            question="Explain this dashboard spike.",
+            context={"spike": "large", "dominant_source": "203.0.113.10", "other_sources": 2},
+            expected_answer=(
+                "Most important: the spike is dominated by one source, so treat it as a concentrated investigation rather than a broad environment-wide surge. "
+                "Fact: one source accounts for most of the graph movement. Inference: a noisy scanner or repeated retry loop is plausible. "
+                "Uncertainty: target spread and success outcomes are not shown. Confidence: medium. Next check: inspect that source's target distribution and outcome history."
+            ),
+            required_terms=("most important", "one source", "fact", "inference", "uncertainty", "confidence", "next check"),
+        ),
+        GoldenReasoningCase(
+            key="golden.decision_monitor_escalate_block",
+            workflow=WORKFLOW_DECISION_SUPPORT,
+            scenario="decision between monitor, escalate, or block",
+            question="Should I block, monitor, or escalate?",
+            context={"severity": "medium", "success": False, "protected_target": True},
+            expected_answer=(
+                "Primary recommendation: escalate for analyst review, not block yet. "
+                "Reasoning: the protected target raises impact, but no success or active compromise is shown. "
+                "Alternative: monitor if target criticality is low; block only if repeated attempts continue or a confirmed malicious source is validated. "
+                "Risk: blocking too early may disrupt legitimate NAT or scanner traffic. Missing evidence: target auth outcomes and source legitimacy. "
+                "Confidence: medium. What would change it: successful auth, exploit evidence, or repeated hits on critical services. "
+                "Next step: inspect target auth outcomes before containment."
+            ),
+            required_terms=("primary recommendation", "alternative", "risk", "confidence", "what would change", "not block yet"),
+            forbidden_terms=("draft", "applied", "confirmed action"),
+        ),
+        GoldenReasoningCase(
+            key="golden.soc_briefing_noise_and_trend",
+            workflow="soc_briefing",
+            scenario="SOC briefing with low-value noise and one important trend",
+            question="Generate briefing.",
+            context={"noise": "commodity scanners", "trend": "vpn denies increasing", "important": "one protected target"},
+            expected_answer=(
+                "Attention first: VPN denies against the protected target increased and deserve review. "
+                "Probably ignore: commodity scanner noise with no successful follow-up. "
+                "Trend: repeated VPN targeting is rising in the window. Evidence gaps: target-side auth outcomes and whether the source repeats across incidents. "
+                "Next actions: inspect VPN auth successes, source-IP history, and target criticality before containment."
+            ),
+            required_terms=("attention first", "probably ignore", "trend", "evidence gaps", "next actions"),
+            forbidden_terms=("raw alert inventory",),
+        ),
+        GoldenReasoningCase(
+            key="golden.repo_most_impressive_feature",
+            workflow="repo_assistant",
+            scenario="What is my most impressive feature?",
+            question="What is my most impressive feature?",
+            context={"repo_features": ["AI acceptance harness", "SOC briefing worker", "preview-confirm gates"]},
+            expected_answer=(
+                "Answer: the most impressive feature is the AI acceptance and safety architecture around Anakin. "
+                "Repository fact: the code has workflow routing, offline acceptance coverage, preview/confirm gates, and read-only SOC briefing controls. "
+                "Judgment: that is stronger than a single flashy screen because it makes AI behavior testable and safer to operate. "
+                "Uncertainty: this judgment depends on the supplied repository excerpts. Safe next step: compare it against the cited implementation files."
+            ),
+            required_terms=("answer", "repository fact", "judgment", "uncertainty", "acceptance"),
+        ),
+    )
+
+
+def evaluate_golden_reasoning_answer(case: GoldenReasoningCase, answer: str) -> dict[str, bool]:
+    text = str(answer or "").lower()
+    required = {f"has_{term.replace(' ', '_')}": term.lower() in text for term in case.required_terms}
+    forbidden = {f"omits_{term.replace(' ', '_')}": term.lower() not in text for term in case.forbidden_terms}
+    generic_continue = "continue monitoring" in text and not any(
+        term in text for term in ("inspect", "auth", "source", "target", "window", "successful", "destination")
+    )
+    return {
+        "not_empty": bool(text.strip()),
+        "specific_next_step": any(term in text for term in ("next check", "next step", "next action", "next actions")),
+        "states_uncertainty_or_missing_evidence": any(term in text for term in ("uncertainty", "missing evidence", "evidence gaps")),
+        "not_generic_monitoring": not generic_continue,
+        **required,
+        **forbidden,
+    }
+
+
+def removed_frontend_ai_controls_present(source_root: Path | None = None) -> dict[str, list[str]]:
+    source_root = source_root or FRONTEND_SOURCE_ROOT
+    labels: list[str] = []
+    action_ids: list[str] = []
+    for path in sorted(source_root.glob("components/**/*.js")):
+        if path.name.endswith(".test.js"):
+            continue
+        text = path.read_text(encoding="utf-8")
+        for label in REMOVED_FRONTEND_AI_LABELS:
+            if label in text:
+                labels.append(f"{path.relative_to(source_root).as_posix()}::{label}")
+        for action_id in REMOVED_FRONTEND_ACTION_IDS:
+            if re.search(rf"\b{re.escape(action_id)}\b", text):
+                action_ids.append(f"{path.relative_to(source_root).as_posix()}::{action_id}")
+    return {"labels": labels, "action_ids": action_ids}
+
+
+def build_workflow_acceptance_summary() -> dict[str, Any]:
+    inventory, frontend_options = build_complete_ai_inventory()
+    report = run_offline_contract_tier()
+    workflow_counts = {workflow: 0 for workflow in CANONICAL_ACCEPTANCE_WORKFLOWS}
+    for entry in inventory:
+        if entry.workflow in workflow_counts:
+            workflow_counts[entry.workflow] += 1
+    controls_by_surface = {
+        surface: list(controls)
+        for surface, controls in APPROVED_SURFACE_CONTROL_MATRIX.items()
+    }
+    obsolete = removed_frontend_ai_controls_present()
+    unmapped = [
+        entry.key
+        for entry in inventory
+        if entry.workflow not in CANONICAL_ACCEPTANCE_WORKFLOWS
+    ]
+    return {
+        "workflows": workflow_counts,
+        "controls_by_surface": controls_by_surface,
+        "actions_discovered": report.actions_discovered,
+        "actions_covered": report.actions_covered,
+        "offline_failures": sum(len(items) for items in report.failures_by_root_cause.values()),
+        "failures_by_root_cause": report.failures_by_root_cause,
+        "unmapped": unmapped,
+        "obsolete_frontend_controls": obsolete,
+        "legacy_adapter_count": sum(1 for entry in inventory if entry.key.startswith("legacy_adapter.")),
+        "canonical_frontend_count": sum(1 for entry in inventory if not entry.key.startswith("legacy_adapter.")),
+        "frontend_option_keys": sorted(frontend_options),
+    }
+
+
+def build_workflow_representative_fixtures() -> tuple[dict[str, Any], ...]:
+    return (
+        {
+            "workflow": WORKFLOW_QUICK_EXPLAIN,
+            "key": "fixture.quick_explain.high_severity_weak_followup",
+            "context_type": "alert",
+            "prompt": "What matters about this high severity alert?",
+            "context": {"alert_id": 1001, "severity": "HIGH", "successful_followup": False},
+            "expected_profile": AI_PROFILE_FAST_TRIAGE,
+            "expected_route": "POST /ai/workflows",
+        },
+        {
+            "workflow": WORKFLOW_DEEP_INVESTIGATE,
+            "key": "fixture.deep_investigate.password_spray_no_success",
+            "context_type": "alert",
+            "prompt": "Deep investigate this likely password spray with no successful login.",
+            "context": {"alert_id": 1001, "failed_logins": 84, "successful_logins": 0},
+            "expected_profile": AI_PROFILE_GUIDED_ANALYSIS,
+            "expected_route": "POST /ai/workflows",
+        },
+        {
+            "workflow": WORKFLOW_DECISION_SUPPORT,
+            "key": "fixture.decision_support.monitor_escalate_block",
+            "context_type": "source_ip",
+            "prompt": "Should I monitor, escalate, or block?",
+            "context": {"source_ip": "203.0.113.77", "protected_target": True, "success": False},
+            "expected_profile": AI_PROFILE_GUIDED_ANALYSIS,
+            "expected_route": "POST /ai/workflows",
+        },
+        {
+            "workflow": WORKFLOW_GENERATE_ARTIFACT,
+            "key": "fixture.generate_artifact.investigation_checklist",
+            "context_type": "alert",
+            "prompt": "Generate an investigation checklist for review only.",
+            "artifact": {"type": "investigation_checklist"},
+            "context": {"alert_id": 1001, "source_ip": "203.0.113.77"},
+            "expected_profile": AI_PROFILE_GUIDED_ANALYSIS,
+            "expected_route": "POST /ai/workflows",
+            "non_persistent": True,
+        },
+        {
+            "workflow": WORKFLOW_SOC_BRIEFING,
+            "key": "fixture.soc_briefing.status_only",
+            "context_type": "soc_briefing",
+            "prompt": "Read SOC briefing status only.",
+            "expected_profile": AI_PROFILE_DEEP_BRIEFING,
+            "expected_route": "soc_briefing_worker",
+            "status_only": True,
+        },
+        {
+            "workflow": WORKFLOW_REPO_ASSISTANT,
+            "key": "fixture.repo_assistant.evaluative",
+            "context_type": "repository",
+            "prompt": "What is my most impressive feature?",
+            "expected_profile": AI_PROFILE_DEVELOPER_ASSISTANT,
+            "expected_route": "POST /ai/repo/chat",
+            "citations_backend_owned": True,
+        },
+    )
+
+
+def build_production_safe_live_sweep_matrix() -> tuple[dict[str, Any], ...]:
+    return (
+        {"key": "status.ai_gateway", "route": "GET /ai/status", "workflow": "status", "mutation": False},
+        {"key": "status.repo_assistant", "route": "GET /ai/repo/status", "workflow": "status", "mutation": False},
+        {"key": "frontend.dashboard.quick_explain", "route": "POST /ai/workflows", "workflow": WORKFLOW_QUICK_EXPLAIN, "mutation": False},
+        {"key": "frontend.alert.deep_investigate", "route": "POST /ai/workflows", "workflow": WORKFLOW_DEEP_INVESTIGATE, "mutation": False},
+        {"key": "frontend.alert.decision_support", "route": "POST /ai/workflows", "workflow": WORKFLOW_DECISION_SUPPORT, "mutation": False},
+        {"key": "frontend.alert.artifact.checklist", "route": "POST /ai/workflows", "workflow": WORKFLOW_GENERATE_ARTIFACT, "mutation": False, "non_persistent": True},
+        {"key": "frontend.floating_anakin.ask", "route": "POST /ai/workflows", "workflow": WORKFLOW_AUTO, "mutation": False},
+        {"key": "frontend.floating_anakin.low_confidence_chooser", "route": "POST /ai/workflows", "workflow": WORKFLOW_AUTO, "expected_status": "chooser_required", "mutation": False},
+        {"key": "frontend.repo_architecture.chat.factual", "route": "POST /ai/repo/chat", "workflow": WORKFLOW_REPO_ASSISTANT, "mutation": False},
+        {"key": "frontend.repo_architecture.chat.evaluative", "route": "POST /ai/repo/chat", "workflow": WORKFLOW_REPO_ASSISTANT, "mutation": False},
+        {"key": "worker.soc_briefing.manual_run_now", "route": "GET /soc-briefings/control", "workflow": WORKFLOW_SOC_BRIEFING, "mutation": False, "status_only_default": True},
+        {"key": "frontend.ai_action.preview.add_incident_note", "route": "POST /ai/actions/preview", "workflow": WORKFLOW_GENERATE_ARTIFACT, "mutation": False, "confirmation_skipped": True},
     )
 
 
@@ -423,31 +797,16 @@ def _select_live_representative_cases(
         selected.append((entry, cases[key]))
         used.add(key)
 
-    def add_first(label: str, predicate) -> None:
-        for entry in inventory:
-            if entry.key in used:
-                continue
-            if predicate(entry):
-                selected.append((entry, cases[entry.key]))
-                used.add(entry.key)
-                return
-        raise ValueError(f"Missing live representative case: {label}")
-
-    add_first(
-        "POST /ai/explain fast_triage",
-        lambda entry: entry.backend_path == "POST /ai/explain" and entry.profile == AI_PROFILE_FAST_TRIAGE,
-    )
-    add_first(
-        "POST /ai/explain guided_analysis",
-        lambda entry: entry.backend_path == "POST /ai/explain" and entry.profile == AI_PROFILE_GUIDED_ANALYSIS,
-    )
-    add_first("POST /ai/drafts", lambda entry: entry.backend_path == "POST /ai/drafts")
-    add_first("POST /ai/investigations", lambda entry: entry.backend_path == "POST /ai/investigations")
-    add("frontend.floating_chat.general")
+    add("frontend.dashboard.quick_explain")
+    add("frontend.alert.deep_investigate")
+    add("frontend.alert.decision_support")
+    add("frontend.alert.artifact.checklist")
+    add("frontend.floating_anakin.ask")
+    add("frontend.floating_anakin.low_confidence_chooser")
     add("frontend.repo_architecture.chat.factual")
     add("frontend.repo_architecture.chat.evaluative")
-    add("frontend.ai_action.preview.add_incident_note")
     add("worker.soc_briefing.manual_run_now")
+    add("frontend.ai_action.preview.add_incident_note")
     return selected
 
 
@@ -503,6 +862,8 @@ def _live_ai_action_check(
     success_statuses = {"success", "partial"}
     if entry.backend_path == "POST /ai/actions/preview":
         success_statuses.add("preview_ready")
+    if entry.key == "frontend.floating_anakin.low_confidence_chooser":
+        success_statuses.add("chooser_required")
     success = 200 <= status_code < 300 and status in success_statuses and not error_value
     return {
         "frontend_action_id": entry.key,
@@ -818,8 +1179,11 @@ def _run_case(entry: AiInvocationInventoryEntry, case: AcceptanceCase, config: A
     response_time_ms = int((time.monotonic() - started) * 1000)
     prompt_size = len(prompt)
     usefulness = _usefulness_checks(_sample_response_for_case(entry, case))
-    if entry.backend_path == "POST /ai/drafts":
-        draft_type = str(case.request_payload.get("draft_type") or "investigation_checklist")
+    if entry.backend_path == "POST /ai/drafts" or (
+        entry.backend_path == "POST /ai/workflows" and case.request_payload.get("workflow") == WORKFLOW_GENERATE_ARTIFACT
+    ):
+        artifact = case.request_payload.get("artifact") if isinstance(case.request_payload.get("artifact"), dict) else {}
+        draft_type = str(case.request_payload.get("draft_type") or artifact.get("type") or "investigation_checklist")
         try:
             parsed_sample = json.loads(_sample_response_for_case(entry, case))
         except json.JSONDecodeError:
@@ -869,6 +1233,60 @@ def _run_case(entry: AiInvocationInventoryEntry, case: AcceptanceCase, config: A
 
 def _prompt_for_case(entry: AiInvocationInventoryEntry, case: AcceptanceCase, config: AiGatewayConfig) -> str:
     profile = config.profile(entry.profile)
+    if entry.backend_path == "POST /ai/workflows":
+        payload = case.request_payload
+        workflow = str(payload.get("workflow") or entry.selector)
+        context_type = str(payload.get("context_type") or "general")
+        question = str(payload.get("prompt") or case.sample_question)
+        if workflow == WORKFLOW_GENERATE_ARTIFACT:
+            artifact = payload.get("artifact") if isinstance(payload.get("artifact"), dict) else {}
+            draft_type = str(artifact.get("type") or "investigation_checklist")
+            request = DraftRequest(
+                draft_type=draft_type,
+                instruction=question,
+                context_type=context_type,
+                context=payload.get("context") if isinstance(payload.get("context"), dict) else _entity_context_for_type(context_type),
+                client_request_id="acceptance-workflow-draft",
+            )
+            return _build_draft_prompt(
+                request,
+                _fixture_context(context_type),
+                SocToolExecutionSummary(used=False),
+                config=config,
+                profile_max_prompt_chars=profile.max_prompt_chars,
+            )
+        if workflow == WORKFLOW_DEEP_INVESTIGATE:
+            request_context = payload.get("context") if isinstance(payload.get("context"), dict) else _entity_context_for_type(context_type)
+            context = _fixture_context(context_type)
+            plan = build_investigation_plan(context_type=context_type, context=request_context, question=question)
+            routing = classify_routing_profile(
+                workflow_type=plan.workflow_type,
+                context_type=plan.context_type,
+                context_payload=context,
+                planned_tool_calls=len(plan.tool_calls),
+                successful_sources=len(context.sources),
+                failed_sources=0,
+                truncated=context.truncated,
+                draft_decision={"decision": "skipped", "reason": "acceptance contract"},
+                config=config,
+                remaining_timeout_seconds=60,
+            )
+            return _build_correlation_prompt(
+                plan=plan,
+                question=question,
+                ai_context=context,
+                tools=SocToolExecutionSummary(used=False),
+                routing=routing,
+                config=config,
+                profile_max_prompt_chars=profile.max_prompt_chars,
+            )
+        return build_explainer_prompt(
+            _fixture_context(context_type),
+            action=workflow if workflow != WORKFLOW_DECISION_SUPPORT else "recommend_next_steps",
+            question=question,
+            config=config,
+            profile_max_prompt_chars=profile.max_prompt_chars,
+        )
     if entry.backend_path == "POST /ai/explain":
         payload = case.request_payload
         return build_explainer_prompt(
@@ -1039,6 +1457,24 @@ def build_frontend_realistic_request(options: dict[str, Any], *, active_section:
         "command": contextual_command,
         **entity_context,
     }
+    if options.get("workflow") or options.get("artifactType"):
+        payload = {
+            "workflow": options.get("workflow") or "auto",
+            "prompt": options.get("prompt") or options.get("question") or options.get("instruction") or "",
+            "context_type": options.get("contextType"),
+            "entity": entity_context,
+            "context": context,
+            "tool_policy": options.get("toolPolicy") or (
+                {"max_tool_calls": 5, "time_window_hours": 24}
+                if options.get("workflow") == WORKFLOW_DEEP_INVESTIGATE
+                else None
+            ),
+        }
+        if options.get("artifactType"):
+            payload["artifact"] = {"type": options.get("artifactType")}
+        if payload.get("tool_policy") is None:
+            payload.pop("tool_policy", None)
+        return payload, "POST /ai/workflows"
     if options.get("draftType"):
         return (
             {
@@ -1076,7 +1512,18 @@ def build_frontend_realistic_request(options: dict[str, Any], *, active_section:
 def _inventory_entry_for_frontend_option(discovered: FrontendAiOption, options: dict[str, Any]) -> HarnessInventoryEntry:
     _payload, route = build_frontend_realistic_request(options, active_section=_active_section_for_context(_normalize_context_type(options.get("contextType"))))
     selector = str(options.get("draftType") or options.get("action") or "ask_anakin")
-    if route == "POST /ai/drafts":
+    if route == "POST /ai/workflows":
+        selector = str(options.get("workflow") or "auto")
+        if selector == WORKFLOW_QUICK_EXPLAIN:
+            selector_type = "workflow"
+            profile = AI_PROFILE_FAST_TRIAGE
+        elif selector in {WORKFLOW_DEEP_INVESTIGATE, WORKFLOW_DECISION_SUPPORT, WORKFLOW_GENERATE_ARTIFACT}:
+            selector_type = "workflow"
+            profile = AI_PROFILE_GUIDED_ANALYSIS
+        else:
+            selector_type = "workflow"
+            profile = profile_for_chat()
+    elif route == "POST /ai/drafts":
         selector_type = "draft_type"
         profile = profile_for_draft_type(selector)
     elif route == "POST /ai/investigations":
@@ -1099,6 +1546,7 @@ def _inventory_entry_for_frontend_option(discovered: FrontendAiOption, options: 
         selector_type=selector_type,
         selector=selector,
         profile=profile,
+        workflow=workflow_for_inventory_path(route, selector_type, selector),
         notes="Discovered from real frontend onAskAi payload construction.",
     )
 
@@ -1107,7 +1555,18 @@ def _inventory_entry_for_static_contract(options: dict[str, Any]) -> HarnessInve
     key = str(options["contract_key"])
     _payload, route = build_frontend_realistic_request(options, active_section=_active_section_for_context(_normalize_context_type(options.get("contextType"))))
     selector = str(options.get("draftType") or options.get("action") or options.get("selector") or "ask_anakin")
-    if route == "POST /ai/chat":
+    if route == "POST /ai/workflows":
+        selector = str(options.get("workflow") or "auto")
+        if selector == WORKFLOW_QUICK_EXPLAIN:
+            selector_type = "workflow"
+            profile = AI_PROFILE_FAST_TRIAGE
+        elif selector in {WORKFLOW_DEEP_INVESTIGATE, WORKFLOW_DECISION_SUPPORT, WORKFLOW_GENERATE_ARTIFACT}:
+            selector_type = "workflow"
+            profile = AI_PROFILE_GUIDED_ANALYSIS
+        else:
+            selector_type = "workflow"
+            profile = profile_for_chat()
+    elif route == "POST /ai/chat":
         selector_type = "route"
         profile = profile_for_chat()
     elif route == "POST /ai/repo/chat":
@@ -1135,29 +1594,81 @@ def _inventory_entry_for_static_contract(options: dict[str, Any]) -> HarnessInve
         selector_type=selector_type,
         selector=selector,
         profile=profile,
+        workflow=workflow_for_inventory_path(route, selector_type, selector),
         notes=str(options.get("source") or "static acceptance contract"),
     )
 
 
 def _static_surface_contracts() -> list[dict[str, Any]]:
-    return [
+    contracts = [
+        _workflow_contract("frontend.dashboard.ask_anakin", "Dashboard Ask Anakin", "dashboard", "auto", context={"dashboard_id": "summary"}),
+        _workflow_contract("frontend.dashboard.quick_explain", "Dashboard Quick Explain", "dashboard", WORKFLOW_QUICK_EXPLAIN, context={"dashboard_id": "summary"}),
+        _workflow_contract("frontend.dashboard.deep_investigate", "Dashboard Deep Investigate", "dashboard", WORKFLOW_DEEP_INVESTIGATE, context={"dashboard_id": "summary"}),
+        _workflow_contract("frontend.alert.quick_explain", "Alert Details Quick Explain", "alert", WORKFLOW_QUICK_EXPLAIN, context={"alert_id": 1001, "source_ip": "203.0.113.77"}),
+        _workflow_contract("frontend.alert.deep_investigate", "Alert Details Deep Investigate", "alert", WORKFLOW_DEEP_INVESTIGATE, context={"alert_id": 1001, "source_ip": "203.0.113.77"}),
+        _workflow_contract("frontend.alert.decision_support", "Alert Details Decision Support", "alert", WORKFLOW_DECISION_SUPPORT, context={"alert_id": 1001, "source_ip": "203.0.113.77"}),
+        _workflow_contract("frontend.alert.artifact.checklist", "Alert Details Generate Artifact: checklist", "alert", WORKFLOW_GENERATE_ARTIFACT, artifact_type="investigation_checklist", context={"alert_id": 1001, "source_ip": "203.0.113.77"}),
+        _workflow_contract("frontend.alert.artifact.detection_change", "Alert Details Generate Artifact: detection change", "detection", WORKFLOW_GENERATE_ARTIFACT, artifact_type="detection_rule_change", context={"alert_id": 1001, "source_ip": "203.0.113.77"}),
+        _workflow_contract("frontend.alert.artifact.response_recommendation", "Alert Details Generate Artifact: response recommendation", "alert", WORKFLOW_GENERATE_ARTIFACT, artifact_type="response_recommendation", context={"alert_id": 1001, "source_ip": "203.0.113.77"}),
+        _workflow_contract("frontend.source_ip.quick_explain", "Source IP Quick Explain", "source_ip", WORKFLOW_QUICK_EXPLAIN, context={"source_ip": "203.0.113.77"}),
+        _workflow_contract("frontend.source_ip.deep_investigate", "Source IP Deep Investigate", "source_ip", WORKFLOW_DEEP_INVESTIGATE, context={"source_ip": "203.0.113.77"}),
+        _workflow_contract("frontend.source_ip.decision_support", "Source IP Decision Support", "source_ip", WORKFLOW_DECISION_SUPPORT, context={"source_ip": "203.0.113.77"}),
+        _workflow_contract("frontend.source_ip.artifact.response_recommendation", "Source IP Generate Artifact: response recommendation", "source_ip", WORKFLOW_GENERATE_ARTIFACT, artifact_type="response_recommendation", context={"source_ip": "203.0.113.77"}),
+        _workflow_contract("frontend.source_ip.artifact.checklist", "Source IP Generate Artifact: checklist", "source_ip", WORKFLOW_GENERATE_ARTIFACT, artifact_type="investigation_checklist", context={"source_ip": "203.0.113.77"}),
+        _workflow_contract("frontend.incident.deep_investigate", "Incident Deep Investigate", "incident", WORKFLOW_DEEP_INVESTIGATE, context={"incident_id": 2002}),
+        _workflow_contract("frontend.incident.decision_support", "Incident Decision Support", "incident", WORKFLOW_DECISION_SUPPORT, context={"incident_id": 2002}),
+        _workflow_contract("frontend.incident.artifact.note", "Incident Generate Artifact: note", "incident", WORKFLOW_GENERATE_ARTIFACT, artifact_type="incident_note", context={"incident_id": 2002}),
+        _workflow_contract("frontend.incident.artifact.escalation", "Incident Generate Artifact: escalation summary", "incident", WORKFLOW_GENERATE_ARTIFACT, artifact_type="escalation_summary", context={"incident_id": 2002}),
+        _workflow_contract("frontend.incident.artifact.playbook", "Incident Generate Artifact: playbook draft", "incident", WORKFLOW_GENERATE_ARTIFACT, artifact_type="playbook_draft", context={"incident_id": 2002}),
+        _workflow_contract("frontend.recon.deep_investigate", "SOC Command Center Recon Deep Investigate", "recon_activity", WORKFLOW_DEEP_INVESTIGATE, context={"activity_id": 3003}),
+        _workflow_contract("frontend.recon.decision_support", "SOC Command Center Recon Decision Support", "recon_activity", WORKFLOW_DECISION_SUPPORT, context={"activity_id": 3003}),
+        _workflow_contract("frontend.recon.artifact.checklist", "SOC Command Center Recon Generate Artifact: checklist", "recon_activity", WORKFLOW_GENERATE_ARTIFACT, artifact_type="investigation_checklist", context={"activity_id": 3003}),
+        _workflow_contract("frontend.recon.artifact.response_recommendation", "SOC Command Center Recon Generate Artifact: response recommendation", "recon_activity", WORKFLOW_GENERATE_ARTIFACT, artifact_type="response_recommendation", context={"activity_id": 3003}),
+        _workflow_contract("frontend.response_registry.decision_support", "Response Registry Decision Support", "response_registry", WORKFLOW_DECISION_SUPPORT, context={"registry_id": 4004, "source_ip": "203.0.113.77"}),
+        _workflow_contract("frontend.response_registry.deep_investigate", "Response Registry Deep Investigate", "response_registry", WORKFLOW_DEEP_INVESTIGATE, context={"registry_id": 4004, "source_ip": "203.0.113.77"}),
+        _workflow_contract("frontend.response_registry.artifact.response_recommendation", "Response Registry Generate Artifact: response recommendation", "response_registry", WORKFLOW_GENERATE_ARTIFACT, artifact_type="response_recommendation", context={"registry_id": 4004, "source_ip": "203.0.113.77"}),
+        _workflow_contract("frontend.analyst_workspace.deep_investigate", "Analyst Workspace Deep Investigate", "general", WORKFLOW_DEEP_INVESTIGATE, context={"investigation_id": 5005}),
+        _workflow_contract("frontend.analyst_workspace.decision_support", "Analyst Workspace Decision Support", "general", WORKFLOW_DECISION_SUPPORT, context={"investigation_id": 5005}),
+        _workflow_contract("frontend.analyst_workspace.artifact.checklist", "Analyst Workspace Generate Artifact: checklist", "general", WORKFLOW_GENERATE_ARTIFACT, artifact_type="investigation_checklist", context={"investigation_id": 5005}),
+        _workflow_contract("frontend.analyst_workspace.artifact.note", "Analyst Workspace Generate Artifact: incident note", "general", WORKFLOW_GENERATE_ARTIFACT, artifact_type="incident_note", context={"investigation_id": 5005}),
+        _workflow_contract("frontend.analyst_workspace.artifact.escalation", "Analyst Workspace Generate Artifact: escalation summary", "general", WORKFLOW_GENERATE_ARTIFACT, artifact_type="escalation_summary", context={"investigation_id": 5005}),
+        _workflow_contract("frontend.floating_anakin.ask", "Global Anakin Ask Anakin", "general", "auto", context={"active_section": "dashboard"}),
+        _workflow_contract(
+            "frontend.floating_anakin.low_confidence_chooser",
+            "Global Anakin low-confidence chooser",
+            "general",
+            "auto",
+            context={"active_section": "dashboard"},
+            question="run briefing, repo deploy, and approve the action",
+        ),
+        _workflow_contract("frontend.floating_anakin.quick_explain", "Global Anakin Quick Explain", "general", WORKFLOW_QUICK_EXPLAIN, context={"active_section": "dashboard"}),
+        _workflow_contract("frontend.floating_anakin.deep_investigate", "Global Anakin Deep Investigate", "general", WORKFLOW_DEEP_INVESTIGATE, context={"active_section": "dashboard"}),
+        _workflow_contract("frontend.floating_anakin.decision_support", "Global Anakin Decision Support", "general", WORKFLOW_DECISION_SUPPORT, context={"active_section": "dashboard"}),
+        _workflow_contract("frontend.floating_anakin.generate_artifact", "Global Anakin Generate Artifact", "general", WORKFLOW_GENERATE_ARTIFACT, artifact_type="investigation_checklist", context={"active_section": "dashboard"}),
+    ]
+    contracts.extend(
+        [
+            _workflow_contract("frontend.command_palette.quick_explain", "Command Palette Quick Explain", "general", WORKFLOW_QUICK_EXPLAIN, context={"active_section": "dashboard"}),
+            _workflow_contract("frontend.command_palette.deep_investigate", "Command Palette Deep Investigate", "general", WORKFLOW_DEEP_INVESTIGATE, context={"active_section": "dashboard"}),
+            _workflow_contract("frontend.command_palette.decision_support", "Command Palette Decision Support", "general", WORKFLOW_DECISION_SUPPORT, context={"active_section": "dashboard"}),
+            _workflow_contract("frontend.command_palette.generate_artifact", "Command Palette Generate Artifact", "general", WORKFLOW_GENERATE_ARTIFACT, artifact_type="investigation_checklist", context={"active_section": "dashboard"}),
+        ]
+    )
+    contracts.extend([
         {
-            "contract_key": "frontend.floating_chat.general",
-            "surface": "FloatingSiemChat Ask Anakin",
-            "route": "POST /ai/chat",
-            "message": "What should I inspect first in this workspace?",
-            "visible_context": _visible_context_fixture("dashboard"),
-            "client_history": [],
-            "source": "FloatingSiemChat",
+            "contract_key": "frontend.command_palette.soc_briefing",
+            "surface": "Command Palette SOC Briefing",
+            "route": "soc_briefing_worker",
+            "contextType": "soc_briefing",
+            "action": "run_now",
+            "source": "anakinCommandRegistry.socBriefing",
         },
         {
-            "contract_key": "frontend.command_palette.ask",
-            "surface": "AnakinCommandSurface Ask command",
-            "route": "POST /ai/chat",
-            "message": "What should I inspect first in this workspace?",
-            "visible_context": _visible_context_fixture("analyst_workspace"),
-            "client_history": [],
-            "source": "AnakinCommandSurface.ask",
+            "contract_key": "frontend.command_palette.repo_assistant",
+            "surface": "Command Palette Repo Assistant",
+            "route": "POST /ai/repo/chat",
+            "message": "Where is the SOAR worker implemented?",
+            "source": "anakinCommandRegistry.repoAssistant",
         },
         {
             "contract_key": "frontend.repo_architecture.chat.factual",
@@ -1193,7 +1704,37 @@ def _static_surface_contracts() -> list[dict[str, Any]]:
             "source_draft": {"draft_type": "incident_note", "read_only": True, "persisted": False, "applied": False},
             "source": "AiResponsePanel.previewAiAction",
         },
-    ]
+    ])
+    return contracts
+
+
+def _workflow_contract(
+    contract_key: str,
+    surface: str,
+    context_type: str,
+    workflow: str,
+    *,
+    artifact_type: str | None = None,
+    context: dict[str, Any] | None = None,
+    question: str | None = None,
+) -> dict[str, Any]:
+    label = workflow.replace("_", " ")
+    options = {
+        "contract_key": contract_key,
+        "surface": surface,
+        "route": "POST /ai/workflows",
+        "contextType": context_type,
+        "workflow": workflow,
+        "question": question or f"Run {label} for this {context_type} context using bounded SIEM evidence.",
+        "context": context or _entity_context_for_type(context_type),
+        "source": "AnakinWorkflowControls",
+    }
+    if workflow == WORKFLOW_DEEP_INVESTIGATE:
+        options["toolPolicy"] = {"max_tool_calls": 5, "time_window_hours": 24}
+    if artifact_type:
+        options["artifactType"] = artifact_type
+        options["instruction"] = f"Generate a {artifact_type.replace('_', ' ')} for analyst review only."
+    return options
 
 
 def _extract_on_ask_ai_blocks(text: str) -> list[tuple[str, int]]:
@@ -1313,45 +1854,51 @@ def _default_command_contracts() -> list[dict[str, Any]]:
     }
     return [
         {
-            "contract_key": "frontend.command_palette.explain",
-            "contextType": "analyst_workspace",
-            "action": "explain",
-            "question": "Provide a read-only explain for the current SIEM context.",
+            "contract_key": "frontend.command_registry.quick_explain",
+            "contextType": "general",
+            "workflow": WORKFLOW_QUICK_EXPLAIN,
+            "question": "Explain the current SIEM context using loaded evidence.",
             "context": workspace,
             "source": "anakinCommandRegistry.commandToAiOptions",
         },
         {
-            "contract_key": "frontend.command_palette.summarize",
-            "contextType": "analyst_workspace",
-            "action": "summarize",
-            "question": "Provide a read-only summarize for the current SIEM context.",
-            "context": workspace,
-            "source": "anakinCommandRegistry.commandToAiOptions",
-        },
-        {
-            "contract_key": "frontend.command_palette.suggested_actions",
-            "contextType": "analyst_workspace",
-            "action": "suggestedactions",
-            "question": "Provide read-only suggested actions for the current SIEM context.",
-            "context": workspace,
-            "source": "anakinCommandRegistry.commandToAiOptions",
-        },
-        {
-            "contract_key": "frontend.guided_investigation",
-            "contextType": "analyst_workspace",
-            "action": "investigate",
-            "investigation": True,
+            "contract_key": "frontend.command_registry.deep_investigate",
+            "contextType": "general",
+            "workflow": WORKFLOW_DEEP_INVESTIGATE,
             "question": "Run a bounded read-only investigation of the current context and identify source-cited next steps.",
             "context": workspace,
             "toolPolicy": {"max_tool_calls": 5, "time_window_hours": 24},
             "source": "anakinCommandRegistry.commandToAiOptions",
         },
         {
-            "contract_key": "frontend.drafts",
-            "contextType": "analyst_workspace",
-            "draftType": "investigation_checklist",
+            "contract_key": "frontend.command_registry.decision_support",
+            "contextType": "general",
+            "workflow": WORKFLOW_DECISION_SUPPORT,
+            "question": "Recommend what the analyst should do next without drafting or taking action.",
+            "context": workspace,
+            "source": "anakinCommandRegistry.commandToAiOptions",
+        },
+        {
+            "contract_key": "frontend.command_registry.generate_artifact",
+            "contextType": "general",
+            "workflow": WORKFLOW_GENERATE_ARTIFACT,
+            "artifactType": "investigation_checklist",
             "instruction": "Draft a read-only analyst checklist from the current context. Do not save or execute anything.",
             "context": workspace,
+            "source": "anakinCommandRegistry.commandToAiOptions",
+        },
+        {
+            "contract_key": "frontend.command_registry.soc_briefing",
+            "contextType": "soc_briefing",
+            "route": "soc_briefing_worker",
+            "action": "run_now",
+            "source": "anakinCommandRegistry.commandToAiOptions",
+        },
+        {
+            "contract_key": "frontend.command_registry.repo_assistant",
+            "contextType": "repository",
+            "route": "POST /ai/repo/chat",
+            "message": "Where is the SOAR worker implemented?",
             "source": "anakinCommandRegistry.commandToAiOptions",
         },
     ]
@@ -1395,6 +1942,53 @@ def _frontend_options_for_entry(
         "question": _question_for_entry(entry, context_type),
         "context": _entity_context_for_type(context_type),
         "source": "acceptance_fallback_from_inventory",
+    }
+
+
+def _legacy_options_for_inventory_entry(entry: AiInvocationInventoryEntry) -> dict[str, Any]:
+    context_type = _context_type_for_entry(entry)
+    if entry.backend_path == "POST /ai/chat":
+        return {
+            "route": "POST /ai/chat",
+            "message": "What should I inspect first in this workspace?",
+            "visible_context": _visible_context_fixture("dashboard"),
+            "client_history": [],
+            "source": "legacy_backend_compatibility_adapter",
+        }
+    if entry.backend_path == "POST /ai/repo/chat":
+        return {
+            "route": "POST /ai/repo/chat",
+            "message": "What is my most impressive feature?",
+            "client_history": [],
+            "refresh": False,
+            "source": "legacy_backend_compatibility_adapter",
+        }
+    if entry.backend_path == "soc_briefing_worker":
+        return {"route": "soc_briefing_worker", "contextType": "soc_briefing", "action": "run_now", "source": "legacy_backend_compatibility_adapter"}
+    if entry.backend_path == "POST /ai/drafts":
+        return {
+            "contextType": "alert",
+            "draftType": "investigation_checklist",
+            "instruction": "Draft a read-only analyst checklist from the current context. Do not save or execute anything.",
+            "context": {"alert_id": 1001, "source_ip": "203.0.113.77"},
+            "source": "legacy_backend_compatibility_adapter",
+        }
+    if entry.backend_path == "POST /ai/investigations":
+        return {
+            "contextType": "alert",
+            "action": "recommend_investigation",
+            "investigation": True,
+            "question": "Run a bounded read-only investigation of the current alert context.",
+            "context": {"alert_id": 1001, "source_ip": "203.0.113.77"},
+            "toolPolicy": {"max_tool_calls": 5, "time_window_hours": 24},
+            "source": "legacy_backend_compatibility_adapter",
+        }
+    return {
+        "contextType": context_type,
+        "action": entry.selector,
+        "question": _question_for_entry(entry, context_type),
+        "context": _entity_context_for_type(context_type),
+        "source": "legacy_backend_compatibility_adapter",
     }
 
 
@@ -1498,7 +2092,9 @@ def _context_type_for_entry(entry: AiInvocationInventoryEntry) -> str:
 
 
 def _stale_policy_for_entry(entry: AiInvocationInventoryEntry) -> str:
-    if entry.backend_path in {"POST /ai/drafts", "POST /ai/actions/preview"}:
+    if entry.backend_path in {"POST /ai/drafts", "POST /ai/actions/preview"} or (
+        entry.backend_path == "POST /ai/workflows" and entry.workflow == WORKFLOW_GENERATE_ARTIFACT
+    ):
         return "strict_for_confirmable_preview"
     if entry.backend_path == "soc_briefing_worker":
         return "durable_lifecycle_recoverable"
@@ -1676,8 +2272,11 @@ def _repo_chunks() -> list[RepoChunk]:
 
 
 def _sample_response_for_case(entry: AiInvocationInventoryEntry, case: AcceptanceCase) -> str:
-    if entry.backend_path == "POST /ai/drafts":
-        return json.dumps(_sample_draft_payload(str(case.request_payload.get("draft_type") or "investigation_checklist"), case.context_type))
+    if entry.backend_path == "POST /ai/drafts" or (
+        entry.backend_path == "POST /ai/workflows" and case.request_payload.get("workflow") == WORKFLOW_GENERATE_ARTIFACT
+    ):
+        artifact = case.request_payload.get("artifact") if isinstance(case.request_payload.get("artifact"), dict) else {}
+        return json.dumps(_sample_draft_payload(str(case.request_payload.get("draft_type") or artifact.get("type") or "investigation_checklist"), case.context_type))
     if entry.backend_path == "POST /ai/actions/preview":
         return (
             "Assessment: action preview is ready for analyst review only.\n"
@@ -1814,11 +2413,23 @@ def _acceptance_config() -> AiGatewayConfig:
 __all__ = [
     "AcceptanceReport",
     "AcceptanceResult",
+    "APPROVED_SURFACE_CONTROL_MATRIX",
+    "CANONICAL_ACCEPTANCE_WORKFLOWS",
+    "LIVE_SWEEP_VM_COMMAND",
     "LIVE_SMOKE_ENV",
     "LIVE_SWEEP_ENV",
+    "REMOVED_FRONTEND_ACTION_IDS",
+    "REMOVED_FRONTEND_AI_LABELS",
     "build_acceptance_cases",
     "build_frontend_realistic_request",
     "discover_frontend_ai_options",
+    "build_complete_ai_inventory",
+    "build_golden_reasoning_cases",
+    "build_production_safe_live_sweep_matrix",
+    "build_workflow_acceptance_summary",
+    "build_workflow_representative_fixtures",
+    "evaluate_golden_reasoning_answer",
+    "removed_frontend_ai_controls_present",
     "render_live_sweep_markdown",
     "render_markdown_report",
     "run_acceptance_harness",

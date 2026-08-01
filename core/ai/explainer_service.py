@@ -16,6 +16,7 @@ from core.ai.context_builder import (
 )
 from core.ai.gateway import AiGateway
 from core.ai.models import AiGatewayRequest, AiRequestMetadata
+from core.ai.anakin_persona import decision_support_policy, quick_explain_policy
 from core.ai.profile_registry import profile_for_explain_action
 from core.ai.soc_tool_executor import (
     build_deterministic_tool_plan,
@@ -282,25 +283,29 @@ def _build_prompt(
     )
     context_json = _context_json_for_prompt(ai_context, budget=budget, tools_json=tools_json)
     question_line = question or _default_question(action, ai_context.context_type)
+    policy = decision_support_policy() if _is_decision_support_action(action) else quick_explain_policy()
     return (
-        "You are a read-only SIEM analyst assistant.\n"
-        "Use only the supplied SIEM context. If the context is incomplete, say what is missing.\n"
-        "Do not claim you checked data that is not included. Do not execute or suggest commands that mutate production.\n"
-        "Read-tool results are evidence only; do not say remediation, blocking, approval, or SOAR execution happened.\n"
-        "Recommendations must be analyst next steps only; do not say an action was taken.\n\n"
-        "Do not repeat the alert description, list every visible field, or define generic security terms unless asked.\n"
-        "Avoid robotic filler and generic advice such as 'continue monitoring' unless you name exactly what to inspect.\n"
-        "Do not fabricate correlations, attack stages, geography, identity, or intent.\n"
-        "Prioritize: concise assessment, what stands out, why it matters here, relevant correlations, supporting evidence, "
-        "contradicting or benign evidence, uncertainty/confidence, missing evidence, and concrete read-only next steps.\n\n"
+        f"{policy}\n"
         f"Action: {action}\n"
         f"Question: {question_line}\n"
         f"Context type: {ai_context.context_type}\n"
         f"Context sources: {json.dumps(ai_context.metadata(), default=str, sort_keys=True)}\n\n"
         f"SIEM context:\n{context_json}\n\n"
         f"Read-only SOC tool evidence:\n{tools_json}\n\n"
-        "Use task-appropriate concise sections. Include support, contradiction/benign alternatives, uncertainty, gaps, and next steps when evidence allows."
+        "Use task-appropriate concise sections only when they help. Include supporting evidence, contradicting or benign evidence, uncertainty, missing evidence, and concrete read-only next steps when evidence allows."
     )
+
+
+def _is_decision_support_action(action: str) -> bool:
+    normalized = str(action or "").lower().replace("-", "_")
+    return normalized in {
+        "recommend_investigation",
+        "recommend_next_steps",
+        "assess_reconnaissance",
+        "investigate_cluster",
+        "suggestedactions",
+        "decision_support",
+    }
 
 
 def _context_json_for_prompt(ai_context: AiContextPayload, *, budget: int, tools_json: str) -> str:

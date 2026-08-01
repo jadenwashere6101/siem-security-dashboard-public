@@ -44,6 +44,9 @@ export const requestAiDraft = (payload, options = {}) =>
 export const requestAiInvestigation = (payload, options = {}) =>
   postAiRequest("/ai/investigations", payload, options);
 
+export const requestAiWorkflow = (payload, options = {}) =>
+  postAiRequest("/ai/workflows", payload, options);
+
 export const previewAiAction = (payload, options = {}) =>
   postAiRequest("/ai/actions/preview", payload, options);
 

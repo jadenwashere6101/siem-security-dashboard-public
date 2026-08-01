@@ -8,6 +8,7 @@ from typing import Any
 from core.ai.config import AiGatewayConfig, load_ai_gateway_config
 from core.ai.gateway import AiGateway
 from core.ai.models import AI_STATUS_SUCCESS, AiGatewayRequest, AiRequestMetadata, estimate_tokens
+from core.ai.anakin_persona import repo_assistant_policy
 from core.ai.profile_registry import profile_for_repo_assistant
 from core.ai.repo_index import DEFAULT_TOP_K, RepoChunk, RepoIndex
 from core.ai.repo_sources import LABEL_HISTORICAL, historical_context_requested
@@ -277,11 +278,8 @@ def _format_prompt(
     question_type: str,
 ) -> str:
     return (
-        "You are a read-only repository architecture assistant for this SIEM.\n"
-        "Use only the supplied repository excerpts. If evidence is missing, say you do not have enough current evidence.\n"
-        "Do not claim to edit files, run commands, access the VM, deploy, commit, push, query databases, or mutate production.\n"
+        f"{repo_assistant_policy()}"
         "Mac repository policy and Tier 0 sources override lower-trust docs. Current source overrides stale docs for implemented behavior.\n"
-        "The backend attaches citations from retrieved evidence. Do not invent file paths, line ranges, or repository details.\n"
         "Historical sources are context only and must be labeled historical in the answer.\n\n"
         f"Question type: {question_type}\n"
         "For factual questions, answer directly with only evidence-backed facts.\n"

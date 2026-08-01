@@ -16,6 +16,7 @@ from core.ai.context_builder import (
     AiContextValidationError,
     build_ai_context,
 )
+from core.ai.anakin_persona import artifact_policy
 from core.ai.draft_schemas import (
     DEFAULT_DRAFT_LABELS,
     DRAFT_STATUS_INSUFFICIENT_CONTEXT,
@@ -151,13 +152,31 @@ def create_draft(
         )
 
     parsed = _parse_provider_draft(gateway_response.content)
+    validation_errors: list[str] = []
+    repair_attempted = False
     if parsed is None:
+        repair_attempted = True
+        repaired = _attempt_draft_repair(
+            resolved_gateway,
+            request=request,
+            original_content=gateway_response.content,
+            validation_errors=["AI draft response was not valid JSON."],
+            profile_name=profile_name,
+        )
+        if repaired is not None:
+            gateway_response = repaired
+            gateway_payload = gateway_response.as_dict()
+            parsed = _parse_provider_draft(gateway_response.content)
+    if parsed is None:
+        metadata = dict(gateway_payload["metadata"])
+        metadata["repair_attempted"] = repair_attempted
+        metadata["repair_count"] = 1 if repair_attempted else 0
         return _draft_state_response(
             DRAFT_STATUS_PARSE_FAILED,
             request=request,
             ai_context=ai_context,
             tools=tools,
-            metadata=gateway_payload["metadata"],
+            metadata=metadata,
             error="AI draft response was not valid JSON.",
             validation_errors=["AI draft response was not valid JSON."],
             status_code=200,
@@ -166,18 +185,48 @@ def create_draft(
     parsed = redact_draft_value(parsed)
     validation = validate_draft_payload(request.draft_type, parsed)
     if not validation.valid:
+        validation_errors = list(validation.errors)
+        repair_attempted = True
+        repaired = _attempt_draft_repair(
+            resolved_gateway,
+            request=request,
+            original_content=gateway_response.content,
+            validation_errors=validation_errors,
+            profile_name=profile_name,
+        )
+        if repaired is not None:
+            gateway_response = repaired
+            gateway_payload = gateway_response.as_dict()
+            repaired_parsed = _parse_provider_draft(gateway_response.content)
+            if repaired_parsed is not None:
+                repaired_parsed = redact_draft_value(repaired_parsed)
+                repaired_validation = validate_draft_payload(request.draft_type, repaired_parsed)
+                if repaired_validation.valid:
+                    parsed = repaired_parsed
+                    validation = repaired_validation
+                else:
+                    validation_errors = list(repaired_validation.errors)
+            else:
+                validation_errors = ["AI draft repair response was not valid JSON."]
+    if not validation.valid:
+        metadata = dict(gateway_payload["metadata"])
+        metadata["repair_attempted"] = repair_attempted
+        metadata["repair_count"] = 1 if repair_attempted else 0
         return _draft_state_response(
             DRAFT_STATUS_VALIDATION_FAILED,
             request=request,
             ai_context=ai_context,
             tools=tools,
-            metadata=gateway_payload["metadata"],
+            metadata=metadata,
             error="AI draft response did not match the required schema.",
-            validation_errors=validation.errors,
+            validation_errors=validation_errors,
             status_code=200,
         )
 
     draft = build_draft_result(request.draft_type, parsed)
+    metadata = dict(gateway_payload["metadata"])
+    metadata["repair_attempted"] = repair_attempted
+    metadata["repair_count"] = 1 if repair_attempted else 0
     _LOGGER.info(
         "ai_draft_generated draft_type=%s context_type=%s status=%s sources=%s tools=%s",
         request.draft_type,
@@ -192,7 +241,7 @@ def create_draft(
             "draft": draft.as_dict(),
             "context": ai_context.metadata(),
             "tools": tools.as_dict(),
-            "metadata": gateway_payload["metadata"],
+            "metadata": metadata,
             "error": None,
         },
         status_code=200,
@@ -266,15 +315,11 @@ def _build_draft_prompt(
     context_budget = max(1800, min(prompt_limit // 2, prompt_limit - fixed_budget))
     context_json = _draft_context_json_for_prompt(ai_context, max_chars=context_budget)
     return (
-        "You are a read-only SIEM drafting assistant.\n"
-        "Use only the supplied SIEM context and read-only tool evidence.\n"
+        f"{artifact_policy()}"
         "Return exactly one JSON object matching the requested draft schema. Do not wrap it in markdown.\n"
         "Every required field must be present, non-empty, and use the exact field name shown. Missing required fields are rejected.\n"
         "Do not claim anything was saved, applied, approved, executed, blocked, deployed, committed, or changed.\n"
         "Do not include secrets, credentials, shell commands, migration commands, or production-mutating payloads.\n"
-        "Mark uncertainty and assumptions inside the requested schema fields.\n"
-        "Do not restate every visible field. Focus on evidence, contradictions, missing evidence, confidence, and concrete read-only next steps.\n"
-        "Avoid generic filler and do not invent correlations, attack stages, or response outcomes.\n"
         "The draft is AI-generated review content only and requires analyst review before any future workflow.\n\n"
         f"Draft type: {request.draft_type}\n"
         f"Draft purpose: {definition.description}\n"
@@ -421,6 +466,44 @@ def _parse_provider_draft(content: str | None) -> dict[str, Any] | None:
         except json.JSONDecodeError:
             return None
     return parsed if isinstance(parsed, dict) else None
+
+
+def _attempt_draft_repair(
+    gateway: AiGateway,
+    *,
+    request: DraftRequest,
+    original_content: str | None,
+    validation_errors: list[str],
+    profile_name: str,
+):
+    bounded_original = str(original_content or "")[:2400]
+    bounded_errors = validation_errors[:8]
+    repair_prompt = (
+        "Repair this SIEM AI draft response. Return exactly one JSON object and no markdown.\n"
+        f"{artifact_policy()}"
+        "Use the requested draft schema implied by the error list. Do not add claims that anything was saved, applied, "
+        "approved, executed, blocked, deployed, committed, or changed.\n"
+        f"Draft type: {request.draft_type}\n"
+        f"Validation errors: {json.dumps(bounded_errors, sort_keys=True)}\n"
+        f"Original response:\n{bounded_original}\n"
+    )
+    repaired = gateway.generate(
+        AiGatewayRequest(
+            prompt=repair_prompt,
+            capability="text_generation",
+            profile=profile_name,
+            metadata={
+                "context_type": request.context_type,
+                "action": "draft_repair",
+                "draft_type": request.draft_type,
+                "read_only": True,
+                "persisted": False,
+                "applied": False,
+                "repair_attempt": 1,
+            },
+        )
+    )
+    return repaired if repaired.status == "success" else None
 
 
 def _draft_state_response(

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 
 import InternetNoiseSummary, { shouldShowInternetNoise } from "./InternetNoiseSummary";
-import AiAssistantButton from "./AiAssistantButton";
+import AnakinWorkflowControls, { ANAKIN_WORKFLOWS } from "./AnakinWorkflowControls";
 import { loadSourceIpContext } from "../services/sourceIpContextService";
 import { CanonicalOutcomeBreakdown, ResponseOutcomeBadge, ResponseOutcomeSummary } from "./ResponseOutcome";
 import ResponseStateSummary from "./ResponseStateSummary";
@@ -357,89 +357,22 @@ function PanelHeader({ sourceIp, compact, onAskAi = null, aiEnabled = false }) {
       </div>
       <div style={headerActionsStyle}>
         {aiEnabled && sourceIp && typeof onAskAi === "function" ? (
-          <>
-            <span style={agentClusterLabelStyle}>Anakin analyst tools</span>
-            <AiAssistantButton
-              onClick={() =>
-                onAskAi({
-                  contextType: "source_ip",
-                  action: "explain_ip",
-                  title: `Source IP ${sourceIp}`,
-                  question: "Explain this source IP using SIEM context.",
-                  context: { source_ip: sourceIp },
-                })
-              }
-            >
-              Explain this IP
-            </AiAssistantButton>
-            <AiAssistantButton
-              onClick={() =>
-                onAskAi({
-                  contextType: "source_ip",
-                  action: "assess_reconnaissance",
-                  title: `Recon assessment for ${sourceIp}`,
-                  question: "Assess whether this source IP looks like reconnaissance.",
-                  context: { source_ip: sourceIp },
-                })
-              }
-            >
-              Is this reconnaissance?
-            </AiAssistantButton>
-            <AiAssistantButton
-              onClick={() =>
-                onAskAi({
-                  contextType: "source_ip",
-                  action: "summarize_activity",
-                  title: `Activity summary for ${sourceIp}`,
-                  question: "Summarize recent SIEM activity for this source IP.",
-                  context: { source_ip: sourceIp },
-                })
-              }
-            >
-              Summarize activity
-            </AiAssistantButton>
-            <AiAssistantButton
-              onClick={() =>
-                onAskAi({
-                  contextType: "source_ip",
-                  action: "summarize_activity",
-                  investigation: true,
-                  title: `Guided investigation for ${sourceIp}`,
-                  question: "Run a bounded, read-only guided investigation for this source IP with correlations, evidence gaps, and recommended analyst next steps.",
-                  context: { source_ip: sourceIp },
-                  toolPolicy: { max_tool_calls: 5, time_window_hours: 24 },
-                })
-              }
-            >
-              Guided investigation
-            </AiAssistantButton>
-            <AiAssistantButton
-              onClick={() =>
-                onAskAi({
-                  contextType: "source_ip",
-                  draftType: "response_recommendation",
-                  title: `Draft response recommendation for ${sourceIp}`,
-                  instruction: "Draft response recommendation options for analyst review only. Do not execute or submit anything.",
-                  context: { source_ip: sourceIp },
-                })
-              }
-            >
-              Draft response
-            </AiAssistantButton>
-            <AiAssistantButton
-              onClick={() =>
-                onAskAi({
-                  contextType: "source_ip",
-                  draftType: "investigation_checklist",
-                  title: `Draft checklist for ${sourceIp}`,
-                  instruction: "Draft a read-only investigation checklist for this source IP. Do not run any actions.",
-                  context: { source_ip: sourceIp },
-                })
-              }
-            >
-              Draft checklist
-            </AiAssistantButton>
-          </>
+          <AnakinWorkflowControls
+            contextType="source_ip"
+            context={{ source_ip: sourceIp }}
+            controls={[
+              ANAKIN_WORKFLOWS.quickExplain,
+              ANAKIN_WORKFLOWS.deepInvestigate,
+              ANAKIN_WORKFLOWS.decisionSupport,
+            ]}
+            artifacts={[
+              { type: "response_recommendation", label: "Response recommendation" },
+              { type: "investigation_checklist", label: "Investigation checklist" },
+            ]}
+            titlePrefix={`Source IP ${sourceIp}`}
+            subject={`source IP ${sourceIp}`}
+            onAskAi={onAskAi}
+          />
         ) : null}
         <span style={ipPillStyle}>{sourceIp || "none"}</span>
       </div>
@@ -504,14 +437,6 @@ const headerActionsStyle = {
   justifyContent: "flex-end",
   gap: "8px",
   flexWrap: "wrap",
-};
-
-const agentClusterLabelStyle = {
-  color: "#93c5fd",
-  fontSize: "11px",
-  fontWeight: 800,
-  letterSpacing: "0.04em",
-  textTransform: "uppercase",
 };
 
 const titleStyle = {

@@ -1,5 +1,4 @@
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import DashboardVisuals from "./DashboardVisuals";
 
 jest.mock("./MapView", () => () => <div>Map</div>);
@@ -9,7 +8,7 @@ jest.mock("./TopIPChart", () => () => <div>Top IP chart</div>);
 
 const style = {};
 
-test("DashboardVisuals exposes dashboard graph AI action", async () => {
+test("DashboardVisuals does not duplicate dashboard AI controls", () => {
   const onAskAi = jest.fn();
   render(
     <DashboardVisuals
@@ -36,14 +35,8 @@ test("DashboardVisuals exposes dashboard graph AI action", async () => {
     />
   );
 
-  await userEvent.click(screen.getByRole("button", { name: "Explain graph/anomaly" }));
-
-  expect(onAskAi).toHaveBeenCalledWith(
-    expect.objectContaining({
-      contextType: "dashboard",
-      action: "explain_anomaly",
-    })
-  );
+  expect(screen.queryByRole("button", { name: "Explain graph/anomaly" })).not.toBeInTheDocument();
+  expect(onAskAi).not.toHaveBeenCalled();
 });
 
 test("DashboardVisuals shows map truncation notice when summary is capped", () => {

@@ -18,21 +18,28 @@ test("DashboardMetrics exposes contextual dashboard AI action", async () => {
     />
   );
 
-  expect(screen.getByText("Anakin analyst tools")).toBeInTheDocument();
+  expect(screen.getByText("Anakin")).toBeInTheDocument();
 
-  await userEvent.click(screen.getByRole("button", { name: "Dashboard summary" }));
-  await userEvent.click(screen.getByRole("button", { name: "Draft checklist" }));
+  await userEvent.click(screen.getByRole("button", { name: "Ask Anakin" }));
+  await userEvent.click(screen.getByRole("button", { name: "Quick Explain" }));
+  await userEvent.click(screen.getByRole("button", { name: "Deep Investigate" }));
 
   expect(onAskAi).toHaveBeenCalledWith(
     expect.objectContaining({
       contextType: "dashboard",
-      action: "ask_dashboard",
+      workflow: "auto",
     })
   );
   expect(onAskAi).toHaveBeenCalledWith(
     expect.objectContaining({
       contextType: "dashboard",
-      draftType: "investigation_checklist",
+      workflow: "quick_explain",
+    })
+  );
+  expect(onAskAi).toHaveBeenCalledWith(
+    expect.objectContaining({
+      contextType: "dashboard",
+      workflow: "deep_investigate",
     })
   );
 });

@@ -45,29 +45,42 @@ test("palette read-only safety blocks mutations but allows approval navigation w
   expect(assertReadOnlyPaletteCommand({ id: "safe", label: "Safe", readOnly: false })).toBe(false);
 });
 
-test("default Anakin commands map to existing AI option shapes", () => {
+test("default Anakin commands map to canonical workflow option shapes", () => {
   const commands = createDefaultAnakinCommands();
   expect(commands.map((command) => command.intent)).toEqual(
     expect.arrayContaining([
-      ANAKIN_COMMAND_INTENTS.ask,
-      ANAKIN_COMMAND_INTENTS.summarize,
-      ANAKIN_COMMAND_INTENTS.investigate,
-      ANAKIN_COMMAND_INTENTS.explain,
-      ANAKIN_COMMAND_INTENTS.draft,
-      ANAKIN_COMMAND_INTENTS.suggestedActions,
+      ANAKIN_COMMAND_INTENTS.quickExplain,
+      ANAKIN_COMMAND_INTENTS.deepInvestigate,
+      ANAKIN_COMMAND_INTENTS.decisionSupport,
+      ANAKIN_COMMAND_INTENTS.generateArtifact,
+      ANAKIN_COMMAND_INTENTS.socBriefing,
+      ANAKIN_COMMAND_INTENTS.repoAssistant,
     ])
   );
+  expect(commands).toHaveLength(6);
 
-  const draft = commandToAiOptions(
-    commands.find((command) => command.intent === ANAKIN_COMMAND_INTENTS.draft),
+  const artifact = commandToAiOptions(
+    commands.find((command) => command.intent === ANAKIN_COMMAND_INTENTS.generateArtifact),
     sanitizeCommandContext({ workspace: { activeSection: "dashboard" } })
   );
-  expect(draft).toEqual(expect.objectContaining({ draftType: "investigation_checklist" }));
+  expect(artifact).toEqual(
+    expect.objectContaining({
+      workflow: "generate_artifact",
+      artifactType: "investigation_checklist",
+    })
+  );
+  expect(
+    commandToAiOptions(
+      commands.find((command) => command.intent === ANAKIN_COMMAND_INTENTS.socBriefing),
+      sanitizeCommandContext({ workspace: { activeSection: "dashboard" } })
+    )
+  ).toBeNull();
 });
 
 test("contextual AI options choose explicit intents without nested precedence", () => {
-  expect(normalizeContextualAiOptions({ draftType: "case_summary" }).intent).toBe(ANAKIN_COMMAND_INTENTS.draft);
-  expect(normalizeContextualAiOptions({ investigation: true }).intent).toBe(ANAKIN_COMMAND_INTENTS.investigate);
+  expect(normalizeContextualAiOptions({ draftType: "case_summary" }).intent).toBe(ANAKIN_COMMAND_INTENTS.generateArtifact);
+  expect(normalizeContextualAiOptions({ investigation: true }).intent).toBe(ANAKIN_COMMAND_INTENTS.deepInvestigate);
+  expect(normalizeContextualAiOptions({ workflow: "decision_support" }).intent).toBe(ANAKIN_COMMAND_INTENTS.decisionSupport);
   expect(normalizeContextualAiOptions({ action: "explain" }).intent).toBe("explain");
   expect(normalizeContextualAiOptions({}).intent).toBe(ANAKIN_COMMAND_INTENTS.ask);
 });

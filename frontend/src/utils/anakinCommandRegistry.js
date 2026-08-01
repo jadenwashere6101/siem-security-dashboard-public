@@ -1,10 +1,11 @@
 export const ANAKIN_COMMAND_INTENTS = Object.freeze({
   ask: "ask",
-  summarize: "summarize",
-  investigate: "investigate",
-  explain: "explain",
-  draft: "draft",
-  suggestedActions: "suggested_actions",
+  quickExplain: "quick_explain",
+  deepInvestigate: "deep_investigate",
+  decisionSupport: "decision_support",
+  generateArtifact: "generate_artifact",
+  socBriefing: "soc_briefing",
+  repoAssistant: "repo_assistant",
   navigate: "navigate",
   lookup: "lookup",
   filter: "filter",
@@ -168,54 +169,63 @@ export function assertReadOnlyPaletteCommand(command) {
 export function createDefaultAnakinCommands() {
   return [
     {
-      id: "anakin.ask",
-      label: "Ask Anakin",
+      id: "anakin.quick-explain",
+      label: "Quick Explain",
       group: "Anakin",
-      intent: ANAKIN_COMMAND_INTENTS.ask,
-      description: "Ask a read-only question using the current workspace context.",
+      intent: ANAKIN_COMMAND_INTENTS.quickExplain,
+      workflow: "quick_explain",
+      description: "Explain the current analyst context.",
       readOnly: true,
     },
     {
-      id: "anakin.summarize",
-      label: "Summarize",
+      id: "anakin.deep-investigate",
+      label: "Deep Investigate",
       group: "Anakin",
-      intent: ANAKIN_COMMAND_INTENTS.summarize,
-      description: "Summarize the active analyst surface.",
-      readOnly: true,
-    },
-    {
-      id: "anakin.investigate",
-      label: "Investigate",
-      group: "Anakin",
-      intent: ANAKIN_COMMAND_INTENTS.investigate,
+      intent: ANAKIN_COMMAND_INTENTS.deepInvestigate,
+      workflow: "deep_investigate",
       description: "Run a bounded read-only investigation.",
       readOnly: true,
       requiresCanOperate: true,
     },
     {
-      id: "anakin.explain",
-      label: "Explain",
+      id: "anakin.decision-support",
+      label: "Decision Support",
       group: "Anakin",
-      intent: ANAKIN_COMMAND_INTENTS.explain,
-      description: "Explain selected data or the active workflow.",
+      intent: ANAKIN_COMMAND_INTENTS.decisionSupport,
+      workflow: "decision_support",
+      description: "Recommend analyst next steps without drafting or acting.",
       readOnly: true,
+      requiresCanOperate: true,
     },
     {
-      id: "anakin.draft",
-      label: "Draft",
+      id: "anakin.generate-artifact",
+      label: "Generate Artifact",
       group: "Anakin",
-      intent: ANAKIN_COMMAND_INTENTS.draft,
+      intent: ANAKIN_COMMAND_INTENTS.generateArtifact,
+      workflow: "generate_artifact",
       description: "Draft a checklist or response recommendation without saving anything.",
       readOnly: true,
       requiresCanOperate: true,
     },
     {
-      id: "anakin.suggested-actions",
-      label: "Suggested Actions",
+      id: "anakin.soc-briefing",
+      label: "SOC Briefing",
       group: "Anakin",
-      intent: ANAKIN_COMMAND_INTENTS.suggestedActions,
-      description: "Review deterministic next steps with optional AI explanation.",
+      intent: ANAKIN_COMMAND_INTENTS.socBriefing,
+      workflow: "soc_briefing",
+      description: "Open SOC briefing controls.",
       readOnly: true,
+      availability: (context) => context.workspace?.activeSection !== "soc-briefings",
+    },
+    {
+      id: "anakin.repo-assistant",
+      label: "Repo Assistant",
+      group: "Anakin",
+      intent: ANAKIN_COMMAND_INTENTS.repoAssistant,
+      workflow: "repo_assistant",
+      description: "Open cited repository architecture assistant.",
+      readOnly: true,
+      requiredRole: "super_admin",
     },
   ];
 }
@@ -244,41 +254,15 @@ export function commandToAiOptions(command, context = {}, question = "") {
     data: context.data,
   };
 
-  if (command.intent === ANAKIN_COMMAND_INTENTS.ask) {
-    return {
-      contextType: active,
-      action: "ask_anakin",
-      title: "Ask Anakin",
-      question: question || "Answer a read-only analyst question about the current SIEM workspace.",
-      context: baseContext,
-    };
-  }
-  if (command.intent === ANAKIN_COMMAND_INTENTS.investigate) {
-    return {
-      contextType: active,
-      action: "investigate",
-      investigation: true,
-      title: "Anakin investigation",
-      question: "Run a bounded read-only investigation of the current context and identify source-cited next steps.",
-      context: baseContext,
-      toolPolicy: { max_tool_calls: 5, time_window_hours: 24 },
-    };
-  }
-  if (command.intent === ANAKIN_COMMAND_INTENTS.draft) {
-    return {
-      contextType: active,
-      draftType: "investigation_checklist",
-      title: "Anakin draft",
-      instruction: "Draft a read-only analyst checklist from the current context. Do not save or execute anything.",
-      context: baseContext,
-    };
-  }
+  if (command.workflow === "soc_briefing" || command.workflow === "repo_assistant") return null;
   return {
+    workflow: command.workflow || "auto",
     contextType: active,
-    action: command.intent,
     title: command.label,
-    question: `Provide a read-only ${command.label.toLowerCase()} for the current SIEM context.`,
+    question: question || workflowQuestion(command.workflow, command.label),
     context: baseContext,
+    artifactType: command.workflow === "generate_artifact" ? "investigation_checklist" : undefined,
+    toolPolicy: command.workflow === "deep_investigate" ? { max_tool_calls: 5, time_window_hours: 24 } : undefined,
   };
 }
 
@@ -295,9 +279,19 @@ export function normalizeContextualAiOptions(options = {}) {
 }
 
 function contextualIntent(options) {
-  if (options.draftType) return ANAKIN_COMMAND_INTENTS.draft;
-  if (options.investigation) return ANAKIN_COMMAND_INTENTS.investigate;
+  if (options.workflow === "generate_artifact" || options.draftType || options.artifactType) return ANAKIN_COMMAND_INTENTS.generateArtifact;
+  if (options.workflow === "deep_investigate" || options.investigation) return ANAKIN_COMMAND_INTENTS.deepInvestigate;
+  if (options.workflow === "decision_support") return ANAKIN_COMMAND_INTENTS.decisionSupport;
+  if (options.workflow === "quick_explain") return ANAKIN_COMMAND_INTENTS.quickExplain;
   return options.action || ANAKIN_COMMAND_INTENTS.ask;
+}
+
+function workflowQuestion(workflow, label) {
+  if (workflow === "quick_explain") return "Explain the current SIEM context using loaded evidence.";
+  if (workflow === "deep_investigate") return "Run a bounded read-only investigation of the current context with evidence, gaps, confidence, and next steps.";
+  if (workflow === "decision_support") return "Recommend what the analyst should do next without drafting or taking action.";
+  if (workflow === "generate_artifact") return "Generate a review-only investigation checklist from the current context.";
+  return `Provide ${String(label || "Anakin help").toLowerCase()} for the current SIEM context.`;
 }
 
 function sanitizeAlert(alert) {

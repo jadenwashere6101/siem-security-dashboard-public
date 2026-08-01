@@ -44,6 +44,7 @@ jest.mock('./services/aiService', () => ({
   requestAiDraft: jest.fn(() => Promise.resolve({ status: 'success', draft: {}, metadata: {}, context: {} })),
   requestAiExplanation: jest.fn(() => Promise.resolve({ status: 'success', answer: 'ok', metadata: {}, context: {} })),
   requestAiInvestigation: jest.fn(() => Promise.resolve({ status: 'success', investigation: {}, metadata: {}, context: {} })),
+  requestAiWorkflow: jest.fn(() => Promise.resolve({ status: 'success', workflow: 'quick_explain', result: { status: 'success', answer: 'ok', metadata: {}, context: {} }, metadata: {}, context: {} })),
 }));
 
 jest.mock('./services/investigationWorkspaceService', () => ({

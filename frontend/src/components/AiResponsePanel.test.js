@@ -46,6 +46,69 @@ test("AiResponsePanel displays answer, source metadata, and local no-cost label"
   expect(screen.getByText("1 sources")).toBeInTheDocument();
 });
 
+test("AiResponsePanel displays workflow classification metadata and lifecycle stages", () => {
+  render(
+    <AiResponsePanel
+      state={{
+        status: "success",
+        title: "Deep Investigate",
+        response: {
+          workflow: "deep_investigate",
+          answer: "Correlated evidence supports continued monitoring.",
+          classification: {
+            classified_workflow: "deep_investigate",
+            confidence: 0.91,
+            reason: "Investigation language was detected.",
+          },
+          lifecycle: {
+            stages: [
+              { stage: "gathering_context", status: "complete" },
+              { stage: "generating_analysis", status: "complete" },
+            ],
+          },
+          context: { sources: [], omitted_count: 0 },
+          metadata: { profile: "guided_analysis", model: "qwen3:4b-instruct", status: "success" },
+        },
+      }}
+      onDismiss={() => {}}
+      onRetry={() => {}}
+      onCancel={() => {}}
+    />
+  );
+
+  expect(screen.getByLabelText("Anakin workflow metadata")).toHaveTextContent("Workflow: deep investigate");
+  expect(screen.getByLabelText("Anakin workflow metadata")).toHaveTextContent("Confidence: 0.91");
+  expect(screen.getByLabelText("Anakin workflow lifecycle")).toHaveTextContent("gathering context");
+});
+
+test("AiResponsePanel renders low-confidence workflow chooser", async () => {
+  const onChooseWorkflow = jest.fn();
+  render(
+    <AiResponsePanel
+      state={{
+        status: "success",
+        title: "Ask Anakin",
+        response: {
+          status: "chooser_required",
+          workflow: "quick_explain",
+          error: "Choose an allowed Anakin workflow before continuing.",
+          result: { allowed_workflows: ["quick_explain", "deep_investigate"] },
+          context: { sources: [], omitted_count: 0 },
+          metadata: {},
+        },
+      }}
+      onDismiss={() => {}}
+      onRetry={() => {}}
+      onChooseWorkflow={onChooseWorkflow}
+      onCancel={() => {}}
+    />
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: "deep investigate" }));
+
+  expect(onChooseWorkflow).toHaveBeenCalledWith("deep_investigate");
+});
+
 test("AiResponsePanel supports retry for failed requests", async () => {
   const onRetry = jest.fn();
   render(
@@ -74,7 +137,7 @@ test("AiResponsePanel supports cancel and dismissal during loading", async () =>
     />
   );
 
-  expect(screen.getByText("Anakin is analyzing current SIEM context...")).toBeInTheDocument();
+  expect(screen.getByText(/Backend lifecycle stages will appear/)).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
   await userEvent.click(screen.getByRole("button", { name: "Dismiss Anakin response" }));
 

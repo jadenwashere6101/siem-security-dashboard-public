@@ -158,44 +158,46 @@ test("SourceIpContext exposes source-IP AI entry points", async () => {
   render(<SourceIpContext sourceIp="8.8.8.8" onAskAi={onAskAi} aiEnabled />);
 
   await screen.findByText("Alerts");
-  await userEvent.click(screen.getByRole("button", { name: "Explain this IP" }));
-  await userEvent.click(screen.getByRole("button", { name: "Is this reconnaissance?" }));
-  await userEvent.click(screen.getByRole("button", { name: "Summarize activity" }));
-  await userEvent.click(screen.getByRole("button", { name: "Draft response" }));
-  await userEvent.click(screen.getByRole("button", { name: "Draft checklist" }));
+  await userEvent.click(screen.getByRole("button", { name: "Quick Explain" }));
+  await userEvent.click(screen.getByRole("button", { name: "Deep Investigate" }));
+  await userEvent.click(screen.getByRole("button", { name: "Decision Support" }));
+  await userEvent.selectOptions(screen.getByLabelText("Generate Artifact"), "response_recommendation");
+  await userEvent.selectOptions(screen.getByLabelText("Generate Artifact"), "investigation_checklist");
 
   expect(onAskAi).toHaveBeenCalledWith(
     expect.objectContaining({
       contextType: "source_ip",
-      action: "explain_ip",
+      workflow: "quick_explain",
       context: { source_ip: "8.8.8.8" },
     })
   );
   expect(onAskAi).toHaveBeenCalledWith(
     expect.objectContaining({
       contextType: "source_ip",
-      action: "assess_reconnaissance",
+      workflow: "deep_investigate",
       context: { source_ip: "8.8.8.8" },
     })
   );
   expect(onAskAi).toHaveBeenCalledWith(
     expect.objectContaining({
       contextType: "source_ip",
-      action: "summarize_activity",
+      workflow: "decision_support",
       context: { source_ip: "8.8.8.8" },
     })
   );
   expect(onAskAi).toHaveBeenCalledWith(
     expect.objectContaining({
       contextType: "source_ip",
-      draftType: "response_recommendation",
+      workflow: "generate_artifact",
+      artifactType: "response_recommendation",
       context: { source_ip: "8.8.8.8" },
     })
   );
   expect(onAskAi).toHaveBeenCalledWith(
     expect.objectContaining({
       contextType: "source_ip",
-      draftType: "investigation_checklist",
+      workflow: "generate_artifact",
+      artifactType: "investigation_checklist",
       context: { source_ip: "8.8.8.8" },
     })
   );

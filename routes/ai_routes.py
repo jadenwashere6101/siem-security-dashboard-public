@@ -12,18 +12,14 @@ from core.ai.action_service import (
 
 from core.ai.explainer_service import (
     AiContextError,
-    chat_about_siem,
-    explain_context,
     service_error_response,
 )
 from core.ai.investigation_service import (
     InvestigationPlannerError,
-    run_investigation,
     service_error_response as investigation_service_error_response,
 )
 from core.ai.drafting_service import (
     DraftValidationError,
-    create_draft,
     service_error_response as draft_service_error_response,
 )
 from core.ai.readiness import get_ai_gateway_status
@@ -31,6 +27,14 @@ from core.ai.repo_assistant_service import (
     RepoAssistantValidationError,
     answer_repo_question,
     get_repo_assistant_status,
+)
+from core.ai.workflow_orchestrator import (
+    WorkflowValidationError,
+    legacy_chat_about_siem as chat_about_siem,
+    legacy_create_draft as create_draft,
+    legacy_explain_context as explain_context,
+    legacy_run_investigation as run_investigation,
+    run_workflow,
 )
 from core.auth import analyst_or_super_admin_required, super_admin_required
 
@@ -83,6 +87,35 @@ def ai_chat_route():
         return jsonify(result.payload), result.status_code
     except Exception as error:
         current_app.logger.error("Error in ai_chat_route: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@ai_bp.route("/ai/workflows", methods=["POST"])
+@login_required
+@analyst_or_super_admin_required
+def ai_workflows_route():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "JSON object body is required."}), 400
+
+    try:
+        result = run_workflow(payload)
+        return jsonify(result.payload), result.status_code
+    except (AiContextError, DraftValidationError, InvestigationPlannerError, WorkflowValidationError) as error:
+        status_code = getattr(error, "status_code", 400)
+        return jsonify(
+            {
+                "status": getattr(error, "error_code", "invalid_workflow_request"),
+                "workflow": None,
+                "classification": None,
+                "lifecycle": {"mode": "sync", "stage": "failed", "stages": [{"stage": "failed", "status": "failed"}]},
+                "result": {},
+                "metadata": {},
+                "error": str(error),
+            }
+        ), status_code
+    except Exception as error:
+        current_app.logger.error("Error in ai_workflows_route: %s", error)
         return jsonify({"error": "Internal server error"}), 500
 
 

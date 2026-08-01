@@ -34,7 +34,7 @@ import SourceIpContext from "./SourceIpContext";
 import { CanonicalOutcomeBreakdown, ResponseOutcomeSummary } from "./ResponseOutcome";
 import { mergeCanonicalOutcomeCounts } from "../utils/responseOutcomeDisplay";
 import { WorkspaceInitialState, WorkspaceRefreshState } from "./WorkspaceAsyncState";
-import AiAssistantButton from "./AiAssistantButton";
+import AnakinWorkflowControls, { ANAKIN_WORKFLOWS } from "./AnakinWorkflowControls";
 import GroupedOperationsFeed from "./GroupedOperationsFeed";
 import { buildOperationalFeedEntries } from "./groupedOperationsFeedModel";
 
@@ -1053,76 +1053,21 @@ function SocCommandCenter({
                       </div>
                       <div style={reconHeroActionsStyle}>
                         {aiEnabled && typeof onAskAi === "function" ? (
-                          <>
-                            <span style={agentClusterLabelStyle}>Anakin analyst tools</span>
-                            <AiAssistantButton
-                              onClick={() =>
-                                onAskAi({
-                                  contextType: "recon_activity",
-                                  action: "explain_recon_activity",
-                                  title: `Recon activity #${reconContext.detail.id}`,
-                                  question: "Explain this recon activity using SIEM evidence and its confidence tier.",
-                                  context: { activity_id: reconContext.detail.id },
-                                })
-                              }
-                            >
-                              Explain recon
-                            </AiAssistantButton>
-                            <AiAssistantButton
-                              onClick={() =>
-                                onAskAi({
-                                  contextType: "recon_activity",
-                                  action: "investigate_cluster",
-                                  title: `Investigate recon #${reconContext.detail.id}`,
-                                  question: "Recommend read-only investigation steps for this recon cluster.",
-                                  context: { activity_id: reconContext.detail.id },
-                                })
-                              }
-                            >
-                              Investigate cluster
-                            </AiAssistantButton>
-                            <AiAssistantButton
-                              onClick={() =>
-                                onAskAi({
-                                  contextType: "recon_activity",
-                                  action: "investigate_cluster",
-                                  investigation: true,
-                                  title: `Guided recon investigation #${reconContext.detail.id}`,
-                                  question: "Run a bounded, read-only guided investigation for this recon cluster with source-cited evidence and recommended analyst next steps.",
-                                  context: { activity_id: reconContext.detail.id },
-                                  toolPolicy: { max_tool_calls: 5, time_window_hours: 24 },
-                                })
-                              }
-                            >
-                              Guided investigation
-                            </AiAssistantButton>
-                            <AiAssistantButton
-                              onClick={() =>
-                                onAskAi({
-                                  contextType: "recon_activity",
-                                  draftType: "investigation_checklist",
-                                  title: `Draft checklist for recon #${reconContext.detail.id}`,
-                                  instruction: "Draft a read-only investigation checklist for this recon cluster. Do not execute actions.",
-                                  context: { activity_id: reconContext.detail.id },
-                                })
-                              }
-                            >
-                              Draft checklist
-                            </AiAssistantButton>
-                            <AiAssistantButton
-                              onClick={() =>
-                                onAskAi({
-                                  contextType: "recon_activity",
-                                  draftType: "response_recommendation",
-                                  title: `Draft response options for recon #${reconContext.detail.id}`,
-                                  instruction: "Draft response recommendation options for analyst review only. Do not approve or execute anything.",
-                                  context: { activity_id: reconContext.detail.id },
-                                })
-                              }
-                            >
-                              Draft response
-                            </AiAssistantButton>
-                          </>
+                          <AnakinWorkflowControls
+                            contextType="recon_activity"
+                            context={{ activity_id: reconContext.detail.id }}
+                            controls={[
+                              ANAKIN_WORKFLOWS.deepInvestigate,
+                              ANAKIN_WORKFLOWS.decisionSupport,
+                            ]}
+                            artifacts={[
+                              { type: "investigation_checklist", label: "Investigation checklist" },
+                              { type: "response_recommendation", label: "Response recommendation" },
+                            ]}
+                            titlePrefix={`Recon activity #${reconContext.detail.id}`}
+                            subject={`recon activity #${reconContext.detail.id}`}
+                            onAskAi={onAskAi}
+                          />
                         ) : null}
                         <StatusBadge tone={String(reconContext.detail.severity || "").toLowerCase() === "high" ? "warning" : "info"}>
                           {titleCase(reconContext.detail.severity)}
@@ -1908,14 +1853,6 @@ const reconHeroActionsStyle = {
   justifyContent: "flex-end",
   gap: "8px",
   flexWrap: "wrap",
-};
-
-const agentClusterLabelStyle = {
-  color: "#93c5fd",
-  fontSize: "11px",
-  fontWeight: 800,
-  letterSpacing: "0.04em",
-  textTransform: "uppercase",
 };
 
 const incidentHeroTitleStyle = {

@@ -442,7 +442,10 @@ def test_detection_rule_change_missing_false_positive_notes_fails_once_without_p
     assert result.payload["draft"]["labels"]["persisted"] is False
     assert result.payload["draft"]["labels"]["applied"] is False
     assert "false_positive_notes is required" in result.payload["draft"]["validation"]["errors"]
-    assert len(gateway.requests) == 1
+    assert result.payload["metadata"]["repair_attempted"] is True
+    assert result.payload["metadata"]["repair_count"] == 1
+    assert len(gateway.requests) == 2
+    assert gateway.requests[1].metadata["action"] == "draft_repair"
 
 
 def test_draft_route_auth_rbac_and_validation(client, mock_db, monkeypatch):
