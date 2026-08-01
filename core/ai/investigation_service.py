@@ -591,13 +591,13 @@ def _build_correlation_prompt(
     profile_max_prompt_chars: int | None = None,
 ) -> str:
     prompt_budget = profile_max_prompt_chars or config.max_prompt_chars
-    context_json = json.dumps(redact_sensitive_values(ai_context.data), default=str, sort_keys=True, indent=2)
     tools_json = json.dumps(
         tool_summary_for_prompt(tools, max_chars=max(1000, prompt_budget // 3)),
         default=str,
         sort_keys=True,
         indent=2,
     )
+    context_json = _correlation_context_json_for_prompt(ai_context, budget=prompt_budget, tools_json=tools_json)
     sources_json = json.dumps(_all_sources(ai_context, tools), default=str, sort_keys=True)
     return (
         "You are a read-only advanced SIEM SOC assistant.\n"
@@ -616,6 +616,86 @@ def _build_correlation_prompt(
         f"SIEM context:\n{context_json}\n\n"
         f"Validated read-only SOC tool evidence:\n{tools_json}\n"
     )
+
+
+def _correlation_context_json_for_prompt(ai_context: AiContextPayload, *, budget: int, tools_json: str) -> str:
+    static_budget = 4200
+    max_context_chars = max(1500, budget - static_budget - len(tools_json))
+    bounded = _bound_correlation_prompt_value(redact_sensitive_values(ai_context.data))
+    context_json = json.dumps(bounded, default=str, sort_keys=True, indent=2)
+    if len(context_json) <= max_context_chars:
+        return context_json
+    summary = {
+        "summary": "Guided investigation context was compacted before prompt serialization because it exceeded the selected AI profile budget.",
+        "context_type": ai_context.context_type,
+        "primary": _primary_correlation_summary(ai_context.data),
+        "_evidence": _correlation_evidence(ai_context.data),
+        "_prompt_compaction": {
+            "original_chars": len(json.dumps(ai_context.data, default=str, sort_keys=True)),
+            "max_context_chars": max_context_chars,
+            "included_sources": len(ai_context.sources),
+            "omitted_count": ai_context.omitted_count,
+            "truncated": True,
+            "reason": "profile_prompt_budget",
+        },
+    }
+    return json.dumps(redact_sensitive_values(summary), default=str, sort_keys=True, indent=2)
+
+
+def _bound_correlation_prompt_value(value: Any, *, depth: int = 0) -> Any:
+    if depth > 4:
+        return _short_correlation_text(value, max_chars=220)
+    if isinstance(value, list):
+        limit = 6 if depth <= 2 else 4
+        items = [_bound_correlation_prompt_value(item, depth=depth + 1) for item in value[:limit]]
+        omitted = max(0, len(value) - len(items))
+        if omitted:
+            return {"items": items, "_evidence": {"included": len(items), "omitted": omitted, "truncated": True}}
+        return items
+    if isinstance(value, dict):
+        bounded: dict[str, Any] = {}
+        for key, child in value.items():
+            if key in {"raw", "raw_events", "full_payload", "full_context", "map_markers"}:
+                rows = child if isinstance(child, list) else []
+                bounded[key] = {
+                    "summary": "High-volume field omitted from guided investigation prompt.",
+                    "_evidence": {"included": 0, "omitted": len(rows), "truncated": bool(rows)},
+                }
+                continue
+            bounded[key] = _bound_correlation_prompt_value(child, depth=depth + 1)
+        return bounded
+    return _short_correlation_text(value, max_chars=360 if depth <= 2 else 180)
+
+
+def _correlation_evidence(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict) and isinstance(value.get("_evidence"), dict):
+        return value["_evidence"]
+    evidence: dict[str, Any] = {"included": {}, "omitted": {}, "truncated": False}
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if isinstance(child, list):
+                included = min(len(child), 6)
+                omitted = max(0, len(child) - included)
+                evidence["included"][key] = included
+                if omitted:
+                    evidence["omitted"][key] = omitted
+                    evidence["truncated"] = True
+    return evidence
+
+
+def _primary_correlation_summary(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return _short_correlation_text(value, max_chars=900)
+    for key in ("alert", "incident", "source_ip", "recon_activity", "registry_record", "primary", "summary"):
+        if key in value:
+            return _bound_correlation_prompt_value(value[key], depth=1)
+    return _bound_correlation_prompt_value(value, depth=1)
+
+
+def _short_correlation_text(value: Any, *, max_chars: int) -> Any:
+    if not isinstance(value, str):
+        return value
+    return value if len(value) <= max_chars else value[:max_chars] + "... [truncated]"
 
 
 def _build_recommendations(

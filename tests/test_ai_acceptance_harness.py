@@ -5,6 +5,7 @@ from dataclasses import replace
 from core.ai.acceptance_harness import (
     ROOT_CAUSE_FRONTEND_CONTRACT_MISMATCH,
     ROOT_CAUSE_INVALID_RESPONSE,
+    build_complete_ai_inventory,
     build_frontend_realistic_request,
     build_acceptance_cases,
     discover_frontend_ai_options,
@@ -20,14 +21,23 @@ from core.ai.profile_registry import AI_INVOCATION_INVENTORY, AI_PROFILE_FAST_TR
 
 def test_acceptance_harness_covers_every_inventory_action_without_manual_button_list():
     cases = build_acceptance_cases()
-    inventory_keys = {entry.key for entry in AI_INVOCATION_INVENTORY}
+    complete_inventory, _frontend_options = build_complete_ai_inventory()
+    complete_keys = {entry.key for entry in complete_inventory}
 
-    assert set(cases) == inventory_keys
+    assert set(cases) == complete_keys
+    for legacy in AI_INVOCATION_INVENTORY:
+        assert any(
+            entry.backend_path == legacy.backend_path and entry.profile == legacy.profile
+            for entry in complete_inventory
+        )
+    assert len(complete_keys) > len(AI_INVOCATION_INVENTORY)
+    assert "frontend.alert.investigation_checklist.draft.line_264" in complete_keys
+    assert "frontend.recon.response_recommendation.draft.line_1114" in complete_keys
 
     report = run_offline_contract_tier()
 
-    assert report.actions_discovered == len(AI_INVOCATION_INVENTORY)
-    assert report.actions_covered == len(AI_INVOCATION_INVENTORY)
+    assert report.actions_discovered == len(complete_inventory)
+    assert report.actions_covered == len(complete_inventory)
     assert report.failures_by_root_cause == {}
     assert all(result.success for result in report.results)
 
@@ -61,7 +71,7 @@ def test_acceptance_rows_include_required_product_debug_fields():
 
 def test_manual_briefing_lifecycle_acceptance_reaches_visible_terminal_state():
     report = run_offline_contract_tier()
-    manual = next(result for result in report.results if result.frontend_action_id == "worker.soc_briefing.manual_and_scheduled")
+    manual = next(result for result in report.results if result.frontend_action_id == "worker.soc_briefing.manual_run_now")
 
     assert manual.backend_route == "soc_briefing_worker"
     assert manual.selected_profile == "deep_briefing"

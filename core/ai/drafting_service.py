@@ -251,7 +251,6 @@ def _build_draft_prompt(
     profile_max_prompt_chars: int | None = None,
 ) -> str:
     definition = get_draft_definition(request.draft_type)
-    context_json = json.dumps(redact_draft_value(ai_context.data), default=str, sort_keys=True, indent=2)
     schema_json = json.dumps(_schema_for_prompt(definition), sort_keys=True, indent=2)
     tool_budget = max(1000, (profile_max_prompt_chars or config.max_prompt_chars) // 3)
     tools_json = json.dumps(
@@ -260,6 +259,10 @@ def _build_draft_prompt(
         sort_keys=True,
         indent=2,
     )
+    prompt_limit = profile_max_prompt_chars or config.max_prompt_chars
+    fixed_budget = len(schema_json) + len(tools_json) + 2200
+    context_budget = max(1800, min(prompt_limit // 2, prompt_limit - fixed_budget))
+    context_json = _draft_context_json_for_prompt(ai_context, max_chars=context_budget)
     return (
         "You are a read-only SIEM drafting assistant.\n"
         "Use only the supplied SIEM context and read-only tool evidence.\n"
@@ -290,6 +293,80 @@ def _schema_for_prompt(definition) -> dict[str, Any]:
         }
         for field in definition.fields
     }
+
+
+def _draft_context_json_for_prompt(ai_context: AiContextPayload, *, max_chars: int) -> str:
+    compacted = _compact_draft_value(redact_draft_value(ai_context.data), max_depth=4)
+    if isinstance(compacted, dict):
+        compacted["_context_bounds"] = {
+            "included_sources": len(ai_context.sources),
+            "truncated": ai_context.truncated,
+            "omitted_count": ai_context.omitted_count,
+            "max_chars": max_chars,
+        }
+    rendered = json.dumps(compacted, default=str, sort_keys=True, indent=2)
+    if len(rendered) <= max_chars:
+        return rendered
+    fallback = {
+        "summary": _compact_draft_value(ai_context.data.get("summary") if isinstance(ai_context.data, dict) else None, max_depth=1),
+        "_evidence": _compact_draft_value(ai_context.data.get("_evidence") if isinstance(ai_context.data, dict) else None, max_depth=2),
+        "_context_bounds": {
+            "included_sources": len(ai_context.sources),
+            "truncated": True,
+            "omitted_count": ai_context.omitted_count,
+            "truncation_reason": "draft_prompt_budget",
+            "max_chars": max_chars,
+        },
+    }
+    return json.dumps(fallback, default=str, sort_keys=True, indent=2)
+
+
+def _compact_draft_value(value: Any, *, max_depth: int, max_items: int = 8) -> Any:
+    if max_depth <= 0:
+        if isinstance(value, dict):
+            return {"_omitted_fields": len(value)}
+        if isinstance(value, list):
+            return {"_omitted_items": len(value)}
+        return value
+    if isinstance(value, list):
+        compacted = [_compact_draft_value(item, max_depth=max_depth - 1, max_items=max_items) for item in value[:max_items]]
+        if len(value) > max_items:
+            compacted.append({"_omitted_items": len(value) - max_items})
+        return compacted
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        preferred = [
+            "summary",
+            "_evidence",
+            "alert",
+            "incident",
+            "source_ip",
+            "recon_activity",
+            "registry_record",
+            "why_fired",
+            "reputation",
+            "signals",
+            "timeline",
+            "linked_alerts",
+            "related_alerts",
+            "related_events",
+            "recent_alerts",
+            "outcome_history",
+            "response_outcomes",
+            "background_refresh",
+            "visible_context",
+            "workspace",
+        ]
+        keys = [key for key in preferred if key in value]
+        keys.extend(key for key in value.keys() if key not in keys)
+        for key in keys[:12]:
+            result[key] = _compact_draft_value(value[key], max_depth=max_depth - 1, max_items=max_items)
+        if len(value) > len(result):
+            result["_omitted_fields"] = len(value) - len(result)
+        return result
+    if isinstance(value, str) and len(value) > 500:
+        return value[:500] + "... [truncated]"
+    return value
 
 
 def _parse_provider_draft(content: str | None) -> dict[str, Any] | None:

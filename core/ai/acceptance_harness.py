@@ -25,6 +25,12 @@ from core.ai.profile_registry import (
     AI_PROFILE_FAST_TRIAGE,
     AI_PROFILE_GUIDED_ANALYSIS,
     AiInvocationInventoryEntry,
+    profile_for_chat,
+    profile_for_draft_type,
+    profile_for_explain_action,
+    profile_for_investigation,
+    profile_for_repo_assistant,
+    profile_for_soc_briefing,
 )
 from core.ai.repo_assistant_service import _build_prompt as build_repo_prompt, classify_repo_question
 from core.ai.repo_index import RepoChunk
@@ -48,6 +54,28 @@ DEFAULT_LIVE_THROTTLE_SECONDS = 2.0
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_SOURCE_ROOT = REPO_ROOT / "frontend" / "src"
 ENTITY_AI_CONTEXT_TYPES = {"alert", "source_ip", "incident", "recon_activity", "response_registry", "detection"}
+
+
+@dataclass(frozen=True)
+class FrontendAiOption:
+    key: str
+    source_file: str
+    line_number: int
+    options: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class HarnessInventoryEntry:
+    key: str
+    frontend_surface: str
+    backend_path: str
+    selector_type: str
+    selector: str
+    profile: str
+    notes: str = ""
+
+    def as_dict(self) -> dict[str, str]:
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -106,33 +134,76 @@ class AcceptanceReport:
 
 
 def build_acceptance_cases() -> dict[str, AcceptanceCase]:
-    frontend_options = discover_frontend_ai_options()
-    return {entry.key: _case_for_entry(entry, frontend_options=frontend_options) for entry in AI_INVOCATION_INVENTORY}
+    inventory, frontend_options = build_complete_ai_inventory()
+    return {entry.key: _case_for_entry(entry, frontend_options=frontend_options) for entry in inventory}
+
+
+def build_complete_ai_inventory() -> tuple[tuple[HarnessInventoryEntry, ...], dict[str, dict[str, Any]]]:
+    frontend_options: dict[str, dict[str, Any]] = {}
+    entries: list[HarnessInventoryEntry] = []
+    seen: set[str] = set()
+
+    for discovered in discover_frontend_ai_option_entries():
+        options = _with_large_entity_fixture(discovered.options, _normalize_context_type(discovered.options.get("contextType")))
+        entry = _inventory_entry_for_frontend_option(discovered, options)
+        if entry.key in seen:
+            continue
+        seen.add(entry.key)
+        frontend_options[entry.key] = options
+        entries.append(entry)
+
+    for command in _default_command_contracts():
+        entry = _inventory_entry_for_static_contract(command)
+        if entry.key in seen:
+            continue
+        seen.add(entry.key)
+        frontend_options[entry.key] = command
+        entries.append(entry)
+
+    for contract in _static_surface_contracts():
+        entry = _inventory_entry_for_static_contract(contract)
+        if entry.key in seen:
+            continue
+        seen.add(entry.key)
+        frontend_options[entry.key] = contract
+        entries.append(entry)
+
+    return tuple(entries), frontend_options
 
 
 def discover_frontend_ai_options(source_root: Path | None = None) -> dict[str, dict[str, Any]]:
-    source_root = source_root or FRONTEND_SOURCE_ROOT
     discovered: dict[str, dict[str, Any]] = {}
-    for path in sorted(source_root.glob("components/**/*.js")):
-        text = path.read_text(encoding="utf-8")
-        for block in _extract_on_ask_ai_blocks(text):
-            parsed = _parse_frontend_ai_options(block)
-            if not parsed:
-                continue
-            key = _frontend_contract_key(parsed, path.name)
-            discovered.setdefault(key, parsed)
-
+    for option in discover_frontend_ai_option_entries(source_root):
+        discovered.setdefault(_frontend_contract_key(option.options, Path(option.source_file).name), option.options)
     for command in _default_command_contracts():
         discovered.setdefault(command["contract_key"], command)
     return discovered
 
 
+def discover_frontend_ai_option_entries(source_root: Path | None = None) -> list[FrontendAiOption]:
+    source_root = source_root or FRONTEND_SOURCE_ROOT
+    discovered: list[FrontendAiOption] = []
+    for path in sorted(source_root.glob("components/**/*.js")):
+        text = path.read_text(encoding="utf-8")
+        relative = path.relative_to(source_root).as_posix()
+        for block, line_number in _extract_on_ask_ai_blocks(text):
+            parsed = _parse_frontend_ai_options(block)
+            if not parsed:
+                continue
+            key = _frontend_contract_key(parsed, path.name)
+            unique = f"{key}.line_{line_number}"
+            parsed = {**parsed, "contract_key": unique, "source_file": relative, "line_number": line_number}
+            discovered.append(FrontendAiOption(unique, relative, line_number, parsed))
+    return discovered
+
+
 def run_offline_contract_tier(config: AiGatewayConfig | None = None) -> AcceptanceReport:
     resolved_config = config or _acceptance_config()
+    inventory, _frontend_options = build_complete_ai_inventory()
     cases = build_acceptance_cases()
     results: list[AcceptanceResult] = []
     failures: dict[str, list[str]] = {}
-    inventory_by_key = {entry.key: entry for entry in AI_INVOCATION_INVENTORY}
+    inventory_by_key = {entry.key: entry for entry in inventory}
 
     for key, entry in inventory_by_key.items():
         case = cases.get(key)
@@ -247,8 +318,9 @@ def run_live_backend_sweep(
     resolved_base_url = (base_url or os.getenv("AI_ACCEPTANCE_BASE_URL") or DEFAULT_LIVE_BASE_URL).rstrip("/")
     config = load_ai_gateway_config()
     ids = _discover_live_entities(resolved_base_url, cookie)
+    inventory, _frontend_options = build_complete_ai_inventory()
     cases = build_acceptance_cases()
-    inventory_by_key = {entry.key: entry for entry in AI_INVOCATION_INVENTORY}
+    inventory_by_key = {entry.key: entry for entry in inventory}
     rows: list[dict[str, Any]] = []
     failures: dict[str, list[str]] = {}
 
@@ -269,12 +341,6 @@ def run_live_backend_sweep(
         if not row.get("success"):
             failures.setdefault(str(row.get("root_cause") or "other"), []).append(str(row.get("frontend_action_id")))
         time.sleep(max(0.0, throttle_seconds))
-
-    repo_rows = _live_repo_assistant_checks(resolved_base_url, cookie, config)
-    for row in repo_rows:
-        rows.append(row)
-        if not row.get("success"):
-            failures.setdefault(str(row.get("root_cause") or "other"), []).append(str(row.get("frontend_action_id")))
 
     return {
         "enabled": True,
@@ -472,6 +538,14 @@ def _live_repo_assistant_checks(base_url: str, cookie: str, config: AiGatewayCon
 
 def _live_payload_for_case(entry: AiInvocationInventoryEntry, case: AcceptanceCase, ids: dict[str, Any]) -> dict[str, Any]:
     payload = json.loads(json.dumps(case.request_payload, default=str))
+    if entry.backend_path in {"POST /ai/chat", "POST /ai/repo/chat"}:
+        return payload
+    if entry.backend_path == "POST /ai/actions/preview":
+        preview_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+        if payload.get("action_type") == "add_incident_note" and ids.get("incident_id"):
+            preview_payload["incident_id"] = ids["incident_id"]
+        payload["payload"] = preview_payload
+        return payload
     context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
     context_type = payload.get("context_type") or case.context_type
     if context_type == "alert" and ids.get("alert_id"):
@@ -748,6 +822,19 @@ def _prompt_for_case(entry: AiInvocationInventoryEntry, case: AcceptanceCase, co
             max_prompt_chars=profile.max_prompt_chars,
             question_type=classify_repo_question(case.sample_question),
         )
+    if entry.backend_path == "POST /ai/actions/preview":
+        return json.dumps(
+            {
+                "non_mutating_ai_action_preview_contract": True,
+                "request": case.request_payload,
+                "expected_status": "preview_ready",
+                "confirm_route_requires_explicit_token": True,
+                "production_mutation_allowed": False,
+            },
+            default=str,
+            sort_keys=True,
+            indent=2,
+        )
     if entry.backend_path == "soc_briefing_worker":
         budget = InvestigationBudget(max_prompt_chars=min(8000, profile.max_prompt_chars), max_prompt_tokens=3000)
         evidence = _fixture_context("recon_activity").metadata()
@@ -762,12 +849,13 @@ def _prompt_for_case(entry: AiInvocationInventoryEntry, case: AcceptanceCase, co
 
 
 def _case_for_entry(
-    entry: AiInvocationInventoryEntry,
+    entry: HarnessInventoryEntry | AiInvocationInventoryEntry,
     *,
     frontend_options: dict[str, dict[str, Any]],
 ) -> AcceptanceCase:
-    context_type = _context_type_for_entry(entry)
-    options = _frontend_options_for_entry(entry, context_type, frontend_options)
+    fallback_context_type = _context_type_for_entry(entry)
+    options = _frontend_options_for_entry(entry, fallback_context_type, frontend_options)
+    context_type = _normalize_context_type(options.get("contextType")) or fallback_context_type
     payload, route = build_frontend_realistic_request(options, active_section=_active_section_for_context(context_type))
     if entry.backend_path in {"soc_briefing_worker", "POST /ai/repo/chat"}:
         route = entry.backend_path
@@ -789,6 +877,18 @@ def _case_for_entry(
 
 def build_frontend_realistic_request(options: dict[str, Any], *, active_section: str = "dashboard") -> tuple[dict[str, Any], str]:
     explicit_route = options.get("route")
+    if explicit_route == "soc_briefing_worker":
+        return {"mode": "status_only", "create_job": False}, "soc_briefing_worker"
+    if explicit_route == "POST /ai/actions/preview":
+        return (
+            {
+                "action_type": options.get("action_type") or "add_incident_note",
+                "payload": options.get("payload") if isinstance(options.get("payload"), dict) else {"incident_id": 2002, "note_text": "Acceptance preview only."},
+                "idempotency_key": options.get("idempotency_key") or "acceptance-preview-action-2002",
+                "source_draft": options.get("source_draft") if isinstance(options.get("source_draft"), dict) else {"draft_type": "incident_note", "read_only": True},
+            },
+            "POST /ai/actions/preview",
+        )
     if explicit_route == "POST /ai/chat":
         return (
             {
@@ -858,8 +958,131 @@ def build_frontend_realistic_request(options: dict[str, Any], *, active_section:
     )
 
 
-def _extract_on_ask_ai_blocks(text: str) -> list[str]:
-    blocks: list[str] = []
+def _inventory_entry_for_frontend_option(discovered: FrontendAiOption, options: dict[str, Any]) -> HarnessInventoryEntry:
+    _payload, route = build_frontend_realistic_request(options, active_section=_active_section_for_context(_normalize_context_type(options.get("contextType"))))
+    selector = str(options.get("draftType") or options.get("action") or "ask_anakin")
+    if route == "POST /ai/drafts":
+        selector_type = "draft_type"
+        profile = profile_for_draft_type(selector)
+    elif route == "POST /ai/investigations":
+        selector_type = "investigation_workflow"
+        profile = profile_for_investigation()
+    elif route == "POST /ai/explain":
+        selector_type = "explain_action"
+        profile = profile_for_explain_action(selector)
+    elif route == "POST /ai/actions/preview":
+        selector_type = "action_preview"
+        profile = profile_for_investigation()
+    else:
+        selector_type = "route"
+        profile = profile_for_chat()
+    label = options.get("title") or selector
+    return HarnessInventoryEntry(
+        key=discovered.key,
+        frontend_surface=f"{discovered.source_file}:{discovered.line_number} {label}",
+        backend_path=route,
+        selector_type=selector_type,
+        selector=selector,
+        profile=profile,
+        notes="Discovered from real frontend onAskAi payload construction.",
+    )
+
+
+def _inventory_entry_for_static_contract(options: dict[str, Any]) -> HarnessInventoryEntry:
+    key = str(options["contract_key"])
+    _payload, route = build_frontend_realistic_request(options, active_section=_active_section_for_context(_normalize_context_type(options.get("contextType"))))
+    selector = str(options.get("draftType") or options.get("action") or options.get("selector") or "ask_anakin")
+    if route == "POST /ai/chat":
+        selector_type = "route"
+        profile = profile_for_chat()
+    elif route == "POST /ai/repo/chat":
+        selector_type = "route"
+        profile = profile_for_repo_assistant()
+    elif route == "soc_briefing_worker":
+        selector_type = "capability"
+        profile = profile_for_soc_briefing()
+    elif route == "POST /ai/drafts":
+        selector_type = "draft_type"
+        profile = profile_for_draft_type(selector)
+    elif route == "POST /ai/investigations":
+        selector_type = "investigation_workflow"
+        profile = profile_for_investigation()
+    elif route == "POST /ai/actions/preview":
+        selector_type = "action_preview"
+        profile = profile_for_investigation()
+    else:
+        selector_type = "explain_action"
+        profile = profile_for_explain_action(selector)
+    return HarnessInventoryEntry(
+        key=key,
+        frontend_surface=str(options.get("surface") or options.get("title") or key),
+        backend_path=route,
+        selector_type=selector_type,
+        selector=selector,
+        profile=profile,
+        notes=str(options.get("source") or "static acceptance contract"),
+    )
+
+
+def _static_surface_contracts() -> list[dict[str, Any]]:
+    return [
+        {
+            "contract_key": "frontend.floating_chat.general",
+            "surface": "FloatingSiemChat Ask Anakin",
+            "route": "POST /ai/chat",
+            "message": "What should I inspect first in this workspace?",
+            "visible_context": _visible_context_fixture("dashboard"),
+            "client_history": [],
+            "source": "FloatingSiemChat",
+        },
+        {
+            "contract_key": "frontend.command_palette.ask",
+            "surface": "AnakinCommandSurface Ask command",
+            "route": "POST /ai/chat",
+            "message": "What should I inspect first in this workspace?",
+            "visible_context": _visible_context_fixture("analyst_workspace"),
+            "client_history": [],
+            "source": "AnakinCommandSurface.ask",
+        },
+        {
+            "contract_key": "frontend.repo_architecture.chat.factual",
+            "surface": "RepoArchitectureAssistantPanel factual question",
+            "route": "POST /ai/repo/chat",
+            "message": "Where is the SOAR worker implemented?",
+            "source": "RepoArchitectureAssistantPanel",
+        },
+        {
+            "contract_key": "frontend.repo_architecture.chat.evaluative",
+            "surface": "RepoArchitectureAssistantPanel evaluative question",
+            "route": "POST /ai/repo/chat",
+            "message": "What is my most impressive feature?",
+            "source": "RepoArchitectureAssistantPanel",
+        },
+        {
+            "contract_key": "worker.soc_briefing.manual_run_now",
+            "surface": "SocBriefingsPanel Run Anakin Briefing Now",
+            "route": "soc_briefing_worker",
+            "contextType": "soc_briefing",
+            "action": "run_now",
+            "source": "SocBriefingsPanel",
+        },
+        {
+            "contract_key": "frontend.ai_action.preview.add_incident_note",
+            "surface": "AiResponsePanel Preview action",
+            "route": "POST /ai/actions/preview",
+            "contextType": "incident",
+            "selector": "add_incident_note",
+            "action_type": "add_incident_note",
+            "payload": {"incident_id": 2002, "note_text": "Acceptance preview only. Do not confirm."},
+            "idempotency_key": "acceptance-preview-action-2002",
+            "source_draft": {"draft_type": "incident_note", "read_only": True, "persisted": False, "applied": False},
+            "source": "AiResponsePanel.previewAiAction",
+        },
+    ]
+
+
+def _extract_on_ask_ai_blocks(text: str) -> list[tuple[str, int]]:
+    blocks: list[tuple[str, int]] = []
     start = 0
     marker = "onAskAi({"
     while True:
@@ -875,7 +1098,7 @@ def _extract_on_ask_ai_blocks(text: str) -> list[str]:
             elif char == "}":
                 depth -= 1
                 if depth == 0:
-                    blocks.append(text[brace_start : pos + 1])
+                    blocks.append((text[brace_start : pos + 1], text.count("\n", 0, idx) + 1))
                     start = pos + 1
                     break
         else:
@@ -1160,7 +1383,7 @@ def _context_type_for_entry(entry: AiInvocationInventoryEntry) -> str:
 
 
 def _stale_policy_for_entry(entry: AiInvocationInventoryEntry) -> str:
-    if entry.backend_path == "POST /ai/drafts":
+    if entry.backend_path in {"POST /ai/drafts", "POST /ai/actions/preview"}:
         return "strict_for_confirmable_preview"
     if entry.backend_path == "soc_briefing_worker":
         return "durable_lifecycle_recoverable"
@@ -1348,6 +1571,14 @@ def _sample_response_for_case(entry: AiInvocationInventoryEntry, case: Acceptanc
                 "stop_conditions": ["No matching current evidence"],
                 "source_references": [case.context_type],
             }
+        )
+    if entry.backend_path == "POST /ai/actions/preview":
+        return (
+            "Assessment: action preview is ready for analyst review only.\n"
+            "Evidence: payload digest, target fingerprint, and confirmation token are required before confirmation.\n"
+            "Contradictions and uncertainty: stale target state blocks confirmation.\n"
+            "Evidence gaps: analyst must review the generated draft and current target state.\n"
+            "Read-only next steps: inspect preview details and reject or explicitly confirm through the guarded workflow."
         )
     return (
         "Assessment: repeated activity is notable because it targets sensitive surfaces.\n"
