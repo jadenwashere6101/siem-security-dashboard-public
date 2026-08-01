@@ -11,13 +11,14 @@ from core.ai.context_builder import AiContextPayload, AiContextSource
 from core.ai.draft_schemas import (
     DEFAULT_DRAFT_LABELS,
     DRAFT_DEFINITIONS,
+    DraftRequest,
     DRAFT_STATUS_PARSE_FAILED,
     DRAFT_STATUS_SUCCESS,
     DRAFT_STATUS_VALIDATION_FAILED,
     SUPPORTED_DRAFT_TYPES,
     validate_draft_payload,
 )
-from core.ai.drafting_service import create_draft
+from core.ai.drafting_service import _build_draft_prompt, create_draft
 from core.ai.models import AI_STATUS_DISABLED, AI_STATUS_SUCCESS, AiGatewayRequest, AiGatewayResponse, AiRequestMetadata
 from core.ai.soc_tools import SocToolExecutionSummary, SocToolResult, SocToolSource
 
@@ -198,6 +199,65 @@ def test_draft_schema_rejects_malformed_and_mutation_like_payloads():
     assert any("steps" in error for error in result.errors)
 
 
+def test_detection_rule_change_schema_requires_false_positive_notes():
+    missing_notes = dict(_valid_payload("detection_rule_change"))
+    missing_notes.pop("false_positive_notes")
+
+    valid = validate_draft_payload("detection_rule_change", _valid_payload("detection_rule_change"))
+    invalid = validate_draft_payload("detection_rule_change", missing_notes)
+
+    assert valid.valid is True
+    assert invalid.valid is False
+    assert "false_positive_notes is required" in invalid.errors
+
+
+def test_detection_rule_change_prompt_names_required_fields_and_valid_example():
+    request = DraftRequest(
+        draft_type="detection_rule_change",
+        instruction="Draft a detection rule change.",
+        context_type="alert",
+        context={"alert_id": 7},
+    )
+
+    prompt = _build_draft_prompt(
+        request,
+        _context_payload("alert"),
+        SocToolExecutionSummary(used=False),
+        config=_config(),
+        profile_max_prompt_chars=14000,
+    )
+
+    required_fields = [field.name for field in DRAFT_DEFINITIONS["detection_rule_change"].fields if field.required]
+    for field in required_fields:
+        assert field in prompt
+    assert "Required fields that must appear exactly once" in prompt
+    assert "Valid JSON example matching this exact draft schema" in prompt
+    assert '"false_positive_notes"' in prompt
+    assert '"suggested_condition"' in prompt
+    assert '"rollback_notes"' in prompt
+
+
+def test_other_draft_prompts_do_not_use_detection_specific_example():
+    request = DraftRequest(
+        draft_type="incident_note",
+        instruction="Draft an incident note.",
+        context_type="incident",
+        context={"incident_id": 7},
+    )
+
+    prompt = _build_draft_prompt(
+        request,
+        _context_payload("incident"),
+        SocToolExecutionSummary(used=False),
+        config=_config(),
+        profile_max_prompt_chars=14000,
+    )
+
+    assert '"false_positive_notes"' not in prompt
+    assert "summary" in prompt
+    assert "recommended_next_steps" in prompt
+
+
 def test_create_draft_reuses_context_gateway_and_redacts_secrets(monkeypatch):
     gateway = RecordingGateway(json.dumps(_valid_payload("incident_note")))
     monkeypatch.setattr("core.ai.drafting_service.build_ai_context", lambda **_kwargs: _context_payload("incident"))
@@ -358,6 +418,31 @@ def test_create_draft_rejects_schema_invalid_provider_output(monkeypatch):
     assert result.payload["status"] == DRAFT_STATUS_VALIDATION_FAILED
     assert result.payload["draft"]["payload"] == {}
     assert result.payload["draft"]["validation"]["errors"]
+
+
+def test_detection_rule_change_missing_false_positive_notes_fails_once_without_persistence(monkeypatch):
+    malformed = dict(_valid_payload("detection_rule_change"))
+    malformed.pop("false_positive_notes")
+    gateway = RecordingGateway(json.dumps(malformed))
+    monkeypatch.setattr("core.ai.drafting_service.build_ai_context", lambda **_kwargs: _context_payload("alert"))
+
+    result = create_draft(
+        {
+            "draft_type": "detection_rule_change",
+            "instruction": "Draft a detection rule change.",
+            "context_type": "alert",
+            "context": {"alert_id": 7},
+        },
+        gateway=gateway,
+        config=_config(),
+    )
+
+    assert result.payload["status"] == DRAFT_STATUS_VALIDATION_FAILED
+    assert result.payload["draft"]["payload"] == {}
+    assert result.payload["draft"]["labels"]["persisted"] is False
+    assert result.payload["draft"]["labels"]["applied"] is False
+    assert "false_positive_notes is required" in result.payload["draft"]["validation"]["errors"]
+    assert len(gateway.requests) == 1
 
 
 def test_draft_route_auth_rbac_and_validation(client, mock_db, monkeypatch):

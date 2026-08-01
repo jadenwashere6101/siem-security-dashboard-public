@@ -14,6 +14,7 @@ from core.ai.config import AI_MODE_LOCAL_ONLY, AiGatewayConfig, default_ai_profi
 from core.ai.context_builder import AiContextPayload, AiContextSource
 from core.ai.drafting_service import _build_draft_prompt
 from core.ai.draft_schemas import DraftRequest
+from core.ai.draft_schemas import validate_draft_payload
 from core.ai.explainer_service import _build_prompt as build_explainer_prompt
 from core.ai.gateway import AiGateway
 from core.ai.investigation_planner import build_investigation_plan, classify_routing_profile
@@ -817,6 +818,18 @@ def _run_case(entry: AiInvocationInventoryEntry, case: AcceptanceCase, config: A
     response_time_ms = int((time.monotonic() - started) * 1000)
     prompt_size = len(prompt)
     usefulness = _usefulness_checks(_sample_response_for_case(entry, case))
+    if entry.backend_path == "POST /ai/drafts":
+        draft_type = str(case.request_payload.get("draft_type") or "investigation_checklist")
+        try:
+            parsed_sample = json.loads(_sample_response_for_case(entry, case))
+        except json.JSONDecodeError:
+            parsed_sample = None
+        draft_validation = validate_draft_payload(draft_type, parsed_sample)
+        usefulness["draft_schema_valid"] = draft_validation.valid
+        if draft_validation.valid:
+            usefulness["has_assessment_or_title"] = True
+            usefulness["has_uncertainty_or_gaps"] = True
+            usefulness["has_next_steps_or_checks"] = True
     stale_result = _stale_result(case)
     success = prompt_error is None and prompt_size <= profile.max_prompt_chars and all(usefulness.values()) and _stale_ok(stale_result)
     error_code = None
@@ -1664,16 +1677,7 @@ def _repo_chunks() -> list[RepoChunk]:
 
 def _sample_response_for_case(entry: AiInvocationInventoryEntry, case: AcceptanceCase) -> str:
     if entry.backend_path == "POST /ai/drafts":
-        return json.dumps(
-            {
-                "title": "Acceptance investigation checklist",
-                "checks": ["Review cited evidence", "Compare benign indicators", "Document uncertainty"],
-                "data_sources": ["alerts", "events"],
-                "expected_findings": ["Repeated denies may indicate recon"],
-                "stop_conditions": ["No matching current evidence"],
-                "source_references": [case.context_type],
-            }
-        )
+        return json.dumps(_sample_draft_payload(str(case.request_payload.get("draft_type") or "investigation_checklist"), case.context_type))
     if entry.backend_path == "POST /ai/actions/preview":
         return (
             "Assessment: action preview is ready for analyst review only.\n"
@@ -1689,6 +1693,68 @@ def _sample_response_for_case(entry: AiInvocationInventoryEntry, case: Acceptanc
         "Evidence gaps: confirm affected asset criticality and related incidents.\n"
         "Read-only next steps: inspect related alerts, event timeline, and source-IP history."
     )
+
+
+def _sample_draft_payload(draft_type: str, context_type: str) -> dict[str, Any]:
+    if draft_type == "detection_rule_change":
+        return {
+            "title": "Tune repeated-deny detection threshold",
+            "rationale": "Bounded evidence supports analyst review of the detection condition.",
+            "target_rule": "pfsense_firewall_repeated_deny",
+            "suggested_condition": "Require repeated deny events from one source across multiple target ports in the observed window.",
+            "severity": "high",
+            "false_positive_notes": "Check approved scanners, NAT gateways, monitoring tools, and maintenance windows before treating the activity as malicious.",
+            "test_ideas": ["Replay benign scanner events.", "Replay recent high-confidence deny bursts."],
+            "rollback_notes": "Restore the previous threshold if false positives increase after review.",
+            "source_references": [context_type],
+        }
+    if draft_type == "playbook_draft":
+        return {
+            "name": "Review suspicious scanner",
+            "trigger_context": "High-severity repeated deny evidence",
+            "steps": ["Collect alert detail", "Review source-IP history"],
+            "approval_gates": ["Analyst approval before enforcement"],
+            "simulation_real_caveats": "This is review-only and does not execute a playbook.",
+            "required_integrations": ["firewall"],
+            "risks": ["Benign scanner may be misclassified"],
+            "source_references": [context_type],
+        }
+    if draft_type == "incident_note":
+        return {
+            "summary": "Repeated suspicious activity requires analyst review.",
+            "evidence": ["Bounded SIEM evidence supports the assessment."],
+            "uncertainty": "Source ownership and benign scanner status remain unknown.",
+            "recommended_next_steps": ["Review related events"],
+            "attribution": [context_type],
+        }
+    if draft_type == "escalation_summary":
+        return {
+            "audience": "SOC lead",
+            "urgency": "High",
+            "business_or_security_impact": "Potential recon against exposed services.",
+            "evidence": ["Multiple related alerts"],
+            "asks": ["Confirm response policy"],
+            "next_update_criteria": "Update after related-event review.",
+            "source_references": [context_type],
+        }
+    if draft_type == "response_recommendation":
+        return {
+            "recommended_action_class": "Monitor and investigate",
+            "prerequisites": ["Confirm source history"],
+            "expected_outcome": "Improved confidence before enforcement.",
+            "approval_need": "Required before any production action.",
+            "risk": "Premature blocking may affect benign traffic.",
+            "alternatives": ["Escalate to network owner"],
+            "source_references": [context_type],
+        }
+    return {
+        "title": "Acceptance investigation checklist",
+        "checks": ["Review cited evidence", "Compare benign indicators", "Document uncertainty"],
+        "data_sources": ["alerts", "events"],
+        "expected_findings": ["Repeated denies may indicate recon"],
+        "stop_conditions": ["No matching current evidence"],
+        "source_references": [context_type],
+    }
 
 
 def _usefulness_checks(response: str) -> dict[str, bool]:

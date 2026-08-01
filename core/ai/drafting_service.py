@@ -252,6 +252,8 @@ def _build_draft_prompt(
 ) -> str:
     definition = get_draft_definition(request.draft_type)
     schema_json = json.dumps(_schema_for_prompt(definition), sort_keys=True, indent=2)
+    required_fields = _required_fields_for_prompt(definition)
+    example_json = json.dumps(_example_for_prompt(definition), sort_keys=True, indent=2)
     tool_budget = max(1000, (profile_max_prompt_chars or config.max_prompt_chars) // 3)
     tools_json = json.dumps(
         tool_summary_for_prompt(tools, max_chars=tool_budget),
@@ -260,13 +262,14 @@ def _build_draft_prompt(
         indent=2,
     )
     prompt_limit = profile_max_prompt_chars or config.max_prompt_chars
-    fixed_budget = len(schema_json) + len(tools_json) + 2200
+    fixed_budget = len(schema_json) + len(example_json) + len(tools_json) + 2600
     context_budget = max(1800, min(prompt_limit // 2, prompt_limit - fixed_budget))
     context_json = _draft_context_json_for_prompt(ai_context, max_chars=context_budget)
     return (
         "You are a read-only SIEM drafting assistant.\n"
         "Use only the supplied SIEM context and read-only tool evidence.\n"
         "Return exactly one JSON object matching the requested draft schema. Do not wrap it in markdown.\n"
+        "Every required field must be present, non-empty, and use the exact field name shown. Missing required fields are rejected.\n"
         "Do not claim anything was saved, applied, approved, executed, blocked, deployed, committed, or changed.\n"
         "Do not include secrets, credentials, shell commands, migration commands, or production-mutating payloads.\n"
         "Mark uncertainty and assumptions inside the requested schema fields.\n"
@@ -278,7 +281,9 @@ def _build_draft_prompt(
         f"Analyst instruction: {request.instruction}\n"
         f"Context type: {ai_context.context_type}\n"
         f"Context sources: {json.dumps(ai_context.metadata(), default=str, sort_keys=True)}\n\n"
+        f"Required fields that must appear exactly once: {', '.join(required_fields)}\n\n"
         f"Required JSON schema shape:\n{schema_json}\n\n"
+        f"Valid JSON example matching this exact draft schema:\n{example_json}\n\n"
         f"SIEM context:\n{context_json}\n\n"
         f"Read-only SOC tool evidence:\n{tools_json}\n"
     )
@@ -293,6 +298,35 @@ def _schema_for_prompt(definition) -> dict[str, Any]:
         }
         for field in definition.fields
     }
+
+
+def _required_fields_for_prompt(definition) -> list[str]:
+    return [field.name for field in definition.fields if field.required]
+
+
+def _example_for_prompt(definition) -> dict[str, Any]:
+    if definition.draft_type == "detection_rule_change":
+        return {
+            "title": "Tune repeated-deny detection threshold",
+            "rationale": "Bounded SIEM evidence shows repeated deny activity; analyst review is needed before any rule change.",
+            "target_rule": "pfsense_firewall_repeated_deny",
+            "suggested_condition": "Require repeated deny events from the same source IP across multiple target ports within the observed window.",
+            "severity": "high",
+            "false_positive_notes": "Check for approved vulnerability scanners, internal monitoring, NAT gateways, and maintenance windows before treating this as malicious.",
+            "test_ideas": [
+                "Replay representative benign scanner events.",
+                "Replay recent high-confidence deny bursts from the supplied evidence.",
+            ],
+            "rollback_notes": "Keep the existing rule parameters available and restore them if alert volume or false positives increase after review.",
+            "source_references": ["alert:1001", "context:evidence"],
+        }
+    example: dict[str, Any] = {}
+    for field in definition.fields:
+        if field.kind == "list":
+            example[field.name] = [f"Example {field.name.replace('_', ' ')} item"]
+        else:
+            example[field.name] = f"Example {field.name.replace('_', ' ')}"
+    return example
 
 
 def _draft_context_json_for_prompt(ai_context: AiContextPayload, *, max_chars: int) -> str:
