@@ -243,7 +243,16 @@ def test_run_now_route_returns_existing_active_job_without_duplicate(client, moc
         assert client.post("/login", json={"username": "brief_analyst", "password": "apass"}).status_code == 200
         with patch("routes.soc_briefing_routes.get_db_connection") as get_conn, patch(
             "routes.soc_briefing_routes.create_manual_briefing_job", return_value=(job, False)
-        ) as create_job, patch("routes.soc_briefing_routes.log_audit_event") as audit:
+        ) as create_job, patch(
+            "routes.soc_briefing_routes._manual_lifecycle_payload",
+            return_value={
+                "job": job,
+                "lifecycle": {"status": "queued", "terminal": False, "blocked_reasons": [{"code": "already_running", "message": "A manual Anakin briefing is already pending or running."}]},
+                "blocked_reasons": [{"code": "already_running", "message": "A manual Anakin briefing is already pending or running."}],
+                "worker": {"status": "offline"},
+                "terminal": False,
+            },
+        ) as lifecycle, patch("routes.soc_briefing_routes.log_audit_event") as audit:
             get_conn.return_value = mock_db[0]
             resp = client.post("/soc-briefings/run-now")
 
@@ -251,8 +260,38 @@ def test_run_now_route_returns_existing_active_job_without_duplicate(client, moc
     body = resp.get_json()
     assert body["created"] is False
     assert body["status"] == "already_running"
+    assert body["manual_lifecycle"]["job"]["id"] == 42
+    assert body["manual_lifecycle"]["blocked_reasons"][0]["code"] == "already_running"
     create_job.assert_called_once()
+    lifecycle.assert_called_once()
     audit.assert_called_once()
+
+
+def test_manual_run_status_route_returns_lifecycle_and_worker_state(client, mock_db):
+    p1, p2 = _login_role(client, "brief_analyst", "apass", "analyst")
+    lifecycle_payload = {
+        "job": {"id": 55, "status": "pending", "trigger_type": "manual"},
+        "run": None,
+        "briefing": None,
+        "worker": {"status": "offline", "message": "No heartbeat"},
+        "lifecycle": {"status": "queued", "terminal": False, "blocked_reasons": [{"code": "worker_unavailable", "message": "No fresh SOC briefing worker heartbeat is available yet."}]},
+        "blocked_reasons": [{"code": "worker_unavailable", "message": "No fresh SOC briefing worker heartbeat is available yet."}],
+        "terminal": False,
+    }
+    with p1, p2:
+        assert client.post("/login", json={"username": "brief_analyst", "password": "apass"}).status_code == 200
+        with patch("routes.soc_briefing_routes.get_db_connection") as get_conn, patch(
+            "routes.soc_briefing_routes._manual_lifecycle_payload", return_value=lifecycle_payload
+        ) as lifecycle:
+            get_conn.return_value = mock_db[0]
+            resp = client.get("/soc-briefings/manual-run/status?job_id=55")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["job"]["id"] == 55
+    assert body["lifecycle"]["status"] == "queued"
+    assert body["blocked_reasons"][0]["code"] == "worker_unavailable"
+    lifecycle.assert_called_once()
 
 
 def test_update_mode_and_pause_routes_validate_payloads(client, mock_db):

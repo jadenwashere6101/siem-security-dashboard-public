@@ -10,6 +10,7 @@ from core.ai.soc_briefing_runtime_store import (
     BRIEFING_MODE_SCHEDULED_AUTONOMOUS,
     create_manual_briefing_job,
     get_briefing_control_status,
+    get_manual_briefing_lifecycle_status,
     update_controls,
 )
 from core.audit_helpers import log_audit_event
@@ -73,6 +74,40 @@ def _control_payload(conn) -> dict:
         "no_paid_fallback": gateway.get("paid_fallback_enabled") is False,
     }
     return status
+
+
+def _manual_lifecycle_payload(conn, *, job_id: int | None = None, already_running: bool = False) -> dict:
+    payload = get_manual_briefing_lifecycle_status(
+        conn,
+        job_id=job_id,
+        already_running=already_running,
+    )
+    ai_status = get_ai_gateway_status()
+    gateway = ai_status.get("gateway") if isinstance(ai_status, dict) else {}
+    providers = ai_status.get("providers") if isinstance(ai_status, dict) else []
+    payload["ai"] = {
+        "gateway": gateway,
+        "providers": providers,
+        "local_only": gateway.get("mode") == "local_only",
+        "no_paid_fallback": gateway.get("paid_fallback_enabled") is False,
+    }
+    if not payload.get("job"):
+        return payload
+    local_ready = True
+    if isinstance(providers, list) and gateway.get("local_provider"):
+        for provider in providers:
+            if isinstance(provider, dict) and provider.get("provider") == gateway.get("local_provider"):
+                local_ready = bool(provider.get("ready"))
+                if not local_ready:
+                    payload.setdefault("blocked_reasons", []).append(
+                        {
+                            "code": "local_model_unavailable",
+                            "message": provider.get("message") or "Local model or provider is unavailable.",
+                        }
+                    )
+                break
+    payload["local_model_ready"] = local_ready
+    return payload
 
 
 @soc_briefing_bp.route("/soc-briefings", methods=["GET"])
@@ -222,11 +257,40 @@ def run_soc_briefing_now():
             },
         )
         status_code = 201 if created else 200
-        return jsonify({"job": job, "created": created, "status": "queued" if created else "already_running"}), status_code
+        lifecycle = _manual_lifecycle_payload(conn, job_id=int(job["id"]), already_running=not created)
+        return jsonify({
+            "job": job,
+            "created": created,
+            "status": "queued" if created else "already_running",
+            "manual_lifecycle": lifecycle,
+        }), status_code
     except Exception as error:
         if conn:
             conn.rollback()
         current_app.logger.error("run_soc_briefing_now: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@soc_briefing_bp.route("/soc-briefings/manual-run/status", methods=["GET"])
+@login_required
+@analyst_or_super_admin_required
+def get_soc_briefing_manual_run_status():
+    conn = None
+    try:
+        job_id, err = _parse_int_param("job_id")
+        if err:
+            return err
+        conn = get_db_connection()
+        payload = _manual_lifecycle_payload(conn, job_id=job_id)
+        conn.commit()
+        return jsonify(payload), 200
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        current_app.logger.error("get_soc_briefing_manual_run_status: %s", error)
         return jsonify({"error": "Internal server error"}), 500
     finally:
         if conn:

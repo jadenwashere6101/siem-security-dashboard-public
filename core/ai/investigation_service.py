@@ -300,6 +300,8 @@ def run_investigation(
         _raise_if_cancelled(cancel_check)
         _raise_if_timeout(started, timeout_seconds)
         step_started = time.monotonic()
+        profile_name = profile_for_investigation()
+        profile = resolved_config.profile(profile_name)
         prompt = _build_correlation_prompt(
             plan=plan,
             question=question,
@@ -307,14 +309,15 @@ def run_investigation(
             tools=validated_tools,
             routing=routing,
             config=resolved_config,
+            profile_max_prompt_chars=profile.max_prompt_chars,
         )
-        if len(prompt) > resolved_config.max_prompt_chars:
-            raise InvestigationPlannerError("Investigation prompt exceeded configured AI size limit", error_code="prompt_too_large")
+        if len(prompt) > profile.max_prompt_chars:
+            raise InvestigationPlannerError("Investigation prompt exceeded configured AI profile size limit", error_code="prompt_too_large")
         gateway_response = resolved_gateway.generate(
             AiGatewayRequest(
                 prompt=prompt,
                 capability="text_generation",
-                profile=profile_for_investigation(),
+                profile=profile_name,
                 metadata={
                     "action": "advanced_investigation",
                     "workflow_type": plan.workflow_type,
@@ -585,10 +588,12 @@ def _build_correlation_prompt(
     tools: SocToolExecutionSummary,
     routing,
     config: AiGatewayConfig,
+    profile_max_prompt_chars: int | None = None,
 ) -> str:
+    prompt_budget = profile_max_prompt_chars or config.max_prompt_chars
     context_json = json.dumps(redact_sensitive_values(ai_context.data), default=str, sort_keys=True, indent=2)
     tools_json = json.dumps(
-        tool_summary_for_prompt(tools, max_chars=max(1000, config.max_prompt_chars // 3)),
+        tool_summary_for_prompt(tools, max_chars=max(1000, prompt_budget // 3)),
         default=str,
         sort_keys=True,
         indent=2,
@@ -600,7 +605,9 @@ def _build_correlation_prompt(
         "Cite source paths or record ids for material findings. Distinguish evidence from inference.\n"
         "Do not claim remediation, blocking, approval, execution, deployment, file changes, shell commands, or database writes happened.\n"
         "If evidence is missing or partial, say exactly what is missing.\n"
-        "Return concise sections: Summary, Correlated Evidence, Uncertainty, Recommended Analyst Next Steps.\n\n"
+        "Do not repeat every visible field or give generic definitions. Avoid filler such as 'continue monitoring' unless you name exactly what to inspect.\n"
+        "Identify what stands out, why it matters here, supporting evidence, contradicting or benign evidence, confidence, gaps, and concrete read-only next steps.\n"
+        "Return concise sections: Assessment, Correlated Evidence, Contradictions And Uncertainty, Evidence Gaps, Read-Only Next Steps.\n\n"
         f"Workflow type: {plan.workflow_type}\n"
         f"Context type: {plan.context_type}\n"
         f"Routing profile: {routing.profile}\n"

@@ -10,9 +10,12 @@ from werkzeug.security import generate_password_hash
 from core.ai.config import AI_MODE_LOCAL_ONLY, AiGatewayConfig
 from core.ai.models import AI_STATUS_SUCCESS, AiGatewayRequest, AiGatewayResponse, AiRequestMetadata
 from core.ai.repo_assistant_service import (
-    AI_STATUS_GROUNDING_FAILURE,
     AI_STATUS_INSUFFICIENT_EVIDENCE,
+    QUESTION_TYPE_ARCHITECTURAL,
+    QUESTION_TYPE_EVALUATIVE,
+    QUESTION_TYPE_FACTUAL,
     answer_repo_question,
+    classify_repo_question,
 )
 from core.ai.repo_index import RepoIndex
 from core.ai.repo_sources import (
@@ -86,6 +89,14 @@ def _repo(tmp_path: Path) -> Path:
     _write(
         tmp_path / "core/incidents.py",
         "class IncidentStateFlow:\n    def transition(self):\n        return 'resolved'\n",
+    )
+    _write(
+        tmp_path / "core/soar_worker.py",
+        "class SoarWorker:\n    def claim_action(self):\n        return 'tracking-only'\n",
+    )
+    _write(
+        tmp_path / "core/ai/gateway.py",
+        "class AiGateway:\n    def generate(self):\n        return 'profile-routed local response'\n",
     )
     _write(tmp_path / "openspec/changes/current-feature/proposal.md", "# Current feature\nActive OpenSpec requirement.\n")
     _write(tmp_path / "openspec/archive/old-feature/proposal.md", "# Old feature\nArchived OpenSpec.\n")
@@ -252,6 +263,7 @@ def test_repo_assistant_builds_grounded_prompt_preserves_metadata_and_redacts_ex
 
     assert result.status_code == 200
     assert result.payload["status"] == AI_STATUS_SUCCESS
+    assert result.payload["question_type"] == QUESTION_TYPE_FACTUAL
     assert result.payload["metadata"]["local_request"] is True
     assert result.payload["metadata"]["paid_request"] is False
     assert result.payload["metadata"]["estimated_cost_usd"] == 0
@@ -262,7 +274,14 @@ def test_repo_assistant_builds_grounded_prompt_preserves_metadata_and_redacts_ex
         "context_type": "repository",
         "action": "repo_architecture_chat",
         "read_only": True,
+        "question_type": QUESTION_TYPE_FACTUAL,
     }
+
+
+def test_repo_assistant_classifies_factual_architectural_and_evaluative_questions():
+    assert classify_repo_question("Where is the SOAR worker implemented?") == QUESTION_TYPE_FACTUAL
+    assert classify_repo_question("How does the AI gateway fit into the worker flow?") == QUESTION_TYPE_ARCHITECTURAL
+    assert classify_repo_question("What is my most impressive feature?") == QUESTION_TYPE_EVALUATIVE
 
 
 def test_repo_assistant_returns_insufficient_evidence_without_provider_call(tmp_path):
@@ -281,7 +300,7 @@ def test_repo_assistant_returns_insufficient_evidence_without_provider_call(tmp_
     assert gateway.requests == []
 
 
-def test_repo_assistant_fails_closed_when_model_citations_are_missing_or_invalid(tmp_path):
+def test_repo_assistant_attaches_backend_citations_when_model_citation_syntax_is_missing(tmp_path):
     gateway = RecordingRepoGateway(content="Detection rules live in the engine without a citation.")
 
     result = answer_repo_question(
@@ -291,9 +310,88 @@ def test_repo_assistant_fails_closed_when_model_citations_are_missing_or_invalid
         index=RepoIndex(_repo(tmp_path)),
     )
 
-    assert result.payload["status"] == AI_STATUS_GROUNDING_FAILURE
-    assert result.payload["insufficient_evidence"] is True
-    assert result.payload["answer"] is None
+    assert result.payload["status"] == AI_STATUS_SUCCESS
+    assert result.payload["insufficient_evidence"] is False
+    assert result.payload["answer"] == "Detection rules live in the engine without a citation."
+    assert result.payload["citations"][0]["path"] == "engines/detection_rule_catalog.py"
+
+
+def test_repo_assistant_ignores_model_selected_paths_outside_retrieved_evidence(tmp_path):
+    gateway = RecordingRepoGateway(
+        content="Detection rules are documented in a fake place [secrets.txt:1-3]."
+    )
+
+    result = answer_repo_question(
+        {"message": "Where do detection rules live?", "refresh": True},
+        gateway=gateway,
+        config=_config(),
+        index=RepoIndex(_repo(tmp_path)),
+    )
+
+    assert result.payload["status"] == AI_STATUS_SUCCESS
+    paths = {citation["path"] for citation in result.payload["citations"]}
+    assert "secrets.txt" not in paths
+    assert "engines/detection_rule_catalog.py" in paths
+
+
+def test_repo_assistant_evaluative_question_returns_natural_grounded_answer(tmp_path):
+    gateway = RecordingRepoGateway(
+        content=(
+            "Your most impressive feature is the policy-aware repo assistant because it combines "
+            "safe source indexing, evidence retrieval, and read-only answering without requiring "
+            "the model to format citations perfectly."
+        )
+    )
+
+    result = answer_repo_question(
+        {"message": "What is my most impressive feature?", "refresh": True},
+        gateway=gateway,
+        config=_config(),
+        index=RepoIndex(_repo(tmp_path)),
+    )
+
+    assert result.payload["status"] == AI_STATUS_SUCCESS
+    assert result.payload["question_type"] == QUESTION_TYPE_EVALUATIVE
+    assert "most impressive feature" in result.payload["answer"]
+    assert result.payload["citations"]
+    assert "Question type: evaluative" in gateway.requests[0].prompt
+    assert "make a clear judgment" in gateway.requests[0].prompt
+
+
+def test_repo_assistant_factual_soar_worker_question_uses_backend_selected_citations(tmp_path):
+    gateway = RecordingRepoGateway(content="The SOAR worker is implemented in core/soar_worker.py.")
+
+    result = answer_repo_question(
+        {"message": "Where is the SOAR worker implemented?", "refresh": True},
+        gateway=gateway,
+        config=_config(),
+        index=RepoIndex(_repo(tmp_path)),
+    )
+
+    assert result.payload["status"] == AI_STATUS_SUCCESS
+    assert result.payload["question_type"] == QUESTION_TYPE_FACTUAL
+    assert result.payload["answer"] == "The SOAR worker is implemented in core/soar_worker.py."
+    assert any(citation["path"] == "core/soar_worker.py" for citation in result.payload["citations"])
+
+
+def test_repo_assistant_architecture_question_combines_explanation_and_evidence(tmp_path):
+    gateway = RecordingRepoGateway(
+        content="The AI gateway centralizes generation, while worker code can remain focused on lifecycle orchestration."
+    )
+
+    result = answer_repo_question(
+        {"message": "How does the AI gateway fit with the worker architecture?", "refresh": True},
+        gateway=gateway,
+        config=_config(),
+        index=RepoIndex(_repo(tmp_path)),
+    )
+
+    assert result.payload["status"] == AI_STATUS_SUCCESS
+    assert result.payload["question_type"] == QUESTION_TYPE_ARCHITECTURAL
+    paths = {citation["path"] for citation in result.payload["citations"]}
+    assert "core/ai/gateway.py" in paths
+    assert "Question type: architectural" in gateway.requests[0].prompt
+    assert "explain relationships" in gateway.requests[0].prompt
 
 
 def test_repo_assistant_routes_require_super_admin_and_validate_payload(client):

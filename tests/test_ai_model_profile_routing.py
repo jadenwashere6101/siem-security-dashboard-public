@@ -103,7 +103,7 @@ def test_profile_inventory_covers_backend_ai_selectors():
     explain_selectors = inventory_selectors("explain_action")
     assert set(ALLOWED_EXPLAIN_ACTIONS).issubset(explain_selectors | FAST_EXPLAIN_ACTIONS)
     assert "explain_recon_activity" in ALLOWED_EXPLAIN_ACTIONS
-    assert profile_for_explain_action("explain_recon_activity") == AI_PROFILE_FAST_TRIAGE
+    assert profile_for_explain_action("explain_recon_activity") == AI_PROFILE_GUIDED_ANALYSIS
     assert set(DRAFT_DEFINITIONS) == GUIDED_DRAFT_TYPES
     for draft_type in DRAFT_DEFINITIONS:
         assert profile_for_draft_type(draft_type) == AI_PROFILE_GUIDED_ANALYSIS
@@ -118,6 +118,25 @@ def test_profile_inventory_covers_backend_ai_selectors():
     assert profile_for_investigation() == AI_PROFILE_GUIDED_ANALYSIS
     assert profile_for_soc_briefing() == AI_PROFILE_DEEP_BRIEFING
     assert profile_for_repo_assistant() == AI_PROFILE_DEVELOPER_ASSISTANT
+
+
+def test_correlation_heavy_explain_actions_use_guided_profile():
+    for action in (
+        "recommend_investigation",
+        "summarize_incident",
+        "recommend_next_steps",
+        "explain_ip",
+        "assess_reconnaissance",
+        "summarize_activity",
+        "explain_campaign",
+        "explain_recon_activity",
+        "investigate_cluster",
+        "explain_response",
+    ):
+        assert profile_for_explain_action(action) == AI_PROFILE_GUIDED_ANALYSIS
+
+    for action in ("ask_dashboard", "explain_anomaly", "explain_alert", "why_important", "general_chat"):
+        assert profile_for_explain_action(action) == AI_PROFILE_FAST_TRIAGE
 
 
 def test_legacy_local_timeout_does_not_override_profile_defaults(monkeypatch):
@@ -213,7 +232,31 @@ def test_gateway_ignores_client_model_timeout_metadata_and_uses_trusted_profile(
     assert provider.requests[0].metadata["model"] == "bad-model"
 
 
-def test_soc_command_center_recon_explain_action_uses_fast_profile(monkeypatch):
+def test_explain_route_ignores_client_profile_model_and_timeout_fields(monkeypatch):
+    provider = RecordingProvider()
+    monkeypatch.setattr("core.ai.explainer_service.load_ai_gateway_config", lambda: _config())
+    monkeypatch.setattr("core.ai.explainer_service.build_ai_context", lambda **_kwargs: _fake_context())
+
+    result = explain_context(
+        {
+            "context_type": "recon_activity",
+            "action": "explain_recon_activity",
+            "question": "Explain this recon activity.",
+            "context": {"activity_id": 90},
+            "profile": AI_PROFILE_FAST_TRIAGE,
+            "model": "client-selected-model",
+            "timeout_seconds": 1,
+        },
+        gateway=AiGateway(config=_config(), providers={"ollama": provider}),
+    )
+
+    assert result.status_code == 200
+    assert result.payload["metadata"]["profile"] == AI_PROFILE_GUIDED_ANALYSIS
+    assert result.payload["metadata"]["model"] == "llama3.1:8b"
+    assert provider.requests[0].profile == AI_PROFILE_GUIDED_ANALYSIS
+
+
+def test_soc_command_center_recon_explain_action_uses_guided_profile(monkeypatch):
     provider = RecordingProvider()
     monkeypatch.setattr("core.ai.explainer_service.load_ai_gateway_config", lambda: _config())
     monkeypatch.setattr("core.ai.explainer_service.build_ai_context", lambda **_kwargs: _fake_context())
@@ -229,8 +272,8 @@ def test_soc_command_center_recon_explain_action_uses_fast_profile(monkeypatch):
     )
 
     assert result.status_code == 200
-    assert result.payload["metadata"]["profile"] == AI_PROFILE_FAST_TRIAGE
-    assert provider.requests[0].profile == AI_PROFILE_FAST_TRIAGE
+    assert result.payload["metadata"]["profile"] == AI_PROFILE_GUIDED_ANALYSIS
+    assert provider.requests[0].profile == AI_PROFILE_GUIDED_ANALYSIS
 
 
 def test_workspace_section_ids_normalize_to_safe_general_context():

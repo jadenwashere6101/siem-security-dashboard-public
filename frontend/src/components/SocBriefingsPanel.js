@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   getSocBriefing,
   getSocBriefingControl,
+  getManualSocBriefingRunStatus,
   listSocBriefings,
   runSocBriefingNow,
   updateSocBriefingMode,
@@ -145,6 +146,38 @@ function boolStatus(value) {
   return value ? "success" : "blocked";
 }
 
+function manualLifecycleStatus(payload) {
+  return payload?.lifecycle?.status || payload?.status || "unknown";
+}
+
+function isManualLifecycleTerminal(payload) {
+  return Boolean(payload?.terminal || payload?.lifecycle?.terminal);
+}
+
+function manualJobId(payload) {
+  return payload?.job?.id || payload?.manual_lifecycle?.job?.id || null;
+}
+
+function manualBriefingId(payload) {
+  return payload?.briefing?.id || payload?.manual_lifecycle?.briefing?.id || null;
+}
+
+function workerLabel(worker) {
+  if (!worker) return "Unknown";
+  const status = worker.status || worker.health || "unknown";
+  const lastSeen = worker.last_seen_at || worker.last_heartbeat_at || worker.updated_at;
+  return lastSeen ? `${statusLabel(status)} · ${formatTimestamp(lastSeen)}` : statusLabel(status);
+}
+
+function blockedReasonText(payload) {
+  const reasons = payload?.blocked_reasons || payload?.lifecycle?.blocked_reasons || [];
+  if (!Array.isArray(reasons) || reasons.length === 0) return "";
+  return reasons
+    .map((reason) => reason?.message || reason?.code)
+    .filter(Boolean)
+    .join(" ");
+}
+
 function getActiveJobTotal(control, triggerType) {
   const jobs = control?.active_jobs?.[triggerType] || {};
   return Number(jobs.pending || 0) + Number(jobs.running || 0);
@@ -155,6 +188,7 @@ function ControlPanel({
   loading,
   actionLoading,
   message,
+  manualRun,
   onRunNow,
   onModeChange,
   onTogglePause,
@@ -167,6 +201,9 @@ function ControlPanel({
   const modelStatus = localProvider.ready ? "success" : (localProvider.status || "blocked");
   const nextRun = control?.next_scheduled_run?.next_due_at;
   const lastRun = control?.last_successful_run?.generated_at || control?.last_successful_run?.created_at;
+  const manualStatus = manualLifecycleStatus(manualRun);
+  const manualReason = blockedReasonText(manualRun);
+  const manualWorker = manualRun?.worker || control?.worker;
 
   return (
     <section style={controlPanelStyle} aria-label="SOC briefing controls">
@@ -218,6 +255,9 @@ function ControlPanel({
         />
         <MetaItem label="Manual Active" value={activeManual ? String(activeManual) : "0"} />
         <MetaItem label="Scheduled Active" value={activeScheduled ? String(activeScheduled) : "0"} />
+        <MetaItem label="Manual Job" value={manualRun?.job?.id ? `#${manualRun.job.id}` : null} />
+        <MetaItem label="Manual Run" value={manualRun?.job?.id ? statusLabel(manualStatus) : null} />
+        <MetaItem label="Worker" value={manualWorker ? workerLabel(manualWorker) : null} />
       </div>
 
       <div style={controlBadgeRowStyle}>
@@ -227,6 +267,14 @@ function ControlPanel({
         <span style={controlHintStyle}>{gateway.local_model || localProvider.model || "No local model configured"}</span>
       </div>
       {message ? <div role="status" style={controlMessageStyle}>{message}</div> : null}
+      {manualRun?.job?.id ? (
+        <div role="status" style={manualRunStatusStyle}>
+          <strong>{`Manual job #${manualRun.job.id}`}</strong>
+          <span>{statusLabel(manualStatus)}</span>
+          {manualRun?.briefing?.id ? <span>{`Briefing #${manualRun.briefing.id}`}</span> : null}
+          {manualReason ? <span>{manualReason}</span> : null}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -342,6 +390,8 @@ export default function SocBriefingsPanel() {
   const [controlLoading, setControlLoading] = useState(false);
   const [controlActionLoading, setControlActionLoading] = useState(false);
   const [controlMessage, setControlMessage] = useState("");
+  const [manualRun, setManualRun] = useState(null);
+  const [manualRunJobId, setManualRunJobId] = useState(null);
   const [error, setError] = useState("");
 
   const filters = useMemo(
@@ -397,6 +447,14 @@ export default function SocBriefingsPanel() {
   }, [loadControl]);
 
   useEffect(() => {
+    const activeJob = control?.active_manual_job;
+    if (activeJob?.id && !manualRunJobId) {
+      setManualRunJobId(activeJob.id);
+      setManualRun((current) => current || { job: activeJob, lifecycle: { status: activeJob.status || "queued" }, terminal: false });
+    }
+  }, [control, manualRunJobId]);
+
+  useEffect(() => {
     if (!selectedId) {
       setDetail(null);
       return;
@@ -423,16 +481,66 @@ export default function SocBriefingsPanel() {
   const latestGeneratedAt = latestBriefing?.generated_at || latestBriefing?.created_at;
   const latestSlackStatus = latestBriefing?.delivery?.latest_status || detail?.deliveries?.[0]?.status;
   const agentStatus = detail?.run?.status || latestBriefing?.run?.status || (total > 0 ? "completed" : null);
+
+  const refreshAfterManualTerminal = useCallback(async (payload) => {
+    await Promise.all([loadControl(), loadList()]);
+    const briefingId = manualBriefingId(payload);
+    if (briefingId) {
+      setSelectedId(briefingId);
+    }
+  }, [loadControl, loadList]);
+
+  useEffect(() => {
+    if (!manualRunJobId) return undefined;
+    let cancelled = false;
+    let timer = null;
+
+    const poll = async () => {
+      try {
+        const payload = await getManualSocBriefingRunStatus(manualRunJobId);
+        if (cancelled) return;
+        setManualRun(payload);
+        const status = manualLifecycleStatus(payload);
+        const reason = blockedReasonText(payload);
+        setControlMessage(`Manual job #${manualJobId(payload) || manualRunJobId}: ${statusLabel(status)}${reason ? ` — ${reason}` : ""}`);
+        if (isManualLifecycleTerminal(payload)) {
+          await refreshAfterManualTerminal(payload);
+          return;
+        }
+        timer = window.setTimeout(poll, 3000);
+      } catch (err) {
+        if (!cancelled) {
+          setError(err.message || "Unable to track manual Anakin briefing run.");
+          timer = window.setTimeout(poll, 5000);
+        }
+      }
+    };
+
+    poll();
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [manualRunJobId, refreshAfterManualTerminal]);
+
   const handleRunNow = useCallback(async () => {
     setControlActionLoading(true);
     setControlMessage("");
     setError("");
     try {
       const payload = await runSocBriefingNow();
+      const lifecycle = payload.manual_lifecycle || null;
+      const jobId = manualJobId(lifecycle || payload);
+      if (lifecycle) {
+        setManualRun(lifecycle);
+      }
+      if (jobId) {
+        setManualRunJobId(jobId);
+      }
       if (payload.created) {
-        setControlMessage("Anakin briefing queued. The worker will persist it into history after processing.");
+        setControlMessage(`Manual Anakin briefing job #${jobId || "unknown"} queued. Waiting for the worker to process it.`);
       } else {
-        setControlMessage("A manual Anakin briefing is already pending or running.");
+        setControlMessage(`Manual Anakin briefing job #${jobId || "unknown"} is already pending or running.`);
       }
       await Promise.all([loadControl(), loadList()]);
     } catch (err) {
@@ -501,6 +609,7 @@ export default function SocBriefingsPanel() {
         loading={controlLoading}
         actionLoading={controlActionLoading}
         message={controlMessage}
+        manualRun={manualRun}
         onRunNow={handleRunNow}
         onModeChange={handleModeChange}
         onTogglePause={handleTogglePause}
@@ -794,6 +903,19 @@ const controlMessageStyle = {
   color: "#bae6fd",
   fontSize: "0.82rem",
   fontWeight: 700,
+  padding: "9px 10px",
+};
+
+const manualRunStatusStyle = {
+  alignItems: "center",
+  background: "rgba(2, 6, 23, 0.42)",
+  border: "1px solid rgba(125, 211, 252, 0.2)",
+  borderRadius: 8,
+  color: "#dbeafe",
+  display: "flex",
+  flexWrap: "wrap",
+  fontSize: "0.82rem",
+  gap: 10,
   padding: "9px 10px",
 };
 

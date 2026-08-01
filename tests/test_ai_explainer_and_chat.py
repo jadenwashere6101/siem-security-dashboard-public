@@ -8,8 +8,9 @@ from werkzeug.security import generate_password_hash
 import core.ai.context_builder as context_builder
 from core.ai.config import AI_MODE_LOCAL_ONLY, AiGatewayConfig
 from core.ai.context_builder import AiContextPayload, AiContextSource, build_ai_context
-from core.ai.explainer_service import chat_about_siem, explain_context
+from core.ai.explainer_service import _build_prompt, chat_about_siem, explain_context
 from core.ai.models import AI_STATUS_SUCCESS, AiGatewayRequest, AiGatewayResponse, AiRequestMetadata
+from core.ai.profile_registry import AI_PROFILE_GUIDED_ANALYSIS
 
 ADMIN_USER = "testadmin"
 ADMIN_PASS = "testpassword123!"
@@ -315,9 +316,10 @@ def test_context_builder_uses_canonical_source_ip_aggregation(monkeypatch):
 
     assert payload.context_type == "source_ip"
     assert payload.data["source_ip"] == "198.51.100.10"
-    assert payload.data["alerts"]["recent"] == [{"id": 42}]
+    assert payload.data["alerts"] == [{"id": 42}]
     assert payload.data["reputation"]["behavioral"]["label"] == "Suspicious"
     assert payload.data["response_outcomes"][0]["limit"] == context_builder.SECTION_LIMITS["source_ip_outcomes"]
+    assert payload.data["_evidence"]["included"]["alerts"] == 1
     assert payload.sources[0].source_path == "/source-ip-context"
 
 
@@ -348,6 +350,73 @@ def test_context_builder_uses_canonical_recon_activity_paths(monkeypatch):
         "/recon-activities/90",
         "/recon-activities/90/related-events",
     ]
+
+
+def test_recon_context_with_large_detail_stays_within_guided_prompt_limit(monkeypatch):
+    conn = FakeConnection()
+    monkeypatch.setattr(context_builder, "get_db_connection", lambda: conn)
+    monkeypatch.setattr(
+        context_builder,
+        "get_recon_activity_detail",
+        lambda _conn, activity_id: {
+            "id": activity_id,
+            "severity": "high",
+            "display": {"action_recommendation": "Review SSH and VPN scan concentration."},
+            "summary": {
+                "representative_sources": ["198.51.100.10"],
+                "target_context": {"sample_destination_ips": ["203.0.113.5"], "sample_destination_ports": [22, 443]},
+                "oversized_raw_cluster_dump": "x" * 40000,
+            },
+            "story": {"narrative": "y" * 20000},
+            "first_seen": "2026-01-01T00:00:00Z",
+            "last_seen": "2026-01-01T01:00:00Z",
+        },
+    )
+    monkeypatch.setattr(
+        context_builder,
+        "_query_related_pfsense_events",
+        lambda *_args, **_kwargs: [
+            {"event_id": index, "source_ip": "198.51.100.10", "destination_port": 22, "message": "blocked scan " + ("z" * 500)}
+            for index in range(200)
+        ],
+    )
+
+    config = _config()
+    payload = build_ai_context(context_type="recon_activity", context={"activity_id": 90}, config=config)
+    prompt = _build_prompt(
+        payload,
+        action="explain_recon_activity",
+        question="Explain this recon activity.",
+        config=config,
+        profile_max_prompt_chars=config.profile(AI_PROFILE_GUIDED_ANALYSIS).max_prompt_chars,
+    )
+
+    assert payload.metadata()["truncated"] is True
+    assert payload.data["_evidence"]["included"]["related_events"] == context_builder.SECTION_LIMITS["recon_related_events"]
+    assert len(prompt) <= config.profile(AI_PROFILE_GUIDED_ANALYSIS).max_prompt_chars
+
+
+def test_interactive_prompt_requires_useful_non_repetitive_analysis():
+    config = _config()
+    payload = AiContextPayload(
+        context_type="alert",
+        data={"alert": {"id": 42, "message": "Port scan detected"}, "_evidence": {"included": {"alerts": 1}}},
+        sources=[AiContextSource("alert", "/alerts/42", [42])],
+    )
+
+    prompt = _build_prompt(
+        payload,
+        action="explain_alert",
+        question="Explain this alert.",
+        config=config,
+        profile_max_prompt_chars=config.profile().max_prompt_chars,
+    )
+
+    assert "Do not repeat the alert description" in prompt
+    assert "supporting evidence" in prompt
+    assert "contradicting or benign evidence" in prompt
+    assert "missing evidence" in prompt
+    assert "concrete read-only next steps" in prompt
 
 
 def test_context_builder_uses_visible_dashboard_state():
@@ -383,7 +452,8 @@ def test_context_builder_uses_registry_detail_without_command_execution(monkeypa
     payload = build_ai_context(context_type="response_registry", context={"registry_id": 11}, config=_config())
 
     assert payload.context_type == "response_registry"
-    assert payload.data["response_registry"]["record"]["id"] == 11
+    assert payload.data["response_registry"]["id"] == 11
+    assert payload.data["response_registry"]["indicator_value"] == "198.51.100.10"
     assert payload.sources[0].source_path == "/response-registry/11"
 
 

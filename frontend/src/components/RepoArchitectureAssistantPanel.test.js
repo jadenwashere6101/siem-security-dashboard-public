@@ -37,6 +37,7 @@ test("submits repo question, displays answer, citations, trust labels, metadata,
       },
     ],
     retrieval: { indexed_files: 42, matched_chunks: 2, refreshed: true, excluded_matches: [] },
+    question_type: "factual",
     metadata: {
       provider: "ollama",
       model: "qwen3:4b-instruct",
@@ -57,6 +58,7 @@ test("submits repo question, displays answer, citations, trust labels, metadata,
   expect(await screen.findByText(/detection rules live in the catalog/i)).toBeInTheDocument();
   expect(screen.getByText("ollama / qwen3:4b-instruct · success")).toBeInTheDocument();
   expect(screen.getByText("Local model · no API cost")).toBeInTheDocument();
+  expect(screen.getByText("Question type: Factual")).toBeInTheDocument();
   expect(screen.getByText(/Retrieval: 2 chunks from 42 files · refreshed/i)).toBeInTheDocument();
   expect(screen.getByText("engines/detection_rule_catalog.py:1-3")).toBeInTheDocument();
   expect(screen.getByText("Tier 1 · source · current")).toBeInTheDocument();
@@ -80,6 +82,7 @@ test("supports insufficient evidence, grounding failure, retry, cancel, and dism
       insufficient_evidence: true,
       citations: [],
       retrieval: { indexed_files: 42, matched_chunks: 0, refreshed: false, excluded_matches: [] },
+      question_type: "factual",
       metadata: { status: "insufficient_evidence", provider: null, model: null },
       error: "No allowed current repository evidence matched the question.",
     })
@@ -89,6 +92,7 @@ test("supports insufficient evidence, grounding failure, retry, cancel, and dism
       insufficient_evidence: true,
       citations: [],
       retrieval: { indexed_files: 42, matched_chunks: 1, refreshed: false, excluded_matches: [] },
+      question_type: "factual",
       metadata: { status: "grounding_failure", provider: null, model: null },
       error: "AI answer did not include valid citations from retrieved repository evidence.",
     });
@@ -114,5 +118,5 @@ test("supports insufficient evidence, grounding failure, retry, cancel, and dism
 
   await userEvent.type(screen.getByLabelText(/repository question/i), "Grounding failure");
   await userEvent.click(screen.getByRole("button", { name: /ask repo ai/i }));
-  expect(await screen.findByText(/blocked because its citations did not match/i)).toBeInTheDocument();
+  expect(await screen.findByText(/blocked because it could not be grounded/i)).toBeInTheDocument();
 });

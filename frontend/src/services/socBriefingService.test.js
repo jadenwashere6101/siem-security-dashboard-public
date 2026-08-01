@@ -1,6 +1,7 @@
 import {
   getSocBriefing,
   getSocBriefingControl,
+  getManualSocBriefingRunStatus,
   listSocBriefings,
   runSocBriefingNow,
   updateSocBriefingMode,
@@ -96,6 +97,19 @@ describe("socBriefingService", () => {
     );
     expect(global.fetch.mock.calls[2][0]).toContain("/soc-briefings/run-now");
     expect(global.fetch.mock.calls[2][1]).toEqual(expect.objectContaining({ method: "POST", credentials: "include" }));
+  });
+
+  test("loads manual run lifecycle status with optional job id", async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ job: { id: 44 }, lifecycle: { status: "queued" } }),
+    });
+
+    const result = await getManualSocBriefingRunStatus(44);
+
+    expect(result.job.id).toBe(44);
+    expect(global.fetch.mock.calls[0][0]).toContain("/soc-briefings/manual-run/status?job_id=44");
+    expect(global.fetch.mock.calls[0][1]).toEqual(expect.objectContaining({ credentials: "include" }));
   });
 
   test("throws API error messages on failure", async () => {

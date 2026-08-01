@@ -97,3 +97,19 @@ export async function runSocBriefingNow() {
   }
   return data;
 }
+
+export async function getManualSocBriefingRunStatus(jobId = null) {
+  const params = new URLSearchParams();
+  if (jobId !== null && jobId !== undefined && jobId !== "") {
+    params.set("job_id", String(jobId));
+  }
+  const query = params.toString();
+  const res = await fetch(buildSiemPath(`/soc-briefings/manual-run/status${query ? `?${query}` : ""}`), {
+    credentials: "include",
+  });
+  const data = await parseJsonResponse(res, {});
+  if (!res.ok) {
+    throw new Error(getApiErrorMessage(data, "Unable to load manual Anakin briefing run status", ["error", "message"]));
+  }
+  return data;
+}

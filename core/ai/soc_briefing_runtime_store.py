@@ -325,6 +325,145 @@ def get_active_manual_job(conn) -> dict[str, Any] | None:
         return _fetchone_dict(cur)
 
 
+def get_manual_job(conn, job_id: int) -> dict[str, Any] | None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT j.*, w.window_start, w.window_end, w.status AS window_status, w.skip_reason AS window_skip_reason,
+                   s.name AS schedule_name
+            FROM soc_briefing_jobs j
+            JOIN soc_briefing_schedule_windows w ON w.id = j.window_id
+            JOIN soc_briefing_schedules s ON s.id = j.schedule_id
+            WHERE j.id = %s
+              AND j.trigger_type = %s
+            """,
+            (job_id, TRIGGER_TYPE_MANUAL),
+        )
+        return _fetchone_dict(cur)
+
+
+def _latest_run_for_job(conn, job_id: int) -> dict[str, Any] | None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT *
+            FROM soc_briefing_runs
+            WHERE job_id = %s
+            ORDER BY started_at DESC, id DESC
+            LIMIT 1
+            """,
+            (job_id,),
+        )
+        return _fetchone_dict(cur)
+
+
+def _briefing_for_run(conn, run_id: int | None) -> dict[str, Any] | None:
+    if not run_id:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT *
+            FROM soc_briefings
+            WHERE run_id = %s
+            ORDER BY generated_at DESC NULLS LAST, created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (run_id,),
+        )
+        return _fetchone_dict(cur)
+
+
+def _normalize_manual_lifecycle(
+    *,
+    job: dict[str, Any] | None,
+    run: dict[str, Any] | None,
+    briefing: dict[str, Any] | None,
+    worker: dict[str, Any],
+    already_running: bool = False,
+) -> dict[str, Any]:
+    if job is None:
+        return {"status": "unknown", "terminal": True, "blocked_reasons": [{"code": "manual_job_not_found", "message": "Manual briefing job was not found."}]}
+
+    job_status = str(job.get("status") or "").lower()
+    run_status = str((run or {}).get("status") or "").lower()
+    content_status = str((briefing or {}).get("content_status") or "").lower()
+    provider_status = str((run or {}).get("provider_status") or "").lower()
+    error_code = job.get("failure_code") or (run or {}).get("error_code") or (briefing or {}).get("error_code")
+    error_message = job.get("failure_message") or (run or {}).get("error_message") or (briefing or {}).get("error_message")
+    worker_status = str(worker.get("status") or "").lower() if isinstance(worker, dict) else ""
+
+    status = "unknown"
+    terminal = False
+    if job_status == JOB_STATUS_PENDING:
+        status = "queued"
+    elif job_status == JOB_STATUS_RUNNING or run_status == RUN_STATUS_RUNNING:
+        status = "running"
+    elif run_status == RUN_STATUS_PARTIAL or (briefing and str(briefing.get("status") or "").lower() == "partial"):
+        status = "partial"
+        terminal = True
+    elif job_status == JOB_STATUS_SUCCESS or run_status == RUN_STATUS_SUCCESS:
+        status = "completed"
+        terminal = True
+    elif job_status == JOB_STATUS_BLOCKED or run_status == RUN_STATUS_BLOCKED or content_status == "blocked":
+        status = "blocked"
+        terminal = True
+    elif job_status == JOB_STATUS_FAILED or run_status == RUN_STATUS_FAILED or content_status == "failed":
+        status = "timed_out" if str(error_code or "").lower() in {"timeout", "provider_timeout", "runtime_timeout", "stale_lease_expired"} else "failed"
+        terminal = True
+    elif job_status in {JOB_STATUS_SKIPPED, JOB_STATUS_INTERRUPTED} or run_status in {RUN_STATUS_SKIPPED, RUN_STATUS_INTERRUPTED}:
+        status = "degraded"
+        terminal = True
+
+    blocked_reasons: list[dict[str, str]] = []
+    if already_running:
+        blocked_reasons.append({"code": "already_running", "message": "A manual Anakin briefing is already pending or running."})
+    if job_status == JOB_STATUS_PENDING and worker_status in {"missing", "offline", "stale", "unknown", "unavailable"}:
+        blocked_reasons.append({"code": "worker_unavailable", "message": "No fresh SOC briefing worker heartbeat is available yet."})
+    if provider_status in {"local_provider_not_configured", "provider_unavailable", "local_provider_unavailable"}:
+        blocked_reasons.append({"code": "local_model_unavailable", "message": "Local AI provider or model is unavailable."})
+    if error_code:
+        message = str(error_message or str(error_code).replace("_", " "))
+        blocked_reasons.append({"code": str(error_code), "message": message[:500]})
+
+    return {"status": status, "terminal": terminal, "blocked_reasons": blocked_reasons}
+
+
+def get_manual_briefing_lifecycle_status(
+    conn,
+    *,
+    job_id: int | None = None,
+    already_running: bool = False,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    current = as_utc(now) or utc_now()
+    job = get_manual_job(conn, int(job_id)) if job_id else get_active_manual_job(conn)
+    run = _latest_run_for_job(conn, int(job["id"])) if job else None
+    briefing = _briefing_for_run(conn, int(run["id"])) if run else None
+    worker = summarize_worker_health(
+        get_worker_heartbeat(conn, worker_name=SOC_BRIEFING_WORKER_NAME),
+        now=current,
+    )
+    lifecycle = _normalize_manual_lifecycle(
+        job=job,
+        run=run,
+        briefing=briefing,
+        worker=worker,
+        already_running=already_running,
+    )
+    return {
+        "job": job,
+        "run": run,
+        "briefing": briefing,
+        "worker": worker,
+        "lifecycle": lifecycle,
+        "blocked_reasons": lifecycle["blocked_reasons"],
+        "terminal": bool(lifecycle["terminal"]),
+        "now": current,
+        "read_only": True,
+    }
+
+
 def create_manual_briefing_job(
     conn,
     *,

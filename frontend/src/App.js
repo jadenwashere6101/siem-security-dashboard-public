@@ -79,6 +79,7 @@ import {
   WORKSPACE_TARGETS,
   createWorkspaceNavigationRequest,
 } from "./utils/workspaceNavigation";
+
 import {
   canGoBackWorkspaceHistory,
   canGoForwardWorkspaceHistory,
@@ -102,6 +103,35 @@ import {
   createExtensionCommandSlots,
   normalizeContextualAiOptions,
 } from "./utils/anakinCommandRegistry";
+
+const ENTITY_AI_CONTEXT_TYPES = new Set([
+  "alert",
+  "source_ip",
+  "incident",
+  "recon_activity",
+  "response_registry",
+  "detection",
+]);
+
+function normalizeAiContextType(value) {
+  return String(value || "").trim().toLowerCase().replaceAll("-", "_");
+}
+
+function stableAiEntityId(context = {}) {
+  if (!context || typeof context !== "object") return null;
+  return (
+    context.alert_id ??
+    context.incident_id ??
+    context.source_ip ??
+    context.activity_id ??
+    context.recon_activity_id ??
+    context.registry_id ??
+    context.id ??
+    context.rule_id ??
+    null
+  );
+}
+
 const DEFAULT_ALERT_PAGE_SIZE = 50;
 const MAX_ALERT_PAGE_SIZE = 100;
 const DEFAULT_ALERT_TIMELINE_RANGE = "7d";
@@ -1966,21 +1996,26 @@ function AppInner() {
       if (!options) return;
       const visibleContext = buildVisibleAiContext();
       const contextualCommand = normalizeContextualAiOptions(options);
+      const normalizedContextType = normalizeAiContextType(options.contextType);
+      const entityContext = options.context && typeof options.context === "object" ? options.context : {};
+      const shouldIncludeVisibleContext = !ENTITY_AI_CONTEXT_TYPES.has(normalizedContextType);
       const contextKey = JSON.stringify({
-        section: activeSection,
-        selectedAlertId,
-        filters: visibleContext.visible_filters,
+        contextType: normalizedContextType || "general",
+        action: options.action || "",
+        draftType: options.draftType || "",
+        investigation: Boolean(options.investigation),
+        entityId: stableAiEntityId(entityContext),
         command: contextualCommand.id,
       });
       const context = {
-        ...visibleContext,
+        ...(shouldIncludeVisibleContext ? visibleContext : { active_section: activeSection }),
         command: {
           id: contextualCommand.id,
           label: contextualCommand.label,
           intent: contextualCommand.intent,
           read_only: contextualCommand.readOnly,
         },
-        ...(options.context || {}),
+        ...entityContext,
       };
       const payload = options.draftType
         ? {
@@ -2009,7 +2044,7 @@ function AppInner() {
         contextKey,
       });
     },
-    [activeSection, buildVisibleAiContext, runAiRequest, selectedAlertId]
+    [activeSection, buildVisibleAiContext, runAiRequest]
   );
 
   const executeAnakinCommand = useCallback(

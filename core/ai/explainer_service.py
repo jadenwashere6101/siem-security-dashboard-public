@@ -177,6 +177,8 @@ def _answer_from_context(
     tool_policy: dict[str, Any] | None = None,
     planning_context: dict[str, Any] | None = None,
 ) -> AiServiceResult:
+    profile_name = profile_for_explain_action(action)
+    profile = config.profile(profile_name)
     tools = _empty_tool_summary()
     if use_tools and not should_skip_tools_for_gateway(config):
         plan = build_deterministic_tool_plan(
@@ -207,8 +209,15 @@ def _answer_from_context(
             status_code=200,
         )
 
-    prompt = _build_prompt(ai_context, action=action, question=question, tools=tools, config=config)
-    if len(prompt) > config.max_prompt_chars:
+    prompt = _build_prompt(
+        ai_context,
+        action=action,
+        question=question,
+        tools=tools,
+        config=config,
+        profile_max_prompt_chars=profile.max_prompt_chars,
+    )
+    if len(prompt) > profile.max_prompt_chars:
         return AiServiceResult(
             {
                 "status": "insufficient_context",
@@ -217,11 +226,11 @@ def _answer_from_context(
                 "context": {
                     **ai_context.metadata(),
                     "truncated": True,
-                    "insufficient_reason": "Prompt exceeded configured AI size limit.",
+                    "insufficient_reason": "Prompt exceeded configured AI profile size limit.",
                 },
                 "metadata": _empty_metadata("insufficient_context", mode=config.mode),
                 "tools": tools.as_dict(),
-                "error": "Prompt exceeded configured AI size limit.",
+                "error": "Prompt exceeded configured AI profile size limit.",
             },
             status_code=200,
         )
@@ -231,7 +240,7 @@ def _answer_from_context(
         AiGatewayRequest(
             prompt=prompt,
             capability="text_generation",
-            profile=profile_for_explain_action(action),
+            profile=profile_name,
             metadata={
                 "context_type": ai_context.context_type,
                 "action": action,
@@ -261,9 +270,11 @@ def _build_prompt(
     question: str,
     tools: SocToolExecutionSummary | None = None,
     config: AiGatewayConfig | None = None,
+    profile_max_prompt_chars: int | None = None,
 ) -> str:
     context_json = json.dumps(ai_context.data, default=str, sort_keys=True, indent=2)
-    tool_budget = max(1000, (config.max_prompt_chars // 3 if config else 4000))
+    budget = profile_max_prompt_chars or (config.max_prompt_chars if config else 12000)
+    tool_budget = max(1000, budget // 3)
     tools_json = json.dumps(
         tool_summary_for_prompt(tools, max_chars=tool_budget) if tools else _empty_tools(),
         default=str,
@@ -277,13 +288,18 @@ def _build_prompt(
         "Do not claim you checked data that is not included. Do not execute or suggest commands that mutate production.\n"
         "Read-tool results are evidence only; do not say remediation, blocking, approval, or SOAR execution happened.\n"
         "Recommendations must be analyst next steps only; do not say an action was taken.\n\n"
+        "Do not repeat the alert description, list every visible field, or define generic security terms unless asked.\n"
+        "Avoid robotic filler and generic advice such as 'continue monitoring' unless you name exactly what to inspect.\n"
+        "Do not fabricate correlations, attack stages, geography, identity, or intent.\n"
+        "Prioritize: concise assessment, what stands out, why it matters here, relevant correlations, supporting evidence, "
+        "contradicting or benign evidence, uncertainty/confidence, missing evidence, and concrete read-only next steps.\n\n"
         f"Action: {action}\n"
         f"Question: {question_line}\n"
         f"Context type: {ai_context.context_type}\n"
         f"Context sources: {json.dumps(ai_context.metadata(), default=str, sort_keys=True)}\n\n"
         f"SIEM context:\n{context_json}\n\n"
         f"Read-only SOC tool evidence:\n{tools_json}\n\n"
-        "Answer with concise sections: Summary, Key Evidence, Uncertainty, Recommended Next Steps."
+        "Use task-appropriate concise sections. Include support, contradiction/benign alternatives, uncertainty, gaps, and next steps when evidence allows."
     )
 
 

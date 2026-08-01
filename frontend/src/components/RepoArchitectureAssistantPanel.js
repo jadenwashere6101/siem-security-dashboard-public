@@ -98,6 +98,7 @@ function RepoArchitectureAssistantPanel({
   const response = requestState.response || {};
   const citations = Array.isArray(response.citations) ? response.citations : [];
   const retrieval = response.retrieval || {};
+  const questionType = formatQuestionType(response.question_type);
 
   return (
     <section style={{ ...cardStyle, ...panelStyle }} aria-label="Repo-aware architecture assistant">
@@ -169,12 +170,13 @@ function RepoArchitectureAssistantPanel({
             <p style={warningStyle}>{response.error || "Not enough current repository evidence was found."}</p>
           ) : null}
           {response.status === "grounding_failure" ? (
-            <p style={warningStyle}>The model response was blocked because its citations did not match retrieved files.</p>
+            <p style={warningStyle}>The response was blocked because it could not be grounded in retrieved repository evidence.</p>
           ) : null}
           <div style={answerStyle}>{response.answer || response.error || "No answer was returned."}</div>
           <div style={metadataGridStyle}>
             <span>{providerStatusLabel(response.metadata)}</span>
             <span>{providerCostLabel(response.metadata)}</span>
+            {questionType ? <span>Question type: {questionType}</span> : null}
             <span>
               Retrieval: {retrieval.matched_chunks || 0} chunks from {retrieval.indexed_files || 0} files
               {retrieval.refreshed ? " · refreshed" : ""}
@@ -216,6 +218,15 @@ function RepoArchitectureAssistantPanel({
       ) : null}
     </section>
   );
+}
+
+function formatQuestionType(questionType) {
+  if (!questionType) return "";
+  return String(questionType)
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 const panelStyle = {

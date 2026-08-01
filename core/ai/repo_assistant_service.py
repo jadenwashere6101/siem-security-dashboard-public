@@ -14,11 +14,15 @@ from core.ai.repo_sources import LABEL_HISTORICAL, historical_context_requested
 
 AI_STATUS_INSUFFICIENT_EVIDENCE = "insufficient_evidence"
 AI_STATUS_GROUNDING_FAILURE = "grounding_failure"
+QUESTION_TYPE_FACTUAL = "factual"
+QUESTION_TYPE_ARCHITECTURAL = "architectural"
+QUESTION_TYPE_EVALUATIVE = "evaluative"
 
 MAX_REPO_MESSAGE_CHARS = 2000
 MAX_HISTORY_ITEMS = 8
 MAX_HISTORY_ITEM_CHARS = 600
 MAX_SNIPPET_CHARS = 1200
+MAX_BACKEND_CITATIONS = 5
 _CITATION_RE = re.compile(r"\[([A-Za-z0-9_./ -]+):(\d+)-(\d+)\]")
 _DEFAULT_INDEX: RepoIndex | None = None
 
@@ -59,6 +63,7 @@ def answer_repo_question(
 ) -> RepoAssistantResult:
     message = _validate_payload(payload)
     history = _validate_history(payload.get("client_history", []))
+    question_type = classify_repo_question(message)
     refresh = bool(payload.get("refresh", False))
     include_historical = historical_context_requested(message)
     resolved_config = config if config is not None else load_ai_gateway_config()
@@ -81,6 +86,7 @@ def answer_repo_question(
                 retrieval=search.metadata(),
                 metadata=_empty_metadata(AI_STATUS_INSUFFICIENT_EVIDENCE, mode=resolved_config.mode),
                 error="No allowed current repository evidence matched the question.",
+                question_type=question_type,
             )
         )
 
@@ -89,6 +95,7 @@ def answer_repo_question(
         history=history,
         chunks=search.chunks,
         max_prompt_chars=resolved_config.max_prompt_chars,
+        question_type=question_type,
     )
     if len(prompt) > resolved_config.max_prompt_chars:
         return RepoAssistantResult(
@@ -100,6 +107,7 @@ def answer_repo_question(
                 retrieval={**search.metadata(), "prompt_truncated": True},
                 metadata=_empty_metadata(AI_STATUS_INSUFFICIENT_EVIDENCE, mode=resolved_config.mode),
                 error="Prompt exceeded configured AI size limit.",
+                question_type=question_type,
             )
         )
 
@@ -113,6 +121,7 @@ def answer_repo_question(
                 "context_type": "repository",
                 "action": "repo_architecture_chat",
                 "read_only": True,
+                "question_type": question_type,
             },
         )
     )
@@ -127,22 +136,16 @@ def answer_repo_question(
                 retrieval=search.metadata(),
                 metadata=response["metadata"],
                 error=response["error"],
+                question_type=question_type,
             )
         )
 
-    citations = _validated_citations(response["content"] or "", search.chunks)
-    if not citations:
-        return RepoAssistantResult(
-            _repo_response(
-                status=AI_STATUS_GROUNDING_FAILURE,
-                answer=None,
-                insufficient_evidence=True,
-                citations=[],
-                retrieval=search.metadata(),
-                metadata=_empty_metadata(AI_STATUS_GROUNDING_FAILURE, mode=resolved_config.mode),
-                error="AI answer did not include valid citations from retrieved repository evidence.",
-            )
-        )
+    model_citations = _validated_citations(response["content"] or "", search.chunks)
+    citations = _backend_selected_citations(
+        search.chunks,
+        preferred=model_citations,
+        question_type=question_type,
+    )
 
     return RepoAssistantResult(
         _repo_response(
@@ -153,8 +156,54 @@ def answer_repo_question(
             retrieval=search.metadata(),
             metadata=response["metadata"],
             error=None,
+            question_type=question_type,
         )
     )
+
+
+def classify_repo_question(message: str) -> str:
+    text = f" {message.strip().lower()} "
+    evaluative_terms = (
+        " most impressive",
+        " best ",
+        " strongest ",
+        " weakest ",
+        " worst ",
+        " impressive",
+        " recommend",
+        " recommendation",
+        " opinion",
+        " should i ",
+        " what do you think",
+        " rate ",
+        " prioritize",
+        " priority",
+        " worth",
+    )
+    if any(term in text for term in evaluative_terms):
+        return QUESTION_TYPE_EVALUATIVE
+
+    architectural_terms = (
+        " architecture",
+        " architected",
+        " design",
+        " designed",
+        " tradeoff",
+        " trade-off",
+        " fit together",
+        " interact",
+        " relationship",
+        " flow",
+        " lifecycle",
+        " pipeline",
+        " how does ",
+        " how do ",
+        " explain ",
+    )
+    if any(term in text for term in architectural_terms):
+        return QUESTION_TYPE_ARCHITECTURAL
+
+    return QUESTION_TYPE_FACTUAL
 
 
 def _validate_payload(payload: dict[str, Any]) -> str:
@@ -195,6 +244,7 @@ def _build_prompt(
     history: list[dict[str, str]],
     chunks: list[RepoChunk],
     max_prompt_chars: int,
+    question_type: str,
 ) -> str:
     snippets: list[dict[str, object]] = []
     for chunk in chunks:
@@ -207,11 +257,16 @@ def _build_prompt(
             "label": chunk.label,
             "excerpt": chunk.text[:MAX_SNIPPET_CHARS],
         }
-        candidate_prompt = _format_prompt(message, history=history, snippets=[*snippets, candidate])
+        candidate_prompt = _format_prompt(
+            message,
+            history=history,
+            snippets=[*snippets, candidate],
+            question_type=question_type,
+        )
         if snippets and len(candidate_prompt) > max_prompt_chars:
             break
         snippets.append(candidate)
-    return _format_prompt(message, history=history, snippets=snippets)
+    return _format_prompt(message, history=history, snippets=snippets, question_type=question_type)
 
 
 def _format_prompt(
@@ -219,14 +274,21 @@ def _format_prompt(
     *,
     history: list[dict[str, str]],
     snippets: list[dict[str, object]],
+    question_type: str,
 ) -> str:
     return (
         "You are a read-only repository architecture assistant for this SIEM.\n"
         "Use only the supplied repository excerpts. If evidence is missing, say you do not have enough current evidence.\n"
         "Do not claim to edit files, run commands, access the VM, deploy, commit, push, query databases, or mutate production.\n"
         "Mac repository policy and Tier 0 sources override lower-trust docs. Current source overrides stale docs for implemented behavior.\n"
-        "Every factual claim must include citations in the exact format [path:line_start-line_end].\n"
+        "The backend attaches citations from retrieved evidence. Do not invent file paths, line ranges, or repository details.\n"
         "Historical sources are context only and must be labeled historical in the answer.\n\n"
+        f"Question type: {question_type}\n"
+        "For factual questions, answer directly with only evidence-backed facts.\n"
+        "For architectural questions, explain relationships, boundaries, and tradeoffs grounded in the excerpts.\n"
+        "For evaluative questions, make a clear judgment, separate repository fact from your judgment, and explain why the evidence supports it.\n"
+        "If a point is an inference, label it as inference; omit unsupported claims.\n"
+        "Avoid robotic disclaimers and do not fail merely because inline citation syntax is absent.\n\n"
         f"Question: {message}\n"
         f"Recent client-owned history: {json.dumps(history, sort_keys=True)}\n"
         f"Repository excerpts: {json.dumps(snippets, sort_keys=True)}\n\n"
@@ -248,6 +310,20 @@ def _validated_citations(answer: str, chunks: list[RepoChunk]) -> list[dict[str,
     return [chunk.citation() for chunk in valid.values()]
 
 
+def _backend_selected_citations(
+    chunks: list[RepoChunk],
+    *,
+    preferred: list[dict[str, object]] | None = None,
+    question_type: str,
+) -> list[dict[str, object]]:
+    if preferred:
+        return preferred[:MAX_BACKEND_CITATIONS]
+
+    ranked = [chunk for chunk in chunks if chunk.label != LABEL_HISTORICAL]
+    limit = 3 if question_type == QUESTION_TYPE_EVALUATIVE else MAX_BACKEND_CITATIONS
+    return [chunk.citation() for chunk in ranked[:limit]]
+
+
 def _repo_response(
     *,
     status: str,
@@ -257,6 +333,7 @@ def _repo_response(
     retrieval: dict[str, object],
     metadata: dict[str, Any],
     error: str | None,
+    question_type: str,
 ) -> dict[str, Any]:
     return {
         "status": status,
@@ -266,6 +343,7 @@ def _repo_response(
         "retrieval": retrieval,
         "metadata": metadata,
         "error": error,
+        "question_type": question_type,
     }
 
 
@@ -298,8 +376,12 @@ def _default_index() -> RepoIndex:
 __all__ = [
     "AI_STATUS_GROUNDING_FAILURE",
     "AI_STATUS_INSUFFICIENT_EVIDENCE",
+    "QUESTION_TYPE_ARCHITECTURAL",
+    "QUESTION_TYPE_EVALUATIVE",
+    "QUESTION_TYPE_FACTUAL",
     "RepoAssistantResult",
     "RepoAssistantValidationError",
     "answer_repo_question",
+    "classify_repo_question",
     "get_repo_assistant_status",
 ]

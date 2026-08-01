@@ -67,6 +67,8 @@ def create_draft(
     resolved_config = config if config is not None else load_ai_gateway_config()
     request = _parse_request(payload)
     definition = get_draft_definition(request.draft_type)
+    profile_name = profile_for_draft_type(request.draft_type)
+    profile = resolved_config.profile(profile_name)
 
     ai_context = build_ai_context(
         context_type=request.context_type,
@@ -102,15 +104,21 @@ def create_draft(
             status_code=200,
         )
 
-    prompt = _build_draft_prompt(request, ai_context, tools, config=resolved_config)
-    if len(prompt) > resolved_config.max_prompt_chars:
+    prompt = _build_draft_prompt(
+        request,
+        ai_context,
+        tools,
+        config=resolved_config,
+        profile_max_prompt_chars=profile.max_prompt_chars,
+    )
+    if len(prompt) > profile.max_prompt_chars:
         return _draft_state_response(
             DRAFT_STATUS_INSUFFICIENT_CONTEXT,
             request=request,
             ai_context=ai_context,
             tools=tools,
             metadata=_empty_metadata(DRAFT_STATUS_INSUFFICIENT_CONTEXT, mode=resolved_config.mode),
-            error="Draft context exceeded configured AI prompt limit.",
+            error="Draft context exceeded configured AI profile prompt limit.",
             status_code=200,
         )
 
@@ -119,7 +127,7 @@ def create_draft(
         AiGatewayRequest(
             prompt=prompt,
             capability="text_generation",
-            profile=profile_for_draft_type(request.draft_type),
+            profile=profile_name,
             metadata={
                 "context_type": ai_context.context_type,
                 "action": "draft",
@@ -240,11 +248,12 @@ def _build_draft_prompt(
     tools: SocToolExecutionSummary,
     *,
     config: AiGatewayConfig,
+    profile_max_prompt_chars: int | None = None,
 ) -> str:
     definition = get_draft_definition(request.draft_type)
     context_json = json.dumps(redact_draft_value(ai_context.data), default=str, sort_keys=True, indent=2)
     schema_json = json.dumps(_schema_for_prompt(definition), sort_keys=True, indent=2)
-    tool_budget = max(1000, config.max_prompt_chars // 3)
+    tool_budget = max(1000, (profile_max_prompt_chars or config.max_prompt_chars) // 3)
     tools_json = json.dumps(
         tool_summary_for_prompt(tools, max_chars=tool_budget),
         default=str,
@@ -258,6 +267,8 @@ def _build_draft_prompt(
         "Do not claim anything was saved, applied, approved, executed, blocked, deployed, committed, or changed.\n"
         "Do not include secrets, credentials, shell commands, migration commands, or production-mutating payloads.\n"
         "Mark uncertainty and assumptions inside the requested schema fields.\n"
+        "Do not restate every visible field. Focus on evidence, contradictions, missing evidence, confidence, and concrete read-only next steps.\n"
+        "Avoid generic filler and do not invent correlations, attack stages, or response outcomes.\n"
         "The draft is AI-generated review content only and requires analyst review before any future workflow.\n\n"
         f"Draft type: {request.draft_type}\n"
         f"Draft purpose: {definition.description}\n"

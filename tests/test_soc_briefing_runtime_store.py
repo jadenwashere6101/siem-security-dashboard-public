@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
+from psycopg2.extras import Json
 
 from core.ai.config import AI_MODE_DISABLED, AI_MODE_LOCAL_ONLY, AiGatewayConfig
 from core.ai.soc_briefing_runtime_store import (
@@ -15,12 +16,15 @@ from core.ai.soc_briefing_runtime_store import (
     autonomous_scheduling_enabled,
     claim_next_job,
     complete_job,
+    complete_run,
+    create_run,
     create_manual_briefing_job,
     create_or_get_job,
     create_or_get_window,
     create_schedule,
     enforce_service_actor_read_only,
     get_runtime_metrics,
+    get_manual_briefing_lifecycle_status,
     heartbeat_job_lease,
     materialize_due_schedule,
     recover_stale_jobs,
@@ -148,6 +152,63 @@ def test_stale_lease_recovery_requeues_then_fails_when_attempts_exhaust(postgres
     with conn.cursor() as cur:
         cur.execute("SELECT status, failure_code FROM soc_briefing_jobs WHERE id = %s", (job["id"],))
         assert cur.fetchone() == (JOB_STATUS_FAILED, "stale_lease_expired")
+
+
+def test_manual_lifecycle_links_completed_job_to_briefing(postgres_db):
+    conn, _cur = postgres_db
+    job, created = create_manual_briefing_job(
+        conn,
+        requested_by="analyst",
+        now=datetime(2026, 7, 27, 8, 0, tzinfo=timezone.utc),
+    )
+    assert created is True
+    claimed = claim_next_job(conn, lease_owner="worker-manual", now=datetime(2026, 7, 27, 8, 1, tzinfo=timezone.utc))
+    run = create_run(conn, claimed, now=datetime(2026, 7, 27, 8, 1, tzinfo=timezone.utc))
+    complete_run(
+        conn,
+        run["id"],
+        status="success",
+        started_at=run["started_at"],
+        ai_gateway_status="success",
+        provider_status="ollama",
+        now=datetime(2026, 7, 27, 8, 2, tzinfo=timezone.utc),
+    )
+    complete_job(
+        conn,
+        claimed["id"],
+        lease_owner="worker-manual",
+        status="success",
+        now=datetime(2026, 7, 27, 8, 2, tzinfo=timezone.utc),
+    )
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO soc_briefings (
+                run_id, schedule_id, window_id, status, lifecycle_status,
+                generated_at, content_status, summary, sections, evidence_refs
+            )
+            VALUES (%s, %s, %s, 'success', 'content_ready', %s, 'ready', 'Manual briefing ready.', %s, %s)
+            RETURNING id
+            """,
+            (
+                run["id"],
+                run["schedule_id"],
+                run["window_id"],
+                datetime(2026, 7, 27, 8, 3, tzinfo=timezone.utc),
+                Json({}),
+                Json([]),
+            ),
+        )
+        briefing_id = cur.fetchone()[0]
+    conn.commit()
+
+    status = get_manual_briefing_lifecycle_status(conn, job_id=job["id"], now=datetime(2026, 7, 27, 8, 4, tzinfo=timezone.utc))
+
+    assert status["job"]["id"] == job["id"]
+    assert status["run"]["id"] == run["id"]
+    assert status["briefing"]["id"] == briefing_id
+    assert status["lifecycle"]["status"] == "completed"
+    assert status["terminal"] is True
 
 
 def test_bounded_catch_up_coalesces_overnight_work(postgres_db):

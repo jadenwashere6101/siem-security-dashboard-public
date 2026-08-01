@@ -6,6 +6,7 @@ import SocBriefingsPanel from "./SocBriefingsPanel";
 import {
   getSocBriefing,
   getSocBriefingControl,
+  getManualSocBriefingRunStatus,
   listSocBriefings,
   runSocBriefingNow,
   updateSocBriefingMode,
@@ -15,6 +16,7 @@ import {
 jest.mock("../services/socBriefingService", () => ({
   getSocBriefing: jest.fn(),
   getSocBriefingControl: jest.fn(),
+  getManualSocBriefingRunStatus: jest.fn(),
   listSocBriefings: jest.fn(),
   runSocBriefingNow: jest.fn(),
   updateSocBriefingMode: jest.fn(),
@@ -87,7 +89,27 @@ describe("SocBriefingsPanel", () => {
     listSocBriefings.mockResolvedValue(listPayload);
     getSocBriefing.mockResolvedValue(detailPayload);
     getSocBriefingControl.mockResolvedValue(controlPayload);
-    runSocBriefingNow.mockResolvedValue({ created: true, status: "queued", job: { id: 44 } });
+    getManualSocBriefingRunStatus.mockResolvedValue({
+      job: { id: 44, status: "success", trigger_type: "manual" },
+      run: { id: 9, status: "success", provider_status: "ollama" },
+      briefing: { id: 1, status: "success", content_status: "ready" },
+      worker: { status: "success", last_seen_at: "2026-07-27T08:02:00Z" },
+      lifecycle: { status: "completed", terminal: true, blocked_reasons: [] },
+      blocked_reasons: [],
+      terminal: true,
+    });
+    runSocBriefingNow.mockResolvedValue({
+      created: true,
+      status: "queued",
+      job: { id: 44 },
+      manual_lifecycle: {
+        job: { id: 44, status: "pending", trigger_type: "manual" },
+        worker: { status: "offline" },
+        lifecycle: { status: "queued", terminal: false, blocked_reasons: [{ code: "worker_unavailable", message: "No fresh SOC briefing worker heartbeat is available yet." }] },
+        blocked_reasons: [{ code: "worker_unavailable", message: "No fresh SOC briefing worker heartbeat is available yet." }],
+        terminal: false,
+      },
+    });
     updateSocBriefingMode.mockResolvedValue({ ...controlPayload, mode: "scheduled_autonomous", schedules_paused: false });
     updateSocBriefingPause.mockResolvedValue({ ...controlPayload, schedules_paused: false });
   });
@@ -148,7 +170,9 @@ describe("SocBriefingsPanel", () => {
     await waitFor(() => expect(updateSocBriefingMode).toHaveBeenCalledWith("scheduled_autonomous"));
 
     await userEvent.click(screen.getByRole("button", { name: "Run Anakin Briefing Now" }));
-    expect(await screen.findByText(/Anakin briefing queued/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Manual Anakin briefing job #44 queued/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Manual job #44/i)).toBeInTheDocument();
+    await waitFor(() => expect(getManualSocBriefingRunStatus).toHaveBeenCalledWith(44));
     expect(runSocBriefingNow).toHaveBeenCalledTimes(1);
 
     await userEvent.click(screen.getByLabelText("Pause schedules"));
@@ -173,6 +197,53 @@ describe("SocBriefingsPanel", () => {
     expect(await screen.findByText(/provider_timeout/i)).toBeInTheDocument();
     expect(screen.getByText("timeout")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
+  });
+
+  test("recovers active manual run tracking from control state", async () => {
+    getSocBriefingControl.mockResolvedValueOnce({
+      ...controlPayload,
+      active_jobs: { manual: { pending: 1, running: 0 }, scheduled: { pending: 0, running: 0 } },
+      active_manual_job: { id: 77, status: "pending", trigger_type: "manual" },
+    });
+    getManualSocBriefingRunStatus.mockResolvedValueOnce({
+      job: { id: 77, status: "pending", trigger_type: "manual" },
+      run: null,
+      briefing: null,
+      worker: { status: "offline" },
+      lifecycle: { status: "queued", terminal: false, blocked_reasons: [{ code: "worker_unavailable", message: "No fresh SOC briefing worker heartbeat is available yet." }] },
+      blocked_reasons: [{ code: "worker_unavailable", message: "No fresh SOC briefing worker heartbeat is available yet." }],
+      terminal: false,
+    });
+
+    render(<SocBriefingsPanel />);
+
+    expect(await screen.findByText(/Manual job #77/i)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText(/No fresh SOC briefing worker heartbeat/i).length).toBeGreaterThanOrEqual(1));
+    await waitFor(() => expect(getManualSocBriefingRunStatus).toHaveBeenCalledWith(77));
+  });
+
+  test("shows already-running manual job from Run Now response", async () => {
+    runSocBriefingNow.mockResolvedValueOnce({
+      created: false,
+      status: "already_running",
+      job: { id: 88, status: "running" },
+      manual_lifecycle: {
+        job: { id: 88, status: "running", trigger_type: "manual" },
+        run: { id: 12, status: "running" },
+        worker: { status: "success" },
+        lifecycle: { status: "running", terminal: false, blocked_reasons: [{ code: "already_running", message: "A manual Anakin briefing is already pending or running." }] },
+        blocked_reasons: [{ code: "already_running", message: "A manual Anakin briefing is already pending or running." }],
+        terminal: false,
+      },
+    });
+
+    render(<SocBriefingsPanel />);
+
+    await screen.findByText("Critical auth anomaly reviewed.");
+    await userEvent.click(screen.getByRole("button", { name: "Run Anakin Briefing Now" }));
+
+    expect(await screen.findByText(/job #88 is already pending or running/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Manual job #88/i)).toBeInTheDocument();
   });
 
   test("renders polished empty state and no-data summary values", async () => {

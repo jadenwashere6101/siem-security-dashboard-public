@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import App from './App';
 import { loadCurrentSession } from './services/authService';
 import { loadAlertDashboardSummary, loadAlertRuleOptions, loadAlerts } from './services/alertsService';
+import { requestAiExplanation } from './services/aiService';
 import {
   createEvidenceReference,
   createInvestigation,
@@ -36,6 +37,13 @@ jest.mock('./services/alertsService', () => ({
   loadAlerts: jest.fn(),
   loadAlertDashboardSummary: jest.fn(),
   loadAlertRuleOptions: jest.fn(),
+}));
+
+jest.mock('./services/aiService', () => ({
+  requestAiChat: jest.fn(() => Promise.resolve({ status: 'success', answer: 'ok', metadata: {}, context: {} })),
+  requestAiDraft: jest.fn(() => Promise.resolve({ status: 'success', draft: {}, metadata: {}, context: {} })),
+  requestAiExplanation: jest.fn(() => Promise.resolve({ status: 'success', answer: 'ok', metadata: {}, context: {} })),
+  requestAiInvestigation: jest.fn(() => Promise.resolve({ status: 'success', investigation: {}, metadata: {}, context: {} })),
 }));
 
 jest.mock('./services/investigationWorkspaceService', () => ({
@@ -134,6 +142,20 @@ jest.mock('./components/SocCommandCenter', () => (props) => (
     <button type="button" onClick={() => props.onNavigate('soar-operations')}>SOC open operations</button>
     <button type="button" onClick={() => props.onOpenAttentionItem('Pending approvals')}>SOC open approvals</button>
     <button type="button" onClick={() => props.onOpenResponseRegistry({ sourceIp: '9.9.9.9', relatedIncidentId: 7 })}>SOC open registry</button>
+    <button
+      type="button"
+      onClick={() =>
+        props.onAskAi({
+          contextType: 'recon_activity',
+          action: 'explain_recon_activity',
+          title: 'Recon activity #90',
+          question: 'Explain this recon activity.',
+          context: { activity_id: 90 },
+        })
+      }
+    >
+      SOC explain recon
+    </button>
   </div>
 ));
 
@@ -722,6 +744,43 @@ test('renders SOAR Metrics nav for analyst and loads dashboard when selected', a
   await userEvent.click(screen.getByRole('button', { name: /soar metrics/i }));
 
   expect(await screen.findByTestId('soar-metrics-dashboard')).toHaveTextContent(/analyst/i);
+});
+
+test('SOC entity AI requests do not include full visible dashboard context', async () => {
+  loadCurrentSession.mockResolvedValue({
+    authenticated: true,
+    user: 'analyst1',
+    role: 'analyst',
+  });
+  loadAlertDashboardSummary.mockResolvedValue({
+    metrics: { total_alerts: 99, high_count: 9, medium_count: 8, low_count: 7, unique_source_ips: 6 },
+    top_source_ips: [{ source_ip: '198.51.100.10' }],
+    timeline: [{ bucket: '2026-01-01T00:00:00Z', count: 5 }],
+    map_markers: [{ source_ip: '198.51.100.10', lat: 1, lon: 2 }],
+  });
+  loadAlerts.mockResolvedValue({
+    items: [{ id: 101, alert_type: 'scan', severity: 'high', source_ip: '198.51.100.10', status: 'open' }],
+    total: 1,
+    limit: 50,
+    offset: 0,
+    sort: 'newest',
+  });
+  requestAiExplanation.mockImplementationOnce(() => new Promise(() => {}));
+
+  render(<App />);
+
+  await userEvent.click(await screen.findByRole('button', { name: /soc command center/i }));
+  await userEvent.click(await screen.findByRole('button', { name: /soc explain recon/i }));
+
+  await waitFor(() => expect(requestAiExplanation).toHaveBeenCalled());
+  const [payload] = requestAiExplanation.mock.calls[0];
+  expect(payload.context_type).toBe('recon_activity');
+  expect(payload.context.activity_id).toBe(90);
+  expect(payload.context.command).toMatchObject({ id: 'contextual.recon_activity.explain_recon_activity', read_only: true });
+  expect(payload.context.dashboard_summary).toBeUndefined();
+  expect(payload.context.timeline).toBeUndefined();
+  expect(payload.context.map_markers).toBeUndefined();
+  expect(payload.context.recent_alerts).toBeUndefined();
 });
 
 test('renders SOAR Metrics nav for super_admin and passes role', async () => {

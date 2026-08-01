@@ -78,6 +78,10 @@ SECTION_LIMITS = {
     "source_ip_outcomes": 10,
     "recon_related_events": 15,
     "chat_history": 8,
+    "compact_alerts": 8,
+    "compact_incidents": 6,
+    "compact_queue": 6,
+    "compact_campaigns": 4,
 }
 
 SENSITIVE_KEY_FRAGMENTS = frozenset(
@@ -152,6 +156,7 @@ class AiContextPayload:
             "sources": [source.as_dict() for source in self.sources],
             "truncated": self.truncated or any(source.truncated for source in self.sources),
             "omitted_count": self.omitted_count + sum(source.omitted_count for source in self.sources),
+            "evidence": self.data.get("_evidence") if isinstance(self.data.get("_evidence"), dict) else None,
             "insufficient_reason": self.insufficient_reason,
         }
 
@@ -255,10 +260,89 @@ def _compact_payload(value: Any, *, max_chars: int) -> tuple[Any, bool]:
     text = json.dumps(value, default=str, sort_keys=True, separators=(",", ":"))
     if len(text) <= max_chars:
         return value, False
-    return {
+    compacted = {
         "summary": "Context was too large and was compacted before AI prompt construction.",
         "preview": text[: max(0, max_chars - 120)],
-    }, True
+    }
+    if isinstance(value, dict) and isinstance(value.get("_evidence"), dict):
+        compacted["_evidence"] = value["_evidence"]
+    return compacted, True
+
+
+def _short_text(value: Any, *, max_chars: int = 320) -> Any:
+    if value is None:
+        return None
+    text = str(value)
+    if len(text) <= max_chars:
+        return value
+    return f"{text[: max(0, max_chars - 3)]}..."
+
+
+def _summarize_mapping(record: Any, keys: list[str], *, max_text_chars: int = 320) -> dict[str, Any]:
+    if not isinstance(record, dict):
+        return {"value": _short_text(record, max_chars=max_text_chars)}
+    compact: dict[str, Any] = {}
+    for key in keys:
+        if key not in record:
+            continue
+        value = record.get(key)
+        if isinstance(value, (dict, list)):
+            preview, _truncated = _compact_payload(value, max_chars=max_text_chars)
+            compact[key] = preview
+        else:
+            compact[key] = _short_text(value, max_chars=max_text_chars)
+    return compact
+
+
+def _record_list(items: Any) -> list[Any]:
+    if isinstance(items, list):
+        return items
+    if isinstance(items, dict) and isinstance(items.get("recent"), list):
+        return items["recent"]
+    if isinstance(items, dict) and isinstance(items.get("items"), list):
+        return items["items"]
+    if isinstance(items, dict) and isinstance(items.get("entries"), list):
+        return items["entries"]
+    return []
+
+
+def _summarize_records(items: Any, limit: int, keys: list[str], *, reason: str) -> tuple[list[dict[str, Any]], AiContextSource | None]:
+    records = _record_list(items)
+    if not records:
+        return [], None
+    limited, source = _limit_list(records, limit, reason=reason)
+    return [_summarize_mapping(item, keys) for item in limited], source
+
+
+def _evidence_stats(*, included: dict[str, int], omitted: dict[str, int] | None = None) -> dict[str, Any]:
+    omitted = omitted or {}
+    return {
+        "included": {key: int(value) for key, value in included.items()},
+        "omitted": {key: int(value) for key, value in omitted.items() if int(value) > 0},
+        "truncated": any(int(value) > 0 for value in omitted.values()),
+    }
+
+
+def _append_compaction_source(
+    sources: list[AiContextSource],
+    *,
+    truncated: bool,
+    omitted_count: int = 0,
+    reason: str,
+) -> list[AiContextSource]:
+    if not truncated:
+        return sources
+    return [
+        *sources,
+        AiContextSource(
+            source_type="truncation",
+            source_path="core.ai.context_builder",
+            generated_at=_utc_now(),
+            truncated=True,
+            omitted_count=max(0, int(omitted_count)),
+            truncation_reason=reason,
+        ),
+    ]
 
 
 def _redact_sensitive_values(value: Any) -> Any:
@@ -319,9 +403,51 @@ def _build_alert_context(context: dict[str, Any], config: AiGatewayConfig) -> Ai
         why_fired = _build_pfsense_why_fired_payload(row, cooldown_by_alert_id)
         related_events = _related_events_from_alert_row(cur, row, SECTION_LIMITS["related_events"])
         data = {
-            "alert": alert,
+            "alert": _summarize_mapping(
+                alert,
+                [
+                    "id",
+                    "alert_id",
+                    "alert_type",
+                    "severity",
+                    "status",
+                    "source_ip",
+                    "target_ip",
+                    "destination_ip",
+                    "destination_port",
+                    "message",
+                    "created_at",
+                    "updated_at",
+                    "source",
+                    "source_type",
+                    "response_outcome",
+                    "intelligence",
+                ],
+            ),
             "why_fired": why_fired,
-            "related_events": related_events,
+            "related_events": [
+                _summarize_mapping(
+                    event,
+                    [
+                        "id",
+                        "event_id",
+                        "event_type",
+                        "severity",
+                        "source_ip",
+                        "destination_ip",
+                        "destination_port",
+                        "protocol",
+                        "action",
+                        "message",
+                        "created_at",
+                        "timestamp",
+                    ],
+                )
+                for event in related_events
+            ],
+            "_evidence": _evidence_stats(
+                included={"related_events": len(related_events)},
+            ),
         }
         data, truncated = _compact_payload(data, max_chars=max(config.max_prompt_chars // 2, 2000))
         return AiContextPayload(
@@ -371,12 +497,63 @@ def _build_incident_context(context: dict[str, Any]) -> AiContextPayload:
         ]
         if truncation_source:
             sources.append(truncation_source)
+        compact_timeline, timeline_truncation_source = _summarize_records(
+            timeline,
+            SECTION_LIMITS["timeline"],
+            [
+                "id",
+                "type",
+                "event_type",
+                "status",
+                "severity",
+                "source_ip",
+                "message",
+                "created_at",
+                "timestamp",
+                "description",
+            ],
+            reason="Incident timeline exceeded AI context limit.",
+        )
+        if timeline_truncation_source:
+            sources.append(timeline_truncation_source)
+        data = {
+            "incident": _summarize_mapping(
+                incident,
+                [
+                    "id",
+                    "event_id",
+                    "title",
+                    "severity",
+                    "priority",
+                    "status",
+                    "source_ip",
+                    "summary",
+                    "created_at",
+                    "updated_at",
+                    "last_seen",
+                    "alert_count",
+                    "affected_assets",
+                ],
+            ),
+            "timeline": compact_timeline,
+            "_evidence": _evidence_stats(
+                included={"timeline": len(compact_timeline)},
+                omitted={"timeline": max(0, len(timeline) - len(compact_timeline)) if isinstance(timeline, list) else 0},
+            ),
+        }
+        data, truncated = _compact_payload(data, max_chars=6000)
+        sources = _append_compaction_source(
+            sources,
+            truncated=truncated,
+            reason="Incident context compacted before AI prompt construction.",
+        )
         return AiContextPayload(
             context_type="incident",
-            data={"incident": incident, "timeline": timeline},
+            data=data,
             sources=sources,
             insufficient_context=not _is_meaningful(incident),
             insufficient_reason=None if _is_meaningful(incident) else "No incident context available.",
+            truncated=truncated,
         )
     finally:
         if conn is not None:
@@ -420,12 +597,47 @@ def _build_source_ip_context(context: dict[str, Any]) -> AiContextPayload:
             )
             response_outcome_counts = get_outcome_count_groups(conn, source_ip=source_ip)
 
+        compact_alerts, alert_truncation = _summarize_records(
+            alerts,
+            SECTION_LIMITS["compact_alerts"],
+            ["id", "alert_id", "alert_type", "severity", "status", "source_ip", "message", "created_at"],
+            reason="Source-IP alert evidence exceeded AI context limit.",
+        )
+        compact_incidents, incident_truncation = _summarize_records(
+            incidents,
+            SECTION_LIMITS["compact_incidents"],
+            ["id", "title", "severity", "priority", "status", "source_ip", "created_at", "updated_at"],
+            reason="Source-IP incident evidence exceeded AI context limit.",
+        )
+        compact_queue, queue_truncation = _summarize_records(
+            queue,
+            SECTION_LIMITS["compact_queue"],
+            ["id", "alert_id", "source_ip", "action", "status", "created_at", "updated_at", "last_error"],
+            reason="Source-IP response queue evidence exceeded AI context limit.",
+        )
+        compact_outcomes, outcome_truncation = _summarize_records(
+            response_outcomes,
+            SECTION_LIMITS["source_ip_outcomes"],
+            ["id", "alert_id", "source_ip", "action", "outcome", "status", "created_at", "completed_at", "summary", "limit"],
+            reason="Source-IP response outcome evidence exceeded AI context limit.",
+        )
+        alert_records = _record_list(alerts)
+        incident_records = _record_list(incidents)
+        queue_records = _record_list(queue)
+        outcome_records = _record_list(response_outcomes)
+        campaign_recent = campaigns.get("recent") if isinstance(campaigns, dict) else []
+        compact_campaigns, campaign_truncation = _summarize_records(
+            campaign_recent,
+            SECTION_LIMITS["compact_campaigns"],
+            ["id", "campaign_key", "label", "severity", "confidence", "first_seen", "last_seen", "campaign_intelligence"],
+            reason="Source-IP campaign evidence exceeded AI context limit.",
+        )
         data = {
             "source_ip": source_ip,
-            "alerts": alerts,
-            "incidents": incidents,
-            "queue": queue,
-            "blocklist": blocklist,
+            "alerts": compact_alerts,
+            "incidents": compact_incidents,
+            "queue": compact_queue,
+            "blocklist": _summarize_mapping(blocklist, ["listed", "status", "reason", "created_at", "updated_at"]),
             "reputation": {
                 "behavioral": {
                     "score": behavioral["reputation_score"],
@@ -437,27 +649,60 @@ def _build_source_ip_context(context: dict[str, Any]) -> AiContextPayload:
                 **external,
             },
             "internet_noise": internet_noise,
-            "playbook_executions": playbook_executions,
+            "playbook_executions": [
+                _summarize_mapping(item, ["id", "playbook_id", "status", "created_at", "updated_at", "failure_reason"])
+                for item in _record_list(playbook_executions)[: SECTION_LIMITS["compact_queue"]]
+            ],
             "returning_attacker": returning_attacker,
-            "campaigns": campaigns,
-            "response_outcomes": response_outcomes,
+            "campaigns": {
+                **(campaigns if isinstance(campaigns, dict) else {}),
+                "recent": compact_campaigns,
+            },
+            "response_outcomes": compact_outcomes,
             "response_outcome_counts": response_outcome_counts,
+            "_evidence": _evidence_stats(
+                included={
+                    "alerts": len(compact_alerts),
+                    "incidents": len(compact_incidents),
+                    "queue": len(compact_queue),
+                    "response_outcomes": len(compact_outcomes),
+                    "campaigns": len(compact_campaigns),
+                },
+                omitted={
+                    "alerts": max(0, len(alert_records) - len(compact_alerts)),
+                    "incidents": max(0, len(incident_records) - len(compact_incidents)),
+                    "queue": max(0, len(queue_records) - len(compact_queue)),
+                    "response_outcomes": max(0, len(outcome_records) - len(compact_outcomes)),
+                    "campaigns": max(0, len(campaign_recent) - len(compact_campaigns)) if isinstance(campaign_recent, list) else 0,
+                },
+            ),
         }
+        data, truncated = _compact_payload(data, max_chars=9000)
+        sources = [AiContextSource("source_ip", "/source-ip-context", [source_ip], _utc_now())]
+        for source in (alert_truncation, incident_truncation, queue_truncation, outcome_truncation, campaign_truncation):
+            if source:
+                sources.append(source)
+        sources = _append_compaction_source(
+            sources,
+            truncated=truncated,
+            reason="Source-IP context compacted before AI prompt construction.",
+        )
         return AiContextPayload(
             context_type="source_ip",
             data=data,
-            sources=[AiContextSource("source_ip", "/source-ip-context", [source_ip], _utc_now())],
+            sources=sources,
             insufficient_context=not _is_meaningful(
                 {
-                    "alerts": alerts,
-                    "incidents": incidents,
-                    "queue": queue,
+                    "alerts": compact_alerts,
+                    "incidents": compact_incidents,
+                    "queue": compact_queue,
                     "blocklist": blocklist,
-                    "response_outcomes": response_outcomes,
-                    "campaigns": campaigns,
+                    "response_outcomes": compact_outcomes,
+                    "campaigns": compact_campaigns,
                 }
             ),
             insufficient_reason="No meaningful source-IP context available.",
+            truncated=truncated,
         )
     finally:
         if conn is not None:
@@ -490,15 +735,77 @@ def _build_recon_activity_context(context: dict[str, Any]) -> AiContextPayload:
             },
             limit=SECTION_LIMITS["recon_related_events"],
         )
-        return AiContextPayload(
-            context_type="recon_activity",
-            data={"recon_activity": detail, "related_events": related_events},
-            sources=[
+        related_events, related_truncation_source = _limit_list(
+            related_events,
+            SECTION_LIMITS["recon_related_events"],
+            reason="Recon related event evidence exceeded AI context limit.",
+        )
+        compact_detail = _summarize_mapping(
+            detail,
+            [
+                "id",
+                "title",
+                "label",
+                "severity",
+                "status",
+                "confidence",
+                "confidence_tier",
+                "first_seen",
+                "last_seen",
+                "display",
+                "story",
+                "investigation_value",
+                "summary",
+                "related_incident_id",
+            ],
+            max_text_chars=700,
+        )
+        compact_events = [
+            _summarize_mapping(
+                event,
+                [
+                    "id",
+                    "event_id",
+                    "event_type",
+                    "source_ip",
+                    "destination_ip",
+                    "destination_port",
+                    "protocol",
+                    "action",
+                    "message",
+                    "created_at",
+                    "timestamp",
+                ],
+                max_text_chars=160,
+            )
+            for event in related_events
+        ]
+        data = {
+            "recon_activity": compact_detail,
+            "related_events": compact_events,
+            "_evidence": _evidence_stats(
+                included={"related_events": len(compact_events)},
+            ),
+        }
+        data, truncated = _compact_payload(data, max_chars=9000)
+        sources = [
                 AiContextSource("recon_activity", f"/recon-activities/{activity_id}", [activity_id], _utc_now()),
                 AiContextSource("events", f"/recon-activities/{activity_id}/related-events", [activity_id], _utc_now()),
-            ],
+            ]
+        if related_truncation_source:
+            sources.append(related_truncation_source)
+        sources = _append_compaction_source(
+            sources,
+            truncated=truncated,
+            reason="Recon activity context compacted before AI prompt construction.",
+        )
+        return AiContextPayload(
+            context_type="recon_activity",
+            data=data,
+            sources=sources,
             insufficient_context=not _is_meaningful(detail),
             insufficient_reason=None if _is_meaningful(detail) else "No recon activity context available.",
+            truncated=truncated,
         )
     finally:
         if cur is not None:
@@ -540,12 +847,44 @@ def _build_response_registry_context(context: dict[str, Any]) -> AiContextPayloa
         detail = get_registry_detail(conn, registry_id)
         if detail is None:
             raise AiContextNotFoundError("Registry record not found")
+        registry_record = detail.get("record") if isinstance(detail, dict) and isinstance(detail.get("record"), dict) else detail
+        data = {
+            "response_registry": _summarize_mapping(
+                registry_record,
+                [
+                    "id",
+                    "indicator_type",
+                    "indicator_value",
+                    "source_ip",
+                    "status",
+                    "action",
+                    "disposition",
+                    "severity",
+                    "confidence",
+                    "created_at",
+                    "updated_at",
+                    "last_seen",
+                    "response_state",
+                    "latest_outcome",
+                    "cooldown",
+                    "evidence",
+                ],
+                max_text_chars=1000,
+            )
+        }
+        data, truncated = _compact_payload(data, max_chars=6000)
+        sources = _append_compaction_source(
+            [AiContextSource("response_registry", f"/response-registry/{registry_id}", [registry_id], _utc_now())],
+            truncated=truncated,
+            reason="Response registry context compacted before AI prompt construction.",
+        )
         return AiContextPayload(
             context_type="response_registry",
-            data={"response_registry": detail},
-            sources=[AiContextSource("response_registry", f"/response-registry/{registry_id}", [registry_id], _utc_now())],
+            data=data,
+            sources=sources,
             insufficient_context=not _is_meaningful(detail),
             insufficient_reason=None if _is_meaningful(detail) else "No response registry context available.",
+            truncated=truncated,
         )
     finally:
         if conn is not None:
