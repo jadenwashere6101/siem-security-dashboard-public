@@ -83,6 +83,16 @@ WORKFLOW_BY_CONTEXT = {
     "detection": WORKFLOW_ALERT,
 }
 
+WORKSPACE_CONTEXT_ALIASES = {
+    "analyst_workspace": "general",
+    "analyst-workspace": "general",
+    "soc_command_center": "general",
+    "soc-command-center": "general",
+    "recon_history": "general",
+    "soc_briefings": "general",
+    "soc-briefings": "general",
+}
+
 WORKFLOW_STEPS = {
     WORKFLOW_ALERT: (
         STEP_BUILD_CONTEXT,
@@ -156,6 +166,7 @@ AUTOMATIC_DRAFT_TYPES = frozenset(
 
 def normalize_context_type(value: Any) -> str:
     context_type = str(value or "").strip().lower()
+    context_type = WORKSPACE_CONTEXT_ALIASES.get(context_type, context_type)
     if not context_type:
         raise InvestigationPlannerError("context_type is required")
     if context_type not in WORKFLOW_BY_CONTEXT:

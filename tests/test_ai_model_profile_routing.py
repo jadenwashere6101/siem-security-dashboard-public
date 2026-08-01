@@ -288,6 +288,20 @@ def test_workspace_section_ids_normalize_to_safe_general_context():
     assert context.data["visible_context"]["visible_filters"] == {"status": "open"}
 
 
+def test_analyst_workspace_investigation_context_maps_to_supported_general_workflow():
+    from core.ai.investigation_planner import build_investigation_plan
+    from core.ai.investigation_models import WORKFLOW_DASHBOARD_ANOMALY
+
+    plan = build_investigation_plan(
+        context_type="analyst_workspace",
+        context={"command": {"id": "anakin.investigate"}, "workspace": {"activeSection": "analyst_workspace"}},
+        question="Run a bounded read-only investigation of this analyst workspace.",
+    )
+
+    assert plan.context_type == "general"
+    assert plan.workflow_type == WORKFLOW_DASHBOARD_ANOMALY
+
+
 def _fake_context():
     from core.ai.context_builder import AiContextPayload, AiContextSource
 

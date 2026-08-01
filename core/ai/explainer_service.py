@@ -272,7 +272,6 @@ def _build_prompt(
     config: AiGatewayConfig | None = None,
     profile_max_prompt_chars: int | None = None,
 ) -> str:
-    context_json = json.dumps(ai_context.data, default=str, sort_keys=True, indent=2)
     budget = profile_max_prompt_chars or (config.max_prompt_chars if config else 12000)
     tool_budget = max(1000, budget // 3)
     tools_json = json.dumps(
@@ -281,6 +280,7 @@ def _build_prompt(
         sort_keys=True,
         indent=2,
     )
+    context_json = _context_json_for_prompt(ai_context, budget=budget, tools_json=tools_json)
     question_line = question or _default_question(action, ai_context.context_type)
     return (
         "You are a read-only SIEM analyst assistant.\n"
@@ -301,6 +301,113 @@ def _build_prompt(
         f"Read-only SOC tool evidence:\n{tools_json}\n\n"
         "Use task-appropriate concise sections. Include support, contradiction/benign alternatives, uncertainty, gaps, and next steps when evidence allows."
     )
+
+
+def _context_json_for_prompt(ai_context: AiContextPayload, *, budget: int, tools_json: str) -> str:
+    static_budget = 3600
+    max_context_chars = max(1200, budget - static_budget - len(tools_json))
+    bounded = _bound_prompt_value(ai_context.data)
+    context_json = json.dumps(bounded, default=str, sort_keys=True, indent=2)
+    if len(context_json) <= max_context_chars:
+        return context_json
+
+    evidence = _extract_evidence(ai_context.data)
+    summary = {
+        "summary": "SIEM context was compacted before prompt serialization because it exceeded the selected AI profile budget.",
+        "context_type": ai_context.context_type,
+        "primary": _primary_prompt_summary(ai_context.data),
+        "_evidence": evidence,
+        "_prompt_compaction": {
+            "original_chars": len(json.dumps(ai_context.data, default=str, sort_keys=True)),
+            "max_context_chars": max_context_chars,
+            "reason": "profile_prompt_budget",
+        },
+    }
+    context_json = json.dumps(summary, default=str, sort_keys=True, indent=2)
+    if len(context_json) <= max_context_chars:
+        return context_json
+    summary["primary"] = _short_prompt_text(summary["primary"], max_chars=max(300, max_context_chars // 2))
+    return json.dumps(summary, default=str, sort_keys=True, indent=2)
+
+
+def _bound_prompt_value(value, *, depth: int = 0):
+    if depth > 4:
+        return _short_prompt_text(value, max_chars=220)
+    if isinstance(value, list):
+        limit = 8 if depth <= 2 else 4
+        bounded = [_bound_prompt_value(item, depth=depth + 1) for item in value[:limit]]
+        omitted = max(0, len(value) - len(bounded))
+        if omitted:
+            return {
+                "items": bounded,
+                "_evidence": {
+                    "included": len(bounded),
+                    "omitted": omitted,
+                    "truncated": True,
+                },
+            }
+        return bounded
+    if isinstance(value, dict):
+        bounded = {}
+        for key, child in value.items():
+            if key in {"raw", "raw_events", "full_payload", "full_context", "map_markers"}:
+                records = child if isinstance(child, list) else []
+                bounded[key] = {
+                    "summary": "Raw or high-volume field omitted from AI prompt.",
+                    "_evidence": {
+                        "included": 0,
+                        "omitted": len(records),
+                        "truncated": bool(records),
+                    },
+                }
+                continue
+            bounded[key] = _bound_prompt_value(child, depth=depth + 1)
+        return bounded
+    return _short_prompt_text(value, max_chars=360 if depth <= 2 else 180)
+
+
+def _extract_evidence(value) -> dict[str, object]:
+    if isinstance(value, dict) and isinstance(value.get("_evidence"), dict):
+        return value["_evidence"]
+    evidence = {"included": {}, "omitted": {}, "truncated": False}
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if isinstance(child, list):
+                evidence["included"][key] = min(len(child), 8)
+                omitted = max(0, len(child) - 8)
+                if omitted:
+                    evidence["omitted"][key] = omitted
+                    evidence["truncated"] = True
+    return evidence
+
+
+def _primary_prompt_summary(value):
+    if not isinstance(value, dict):
+        return _short_prompt_text(value, max_chars=800)
+    for key in (
+        "alert",
+        "incident",
+        "source_ip",
+        "recon_activity",
+        "response_registry",
+        "dashboard_summary",
+        "visible_context",
+        "primary",
+    ):
+        if key in value:
+            return _bound_prompt_value(value[key])
+    return _bound_prompt_value(value)
+
+
+def _short_prompt_text(value, *, max_chars: int):
+    if value is None:
+        return None
+    if isinstance(value, (int, float, bool)):
+        return value
+    text = value if isinstance(value, str) else json.dumps(value, default=str, sort_keys=True)
+    if len(text) <= max_chars:
+        return value
+    return f"{text[: max(0, max_chars - 3)]}..."
 
 
 def _default_question(action: str, context_type: str) -> str:
