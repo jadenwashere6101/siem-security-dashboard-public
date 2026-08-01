@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+from core.ai.anakin_persona import (
+    artifact_policy,
+    banned_filler_phrases,
+    base_persona_policy,
+    decision_support_policy,
+    quick_explain_policy,
+    repo_assistant_policy,
+)
 from core.ai.acceptance_harness import build_golden_reasoning_cases, evaluate_golden_reasoning_answer
 from core.ai.config import AiGatewayConfig
 from core.ai.context_builder import AiContextPayload, AiContextSource
@@ -41,12 +49,74 @@ def test_quick_explain_prompt_uses_persona_and_stays_concise_tool_free():
 
     assert "experienced detection engineer" in prompt
     assert "already-loaded bounded context only" in prompt
+    assert "usually 3-6 sentences" in prompt
     assert "do not ask for or imply tool use" in prompt
     assert "what happened" in prompt
     assert "one concrete next check" in prompt
     assert "do not repeat the alert description" in prompt
     assert "continue monitoring" in prompt
+    assert "do not roleplay" in prompt
+    assert "generic assistant phrasing" in prompt
     assert "you are a read-only siem analyst assistant" not in prompt
+
+
+def test_shared_persona_has_tone_adaptation_without_false_personality():
+    policy = base_persona_policy().lower()
+
+    assert "match the user's communication style" in policy
+    assert "formal user -> professional" in policy
+    assert "casual user -> natural" in policy
+    assert "technical user -> technical" in policy
+    assert "do not roleplay" in policy
+    assert "not theater" in policy
+    assert "never initiate profanity" in policy
+    assert "almost never repeat profanity" in policy
+    assert "do not make operational recommendations stronger than the evidence supports" in policy
+    assert "do not use filler phrases like" in policy
+    assert "do not answer by merely restating visible ui fields" in policy
+
+
+def test_filler_phrases_are_canonical_and_rejected_by_acceptance():
+    assert "based on the information provided" in banned_filler_phrases()
+    case = build_golden_reasoning_cases()[0]
+
+    checks = evaluate_golden_reasoning_answer(
+        case,
+        "Based on the information provided, severity is high, source IP is 203.0.113.77, timestamp is now, status is open.",
+    )
+
+    assert checks["no_filler_phrases"] is False
+    assert checks["not_visible_field_only"] is False
+
+
+def test_persona_keeps_professional_artifacts_and_conservative_profanity():
+    base_policy = base_persona_policy().lower()
+    artifact = artifact_policy().lower()
+
+    assert "never initiate profanity" in base_policy
+    assert "almost never repeat profanity" in base_policy
+    assert "never use profanity, slang, or casual mirroring" in base_policy
+    assert "reduce personality" in artifact
+    assert "free of slang or profanity" in artifact
+
+
+def test_decision_support_recommendation_strength_is_evidence_bounded():
+    policy = decision_support_policy().lower()
+
+    assert "put the recommendation first" in policy
+    assert "what evidence would change the recommendation" in policy
+    assert "more confidence than the evidence supports" in policy
+    assert "never draft an artifact" in policy
+
+
+def test_quick_explain_and_repo_assistant_are_short_by_default():
+    quick = quick_explain_policy().lower()
+    repo = repo_assistant_policy().lower()
+
+    assert "short by default" in quick
+    assert "usually 3-6 sentences" in quick
+    assert "concise by default" in repo
+    assert "do not answer live siem-data questions from repository context" in repo
 
 
 def test_deep_investigate_prompt_requires_skeptical_reasoning_contract():
@@ -68,6 +138,7 @@ def test_deep_investigate_prompt_requires_skeptical_reasoning_contract():
     ).lower()
 
     assert "deep investigate mode" in prompt
+    assert "competing hypotheses" in prompt
     assert "supporting evidence" in prompt
     assert "contradictory or benign evidence" in prompt
     assert "evidence gaps" in prompt
@@ -179,6 +250,11 @@ def test_golden_reasoning_acceptance_cases_check_properties_not_exact_words():
     cases = build_golden_reasoning_cases()
 
     assert {case.scenario for case in cases} == {
+        "casual user asks what is going on",
+        "professional user requests assessment",
+        "casual frustrated analyst used profanity",
+        "shareable artifact stays professional",
+        "analyst assumes block is required but evidence is weak",
         "likely password spray with no successful login",
         "noisy commodity recon that may not deserve escalation",
         "high-severity alert with weak follow-up evidence",

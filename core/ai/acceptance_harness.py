@@ -10,6 +10,7 @@ from typing import Any
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
+from core.ai.anakin_persona import banned_filler_phrases
 from core.ai.config import AI_MODE_LOCAL_ONLY, AiGatewayConfig, default_ai_profiles, load_ai_gateway_config
 from core.ai.context_builder import AiContextPayload, AiContextSource
 from core.ai.drafting_service import _build_draft_prompt
@@ -367,6 +368,82 @@ def run_offline_contract_tier(config: AiGatewayConfig | None = None) -> Acceptan
 def build_golden_reasoning_cases() -> tuple[GoldenReasoningCase, ...]:
     return (
         GoldenReasoningCase(
+            key="golden.casual_natural_tone",
+            workflow=WORKFLOW_QUICK_EXPLAIN,
+            scenario="casual user asks what is going on",
+            question="what's actually going on here?",
+            context={"alert": "vpn deny burst", "success": False},
+            expected_answer=(
+                "Short version: this looks like a VPN deny burst worth checking, not proof of compromise. "
+                "Fact: I only see failed attempts. Inference: scanning or password guessing is plausible. "
+                "Uncertainty: I do not have target-side auth outcomes. Confidence: medium. Next check: inspect VPN auth successes from the same source."
+            ),
+            required_terms=("short version", "fact", "inference", "uncertainty", "confidence", "next check"),
+            forbidden_terms=("based on the information provided", "as an ai"),
+        ),
+        GoldenReasoningCase(
+            key="golden.professional_tone",
+            workflow=WORKFLOW_DEEP_INVESTIGATE,
+            scenario="professional user requests assessment",
+            question="Please provide a concise assessment.",
+            context={"alert": "admin portal failures", "business_service": "customer portal"},
+            expected_answer=(
+                "Most important: admin-portal failures against a customer-facing service deserve review, but the evidence does not support containment yet. "
+                "Fact: failed access attempts target an administrative surface. Inference: credential testing is plausible. "
+                "Contradictory evidence: no successful login or post-auth activity is shown. Missing evidence: account list, MFA outcome, and source history. "
+                "Confidence: medium. Next step: inspect auth outcomes for targeted accounts before escalation."
+            ),
+            required_terms=("most important", "fact", "inference", "contradictory evidence", "missing evidence", "confidence", "next step"),
+            forbidden_terms=("i hope this helps",),
+        ),
+        GoldenReasoningCase(
+            key="golden.profanity_conservative",
+            workflow=WORKFLOW_DECISION_SUPPORT,
+            scenario="casual frustrated analyst used profanity",
+            question="is this thing actually bad or just noisy?",
+            context={"noise": True, "success": False, "protected_target": False},
+            expected_answer=(
+                "Primary recommendation: monitor with a specific source-history check, not escalate. "
+                "Reasoning: the activity is noisy, but no success, protected target, or progression is visible. "
+                "Alternative: escalate if the same source starts hitting sensitive services. Risk: escalating now burns analyst time on likely commodity noise. "
+                "Missing evidence: target criticality and source ownership. Confidence: medium-high. "
+                "What would change it: successful auth, exploit evidence, or repeat targeting of critical assets. Next step: inspect source history for progression."
+            ),
+            required_terms=("primary recommendation", "reasoning", "alternative", "risk", "confidence", "what would change", "next step"),
+            forbidden_terms=("shit", "damn", "fuck"),
+        ),
+        GoldenReasoningCase(
+            key="golden.artifact_professional",
+            workflow=WORKFLOW_GENERATE_ARTIFACT,
+            scenario="shareable artifact stays professional",
+            question="Draft an escalation summary.",
+            context={"severity": "high", "evidence": "weak"},
+            expected_answer=(
+                "Title: Escalation summary for high-severity authentication activity. "
+                "Evidence: failed authentication activity was observed, with no confirmed successful access in the supplied context. "
+                "Uncertainty: source ownership and target-side outcomes are not confirmed. "
+                "Recommended next steps: review authentication outcomes, source history, and affected account criticality before containment."
+            ),
+            required_terms=("title", "evidence", "uncertainty", "recommended next steps"),
+            forbidden_terms=("shit", "damn", "fuck", "lol", "kinda"),
+        ),
+        GoldenReasoningCase(
+            key="golden.analyst_disagreement",
+            workflow=WORKFLOW_DECISION_SUPPORT,
+            scenario="analyst assumes block is required but evidence is weak",
+            question="This is high severity, should I block it now?",
+            context={"severity": "high", "success": False, "source_reputation": "unknown", "protected_target": False},
+            expected_answer=(
+                "Primary recommendation: I would not block this yet. "
+                "Reasoning: high severity raises priority, but the supplied evidence does not show success, impact, or a protected target. "
+                "Alternative: escalate if source history shows repeated targeting of sensitive services. Risk: blocking now may create unnecessary disruption. "
+                "Missing evidence: target criticality and source reputation are not established. Confidence: medium. "
+                "What would change it: confirmed malicious reputation, successful auth, exploit evidence, or critical target exposure. Next step: inspect source history and target outcomes."
+            ),
+            required_terms=("primary recommendation", "would not block", "reasoning", "risk", "confidence", "what would change", "next step"),
+            forbidden_terms=("block immediately",),
+        ),
+        GoldenReasoningCase(
             key="golden.password_spray_no_success",
             workflow=WORKFLOW_DEEP_INVESTIGATE,
             scenario="likely password spray with no successful login",
@@ -493,14 +570,46 @@ def evaluate_golden_reasoning_answer(case: GoldenReasoningCase, answer: str) -> 
     generic_continue = "continue monitoring" in text and not any(
         term in text for term in ("inspect", "auth", "source", "target", "window", "successful", "destination")
     )
+    filler = {phrase: phrase in text for phrase in banned_filler_phrases()}
     return {
         "not_empty": bool(text.strip()),
         "specific_next_step": any(term in text for term in ("next check", "next step", "next action", "next actions")),
         "states_uncertainty_or_missing_evidence": any(term in text for term in ("uncertainty", "missing evidence", "evidence gaps")),
         "not_generic_monitoring": not generic_continue,
+        "no_filler_phrases": not any(filler.values()),
+        "not_visible_field_only": not _looks_like_visible_field_restatement(text),
         **required,
         **forbidden,
     }
+
+
+def _looks_like_visible_field_restatement(text: str) -> bool:
+    normalized = " ".join(str(text or "").lower().split())
+    if not normalized:
+        return False
+    has_reasoning = any(
+        term in normalized
+        for term in (
+            "because",
+            "matters",
+            "suggests",
+            "supports",
+            "argues against",
+            "missing",
+            "uncertainty",
+            "confidence",
+            "next",
+            "recommend",
+            "would change",
+            "not enough evidence",
+        )
+    )
+    visible_terms = sum(
+        1
+        for term in ("severity", "alert title", "source ip", "timestamp", "status", "id")
+        if term in normalized
+    )
+    return visible_terms >= 3 and not has_reasoning
 
 
 def removed_frontend_ai_controls_present(source_root: Path | None = None) -> dict[str, list[str]]:
