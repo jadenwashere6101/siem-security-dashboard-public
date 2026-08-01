@@ -44,6 +44,24 @@ Pass:
 - no new errors are introduced
 - existing warnings are unchanged or reduced
 
+## Anakin Production Acceptance
+
+For any change that affects Anakin workflows, prompts, UI controls, model profiles, workflow routing, SOC briefing, Repo Assistant, worker behavior, or the AI acceptance harness, follow [Anakin Production Acceptance Policy](anakin-production-acceptance-policy.md).
+
+Do not report an Anakin change as working, done, fully verified, or production-ready based only on unit tests, integration tests, OpenSpec validation, frontend build success, service health, direct-backend localhost 200s, or offline acceptance harness success.
+
+Required production completion evidence must come through:
+
+```text
+browser -> /siem/ -> nginx -> frontend -> backend -> worker/Ollama -> frontend-rendered result
+```
+
+If browser-path verification was not performed, report exactly:
+
+```text
+Implementation complete; production behavior unverified.
+```
+
 ## 3. Azure Function Syntax Sanity
 
 Check:

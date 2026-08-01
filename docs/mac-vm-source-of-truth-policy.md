@@ -70,6 +70,22 @@ The VM AI must not invent or implement durable fixes. Any required source, migra
 
 Specs/docs/tests alone do not require VM synchronization. Source changes do not reach the VM until committed, pushed, and explicitly deployed.
 
+## Anakin Production Completion Gate
+
+All Anakin changes must follow [Anakin Production Acceptance Policy](anakin-production-acceptance-policy.md) before being reported as working, done, fully verified, or production-ready.
+
+Automated tests, OpenSpec validation, frontend builds, service health, direct-backend localhost 200s, and offline acceptance harness success are not sufficient for Anakin completion. Final acceptance requires browser-path verification through:
+
+```text
+browser -> /siem/ -> nginx -> frontend -> backend -> worker/Ollama -> frontend-rendered result
+```
+
+If that browser-path verification was not performed, the only allowed completion wording is:
+
+```text
+Implementation complete; production behavior unverified.
+```
+
 ## VM Clean-Tree Gate
 
 Before every VM sync:

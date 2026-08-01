@@ -41,3 +41,4 @@ rules:
     - Break into small, verifiable steps
     - Each task must be testable
     - No large multi-file changes without verification
+    - For Anakin changes, include the reusable completion-gate block from docs/anakin-production-acceptance-policy.md in implementation prompts and require browser-path production verification before using working/done/fully verified/production-ready language
