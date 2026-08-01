@@ -3,6 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 
+from core.ai.profile_registry import (
+    AI_PROFILE_DEEP_BRIEFING,
+    AI_PROFILE_DEVELOPER_ASSISTANT,
+    AI_PROFILE_FAST_TRIAGE,
+    AI_PROFILE_GUIDED_ANALYSIS,
+    APPROVED_AI_PROFILES,
+    AiModelProfile,
+)
+
 AI_MODE_DISABLED = "disabled"
 AI_MODE_LOCAL_ONLY = "local_only"
 AI_MODE_ASK_BEFORE_PAID_FALLBACK = "ask_before_paid_fallback"
@@ -21,6 +30,22 @@ DEFAULT_LOCAL_PROVIDER = "ollama"
 DEFAULT_LOCAL_TIMEOUT_SECONDS = 10.0
 DEFAULT_PAID_TIMEOUT_SECONDS = 20.0
 DEFAULT_MAX_PROMPT_CHARS = 12000
+DEFAULT_FAST_MODEL = "llama3.2:3b"
+DEFAULT_GUIDED_MODEL = "llama3.1:8b"
+DEFAULT_DEEP_MODEL = "llama3.1:8b"
+DEFAULT_DEVELOPER_MODEL = "llama3.1:8b"
+DEFAULT_FAST_TIMEOUT_SECONDS = 45.0
+DEFAULT_GUIDED_TIMEOUT_SECONDS = 90.0
+DEFAULT_DEEP_TIMEOUT_SECONDS = 150.0
+DEFAULT_DEVELOPER_TIMEOUT_SECONDS = 120.0
+DEFAULT_FAST_MAX_PROMPT_CHARS = 8000
+DEFAULT_GUIDED_MAX_PROMPT_CHARS = 14000
+DEFAULT_DEEP_MAX_PROMPT_CHARS = 18000
+DEFAULT_DEVELOPER_MAX_PROMPT_CHARS = 20000
+DEFAULT_FAST_MAX_OUTPUT_TOKENS = 512
+DEFAULT_GUIDED_MAX_OUTPUT_TOKENS = 1200
+DEFAULT_DEEP_MAX_OUTPUT_TOKENS = 1800
+DEFAULT_DEVELOPER_MAX_OUTPUT_TOKENS = 1600
 
 
 @dataclass(frozen=True)
@@ -37,6 +62,7 @@ class AiGatewayConfig:
     paid_timeout_seconds: float = DEFAULT_PAID_TIMEOUT_SECONDS
     paid_fallback_enabled: bool = False
     max_prompt_chars: int = DEFAULT_MAX_PROMPT_CHARS
+    profiles: dict[str, AiModelProfile] | None = None
 
     @property
     def local_configured(self) -> bool:
@@ -45,6 +71,13 @@ class AiGatewayConfig:
     @property
     def paid_configured(self) -> bool:
         return bool(self.paid_provider and self.paid_model)
+
+    def profile(self, name: str | None = None) -> AiModelProfile:
+        profile_name = str(name or AI_PROFILE_FAST_TRIAGE).strip().lower()
+        if profile_name not in APPROVED_AI_PROFILES:
+            profile_name = AI_PROFILE_FAST_TRIAGE
+        profiles = self.profiles or default_ai_profiles(local_model=self.local_model, local_timeout_seconds=self.local_timeout_seconds)
+        return profiles.get(profile_name) or profiles[AI_PROFILE_FAST_TRIAGE]
 
     def sanitized(self) -> dict[str, object]:
         return {
@@ -62,6 +95,10 @@ class AiGatewayConfig:
             "paid_fallback_enabled": self.paid_fallback_enabled,
             "paid_configured": self.paid_configured,
             "max_prompt_chars": self.max_prompt_chars,
+            "profiles": {
+                name: profile.sanitized()
+                for name, profile in (self.profiles or {}).items()
+            },
         }
 
 
@@ -98,10 +135,81 @@ def _env_positive_int(name: str, default: int) -> int:
     return value
 
 
+def _profile_model(name: str, default: str, legacy_local_model: str) -> str:
+    raw = _env_text(name)
+    if raw:
+        return raw
+    if legacy_local_model:
+        return legacy_local_model
+    return default
+
+
+def _profile_timeout(name: str, default: float, legacy_timeout: float) -> float:
+    if os.getenv(name) is None and legacy_timeout > 0:
+        return legacy_timeout
+    return _env_positive_float(name, default)
+
+
+def default_ai_profiles(
+    *,
+    local_model: str = "",
+    local_timeout_seconds: float = DEFAULT_LOCAL_TIMEOUT_SECONDS,
+) -> dict[str, AiModelProfile]:
+    return {
+        AI_PROFILE_FAST_TRIAGE: AiModelProfile(
+            name=AI_PROFILE_FAST_TRIAGE,
+            model=_profile_model("AI_FAST_MODEL", DEFAULT_FAST_MODEL, ""),
+            timeout_seconds=_env_positive_float("AI_FAST_TIMEOUT_SECONDS", DEFAULT_FAST_TIMEOUT_SECONDS),
+            max_prompt_chars=_env_positive_int("AI_FAST_MAX_PROMPT_CHARS", DEFAULT_FAST_MAX_PROMPT_CHARS),
+            max_output_tokens=_env_positive_int("AI_FAST_MAX_OUTPUT_TOKENS", DEFAULT_FAST_MAX_OUTPUT_TOKENS),
+            temperature=_env_positive_float("AI_FAST_TEMPERATURE", 0.2),
+            task_category="quick SOC triage and short explanations",
+        ),
+        AI_PROFILE_GUIDED_ANALYSIS: AiModelProfile(
+            name=AI_PROFILE_GUIDED_ANALYSIS,
+            model=_profile_model("AI_GUIDED_MODEL", DEFAULT_GUIDED_MODEL, local_model),
+            timeout_seconds=_profile_timeout("AI_GUIDED_TIMEOUT_SECONDS", DEFAULT_GUIDED_TIMEOUT_SECONDS, local_timeout_seconds),
+            max_prompt_chars=_env_positive_int("AI_GUIDED_MAX_PROMPT_CHARS", DEFAULT_GUIDED_MAX_PROMPT_CHARS),
+            max_output_tokens=_env_positive_int("AI_GUIDED_MAX_OUTPUT_TOKENS", DEFAULT_GUIDED_MAX_OUTPUT_TOKENS),
+            temperature=_env_positive_float("AI_GUIDED_TEMPERATURE", 0.2),
+            task_category="guided multi-source SOC analysis",
+        ),
+        AI_PROFILE_DEEP_BRIEFING: AiModelProfile(
+            name=AI_PROFILE_DEEP_BRIEFING,
+            model=_profile_model("AI_DEEP_MODEL", DEFAULT_DEEP_MODEL, local_model),
+            timeout_seconds=_profile_timeout("AI_DEEP_TIMEOUT_SECONDS", DEFAULT_DEEP_TIMEOUT_SECONDS, local_timeout_seconds),
+            max_prompt_chars=_env_positive_int("AI_DEEP_MAX_PROMPT_CHARS", DEFAULT_DEEP_MAX_PROMPT_CHARS),
+            max_output_tokens=_env_positive_int("AI_DEEP_MAX_OUTPUT_TOKENS", DEFAULT_DEEP_MAX_OUTPUT_TOKENS),
+            temperature=_env_positive_float("AI_DEEP_TEMPERATURE", 0.1),
+            task_category="scheduled and manual SOC briefing synthesis",
+        ),
+        AI_PROFILE_DEVELOPER_ASSISTANT: AiModelProfile(
+            name=AI_PROFILE_DEVELOPER_ASSISTANT,
+            model=_profile_model("AI_DEVELOPER_MODEL", DEFAULT_DEVELOPER_MODEL, local_model),
+            timeout_seconds=_profile_timeout("AI_DEVELOPER_TIMEOUT_SECONDS", DEFAULT_DEVELOPER_TIMEOUT_SECONDS, local_timeout_seconds),
+            max_prompt_chars=_env_positive_int("AI_DEVELOPER_MAX_PROMPT_CHARS", DEFAULT_DEVELOPER_MAX_PROMPT_CHARS),
+            max_output_tokens=_env_positive_int("AI_DEVELOPER_MAX_OUTPUT_TOKENS", DEFAULT_DEVELOPER_MAX_OUTPUT_TOKENS),
+            temperature=_env_positive_float("AI_DEVELOPER_TEMPERATURE", 0.1),
+            task_category="repository architecture assistance",
+        ),
+    }
+
+
 def load_ai_gateway_config() -> AiGatewayConfig:
     configured_mode = _env_text("AI_GATEWAY_MODE", AI_MODE_DISABLED).lower()
     mode_valid = configured_mode in VALID_AI_GATEWAY_MODES
     mode = configured_mode if mode_valid else AI_MODE_DISABLED
+
+    legacy_local_model = _env_text("AI_LOCAL_MODEL")
+    legacy_local_timeout = _env_positive_float(
+        "AI_LOCAL_TIMEOUT_SECONDS",
+        DEFAULT_LOCAL_TIMEOUT_SECONDS,
+    )
+    profiles = default_ai_profiles(
+        local_model=legacy_local_model,
+        local_timeout_seconds=legacy_local_timeout,
+    )
+    fast_profile = profiles[AI_PROFILE_FAST_TRIAGE]
 
     return AiGatewayConfig(
         mode=mode,
@@ -109,11 +217,8 @@ def load_ai_gateway_config() -> AiGatewayConfig:
         mode_valid=mode_valid,
         local_provider=_env_text("AI_LOCAL_PROVIDER", DEFAULT_LOCAL_PROVIDER).lower(),
         local_base_url=_env_text("AI_LOCAL_BASE_URL"),
-        local_model=_env_text("AI_LOCAL_MODEL"),
-        local_timeout_seconds=_env_positive_float(
-            "AI_LOCAL_TIMEOUT_SECONDS",
-            DEFAULT_LOCAL_TIMEOUT_SECONDS,
-        ),
+        local_model=legacy_local_model or fast_profile.model,
+        local_timeout_seconds=legacy_local_timeout,
         paid_provider=_env_text("AI_PAID_PROVIDER").lower(),
         paid_model=_env_text("AI_PAID_MODEL"),
         paid_timeout_seconds=_env_positive_float(
@@ -122,4 +227,5 @@ def load_ai_gateway_config() -> AiGatewayConfig:
         ),
         paid_fallback_enabled=_env_bool("AI_PAID_FALLBACK_ENABLED", False),
         max_prompt_chars=_env_positive_int("AI_MAX_PROMPT_CHARS", DEFAULT_MAX_PROMPT_CHARS),
+        profiles=profiles,
     )

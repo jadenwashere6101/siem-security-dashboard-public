@@ -18,6 +18,7 @@ AI_STATUS_FAILED = "failed"
 class AiGatewayRequest:
     prompt: str
     capability: str = "text_generation"
+    profile: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -42,6 +43,7 @@ class AiProviderReadiness:
     credential_env_vars: list[str] = field(default_factory=list)
     credential_configured: dict[str, bool] = field(default_factory=dict)
     error_code: str | None = None
+    profile: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -54,6 +56,7 @@ class AiProviderReadiness:
             "credential_env_vars": list(self.credential_env_vars),
             "credential_configured": dict(self.credential_configured),
             "error_code": self.error_code,
+            "profile": self.profile,
         }
 
 
@@ -73,6 +76,10 @@ class AiRequestMetadata:
     fallback_attempted: bool = False
     fallback_reason: str | None = None
     error_code: str | None = None
+    profile: str | None = None
+    task_category: str | None = None
+    timeout_seconds: float | None = None
+    max_output_tokens: int | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)

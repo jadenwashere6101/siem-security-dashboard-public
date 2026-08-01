@@ -12,7 +12,8 @@ export function providerStatusLabel(metadata) {
   if (!metadata) return "No provider metadata";
   const provider = metadata.provider || "none";
   const model = metadata.model || "no model";
-  return `${provider} / ${model} · ${metadata.status || "unknown"}`;
+  const profile = metadata.profile ? ` · ${metadata.profile}` : "";
+  return `${provider} / ${model}${profile} · ${metadata.status || "unknown"}`;
 }
 
 export function sourceCountLabel(context) {

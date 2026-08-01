@@ -53,6 +53,7 @@ from core.ai.investigation_planner import (
     validate_tool_evidence,
 )
 from core.ai.models import AI_STATUS_SUCCESS, AiGatewayRequest, AiRequestMetadata
+from core.ai.profile_registry import profile_for_investigation
 from core.ai.soc_tool_executor import (
     execute_tool_plan,
     normalize_tool_policy,
@@ -313,6 +314,7 @@ def run_investigation(
             AiGatewayRequest(
                 prompt=prompt,
                 capability="text_generation",
+                profile=profile_for_investigation(),
                 metadata={
                     "action": "advanced_investigation",
                     "workflow_type": plan.workflow_type,

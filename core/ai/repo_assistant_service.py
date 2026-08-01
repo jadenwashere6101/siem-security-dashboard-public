@@ -8,6 +8,7 @@ from typing import Any
 from core.ai.config import AiGatewayConfig, load_ai_gateway_config
 from core.ai.gateway import AiGateway
 from core.ai.models import AI_STATUS_SUCCESS, AiGatewayRequest, AiRequestMetadata, estimate_tokens
+from core.ai.profile_registry import profile_for_repo_assistant
 from core.ai.repo_index import DEFAULT_TOP_K, RepoChunk, RepoIndex
 from core.ai.repo_sources import LABEL_HISTORICAL, historical_context_requested
 
@@ -107,6 +108,7 @@ def answer_repo_question(
         AiGatewayRequest(
             prompt=prompt,
             capability="text_generation",
+            profile=profile_for_repo_assistant(),
             metadata={
                 "context_type": "repository",
                 "action": "repo_architecture_chat",

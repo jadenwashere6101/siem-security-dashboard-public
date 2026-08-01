@@ -49,6 +49,28 @@ SUPPORTED_CONTEXT_TYPES = frozenset(
     }
 )
 
+WORKSPACE_CONTEXT_ALIASES = {
+    "soc_command_center": "general",
+    "soc_briefings": "general",
+    "recon_history": "general",
+    "analyst_workspace": "general",
+    "detection_simulator": "general",
+    "detection_rules": "general",
+    "severity_response_matrix": "general",
+    "source_health": "general",
+    "threat_hunt": "general",
+    "settings": "general",
+    "admin_users": "general",
+    "admin_audit_logs": "general",
+    "soar_queue": "general",
+    "soar_incidents": "general",
+    "soar_approvals": "general",
+    "soar_playbooks": "general",
+    "soar_integrations": "general",
+    "soar_playbook_metrics": "general",
+    "soar_operations": "general",
+}
+
 SECTION_LIMITS = {
     "recent_alerts": 10,
     "related_events": 15,
@@ -166,7 +188,8 @@ def build_ai_context(
 
 
 def _normalize_context_type(context_type: str) -> str:
-    value = str(context_type or "").strip().lower()
+    value = str(context_type or "").strip().lower().replace("-", "_")
+    value = WORKSPACE_CONTEXT_ALIASES.get(value, value)
     if value not in SUPPORTED_CONTEXT_TYPES:
         raise AiContextValidationError(f"Unsupported context_type: {context_type}")
     return value

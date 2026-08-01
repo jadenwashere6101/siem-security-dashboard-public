@@ -42,6 +42,7 @@ class AiGateway:
 
     def generate(self, request: AiGatewayRequest) -> AiGatewayResponse:
         prompt_tokens = estimate_tokens(request.prompt)
+        profile = self.config.profile(request.profile)
         if not self.config.mode_valid:
             return _failure_response(
                 mode=self.config.mode,
@@ -49,6 +50,7 @@ class AiGateway:
                 error="AI gateway configuration is invalid and failed closed.",
                 error_code=AI_STATUS_CONFIGURATION_ERROR,
                 prompt_tokens=prompt_tokens,
+                profile=profile,
             )
         if self.config.mode == AI_MODE_DISABLED:
             return _failure_response(
@@ -57,6 +59,7 @@ class AiGateway:
                 error="AI gateway is disabled.",
                 error_code=AI_STATUS_DISABLED,
                 prompt_tokens=prompt_tokens,
+                profile=profile,
             )
 
         local_response = self._try_local(request)
@@ -64,7 +67,10 @@ class AiGateway:
             return local_response
 
         fallback_reason = local_response.metadata.error_code or local_response.status
-        if self.config.mode == AI_MODE_LOCAL_ONLY:
+        profile_enforced = request.profile is not None
+        if self.config.mode == AI_MODE_LOCAL_ONLY or (
+            profile_enforced and (profile.local_only or not profile.paid_fallback_enabled)
+        ):
             return with_fallback_metadata(
                 local_response,
                 fallback_attempted=False,
@@ -79,6 +85,7 @@ class AiGateway:
                 prompt_tokens=prompt_tokens,
                 fallback_attempted=True,
                 fallback_reason=fallback_reason,
+                profile=profile,
             )
         if self.config.mode == AI_MODE_AUTOMATIC_FALLBACK:
             return self._try_automatic_paid_fallback(request, fallback_reason)
@@ -89,20 +96,23 @@ class AiGateway:
             error="AI gateway mode is unsupported.",
             error_code=AI_STATUS_CONFIGURATION_ERROR,
             prompt_tokens=prompt_tokens,
+            profile=profile,
         )
 
     def _try_local(self, request: AiGatewayRequest) -> AiGatewayResponse:
         provider = self.providers.get(self.config.local_provider)
         if provider is None or not self.config.local_configured:
+            profile = self.config.profile(request.profile)
             return _failure_response(
                 mode=self.config.mode,
                 status=AI_STATUS_PROVIDER_UNAVAILABLE,
                 provider=self.config.local_provider or None,
-                model=self.config.local_model or None,
-                error="Local AI provider is not configured.",
+                model=profile.model or self.config.local_model or None,
+                error="Local AI provider is not configured for the selected AI profile.",
                 error_code="local_provider_not_configured",
                 prompt_tokens=estimate_tokens(request.prompt),
                 local_request=True,
+                profile=profile,
             )
 
         capability = provider.supports(request)
@@ -111,11 +121,12 @@ class AiGateway:
                 mode=self.config.mode,
                 status=AI_STATUS_PROVIDER_INCAPABLE,
                 provider=self.config.local_provider,
-                model=self.config.local_model,
+                model=self.config.profile(request.profile).model,
                 error=capability.reason or "Local AI provider is incapable.",
                 error_code=capability.status,
                 prompt_tokens=estimate_tokens(request.prompt),
                 local_request=True,
+                profile=self.config.profile(request.profile),
             )
 
         try:
@@ -126,11 +137,12 @@ class AiGateway:
                 mode=self.config.mode,
                 status=AI_STATUS_FAILED,
                 provider=self.config.local_provider,
-                model=self.config.local_model,
+                model=self.config.profile(request.profile).model,
                 error="Local AI provider failed.",
                 error_code="provider_exception",
                 prompt_tokens=estimate_tokens(request.prompt),
                 local_request=True,
+                profile=self.config.profile(request.profile),
             )
 
     def _try_automatic_paid_fallback(
@@ -139,6 +151,7 @@ class AiGateway:
         fallback_reason: str | None,
     ) -> AiGatewayResponse:
         prompt_tokens = estimate_tokens(request.prompt)
+        profile = self.config.profile(request.profile)
         if not self.config.paid_fallback_enabled or not self.config.paid_configured:
             return _failure_response(
                 mode=self.config.mode,
@@ -148,6 +161,7 @@ class AiGateway:
                 prompt_tokens=prompt_tokens,
                 fallback_attempted=True,
                 fallback_reason=fallback_reason,
+                profile=profile,
             )
 
         provider = self.providers.get(self.config.paid_provider)
@@ -163,6 +177,7 @@ class AiGateway:
                 fallback_attempted=True,
                 fallback_reason=fallback_reason,
                 paid_request=True,
+                profile=profile,
             )
 
         capability = provider.supports(request)
@@ -178,6 +193,7 @@ class AiGateway:
                 fallback_attempted=True,
                 fallback_reason=fallback_reason,
                 paid_request=True,
+                profile=profile,
             )
 
         try:
@@ -199,6 +215,7 @@ class AiGateway:
                 fallback_attempted=True,
                 fallback_reason=fallback_reason,
                 paid_request=True,
+                profile=profile,
             )
 
 
@@ -215,6 +232,7 @@ def _failure_response(
     fallback_reason: str | None = None,
     local_request: bool = False,
     paid_request: bool = False,
+    profile=None,
 ) -> AiGatewayResponse:
     started = time.monotonic()
     return AiGatewayResponse(
@@ -235,5 +253,9 @@ def _failure_response(
             fallback_attempted=fallback_attempted,
             fallback_reason=fallback_reason,
             error_code=error_code,
+            profile=profile.name if profile else None,
+            task_category=profile.task_category if profile else None,
+            timeout_seconds=profile.timeout_seconds if profile else None,
+            max_output_tokens=profile.max_output_tokens if profile else None,
         ),
     )

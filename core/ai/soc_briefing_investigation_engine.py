@@ -25,6 +25,7 @@ from core.ai.models import (
     AiGatewayRequest,
     estimate_tokens,
 )
+from core.ai.profile_registry import profile_for_soc_briefing
 from core.ai.soc_briefing_runtime_store import (
     JOB_STATUS_BLOCKED,
     JOB_STATUS_FAILED,
@@ -531,6 +532,7 @@ def _synthesize_briefing(
         AiGatewayRequest(
             prompt=prompt,
             capability="scheduled_soc_briefing",
+            profile=profile_for_soc_briefing(),
             metadata={
                 "service_actor": SERVICE_ACTOR,
                 "read_only": True,
@@ -754,6 +756,7 @@ def _scheduled_gateway_config(config: AiGatewayConfig) -> AiGatewayConfig:
             paid_timeout_seconds=config.paid_timeout_seconds,
             paid_fallback_enabled=False,
             max_prompt_chars=config.max_prompt_chars,
+            profiles=config.profiles,
         )
     return config
 

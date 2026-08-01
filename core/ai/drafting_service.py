@@ -36,6 +36,7 @@ from core.ai.draft_schemas import (
 from core.ai.explainer_service import _empty_metadata
 from core.ai.gateway import AiGateway
 from core.ai.models import AiGatewayRequest
+from core.ai.profile_registry import profile_for_draft_type
 from core.ai.soc_tool_executor import (
     build_deterministic_tool_plan,
     execute_tool_plan,
@@ -118,6 +119,7 @@ def create_draft(
         AiGatewayRequest(
             prompt=prompt,
             capability="text_generation",
+            profile=profile_for_draft_type(request.draft_type),
             metadata={
                 "context_type": ai_context.context_type,
                 "action": "draft",

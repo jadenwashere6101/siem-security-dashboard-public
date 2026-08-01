@@ -76,7 +76,7 @@ class OllamaProvider:
     provider_key = "ollama"
 
     def supports(self, request: AiGatewayRequest) -> AiCapabilityResult:
-        if request.capability != "text_generation":
+        if request.capability not in {"text_generation", "scheduled_soc_briefing"}:
             return AiCapabilityResult(
                 False,
                 AI_STATUS_PROVIDER_INCAPABLE,
@@ -147,47 +147,54 @@ class OllamaProvider:
     def generate(self, request: AiGatewayRequest, config: AiGatewayConfig) -> AiGatewayResponse:
         started = time.monotonic()
         prompt_tokens = estimate_tokens(request.prompt)
-        if len(request.prompt) > config.max_prompt_chars:
+        profile = config.profile(request.profile)
+        if len(request.prompt) > profile.max_prompt_chars:
             return _provider_response(
                 provider=self.provider_key,
-                model=config.local_model,
+                model=profile.model,
                 mode=config.mode,
                 status=AI_STATUS_FAILED,
                 prompt_tokens=prompt_tokens,
                 started=started,
-                error="AI request exceeds configured prompt limit.",
+                error="AI request exceeds configured profile prompt limit.",
                 error_code="prompt_too_large",
                 local_request=True,
+                profile=profile,
             )
 
         payload = {
-            "model": config.local_model,
+            "model": profile.model,
             "prompt": request.prompt,
             "stream": False,
+            "options": {
+                "num_predict": profile.max_output_tokens,
+                "temperature": profile.temperature,
+            },
         }
         try:
             response = _http_json(
                 "POST",
                 _ollama_url(config.local_base_url, "/api/generate"),
                 payload=payload,
-                timeout=config.local_timeout_seconds,
+                timeout=profile.timeout_seconds,
             )
         except TimeoutError:
             return _provider_response(
                 provider=self.provider_key,
-                model=config.local_model,
+                model=profile.model,
                 mode=config.mode,
                 status=AI_STATUS_PROVIDER_TIMEOUT,
                 prompt_tokens=prompt_tokens,
                 started=started,
-                error="Local AI provider timed out.",
+                error="Local AI provider timed out for the selected profile. The model may still be cold-loading or generation exceeded the bounded timeout.",
                 error_code=AI_STATUS_PROVIDER_TIMEOUT,
                 local_request=True,
+                profile=profile,
             )
         except OSError:
             return _provider_response(
                 provider=self.provider_key,
-                model=config.local_model,
+                model=profile.model,
                 mode=config.mode,
                 status=AI_STATUS_PROVIDER_UNAVAILABLE,
                 prompt_tokens=prompt_tokens,
@@ -195,12 +202,13 @@ class OllamaProvider:
                 error="Local AI provider is unavailable.",
                 error_code=AI_STATUS_PROVIDER_UNAVAILABLE,
                 local_request=True,
+                profile=profile,
             )
 
         content = str(response.get("response", "")).strip()
         return _provider_response(
             provider=self.provider_key,
-            model=config.local_model,
+            model=profile.model,
             mode=config.mode,
             status=AI_STATUS_SUCCESS,
             prompt_tokens=prompt_tokens,
@@ -208,6 +216,7 @@ class OllamaProvider:
             started=started,
             content=content,
             local_request=True,
+            profile=profile,
         )
 
 
@@ -339,6 +348,7 @@ def _provider_response(
     error_code: str | None = None,
     local_request: bool = False,
     paid_request: bool = False,
+    profile=None,
 ) -> AiGatewayResponse:
     metadata = AiRequestMetadata(
         provider=provider,
@@ -352,6 +362,10 @@ def _provider_response(
         local_request=local_request,
         paid_request=paid_request,
         error_code=error_code,
+        profile=profile.name if profile else None,
+        task_category=profile.task_category if profile else None,
+        timeout_seconds=profile.timeout_seconds if profile else None,
+        max_output_tokens=profile.max_output_tokens if profile else None,
     )
     return AiGatewayResponse(status=status, content=content, error=error, metadata=metadata)
 

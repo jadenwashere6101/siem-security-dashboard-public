@@ -16,6 +16,7 @@ from core.ai.context_builder import (
 )
 from core.ai.gateway import AiGateway
 from core.ai.models import AiGatewayRequest, AiRequestMetadata
+from core.ai.profile_registry import profile_for_explain_action
 from core.ai.soc_tool_executor import (
     build_deterministic_tool_plan,
     execute_tool_plan,
@@ -28,6 +29,10 @@ from core.ai.soc_tools import SocToolExecutionSummary
 ALLOWED_EXPLAIN_ACTIONS = frozenset(
     {
         "explain_alert",
+        "ask_anakin",
+        "summarize",
+        "explain",
+        "suggestedactions",
         "why_important",
         "recommend_investigation",
         "summarize_incident",
@@ -36,6 +41,7 @@ ALLOWED_EXPLAIN_ACTIONS = frozenset(
         "assess_reconnaissance",
         "summarize_activity",
         "explain_campaign",
+        "explain_recon_activity",
         "investigate_cluster",
         "explain_response",
         "ask_dashboard",
@@ -225,6 +231,7 @@ def _answer_from_context(
         AiGatewayRequest(
             prompt=prompt,
             capability="text_generation",
+            profile=profile_for_explain_action(action),
             metadata={
                 "context_type": ai_context.context_type,
                 "action": action,
