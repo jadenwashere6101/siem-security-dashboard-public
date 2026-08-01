@@ -46,6 +46,7 @@ ROOT_CAUSE_CITATION_CONTRACT = "citation_contract"
 ROOT_CAUSE_FRONTEND_CONTRACT_MISMATCH = "frontend_contract_mismatch"
 
 TERMINAL_MANUAL_BRIEFING_STATES = {"completed", "partial", "degraded", "failed", "blocked", "timed_out"}
+LIVE_STATUS_ROUTE = "GET"
 LIVE_SMOKE_ENV = "AI_ACCEPTANCE_LIVE_OLLAMA"
 LIVE_SWEEP_ENV = "AI_ACCEPTANCE_LIVE_BACKEND_SWEEP"
 LIVE_MANUAL_BRIEFING_MUTATION_ENV = "AI_ACCEPTANCE_CREATE_MANUAL_BRIEFING_JOB"
@@ -320,14 +321,20 @@ def run_live_backend_sweep(
     ids = _discover_live_entities(resolved_base_url, cookie)
     inventory, _frontend_options = build_complete_ai_inventory()
     cases = build_acceptance_cases()
-    inventory_by_key = {entry.key: entry for entry in inventory}
+    representative_plan = _select_live_representative_cases(inventory, cases)
     rows: list[dict[str, Any]] = []
     failures: dict[str, list[str]] = {}
 
-    for key, entry in inventory_by_key.items():
-        case = cases[key]
-        if entry.backend_path == "POST /ai/drafts":
-            continue
+    status_rows = [
+        _live_status_check(resolved_base_url, cookie, "/ai/status", "status.ai_gateway", config),
+        _live_status_check(resolved_base_url, cookie, "/ai/repo/status", "status.repo_assistant", config),
+    ]
+    for row in status_rows:
+        rows.append(row)
+        if not row.get("success"):
+            failures.setdefault(str(row.get("root_cause") or "other"), []).append(str(row.get("frontend_action_id")))
+
+    for entry, case in representative_plan:
         if entry.backend_path == "soc_briefing_worker":
             row = _live_manual_briefing_check(
                 resolved_base_url,
@@ -342,18 +349,26 @@ def run_live_backend_sweep(
             failures.setdefault(str(row.get("root_cause") or "other"), []).append(str(row.get("frontend_action_id")))
         time.sleep(max(0.0, throttle_seconds))
 
+    manual_briefing_mutation = create_manual_briefing_job or os.getenv(LIVE_MANUAL_BRIEFING_MUTATION_ENV) == "1"
     return {
         "enabled": True,
         "base_url": resolved_base_url,
-        "actions_discovered": len(inventory_by_key),
+        "offline_actions_discovered": len(inventory),
+        "offline_actions_covered": len(cases),
+        "actions_discovered": len(inventory),
+        "representative_calls_planned": len(representative_plan) + len(status_rows),
         "actions_invoked": len(rows),
+        "estimated_runtime_seconds": int((len(representative_plan) + len(status_rows)) * max(0.0, throttle_seconds) + 240),
         "entity_discovery": ids,
         "failures_by_root_cause": failures,
         "results": rows,
         "safety": {
-            "draft_routes_skipped": True,
+            "offline_full_button_coverage": True,
+            "live_strategy": "representative_unique_backend_execution_paths",
+            "draft_routes_preview_only": True,
             "allow_automatic_draft_false": True,
-            "manual_briefing_create_job": create_manual_briefing_job or os.getenv(LIVE_MANUAL_BRIEFING_MUTATION_ENV) == "1",
+            "manual_briefing_create_job": manual_briefing_mutation,
+            "actions_confirm_route_skipped": True,
             "production_mutations_allowed": False,
         },
     }
@@ -367,8 +382,10 @@ def render_live_sweep_markdown(result: dict[str, Any]) -> str:
     lines.extend(
         [
             f"- Base URL: {result.get('base_url')}",
-            f"- Actions discovered: {result.get('actions_discovered')}",
-            f"- Actions invoked: {result.get('actions_invoked')}",
+            f"- Offline actions covered: {result.get('offline_actions_covered', result.get('actions_discovered'))}",
+            f"- Representative live calls planned: {result.get('representative_calls_planned', result.get('actions_invoked'))}",
+            f"- Representative live calls invoked: {result.get('actions_invoked')}",
+            f"- Estimated runtime seconds: {result.get('estimated_runtime_seconds')}",
             f"- Failures: {sum(len(items) for items in (result.get('failures_by_root_cause') or {}).values())}",
             "",
             "## Failures By Root Cause",
@@ -385,11 +402,52 @@ def render_live_sweep_markdown(result: dict[str, Any]) -> str:
     for row in result.get("results") or []:
         status = "PASS" if row.get("success") else f"FAIL {row.get('error_code') or row.get('error') or 'unknown'}"
         lines.append(
-            f"- {status} `{row.get('frontend_action_id')}` {row.get('route')} "
+            f"- {status} `{row.get('frontend_action_id')}` {row.get('execution_path') or row.get('route')} "
             f"entity=`{row.get('entity')}` profile=`{row.get('profile')}` model=`{row.get('model')}` "
             f"prompt={row.get('prompt_size')}/{row.get('prompt_limit')} latency={row.get('latency_ms')}ms"
         )
     return "\n".join(lines) + "\n"
+
+
+def _select_live_representative_cases(
+    inventory: tuple[HarnessInventoryEntry, ...],
+    cases: dict[str, AcceptanceCase],
+) -> list[tuple[HarnessInventoryEntry, AcceptanceCase]]:
+    by_key = {entry.key: entry for entry in inventory}
+    selected: list[tuple[HarnessInventoryEntry, AcceptanceCase]] = []
+    used: set[str] = set()
+
+    def add(key: str) -> None:
+        entry = by_key[key]
+        selected.append((entry, cases[key]))
+        used.add(key)
+
+    def add_first(label: str, predicate) -> None:
+        for entry in inventory:
+            if entry.key in used:
+                continue
+            if predicate(entry):
+                selected.append((entry, cases[entry.key]))
+                used.add(entry.key)
+                return
+        raise ValueError(f"Missing live representative case: {label}")
+
+    add_first(
+        "POST /ai/explain fast_triage",
+        lambda entry: entry.backend_path == "POST /ai/explain" and entry.profile == AI_PROFILE_FAST_TRIAGE,
+    )
+    add_first(
+        "POST /ai/explain guided_analysis",
+        lambda entry: entry.backend_path == "POST /ai/explain" and entry.profile == AI_PROFILE_GUIDED_ANALYSIS,
+    )
+    add_first("POST /ai/drafts", lambda entry: entry.backend_path == "POST /ai/drafts")
+    add_first("POST /ai/investigations", lambda entry: entry.backend_path == "POST /ai/investigations")
+    add("frontend.floating_chat.general")
+    add("frontend.repo_architecture.chat.factual")
+    add("frontend.repo_architecture.chat.evaluative")
+    add("frontend.ai_action.preview.add_incident_note")
+    add("worker.soc_briefing.manual_run_now")
+    return selected
 
 
 def _discover_live_entities(base_url: str, cookie: str) -> dict[str, Any]:
@@ -441,9 +499,13 @@ def _live_ai_action_check(
     status = body.get("status") or metadata.get("status")
     error_value = body.get("error") or error_text
     root_cause = _root_cause_from_live(status=status, error=error_value, http_status=status_code, body=body)
-    success = 200 <= status_code < 300 and status in {"success", "partial"} and not error_value
+    success_statuses = {"success", "partial"}
+    if entry.backend_path == "POST /ai/actions/preview":
+        success_statuses.add("preview_ready")
+    success = 200 <= status_code < 300 and status in success_statuses and not error_value
     return {
         "frontend_action_id": entry.key,
+        "execution_path": entry.backend_path,
         "action": case.action_name,
         "route": route,
         "entity": _stable_ai_entity_id(payload.get("context") or payload.get("visible_context")),
@@ -459,6 +521,45 @@ def _live_ai_action_check(
         "error_code": status if not success else None,
         "error": error_value,
         "root_cause": None if success else root_cause,
+    }
+
+
+def _live_status_check(base_url: str, cookie: str, path: str, frontend_action_id: str, config: AiGatewayConfig) -> dict[str, Any]:
+    started = time.monotonic()
+    status_code = 0
+    body: dict[str, Any] = {}
+    error_text = None
+    try:
+        status_code, body = _live_get_json_with_status(base_url, path, cookie)
+    except Exception as error:
+        error_text = str(error)
+    latency_ms = int((time.monotonic() - started) * 1000)
+    gateway = body.get("gateway") if isinstance(body.get("gateway"), dict) else {}
+    providers = body.get("providers") if isinstance(body.get("providers"), list) else []
+    provider = providers[0] if providers and isinstance(providers[0], dict) else {}
+    status = body.get("status") or provider.get("status") or gateway.get("mode") or ("success" if 200 <= status_code < 300 else "failed")
+    error_value = body.get("error") or provider.get("error") or error_text
+    success = 200 <= status_code < 300 and not error_value
+    profile_name = AI_PROFILE_DEVELOPER_ASSISTANT if path == "/ai/repo/status" else AI_PROFILE_FAST_TRIAGE
+    profile = config.profile(profile_name)
+    return {
+        "frontend_action_id": frontend_action_id,
+        "execution_path": f"GET {path}",
+        "action": f"Status check {path}",
+        "route": path,
+        "entity": None,
+        "context_type": "status",
+        "profile": profile_name,
+        "model": provider.get("model") or gateway.get("local_model") or profile.model,
+        "prompt_size": 0,
+        "prompt_limit": profile.max_prompt_chars,
+        "latency_ms": latency_ms,
+        "http_status": status_code,
+        "provider_status": status,
+        "success": success,
+        "error_code": None if success else status,
+        "error": error_value,
+        "root_cause": None if success else _root_cause_from_live(status=status, error=error_value, http_status=status_code, body=body),
     }
 
 
@@ -481,6 +582,7 @@ def _live_manual_briefing_check(
     root_cause = None if success else ROOT_CAUSE_WORKER_UNAVAILABLE
     return {
         "frontend_action_id": entry.key,
+        "execution_path": "POST /soc-briefings/run-now" if create_manual_briefing_job else "GET /soc-briefings/control",
         "action": entry.frontend_surface,
         "route": "/soc-briefings/run-now" if create_manual_briefing_job else "/soc-briefings/control",
         "entity": lifecycle.get("job_id") or lifecycle.get("job", {}).get("id"),

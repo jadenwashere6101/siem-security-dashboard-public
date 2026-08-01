@@ -17,6 +17,7 @@ from core.ai.acceptance_harness import (
 )
 from core.ai.config import default_ai_profiles
 from core.ai.profile_registry import AI_INVOCATION_INVENTORY, AI_PROFILE_FAST_TRIAGE
+from core.ai.acceptance_harness import _select_live_representative_cases
 
 
 def test_acceptance_harness_covers_every_inventory_action_without_manual_button_list():
@@ -200,6 +201,106 @@ def test_live_backend_sweep_requires_authenticated_cookie_when_enabled(monkeypat
     assert sweep["enabled"] is True
     assert sweep["status"] == "blocked"
     assert "AI_ACCEPTANCE_SESSION_COOKIE" in sweep["error"]
+
+
+def test_live_representative_plan_uses_unique_safe_backend_paths():
+    inventory, _frontend_options = build_complete_ai_inventory()
+    cases = build_acceptance_cases()
+
+    plan = _select_live_representative_cases(inventory, cases)
+    matrix = [(entry.backend_path, entry.profile, entry.key) for entry, _case in plan]
+
+    assert len(plan) == 9
+    assert ("POST /ai/explain", "fast_triage", "frontend.alert.explain_alert.line_184") in matrix
+    assert any(path == "POST /ai/explain" and profile == "guided_analysis" for path, profile, _key in matrix)
+    assert any(path == "POST /ai/drafts" for path, _profile, _key in matrix)
+    assert any(path == "POST /ai/investigations" for path, _profile, _key in matrix)
+    assert ("POST /ai/chat", "fast_triage", "frontend.floating_chat.general") in matrix
+    assert ("POST /ai/repo/chat", "developer_assistant", "frontend.repo_architecture.chat.factual") in matrix
+    assert ("POST /ai/repo/chat", "developer_assistant", "frontend.repo_architecture.chat.evaluative") in matrix
+    assert ("POST /ai/actions/preview", "guided_analysis", "frontend.ai_action.preview.add_incident_note") in matrix
+    assert ("soc_briefing_worker", "deep_briefing", "worker.soc_briefing.manual_run_now") in matrix
+    assert all(path != "POST /ai/actions/confirm" for path, _profile, _key in matrix)
+
+
+def test_live_backend_sweep_runs_status_checks_and_representative_plan_only(monkeypatch):
+    monkeypatch.setenv("AI_ACCEPTANCE_LIVE_BACKEND_SWEEP", "1")
+    monkeypatch.setenv("AI_ACCEPTANCE_SESSION_COOKIE", "session=test")
+    monkeypatch.setattr("core.ai.acceptance_harness._discover_live_entities", lambda _base_url, _cookie: {"incident_id": 2002})
+    monkeypatch.setattr("core.ai.acceptance_harness.time.sleep", lambda _seconds: None)
+
+    status_paths = []
+    representative_paths = []
+
+    def fake_status(_base_url, _cookie, path, frontend_action_id, _config):
+        status_paths.append(path)
+        return {
+            "frontend_action_id": frontend_action_id,
+            "execution_path": f"GET {path}",
+            "route": path,
+            "profile": "fast_triage",
+            "model": "llama3.1:8b",
+            "prompt_size": 0,
+            "prompt_limit": 8000,
+            "latency_ms": 1,
+            "http_status": 200,
+            "provider_status": "success",
+            "success": True,
+        }
+
+    def fake_action(_base_url, _cookie, entry, case, _ids, _config):
+        representative_paths.append(entry.backend_path)
+        return {
+            "frontend_action_id": entry.key,
+            "execution_path": entry.backend_path,
+            "route": entry.backend_path,
+            "profile": entry.profile,
+            "model": "llama3.1:8b",
+            "prompt_size": 10,
+            "prompt_limit": 14000,
+            "latency_ms": 1,
+            "http_status": 200,
+            "provider_status": "success",
+            "success": True,
+        }
+
+    def fake_briefing(_base_url, _cookie, entry, *, create_manual_briefing_job):
+        assert create_manual_briefing_job is False
+        representative_paths.append(entry.backend_path)
+        return {
+            "frontend_action_id": entry.key,
+            "execution_path": "GET /soc-briefings/control",
+            "route": "/soc-briefings/control",
+            "profile": entry.profile,
+            "model": None,
+            "prompt_size": None,
+            "prompt_limit": None,
+            "latency_ms": 1,
+            "http_status": 200,
+            "provider_status": "status_only",
+            "success": True,
+        }
+
+    monkeypatch.setattr("core.ai.acceptance_harness._live_status_check", fake_status)
+    monkeypatch.setattr("core.ai.acceptance_harness._live_ai_action_check", fake_action)
+    monkeypatch.setattr("core.ai.acceptance_harness._live_manual_briefing_check", fake_briefing)
+
+    sweep = run_live_backend_sweep(throttle_seconds=0)
+
+    assert sweep["offline_actions_covered"] == 43
+    assert sweep["representative_calls_planned"] == 11
+    assert sweep["actions_invoked"] == 11
+    assert status_paths == ["/ai/status", "/ai/repo/status"]
+    assert representative_paths.count("POST /ai/explain") == 2
+    assert "POST /ai/drafts" in representative_paths
+    assert "POST /ai/investigations" in representative_paths
+    assert "POST /ai/chat" in representative_paths
+    assert representative_paths.count("POST /ai/repo/chat") == 2
+    assert "POST /ai/actions/preview" in representative_paths
+    assert "soc_briefing_worker" in representative_paths
+    assert "POST /ai/actions/confirm" not in representative_paths
+    assert sweep["safety"]["live_strategy"] == "representative_unique_backend_execution_paths"
+    assert sweep["safety"]["actions_confirm_route_skipped"] is True
 
 
 def test_acceptance_report_renders_grouped_markdown_summary():
