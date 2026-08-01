@@ -1,4 +1,4 @@
--- Schema snapshot version: 0029
+-- Schema snapshot version: 0030
 
 CREATE TABLE IF NOT EXISTS events (
     id SERIAL PRIMARY KEY,

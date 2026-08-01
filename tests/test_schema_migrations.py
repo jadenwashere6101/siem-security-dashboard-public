@@ -155,7 +155,7 @@ def test_schema_snapshot_marker_matches_latest_migration():
         migrations_dir=repo_root / "migrations",
     )
 
-    assert version == 29
+    assert version == 30
 
 
 def test_events_latest_environment_index_migration_scope():
