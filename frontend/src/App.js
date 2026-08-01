@@ -45,7 +45,14 @@ import {
 } from "./utils/sessionIdentity";
 import { updateAlertStatusRequest } from "./services/alertStatusService";
 import { loadAlertDashboardSummary, loadAlertRuleOptions, loadAlerts } from "./services/alertsService";
-import { requestAiDraft, requestAiExplanation, requestAiInvestigation, requestAiWorkflow } from "./services/aiService";
+import {
+  getAiWorkflowRequest,
+  queueAiWorkflowRequest,
+  requestAiDraft,
+  requestAiExplanation,
+  requestAiInvestigation,
+  requestAiWorkflow,
+} from "./services/aiService";
 import {
   createEvidenceReference,
   createInvestigation,
@@ -112,6 +119,83 @@ const ENTITY_AI_CONTEXT_TYPES = new Set([
   "response_registry",
   "detection",
 ]);
+
+const ASYNC_ANAKIN_WORKFLOWS = new Set(["deep_investigate", "decision_support", "generate_artifact"]);
+const ASYNC_ANAKIN_STORAGE_KEY = "anakin.activeWorkflowRequests.v1";
+const ASYNC_ANAKIN_TERMINAL_STATES = new Set([
+  "completed",
+  "partial",
+  "degraded",
+  "failed",
+  "timed_out",
+  "cancelled",
+  "expired",
+]);
+const ASYNC_ANAKIN_SUCCESS_STATES = new Set(["completed", "partial", "degraded"]);
+const ASYNC_ANAKIN_POLL_INTERVAL_MS = 2500;
+
+function readStoredAsyncAnakinRequests() {
+  if (typeof window === "undefined") return {};
+  try {
+    const parsed = JSON.parse(window.sessionStorage.getItem(ASYNC_ANAKIN_STORAGE_KEY) || "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function writeStoredAsyncAnakinRequests(entries) {
+  if (typeof window === "undefined") return;
+  try {
+    const keys = Object.keys(entries || {});
+    if (!keys.length) {
+      window.sessionStorage.removeItem(ASYNC_ANAKIN_STORAGE_KEY);
+      return;
+    }
+    window.sessionStorage.setItem(ASYNC_ANAKIN_STORAGE_KEY, JSON.stringify(entries));
+  } catch (_) {
+    // Session recovery is best effort; request execution must not depend on browser storage.
+  }
+}
+
+function saveAsyncAnakinRequest(contextKey, entry) {
+  if (!contextKey || !entry?.requestId) return;
+  writeStoredAsyncAnakinRequests({
+    ...readStoredAsyncAnakinRequests(),
+    [contextKey]: { ...entry, savedAt: new Date().toISOString() },
+  });
+}
+
+function removeAsyncAnakinRequest(contextKey) {
+  if (!contextKey) return;
+  const entries = readStoredAsyncAnakinRequests();
+  if (!entries[contextKey]) return;
+  delete entries[contextKey];
+  writeStoredAsyncAnakinRequests(entries);
+}
+
+function newestStoredAsyncAnakinRequest() {
+  const entries = readStoredAsyncAnakinRequests();
+  return Object.entries(entries)
+    .map(([contextKey, entry]) => ({ ...entry, contextKey }))
+    .filter((entry) => entry.requestId && entry.request)
+    .sort((a, b) => String(b.savedAt || "").localeCompare(String(a.savedAt || "")))[0] || null;
+}
+
+function sleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+      return;
+    }
+    const timeout = window.setTimeout(resolve, ms);
+    const onAbort = () => {
+      window.clearTimeout(timeout);
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 function normalizeAiContextType(value) {
   return String(value || "").trim().toLowerCase().replaceAll("-", "_");
@@ -1959,6 +2043,7 @@ function AppInner() {
     if (aiRequestRef.current.controller) {
       aiRequestRef.current.controller.abort();
     }
+    removeAsyncAnakinRequest(aiRequestRef.current.contextKey);
   }, []);
 
   const runAiRequest = useCallback(async ({ title, request, executor, contextKey }) => {
@@ -2014,6 +2099,180 @@ function AppInner() {
     }
   }, [canTakeAlertActions, cancelAiRequest]);
 
+  const pollQueuedAiRequest = useCallback(async ({
+    title,
+    request,
+    contextKey,
+    requestId: queuedRequestId,
+    controller,
+    runId,
+    startedAt,
+  }) => {
+    while (true) {
+      const response = await getAiWorkflowRequest(queuedRequestId, { signal: controller.signal });
+      const displayResponse = normalizeAiWorkflowResponse(response);
+      if (aiRequestRef.current.id !== runId) return null;
+      const terminal = ASYNC_ANAKIN_TERMINAL_STATES.has(response.status);
+      setAiPanelState((current) => ({
+        ...current,
+        status: terminal && ASYNC_ANAKIN_SUCCESS_STATES.has(response.status) ? "success" : "loading",
+        title,
+        response: {
+          ...displayResponse,
+          async_request_id: queuedRequestId,
+          elapsed_ms: Date.now() - startedAt,
+        },
+        error: terminal && !ASYNC_ANAKIN_SUCCESS_STATES.has(response.status)
+          ? response.error || response.message || "Anakin workflow failed."
+          : "",
+        stale: aiRequestRef.current.contextKey !== contextKey,
+        request: { title, request, executor: queueAiWorkflowRequest, contextKey, queued: true },
+      }));
+      if (terminal) return response;
+      await sleep(ASYNC_ANAKIN_POLL_INTERVAL_MS, controller.signal);
+    }
+  }, []);
+
+  const runQueuedAiRequest = useCallback(async ({ title, request, contextKey, existingRequestId }) => {
+    if (!canTakeAlertActions) return;
+    cancelAiRequest();
+    const controller = new AbortController();
+    const requestId = aiRequestRef.current.id + 1;
+    const startedAt = Date.now();
+    aiRequestRef.current = { id: requestId, controller, contextKey };
+    setAiPanelState({
+      status: "loading",
+      title,
+      response: {
+        workflow: request.workflow,
+        status: existingRequestId ? "running" : "queued",
+        async_request_id: existingRequestId || null,
+        lifecycle: {
+          current_stage: existingRequestId ? "running" : "queued",
+          stages: [{ stage: existingRequestId ? "running" : "queued", status: "running" }],
+        },
+        metadata: { async: true },
+      },
+      error: "",
+      stale: false,
+      request: { title, request, executor: queueAiWorkflowRequest, contextKey, queued: true },
+    });
+
+    try {
+      let queueResponse = null;
+      let queuedRequestId = existingRequestId;
+      if (!queuedRequestId) {
+        queueResponse = await queueAiWorkflowRequest(request, { signal: controller.signal });
+        if (aiRequestRef.current.id !== requestId) return;
+        const normalizedQueueResponse = normalizeAiWorkflowResponse(queueResponse);
+        if (queueResponse?.status === "chooser_required" || !queueResponse?.request_id) {
+          setAiPanelState({
+            status: "success",
+            title,
+            response: normalizedQueueResponse,
+            error: "",
+            stale: false,
+            request: { title, request, executor: queueAiWorkflowRequest, contextKey, queued: true },
+          });
+          return;
+        }
+        queuedRequestId = queueResponse.request_id;
+        saveAsyncAnakinRequest(contextKey, {
+          requestId: queuedRequestId,
+          title,
+          request,
+          workflow: queueResponse.workflow || request.workflow,
+        });
+        setAiPanelState((current) => ({
+          ...current,
+          response: {
+            ...normalizedQueueResponse,
+            async_request_id: queuedRequestId,
+            elapsed_ms: Date.now() - startedAt,
+          },
+        }));
+      }
+
+      const terminalResponse = await pollQueuedAiRequest({
+        title,
+        request,
+        contextKey,
+        requestId: queuedRequestId,
+        controller,
+        runId: requestId,
+        startedAt,
+      });
+      if (!terminalResponse || aiRequestRef.current.id !== requestId) return;
+      removeAsyncAnakinRequest(contextKey);
+      const displayResponse = normalizeAiWorkflowResponse(terminalResponse);
+      if (ASYNC_ANAKIN_SUCCESS_STATES.has(terminalResponse.status)) {
+        setAiPanelState({
+          status: "success",
+          title,
+          response: {
+            ...displayResponse,
+            async_request_id: queuedRequestId,
+            elapsed_ms: Date.now() - startedAt,
+          },
+          error: "",
+          stale: aiRequestRef.current.contextKey !== contextKey,
+          request: { title, request, executor: queueAiWorkflowRequest, contextKey, queued: true },
+        });
+      } else {
+        setAiPanelState({
+          status: "error",
+          title,
+          response: {
+            ...displayResponse,
+            async_request_id: queuedRequestId,
+            elapsed_ms: Date.now() - startedAt,
+          },
+          error: terminalResponse.error || terminalResponse.message || "Anakin workflow failed.",
+          stale: false,
+          request: { title, request, executor: queueAiWorkflowRequest, contextKey, queued: true },
+        });
+      }
+    } catch (error) {
+      if (error.name === "AbortError") {
+        setAiPanelState((current) => ({
+          ...current,
+          status: "idle",
+          error: "",
+          response: null,
+        }));
+        return;
+      }
+      if (aiRequestRef.current.id !== requestId) return;
+      const message = error.status === 504
+        ? "Network/proxy timeout before Anakin returned a result."
+        : error.message || "AI request failed.";
+      setAiPanelState({
+        status: "error",
+        title,
+        response: error.payload || null,
+        error: message,
+        stale: false,
+        request: { title, request, executor: queueAiWorkflowRequest, contextKey, queued: true },
+      });
+    } finally {
+      if (aiRequestRef.current.id === requestId) {
+        aiRequestRef.current.controller = null;
+      }
+    }
+  }, [canTakeAlertActions, cancelAiRequest, pollQueuedAiRequest]);
+
+  useEffect(() => {
+    if (!canTakeAlertActions || aiPanelState.status !== "idle") return;
+    const stored = newestStoredAsyncAnakinRequest();
+    if (!stored) return;
+    runQueuedAiRequest({
+      title: stored.title || workflowTitleForPanel(stored.workflow),
+      request: stored.request,
+      contextKey: stored.contextKey,
+      existingRequestId: stored.requestId,
+    });
+  }, [canTakeAlertActions, aiPanelState.status, runQueuedAiRequest]);
+
   const handleAskAi = useCallback(
     (options) => {
       if (!options) return;
@@ -2043,9 +2302,11 @@ function AppInner() {
         ...entityContext,
       };
       const usesWorkflowRoute = Boolean(options.workflow || options.artifactType);
+      const requestedWorkflow = options.artifactType ? "generate_artifact" : (options.workflow || "auto");
+      const usesAsyncWorkflowRoute = ASYNC_ANAKIN_WORKFLOWS.has(requestedWorkflow);
       const payload = usesWorkflowRoute
         ? {
-            workflow: options.workflow || "auto",
+            workflow: requestedWorkflow,
             prompt: options.prompt || options.question || options.instruction || "",
             context_type: options.contextType,
             entity: entityContext,
@@ -2080,14 +2341,15 @@ function AppInner() {
         : options.draftType
           ? requestAiDraft
           : requestAiExplanation;
-      runAiRequest({
+      const requestRunner = usesAsyncWorkflowRoute ? runQueuedAiRequest : runAiRequest;
+      requestRunner({
         title: options.title || (usesWorkflowRoute ? "Ask Anakin" : options.investigation ? "Guided AI investigation" : options.draftType ? "AI draft" : "AI explanation"),
         request: payload,
-        executor,
+        executor: usesAsyncWorkflowRoute ? queueAiWorkflowRequest : executor,
         contextKey,
       });
     },
-    [activeSection, buildVisibleAiContext, runAiRequest]
+    [activeSection, buildVisibleAiContext, runAiRequest, runQueuedAiRequest]
   );
 
   const executeAnakinCommand = useCallback(
@@ -2107,10 +2369,12 @@ function AppInner() {
       }
       if (command.intent === ANAKIN_COMMAND_INTENTS.ask && runtime.question?.trim()) {
         const visibleContext = buildVisibleAiContext();
-        runAiRequest({
+        const requestedWorkflow = command.workflow || "auto";
+        const runner = ASYNC_ANAKIN_WORKFLOWS.has(requestedWorkflow) ? runQueuedAiRequest : runAiRequest;
+        runner({
           title: "Ask Anakin",
           request: {
-            workflow: command.workflow || "auto",
+            workflow: requestedWorkflow,
             prompt: runtime.question.trim(),
             context_type: activeSection,
             context: {
@@ -2119,7 +2383,7 @@ function AppInner() {
             },
             tool_policy: { max_tool_calls: 5, time_window_hours: 24 },
           },
-          executor: requestAiWorkflow,
+          executor: ASYNC_ANAKIN_WORKFLOWS.has(requestedWorkflow) ? queueAiWorkflowRequest : requestAiWorkflow,
           contextKey: JSON.stringify({
             section: activeSection,
             filters: visibleContext.visible_filters,
@@ -2131,7 +2395,7 @@ function AppInner() {
       const options = commandToAiOptions(command, anakinCommandContext, runtime.question || "");
       handleAskAi(options);
     },
-    [activeSection, anakinCommandContext, buildVisibleAiContext, handleAskAi, handleNavigate, runAiRequest]
+    [activeSection, anakinCommandContext, buildVisibleAiContext, handleAskAi, handleNavigate, runAiRequest, runQueuedAiRequest]
   );
 
   const executePaletteCommand = useCallback(
@@ -2144,22 +2408,27 @@ function AppInner() {
 
   const retryAiRequest = useCallback(() => {
     if (aiPanelState.request) {
-      runAiRequest(aiPanelState.request);
+      if (aiPanelState.request.queued) {
+        runQueuedAiRequest(aiPanelState.request);
+      } else {
+        runAiRequest(aiPanelState.request);
+      }
     }
-  }, [aiPanelState.request, runAiRequest]);
+  }, [aiPanelState.request, runAiRequest, runQueuedAiRequest]);
 
   const chooseAiWorkflow = useCallback((workflow) => {
     if (!workflow || !aiPanelState.request?.request) return;
-    runAiRequest({
+    const runner = ASYNC_ANAKIN_WORKFLOWS.has(workflow) ? runQueuedAiRequest : runAiRequest;
+    runner({
       ...aiPanelState.request,
       title: workflowTitleForPanel(workflow),
       request: {
         ...aiPanelState.request.request,
         workflow,
       },
-      executor: requestAiWorkflow,
+      executor: ASYNC_ANAKIN_WORKFLOWS.has(workflow) ? queueAiWorkflowRequest : requestAiWorkflow,
     });
-  }, [aiPanelState.request, runAiRequest]);
+  }, [aiPanelState.request, runAiRequest, runQueuedAiRequest]);
 
   const dismissAiPanel = useCallback(() => {
     cancelAiRequest();

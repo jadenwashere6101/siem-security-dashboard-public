@@ -36,6 +36,8 @@ from core.ai.workflow_orchestrator import (
     legacy_run_investigation as run_investigation,
     run_workflow,
 )
+from core.ai.workflow_request_service import queue_workflow_request, read_workflow_request
+from core.audit_helpers import log_audit_event
 from core.auth import analyst_or_super_admin_required, super_admin_required
 
 ai_bp = Blueprint("ai", __name__)
@@ -106,6 +108,7 @@ def ai_workflows_route():
         return jsonify(
             {
                 "status": getattr(error, "error_code", "invalid_workflow_request"),
+                "error_code": getattr(error, "error_code", "invalid_workflow_request"),
                 "workflow": None,
                 "classification": None,
                 "lifecycle": {"mode": "sync", "stage": "failed", "stages": [{"stage": "failed", "status": "failed"}]},
@@ -116,6 +119,70 @@ def ai_workflows_route():
         ), status_code
     except Exception as error:
         current_app.logger.error("Error in ai_workflows_route: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@ai_bp.route("/ai/workflows/requests", methods=["POST"])
+@login_required
+@analyst_or_super_admin_required
+def ai_workflow_requests_route():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "JSON object body is required."}), 400
+
+    try:
+        result, status_code = queue_workflow_request(
+            payload,
+            actor_username=str(getattr(current_user, "id", "") or ""),
+            actor_role=str(getattr(current_user, "role", "") or ""),
+        )
+        log_audit_event(
+            "ai_workflow_request_queued",
+            actor_username=getattr(current_user, "id", None),
+            actor_role=getattr(current_user, "role", None),
+            http_method=request.method,
+            request_path=request.path,
+            source_ip=request.remote_addr,
+            details={
+                "workflow": result.get("workflow"),
+                "request_id": result.get("request_id"),
+                "status": result.get("status"),
+                "created": result.get("created"),
+                "read_only": True,
+            },
+        )
+        return jsonify(result), status_code
+    except WorkflowValidationError as error:
+        status_code = getattr(error, "status_code", 400)
+        return jsonify(
+            {
+                "status": getattr(error, "error_code", "invalid_workflow_request"),
+                "error_code": getattr(error, "error_code", "invalid_workflow_request"),
+                "workflow": None,
+                "classification": None,
+                "lifecycle": {"mode": "polling", "stage": "failed", "stages": [{"stage": "failed", "status": "failed"}]},
+                "result": {},
+                "metadata": {},
+                "error": str(error),
+            }
+        ), status_code
+    except Exception as error:
+        current_app.logger.error("Error in ai_workflow_requests_route: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@ai_bp.route("/ai/workflows/requests/<request_id>", methods=["GET"])
+@login_required
+@analyst_or_super_admin_required
+def ai_workflow_request_status_route(request_id):
+    try:
+        result, status_code = read_workflow_request(
+            request_id,
+            actor_username=str(getattr(current_user, "id", "") or ""),
+        )
+        return jsonify(result), status_code
+    except Exception as error:
+        current_app.logger.error("Error in ai_workflow_request_status_route: %s", error)
         return jsonify({"error": "Internal server error"}), 500
 
 

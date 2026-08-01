@@ -76,6 +76,11 @@ const controlPayload = {
   last_successful_run: { generated_at: "2026-07-27T08:02:00Z" },
   catch_up: { status: "paused", max_windows: 3, max_lookback_hours: 24, coalesce_missed_windows: true },
   active_jobs: { manual: { pending: 0, running: 0 }, scheduled: { pending: 0, running: 0 } },
+  worker: {
+    status: "healthy_waiting",
+    message: "Manual-only mode is waiting for explicit Run Now requests.",
+    one_shot_timer: true,
+  },
   ai: {
     local_only: true,
     no_paid_fallback: true,
@@ -132,6 +137,7 @@ describe("SocBriefingsPanel", () => {
     await screen.findByText("llama3.1:8b");
     expect(screen.getByLabelText("Briefing mode")).toHaveValue("manual_only");
     await waitFor(() => expect(screen.getByLabelText("Pause schedules")).toBeChecked());
+    expect(screen.getByText("Healthy Waiting")).toBeInTheDocument();
     expect(screen.getByText("No Paid Fallback: Completed")).toBeInTheDocument();
     await waitFor(() => expect(screen.getAllByText("Critical auth anomaly reviewed.").length).toBeGreaterThanOrEqual(1));
     expect(await screen.findByText("Executive Summary")).toBeInTheDocument();

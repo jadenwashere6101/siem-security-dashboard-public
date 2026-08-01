@@ -66,6 +66,16 @@ DEFAULT_LIVE_THROTTLE_SECONDS = 2.0
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_SOURCE_ROOT = REPO_ROOT / "frontend" / "src"
 ENTITY_AI_CONTEXT_TYPES = {"alert", "source_ip", "incident", "recon_activity", "response_registry", "detection"}
+ASYNC_WORKFLOW_REQUEST_ROUTE = "POST /ai/workflows/requests"
+ASYNC_WORKFLOW_REQUESTS = {
+    WORKFLOW_DEEP_INVESTIGATE,
+    WORKFLOW_DECISION_SUPPORT,
+    WORKFLOW_GENERATE_ARTIFACT,
+}
+ASYNC_WORKFLOW_TERMINAL_STATES = {"completed", "partial", "degraded", "failed", "timed_out", "cancelled", "expired"}
+ASYNC_WORKFLOW_SUCCESS_STATES = {"completed", "partial", "degraded"}
+ASYNC_WORKFLOW_LIVE_POLL_SECONDS = 150
+ASYNC_WORKFLOW_LIVE_POLL_INTERVAL_SECONDS = 3
 CANONICAL_ACCEPTANCE_WORKFLOWS = (
     WORKFLOW_QUICK_EXPLAIN,
     WORKFLOW_DEEP_INVESTIGATE,
@@ -559,7 +569,7 @@ def build_workflow_representative_fixtures() -> tuple[dict[str, Any], ...]:
             "prompt": "Deep investigate this likely password spray with no successful login.",
             "context": {"alert_id": 1001, "failed_logins": 84, "successful_logins": 0},
             "expected_profile": AI_PROFILE_GUIDED_ANALYSIS,
-            "expected_route": "POST /ai/workflows",
+            "expected_route": ASYNC_WORKFLOW_REQUEST_ROUTE,
         },
         {
             "workflow": WORKFLOW_DECISION_SUPPORT,
@@ -568,7 +578,7 @@ def build_workflow_representative_fixtures() -> tuple[dict[str, Any], ...]:
             "prompt": "Should I monitor, escalate, or block?",
             "context": {"source_ip": "203.0.113.77", "protected_target": True, "success": False},
             "expected_profile": AI_PROFILE_GUIDED_ANALYSIS,
-            "expected_route": "POST /ai/workflows",
+            "expected_route": ASYNC_WORKFLOW_REQUEST_ROUTE,
         },
         {
             "workflow": WORKFLOW_GENERATE_ARTIFACT,
@@ -578,7 +588,7 @@ def build_workflow_representative_fixtures() -> tuple[dict[str, Any], ...]:
             "artifact": {"type": "investigation_checklist"},
             "context": {"alert_id": 1001, "source_ip": "203.0.113.77"},
             "expected_profile": AI_PROFILE_GUIDED_ANALYSIS,
-            "expected_route": "POST /ai/workflows",
+            "expected_route": ASYNC_WORKFLOW_REQUEST_ROUTE,
             "non_persistent": True,
         },
         {
@@ -705,9 +715,9 @@ def build_production_safe_live_sweep_matrix() -> tuple[dict[str, Any], ...]:
         {"key": "status.ai_gateway", "route": "GET /ai/status", "workflow": "status", "mutation": False},
         {"key": "status.repo_assistant", "route": "GET /ai/repo/status", "workflow": "status", "mutation": False},
         {"key": "frontend.dashboard.quick_explain", "route": "POST /ai/workflows", "workflow": WORKFLOW_QUICK_EXPLAIN, "mutation": False},
-        {"key": "frontend.alert.deep_investigate", "route": "POST /ai/workflows", "workflow": WORKFLOW_DEEP_INVESTIGATE, "mutation": False},
-        {"key": "frontend.alert.decision_support", "route": "POST /ai/workflows", "workflow": WORKFLOW_DECISION_SUPPORT, "mutation": False},
-        {"key": "frontend.alert.artifact.checklist", "route": "POST /ai/workflows", "workflow": WORKFLOW_GENERATE_ARTIFACT, "mutation": False, "non_persistent": True},
+        {"key": "frontend.alert.deep_investigate", "route": ASYNC_WORKFLOW_REQUEST_ROUTE, "workflow": WORKFLOW_DEEP_INVESTIGATE, "mutation": False},
+        {"key": "frontend.alert.decision_support", "route": ASYNC_WORKFLOW_REQUEST_ROUTE, "workflow": WORKFLOW_DECISION_SUPPORT, "mutation": False},
+        {"key": "frontend.alert.artifact.checklist", "route": ASYNC_WORKFLOW_REQUEST_ROUTE, "workflow": WORKFLOW_GENERATE_ARTIFACT, "mutation": False, "non_persistent": True},
         {"key": "frontend.floating_anakin.ask", "route": "POST /ai/workflows", "workflow": WORKFLOW_AUTO, "mutation": False},
         {"key": "frontend.floating_anakin.low_confidence_chooser", "route": "POST /ai/workflows", "workflow": WORKFLOW_AUTO, "expected_status": "chooser_required", "mutation": False},
         {"key": "frontend.repo_architecture.chat.factual", "route": "POST /ai/repo/chat", "workflow": WORKFLOW_REPO_ASSISTANT, "mutation": False},
@@ -950,6 +960,14 @@ def _live_ai_action_check(
     error_text = None
     try:
         status_code, body = _live_post_json(base_url, route, payload, cookie)
+        if entry.backend_path == ASYNC_WORKFLOW_REQUEST_ROUTE and 200 <= status_code < 300 and body.get("request_id"):
+            poll_deadline = time.monotonic() + ASYNC_WORKFLOW_LIVE_POLL_SECONDS
+            while str(body.get("status") or "").lower() not in ASYNC_WORKFLOW_TERMINAL_STATES and time.monotonic() < poll_deadline:
+                time.sleep(ASYNC_WORKFLOW_LIVE_POLL_INTERVAL_SECONDS)
+                status_code, body = _live_get_json_with_status(base_url, f"/ai/workflows/requests/{body['request_id']}", cookie)
+            if str(body.get("status") or "").lower() not in ASYNC_WORKFLOW_TERMINAL_STATES:
+                body.setdefault("error", "Workflow request did not reach a terminal state before live sweep polling timed out.")
+                body["status"] = "timed_out"
     except Exception as error:
         error_text = str(error)
     latency_ms = int((time.monotonic() - started) * 1000)
@@ -958,6 +976,8 @@ def _live_ai_action_check(
     error_value = body.get("error") or error_text
     root_cause = _root_cause_from_live(status=status, error=error_value, http_status=status_code, body=body)
     success_statuses = {"success", "partial"}
+    if entry.backend_path == ASYNC_WORKFLOW_REQUEST_ROUTE:
+        success_statuses.update(ASYNC_WORKFLOW_SUCCESS_STATES)
     if entry.backend_path == "POST /ai/actions/preview":
         success_statuses.add("preview_ready")
     if entry.key == "frontend.floating_anakin.low_confidence_chooser":
@@ -1278,7 +1298,8 @@ def _run_case(entry: AiInvocationInventoryEntry, case: AcceptanceCase, config: A
     prompt_size = len(prompt)
     usefulness = _usefulness_checks(_sample_response_for_case(entry, case))
     if entry.backend_path == "POST /ai/drafts" or (
-        entry.backend_path == "POST /ai/workflows" and case.request_payload.get("workflow") == WORKFLOW_GENERATE_ARTIFACT
+        entry.backend_path in {"POST /ai/workflows", ASYNC_WORKFLOW_REQUEST_ROUTE}
+        and case.request_payload.get("workflow") == WORKFLOW_GENERATE_ARTIFACT
     ):
         artifact = case.request_payload.get("artifact") if isinstance(case.request_payload.get("artifact"), dict) else {}
         draft_type = str(case.request_payload.get("draft_type") or artifact.get("type") or "investigation_checklist")
@@ -1331,7 +1352,7 @@ def _run_case(entry: AiInvocationInventoryEntry, case: AcceptanceCase, config: A
 
 def _prompt_for_case(entry: AiInvocationInventoryEntry, case: AcceptanceCase, config: AiGatewayConfig) -> str:
     profile = config.profile(entry.profile)
-    if entry.backend_path == "POST /ai/workflows":
+    if entry.backend_path in {"POST /ai/workflows", ASYNC_WORKFLOW_REQUEST_ROUTE}:
         payload = case.request_payload
         workflow = str(payload.get("workflow") or entry.selector)
         context_type = str(payload.get("context_type") or "general")
@@ -1572,7 +1593,8 @@ def build_frontend_realistic_request(options: dict[str, Any], *, active_section:
             payload["artifact"] = {"type": options.get("artifactType")}
         if payload.get("tool_policy") is None:
             payload.pop("tool_policy", None)
-        return payload, "POST /ai/workflows"
+        route = ASYNC_WORKFLOW_REQUEST_ROUTE if payload["workflow"] in ASYNC_WORKFLOW_REQUESTS else "POST /ai/workflows"
+        return payload, route
     if options.get("draftType"):
         return (
             {
@@ -1610,7 +1632,7 @@ def build_frontend_realistic_request(options: dict[str, Any], *, active_section:
 def _inventory_entry_for_frontend_option(discovered: FrontendAiOption, options: dict[str, Any]) -> HarnessInventoryEntry:
     _payload, route = build_frontend_realistic_request(options, active_section=_active_section_for_context(_normalize_context_type(options.get("contextType"))))
     selector = str(options.get("draftType") or options.get("action") or "ask_anakin")
-    if route == "POST /ai/workflows":
+    if route in {"POST /ai/workflows", ASYNC_WORKFLOW_REQUEST_ROUTE}:
         selector = str(options.get("workflow") or "auto")
         if selector == WORKFLOW_QUICK_EXPLAIN:
             selector_type = "workflow"
@@ -1636,6 +1658,7 @@ def _inventory_entry_for_frontend_option(discovered: FrontendAiOption, options: 
     else:
         selector_type = "route"
         profile = profile_for_chat()
+    workflow_route = "POST /ai/workflows" if route == ASYNC_WORKFLOW_REQUEST_ROUTE else route
     label = options.get("title") or selector
     return HarnessInventoryEntry(
         key=discovered.key,
@@ -1644,7 +1667,7 @@ def _inventory_entry_for_frontend_option(discovered: FrontendAiOption, options: 
         selector_type=selector_type,
         selector=selector,
         profile=profile,
-        workflow=workflow_for_inventory_path(route, selector_type, selector),
+        workflow=workflow_for_inventory_path(workflow_route, selector_type, selector),
         notes="Discovered from real frontend onAskAi payload construction.",
     )
 
@@ -1653,7 +1676,7 @@ def _inventory_entry_for_static_contract(options: dict[str, Any]) -> HarnessInve
     key = str(options["contract_key"])
     _payload, route = build_frontend_realistic_request(options, active_section=_active_section_for_context(_normalize_context_type(options.get("contextType"))))
     selector = str(options.get("draftType") or options.get("action") or options.get("selector") or "ask_anakin")
-    if route == "POST /ai/workflows":
+    if route in {"POST /ai/workflows", ASYNC_WORKFLOW_REQUEST_ROUTE}:
         selector = str(options.get("workflow") or "auto")
         if selector == WORKFLOW_QUICK_EXPLAIN:
             selector_type = "workflow"
@@ -1685,6 +1708,7 @@ def _inventory_entry_for_static_contract(options: dict[str, Any]) -> HarnessInve
     else:
         selector_type = "explain_action"
         profile = profile_for_explain_action(selector)
+    workflow_route = "POST /ai/workflows" if route == ASYNC_WORKFLOW_REQUEST_ROUTE else route
     return HarnessInventoryEntry(
         key=key,
         frontend_surface=str(options.get("surface") or options.get("title") or key),
@@ -1692,7 +1716,7 @@ def _inventory_entry_for_static_contract(options: dict[str, Any]) -> HarnessInve
         selector_type=selector_type,
         selector=selector,
         profile=profile,
-        workflow=workflow_for_inventory_path(route, selector_type, selector),
+        workflow=workflow_for_inventory_path(workflow_route, selector_type, selector),
         notes=str(options.get("source") or "static acceptance contract"),
     )
 
@@ -1820,7 +1844,7 @@ def _workflow_contract(
     options = {
         "contract_key": contract_key,
         "surface": surface,
-        "route": "POST /ai/workflows",
+        "route": ASYNC_WORKFLOW_REQUEST_ROUTE if workflow in ASYNC_WORKFLOW_REQUESTS else "POST /ai/workflows",
         "contextType": context_type,
         "workflow": workflow,
         "question": question or f"Run {label} for this {context_type} context using bounded SIEM evidence.",
@@ -2191,7 +2215,7 @@ def _context_type_for_entry(entry: AiInvocationInventoryEntry) -> str:
 
 def _stale_policy_for_entry(entry: AiInvocationInventoryEntry) -> str:
     if entry.backend_path in {"POST /ai/drafts", "POST /ai/actions/preview"} or (
-        entry.backend_path == "POST /ai/workflows" and entry.workflow == WORKFLOW_GENERATE_ARTIFACT
+        entry.backend_path in {"POST /ai/workflows", ASYNC_WORKFLOW_REQUEST_ROUTE} and entry.workflow == WORKFLOW_GENERATE_ARTIFACT
     ):
         return "strict_for_confirmable_preview"
     if entry.backend_path == "soc_briefing_worker":
@@ -2371,7 +2395,8 @@ def _repo_chunks() -> list[RepoChunk]:
 
 def _sample_response_for_case(entry: AiInvocationInventoryEntry, case: AcceptanceCase) -> str:
     if entry.backend_path == "POST /ai/drafts" or (
-        entry.backend_path == "POST /ai/workflows" and case.request_payload.get("workflow") == WORKFLOW_GENERATE_ARTIFACT
+        entry.backend_path in {"POST /ai/workflows", ASYNC_WORKFLOW_REQUEST_ROUTE}
+        and case.request_payload.get("workflow") == WORKFLOW_GENERATE_ARTIFACT
     ):
         artifact = case.request_payload.get("artifact") if isinstance(case.request_payload.get("artifact"), dict) else {}
         return json.dumps(_sample_draft_payload(str(case.request_payload.get("draft_type") or artifact.get("type") or "investigation_checklist"), case.context_type))

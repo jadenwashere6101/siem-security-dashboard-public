@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Anakin Async Workflow Worker periodically
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=10s
+AccuracySec=2s
+Persistent=true
+Unit=anakin-workflow-worker.service
+
+[Install]
+WantedBy=timers.target

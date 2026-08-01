@@ -81,6 +81,35 @@ test("AiResponsePanel displays workflow classification metadata and lifecycle st
   expect(screen.getByLabelText("Anakin workflow lifecycle")).toHaveTextContent("gathering context");
 });
 
+test("AiResponsePanel displays queued workflow progress and elapsed time while loading", () => {
+  render(
+    <AiResponsePanel
+      state={{
+        status: "loading",
+        title: "Deep Investigate",
+        response: {
+          workflow: "deep_investigate",
+          status: "running",
+          elapsed_ms: 42000,
+          lifecycle: {
+            current_stage: "retrieving_evidence",
+            stages: [
+              { stage: "gathering_context", status: "complete" },
+              { stage: "retrieving_evidence", status: "running" },
+            ],
+          },
+        },
+      }}
+      onDismiss={() => {}}
+      onRetry={() => {}}
+      onCancel={() => {}}
+    />
+  );
+
+  expect(screen.getByText(/deep investigate request running/i)).toHaveTextContent("Elapsed: 42s");
+  expect(screen.getByLabelText("Anakin workflow lifecycle")).toHaveTextContent("retrieving evidence");
+});
+
 test("AiResponsePanel renders low-confidence workflow chooser", async () => {
   const onChooseWorkflow = jest.fn();
   render(
@@ -137,7 +166,7 @@ test("AiResponsePanel supports cancel and dismissal during loading", async () =>
     />
   );
 
-  expect(screen.getByText(/Backend lifecycle stages will appear/)).toBeInTheDocument();
+  expect(screen.getByText(/request running/i)).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
   await userEvent.click(screen.getByRole("button", { name: "Dismiss Anakin response" }));
 

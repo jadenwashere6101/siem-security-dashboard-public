@@ -15,9 +15,11 @@ from core.ai.repo_sources import LABEL_HISTORICAL, historical_context_requested
 
 AI_STATUS_INSUFFICIENT_EVIDENCE = "insufficient_evidence"
 AI_STATUS_GROUNDING_FAILURE = "grounding_failure"
+AI_STATUS_SCOPE_BOUNDARY = "scope_boundary"
 QUESTION_TYPE_FACTUAL = "factual"
 QUESTION_TYPE_ARCHITECTURAL = "architectural"
 QUESTION_TYPE_EVALUATIVE = "evaluative"
+QUESTION_TYPE_LIVE_SIEM_DATA = "live_siem_data"
 
 MAX_REPO_MESSAGE_CHARS = 2000
 MAX_HISTORY_ITEMS = 8
@@ -64,6 +66,27 @@ def answer_repo_question(
 ) -> RepoAssistantResult:
     message = _validate_payload(payload)
     history = _validate_history(payload.get("client_history", []))
+    if is_live_siem_data_question(message):
+        resolved_config = config if config is not None else load_ai_gateway_config()
+        return RepoAssistantResult(
+            _repo_response(
+                status=AI_STATUS_SCOPE_BOUNDARY,
+                answer=(
+                    "That question requires live SIEM data. Ask Anakin from the Dashboard, "
+                    "Alert Details, or SOC Command Center."
+                ),
+                insufficient_evidence=True,
+                citations=[],
+                retrieval={
+                    "skipped": True,
+                    "reason": "live_siem_data_boundary",
+                    "recommended_surfaces": ["dashboard", "alert_details", "soc_command_center"],
+                },
+                metadata=_empty_metadata(AI_STATUS_SCOPE_BOUNDARY, mode=resolved_config.mode),
+                error="Repo Assistant is limited to repository source-code and architecture questions.",
+                question_type=QUESTION_TYPE_LIVE_SIEM_DATA,
+            )
+        )
     question_type = classify_repo_question(message)
     refresh = bool(payload.get("refresh", False))
     include_historical = historical_context_requested(message)
@@ -205,6 +228,78 @@ def classify_repo_question(message: str) -> str:
         return QUESTION_TYPE_ARCHITECTURAL
 
     return QUESTION_TYPE_FACTUAL
+
+
+def is_live_siem_data_question(message: str) -> bool:
+    text = f" {message.strip().lower()} "
+    live_terms = (
+        " current ",
+        " right now",
+        " currently ",
+        " live ",
+        " latest ",
+        " today",
+        " tonight",
+        " this morning",
+        " this hour",
+        " in the dashboard",
+    )
+    siem_operational_terms = (
+        " alert",
+        " alerts",
+        " incident",
+        " incidents",
+        " source ip",
+        " source ips",
+        " ip activity",
+        " detections firing",
+        " detections ",
+        " detection firing",
+        " dashboard metric",
+        " dashboard metrics",
+        " soc state",
+        " briefing",
+        " briefings",
+        " investigation data",
+        " open case",
+        " cases",
+    )
+    live_actions = (
+        " most severe ",
+        " highest severity",
+        " worst ",
+        " active ",
+        " open ",
+        " firing ",
+        " happening ",
+        " what happened",
+        " what is my ",
+        " show me ",
+        " list ",
+        " summarize ",
+    )
+    repo_terms = (
+        " code",
+        " repository",
+        " repo",
+        " implemented",
+        " implementation",
+        " architecture",
+        " file",
+        " test",
+        " function",
+        " class",
+        " module",
+    )
+    has_siem_term = any(term in text for term in siem_operational_terms)
+    has_live_intent = any(term in text for term in live_terms) or any(term in text for term in live_actions)
+    if has_siem_term and has_live_intent:
+        return True
+    if any(phrase in text for phrase in (" my most severe alert", " most severe alert", " highest severity alert", " current alert count")):
+        return True
+    if has_siem_term and not any(term in text for term in repo_terms):
+        return True
+    return False
 
 
 def _validate_payload(payload: dict[str, Any]) -> str:
@@ -374,12 +469,15 @@ def _default_index() -> RepoIndex:
 __all__ = [
     "AI_STATUS_GROUNDING_FAILURE",
     "AI_STATUS_INSUFFICIENT_EVIDENCE",
+    "AI_STATUS_SCOPE_BOUNDARY",
     "QUESTION_TYPE_ARCHITECTURAL",
     "QUESTION_TYPE_EVALUATIVE",
     "QUESTION_TYPE_FACTUAL",
+    "QUESTION_TYPE_LIVE_SIEM_DATA",
     "RepoAssistantResult",
     "RepoAssistantValidationError",
     "answer_repo_question",
     "classify_repo_question",
     "get_repo_assistant_status",
+    "is_live_siem_data_question",
 ]

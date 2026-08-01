@@ -77,8 +77,10 @@ def test_representative_workflow_fixtures_cover_every_canonical_workflow_with_sa
     assert {fixture["workflow"] for fixture in fixtures} == set(CANONICAL_ACCEPTANCE_WORKFLOWS)
     for fixture in fixtures:
         assert fixture["prompt"]
-        if fixture["workflow"] in {WORKFLOW_QUICK_EXPLAIN, WORKFLOW_DEEP_INVESTIGATE, WORKFLOW_DECISION_SUPPORT, WORKFLOW_GENERATE_ARTIFACT}:
+        if fixture["workflow"] == WORKFLOW_QUICK_EXPLAIN:
             assert fixture["expected_route"] == "POST /ai/workflows"
+        if fixture["workflow"] in {WORKFLOW_DEEP_INVESTIGATE, WORKFLOW_DECISION_SUPPORT, WORKFLOW_GENERATE_ARTIFACT}:
+            assert fixture["expected_route"] == "POST /ai/workflows/requests"
         if fixture["workflow"] == WORKFLOW_GENERATE_ARTIFACT:
             assert fixture["non_persistent"] is True
         if fixture["workflow"] == WORKFLOW_SOC_BRIEFING:

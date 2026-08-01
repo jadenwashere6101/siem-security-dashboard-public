@@ -18,12 +18,14 @@ from core.ai.soc_briefing_runtime_store import (
     complete_job,
     complete_run,
     create_run,
+    create_run_step,
     create_manual_briefing_job,
     create_or_get_job,
     create_or_get_window,
     create_schedule,
     enforce_service_actor_read_only,
     get_runtime_metrics,
+    get_briefing_control_status,
     get_manual_briefing_lifecycle_status,
     heartbeat_job_lease,
     materialize_due_schedule,
@@ -84,8 +86,8 @@ def test_duplicate_window_and_job_prevention(postgres_db):
 
     first_window, first_created = create_or_get_window(conn, schedule_id=schedule["id"], window_start=start, window_end=end)
     second_window, second_created = create_or_get_window(conn, schedule_id=schedule["id"], window_start=start, window_end=end)
-    first_job, first_job_created = create_or_get_job(conn, schedule_id=schedule["id"], window_id=first_window["id"])
-    second_job, second_job_created = create_or_get_job(conn, schedule_id=schedule["id"], window_id=first_window["id"])
+    first_job, first_job_created = create_or_get_job(conn, schedule_id=schedule["id"], window_id=first_window["id"], now=end)
+    second_job, second_job_created = create_or_get_job(conn, schedule_id=schedule["id"], window_id=first_window["id"], now=end)
     conn.commit()
 
     assert first_created is True
@@ -105,7 +107,7 @@ def test_claim_lease_heartbeat_and_owner_matched_completion(postgres_db):
         window_start=datetime(2026, 7, 27, 7, 0, tzinfo=timezone.utc),
         window_end=datetime(2026, 7, 27, 8, 0, tzinfo=timezone.utc),
     )
-    create_or_get_job(conn, schedule_id=schedule["id"], window_id=window["id"])
+    create_or_get_job(conn, schedule_id=schedule["id"], window_id=window["id"], now=datetime(2026, 7, 27, 8, 0, tzinfo=timezone.utc))
     conn.commit()
 
     claimed = claim_next_job(conn, lease_owner="worker-a", now=datetime(2026, 7, 27, 8, 1, tzinfo=timezone.utc))
@@ -136,7 +138,7 @@ def test_stale_lease_recovery_requeues_then_fails_when_attempts_exhaust(postgres
     schedule = _due_schedule(conn)
     now = datetime(2026, 7, 27, 8, 0, tzinfo=timezone.utc)
     window, _ = create_or_get_window(conn, schedule_id=schedule["id"], window_start=now - timedelta(hours=1), window_end=now)
-    job, _ = create_or_get_job(conn, schedule_id=schedule["id"], window_id=window["id"], max_attempts=2)
+    job, _ = create_or_get_job(conn, schedule_id=schedule["id"], window_id=window["id"], max_attempts=2, now=now - timedelta(minutes=6))
     claim_next_job(conn, lease_owner="worker-a", now=now - timedelta(minutes=5), lease_duration_seconds=60)
     conn.commit()
 
@@ -152,6 +154,82 @@ def test_stale_lease_recovery_requeues_then_fails_when_attempts_exhaust(postgres
     with conn.cursor() as cur:
         cur.execute("SELECT status, failure_code FROM soc_briefing_jobs WHERE id = %s", (job["id"],))
         assert cur.fetchone() == (JOB_STATUS_FAILED, "stale_lease_expired")
+
+
+def test_run_step_persistence_is_idempotent_for_duplicate_step_index(postgres_db):
+    conn, _cur = postgres_db
+    schedule = _due_schedule(conn)
+    now = datetime(2026, 7, 27, 8, 0, tzinfo=timezone.utc)
+    window, _ = create_or_get_window(conn, schedule_id=schedule["id"], window_start=now - timedelta(hours=1), window_end=now)
+    job, _ = create_or_get_job(conn, schedule_id=schedule["id"], window_id=window["id"], now=now)
+    claimed = claim_next_job(conn, lease_owner="worker-a", now=now)
+    run = create_run(conn, claimed, now=now)
+
+    first = create_run_step(
+        conn,
+        run["id"],
+        step_index=13,
+        step_type="ai_synthesis",
+        status="failed",
+        sanitized_input={"attempt": 1, "password": "secret"},
+        evidence_refs=[{"source": "alert", "id": 1}],
+        decision_summary="First attempt failed.",
+        error_code="provider_timeout",
+    )
+    second = create_run_step(
+        conn,
+        run["id"],
+        step_index=13,
+        step_type="ai_synthesis",
+        status="success",
+        sanitized_input={"attempt": 2},
+        evidence_refs=[{"source": "alert", "id": 1}, {"source": "incident", "id": 2}],
+        decision_summary="Retried step succeeded.",
+    )
+    conn.commit()
+
+    assert first["id"] == second["id"]
+    assert second["status"] == "success"
+    assert second["decision_summary"] == "Retried step succeeded."
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*), MIN(step_index), MAX(step_index) FROM soc_briefing_run_steps WHERE run_id = %s", (run["id"],))
+        assert cur.fetchone() == (1, 13, 13)
+        cur.execute("SELECT sanitized_input FROM soc_briefing_run_steps WHERE run_id = %s AND step_index = 13", (run["id"],))
+        sanitized = cur.fetchone()[0]
+        assert "secret" not in str(sanitized)
+        assert sanitized["retry_history"][0]["status"] == "failed"
+        assert sanitized["retry_history"][0]["error_code"] == "provider_timeout"
+
+
+def test_stale_recovery_preserves_terminal_briefing_instead_of_failing_job(postgres_db):
+    conn, _cur = postgres_db
+    schedule = _due_schedule(conn)
+    now = datetime(2026, 7, 27, 8, 0, tzinfo=timezone.utc)
+    window, _ = create_or_get_window(conn, schedule_id=schedule["id"], window_start=now - timedelta(hours=1), window_end=now)
+    job, _ = create_or_get_job(conn, schedule_id=schedule["id"], window_id=window["id"], max_attempts=1, now=now - timedelta(minutes=6))
+    claimed = claim_next_job(conn, lease_owner="worker-a", now=now - timedelta(minutes=5), lease_duration_seconds=60)
+    run = create_run(conn, claimed, now=now - timedelta(minutes=4))
+    complete_run(conn, run["id"], status="success", started_at=run["started_at"], ai_gateway_status="success", provider_status="ollama", now=now - timedelta(minutes=3))
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO soc_briefings (
+                run_id, schedule_id, window_id, status, lifecycle_status,
+                generated_at, content_status, summary, sections, evidence_refs
+            )
+            VALUES (%s, %s, %s, 'success', 'content_ready', %s, 'ready', 'Recovered briefing ready.', %s, %s)
+            """,
+            (run["id"], run["schedule_id"], run["window_id"], now - timedelta(minutes=2), Json({}), Json([])),
+        )
+    conn.commit()
+
+    recovered = recover_stale_jobs(conn, now=now, limit=10)
+    conn.commit()
+
+    assert recovered == {"recovered": 1, "failed": 0}
+    with conn.cursor() as cur:
+        cur.execute("SELECT status, failure_code FROM soc_briefing_jobs WHERE id = %s", (job["id"],))
+        assert cur.fetchone() == ("success", None)
 
 
 def test_manual_lifecycle_links_completed_job_to_briefing(postgres_db):
@@ -209,6 +287,29 @@ def test_manual_lifecycle_links_completed_job_to_briefing(postgres_db):
     assert status["briefing"]["id"] == briefing_id
     assert status["lifecycle"]["status"] == "completed"
     assert status["terminal"] is True
+
+
+def test_timer_aware_worker_health_treats_manual_waiting_as_healthy(postgres_db):
+    conn, _cur = postgres_db
+    status = get_briefing_control_status(conn, now=datetime(2026, 7, 27, 8, 0, tzinfo=timezone.utc))
+
+    assert status["mode"] == "manual_only"
+    assert status["worker"]["status"] == "healthy_waiting"
+    assert "Manual-only mode is waiting" in status["worker"]["message"]
+
+
+def test_manual_pending_job_without_heartbeat_is_stale_not_generic_offline(postgres_db):
+    conn, _cur = postgres_db
+    job, created = create_manual_briefing_job(conn, requested_by="analyst", now=datetime(2026, 7, 27, 8, 0, tzinfo=timezone.utc))
+    conn.commit()
+    assert created is True
+
+    status = get_manual_briefing_lifecycle_status(conn, job_id=job["id"], now=datetime(2026, 7, 27, 8, 1, tzinfo=timezone.utc))
+
+    assert status["lifecycle"]["status"] == "queued"
+    assert status["worker"]["status"] == "stale"
+    assert status["blocked_reasons"][0]["code"] == "worker_unavailable"
+    assert "active queued work" in status["blocked_reasons"][0]["message"]
 
 
 def test_bounded_catch_up_coalesces_overnight_work(postgres_db):
@@ -313,8 +414,16 @@ def test_worker_persistence_failure_aborts_without_silent_continue(postgres_db):
 
 def test_graceful_shutdown_stops_new_claims(postgres_db):
     conn, _cur = postgres_db
-    _due_schedule(conn)
+    schedule = _due_schedule(conn)
     _enable_autonomous(conn)
+    window, _ = create_or_get_window(
+        conn,
+        schedule_id=schedule["id"],
+        window_start=datetime(2026, 7, 27, 7, 0, tzinfo=timezone.utc),
+        window_end=datetime(2026, 7, 27, 8, 0, tzinfo=timezone.utc),
+    )
+    create_or_get_job(conn, schedule_id=schedule["id"], window_id=window["id"], now=datetime(2026, 7, 27, 8, 0, tzinfo=timezone.utc))
+    conn.commit()
     shutdown = type("Shutdown", (), {"requested": True, "reason": "test_shutdown"})()
 
     stats = run_soc_briefing_worker(
@@ -391,7 +500,7 @@ def test_runtime_metrics_hide_lease_owner_and_report_counts(postgres_db):
         window_start=datetime(2026, 7, 27, 7, 0, tzinfo=timezone.utc),
         window_end=datetime(2026, 7, 27, 8, 0, tzinfo=timezone.utc),
     )
-    create_or_get_job(conn, schedule_id=schedule["id"], window_id=window["id"])
+    create_or_get_job(conn, schedule_id=schedule["id"], window_id=window["id"], now=datetime(2026, 7, 27, 8, 0, tzinfo=timezone.utc))
     conn.commit()
 
     metrics = get_runtime_metrics(conn, now=datetime(2026, 7, 27, 8, 1, tzinfo=timezone.utc))

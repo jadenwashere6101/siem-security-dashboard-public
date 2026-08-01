@@ -60,6 +60,12 @@ MANUAL_SCHEDULE_NAME = "Manual Anakin briefing"
 TRIGGER_TYPE_SCHEDULED = "scheduled"
 TRIGGER_TYPE_MANUAL = "manual"
 ACTIVE_JOB_STATUSES = (JOB_STATUS_PENDING, JOB_STATUS_RUNNING)
+SOC_BRIEFING_HEALTH_RUNNING = "running"
+SOC_BRIEFING_HEALTH_HEALTHY_WAITING = "healthy_waiting"
+SOC_BRIEFING_HEALTH_RECENTLY_SUCCESSFUL = "recently_successful"
+SOC_BRIEFING_HEALTH_STALE = "stale"
+SOC_BRIEFING_HEALTH_FAILED = "failed"
+SOC_BRIEFING_HEALTH_TIMER_INACTIVE = "timer_inactive"
 
 MUTATION_ACTIONS = frozenset(
     {
@@ -418,8 +424,13 @@ def _normalize_manual_lifecycle(
     blocked_reasons: list[dict[str, str]] = []
     if already_running:
         blocked_reasons.append({"code": "already_running", "message": "A manual Anakin briefing is already pending or running."})
-    if job_status == JOB_STATUS_PENDING and worker_status in {"missing", "offline", "stale", "unknown", "unavailable"}:
-        blocked_reasons.append({"code": "worker_unavailable", "message": "No fresh SOC briefing worker heartbeat is available yet."})
+    if job_status == JOB_STATUS_PENDING and worker_status in {"failed", "stale", "timer_inactive", "unavailable"}:
+        blocked_reasons.append(
+            {
+                "code": "worker_unavailable",
+                "message": worker.get("message") if isinstance(worker, dict) and worker.get("message") else "SOC briefing worker is not currently able to process this job.",
+            }
+        )
     if provider_status in {"local_provider_not_configured", "provider_unavailable", "local_provider_unavailable"}:
         blocked_reasons.append({"code": "local_model_unavailable", "message": "Local AI provider or model is unavailable."})
     if error_code:
@@ -440,10 +451,8 @@ def get_manual_briefing_lifecycle_status(
     job = get_manual_job(conn, int(job_id)) if job_id else get_active_manual_job(conn)
     run = _latest_run_for_job(conn, int(job["id"])) if job else None
     briefing = _briefing_for_run(conn, int(run["id"])) if run else None
-    worker = summarize_worker_health(
-        get_worker_heartbeat(conn, worker_name=SOC_BRIEFING_WORKER_NAME),
-        now=current,
-    )
+    control_status = get_briefing_control_status(conn, now=current)
+    worker = control_status["worker"]
     lifecycle = _normalize_manual_lifecycle(
         job=job,
         run=run,
@@ -501,6 +510,7 @@ def create_manual_briefing_job(
             "writes_performed": False,
         },
         priority=25,
+        now=current,
     )
     return job, job_created
 
@@ -615,7 +625,7 @@ def materialize_due_schedule(
             windows_created += 1
         else:
             duplicates += 1
-        _job, job_created = create_or_get_job(conn, schedule_id=int(schedule["id"]), window_id=int(window["id"]))
+        _job, job_created = create_or_get_job(conn, schedule_id=int(schedule["id"]), window_id=int(window["id"]), now=current)
         if job_created:
             jobs_created += 1
 
@@ -701,19 +711,21 @@ def create_or_get_job(
     requested_by: str | None = None,
     request_metadata: dict[str, Any] | None = None,
     priority: int = 100,
+    now: datetime | None = None,
 ) -> tuple[dict[str, Any], bool]:
     normalized_trigger = (trigger_type or TRIGGER_TYPE_SCHEDULED).strip()
     if normalized_trigger not in {TRIGGER_TYPE_SCHEDULED, TRIGGER_TYPE_MANUAL}:
         raise ValueError("invalid SOC briefing job trigger_type")
+    current = as_utc(now) or utc_now()
     key = idempotency_key("soc-briefing-job", window_id)
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO soc_briefing_jobs (
                 schedule_id, window_id, idempotency_key, max_attempts, service_actor,
-                priority, trigger_type, requested_by, request_metadata, updated_at
+                priority, trigger_type, requested_by, request_metadata, not_before, updated_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (window_id) DO NOTHING
             RETURNING *
             """,
@@ -727,7 +739,8 @@ def create_or_get_job(
                 normalized_trigger,
                 (requested_by or "").strip()[:255] or None,
                 Json(request_metadata or {}),
-                utc_now(),
+                current,
+                current,
             ),
         )
         row = _fetchone_dict(cur)
@@ -789,6 +802,17 @@ def get_briefing_control_status(conn, *, now: datetime | None = None) -> dict[st
             """
         )
         counts = _fetchall_dicts(cur)
+        cur.execute(
+            """
+            SELECT id, trigger_type, status, failure_code, failure_message,
+                   lease_owner, lease_acquired_at, lease_heartbeat_at, lease_expires_at,
+                   started_at, completed_at, updated_at
+            FROM soc_briefing_jobs
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 1
+            """
+        )
+        latest_job = _fetchone_dict(cur)
 
     active_manual = get_active_manual_job(conn)
 
@@ -802,6 +826,20 @@ def get_briefing_control_status(conn, *, now: datetime | None = None) -> dict[st
         if trigger not in active_counts:
             active_counts[trigger] = {}
         active_counts[trigger][status] = int(row.get("count") or 0)
+
+    heartbeat = summarize_worker_health(
+        get_worker_heartbeat(conn, worker_name=SOC_BRIEFING_WORKER_NAME),
+        now=current,
+    )
+    worker = _timer_aware_worker_health(
+        heartbeat=heartbeat,
+        controls=controls,
+        latest_run=last_run,
+        latest_job=latest_job,
+        active_counts=active_counts,
+        next_schedule=next_schedule,
+        now=current,
+    )
 
     catch_up = None
     if next_schedule is not None:
@@ -826,6 +864,8 @@ def get_briefing_control_status(conn, *, now: datetime | None = None) -> dict[st
         "now": current,
         "next_scheduled_run": next_schedule,
         "last_successful_run": last_run,
+        "latest_job": latest_job,
+        "worker": worker,
         "catch_up": catch_up,
         "active_jobs": active_counts,
         "active_manual_job": active_manual,
@@ -983,6 +1023,11 @@ def recover_stale_jobs(conn, *, now: datetime | None = None, limit: int = 50) ->
         )
         jobs = _fetchall_dicts(cur)
         for job in jobs:
+            terminal = _terminal_recovery_from_latest_run(cur, job, current)
+            if terminal is not None:
+                if terminal:
+                    recovered += 1
+                continue
             if int(job["attempt_count"]) < int(job["max_attempts"]):
                 cur.execute(
                     """
@@ -1086,6 +1131,33 @@ def create_run_step(
                 evidence_refs, decision_summary, latency_ms, error_code, error_message, read_only, updated_at
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, %s)
+            ON CONFLICT (run_id, step_index) DO UPDATE
+            SET step_type = EXCLUDED.step_type,
+                status = EXCLUDED.status,
+                tool_name = EXCLUDED.tool_name,
+                sanitized_input = jsonb_set(
+                    EXCLUDED.sanitized_input,
+                    '{retry_history}',
+                    COALESCE(soc_briefing_run_steps.sanitized_input->'retry_history', '[]'::jsonb) ||
+                        jsonb_build_array(
+                            jsonb_build_object(
+                                'status', soc_briefing_run_steps.status,
+                                'step_type', soc_briefing_run_steps.step_type,
+                                'tool_name', soc_briefing_run_steps.tool_name,
+                                'decision_summary', soc_briefing_run_steps.decision_summary,
+                                'error_code', soc_briefing_run_steps.error_code,
+                                'updated_at', soc_briefing_run_steps.updated_at
+                            )
+                        ),
+                    TRUE
+                ),
+                evidence_refs = EXCLUDED.evidence_refs,
+                decision_summary = EXCLUDED.decision_summary,
+                latency_ms = EXCLUDED.latency_ms,
+                error_code = EXCLUDED.error_code,
+                error_message = EXCLUDED.error_message,
+                read_only = TRUE,
+                updated_at = EXCLUDED.updated_at
             RETURNING *
             """,
             (
@@ -1107,6 +1179,122 @@ def create_run_step(
     if row is None:
         raise SocBriefingPersistenceError("run step insert returned no row")
     return row
+
+
+def _timer_aware_worker_health(
+    *,
+    heartbeat: dict[str, Any],
+    controls: dict[str, Any],
+    latest_run: dict[str, Any] | None,
+    latest_job: dict[str, Any] | None,
+    active_counts: dict[str, dict[str, int]],
+    next_schedule: dict[str, Any] | None,
+    now: datetime,
+) -> dict[str, Any]:
+    raw_status = str(heartbeat.get("status") or "unknown").lower()
+    manual_active = sum(int(value or 0) for value in active_counts.get(TRIGGER_TYPE_MANUAL, {}).values())
+    scheduled_active = sum(int(value or 0) for value in active_counts.get(TRIGGER_TYPE_SCHEDULED, {}).values())
+    running_jobs = int(active_counts.get(TRIGGER_TYPE_MANUAL, {}).get(JOB_STATUS_RUNNING, 0)) + int(
+        active_counts.get(TRIGGER_TYPE_SCHEDULED, {}).get(JOB_STATUS_RUNNING, 0)
+    )
+    latest_job_status = str((latest_job or {}).get("status") or "").lower()
+    latest_failure_code = (latest_job or {}).get("failure_code") or (latest_run or {}).get("error_code")
+    latest_failure_message = (latest_job or {}).get("failure_message") or (latest_run or {}).get("error_message")
+    latest_completed_at = as_utc((latest_job or {}).get("completed_at")) or as_utc((latest_run or {}).get("generated_at")) or as_utc((latest_run or {}).get("created_at"))
+    latest_age_seconds = None
+    if latest_completed_at is not None:
+        latest_age_seconds = max(0, int((now - latest_completed_at).total_seconds()))
+
+    if running_jobs > 0 and raw_status in {"healthy", "degraded"}:
+        status = SOC_BRIEFING_HEALTH_RUNNING
+        message = "SOC briefing worker is processing queued briefing work."
+    elif latest_job_status in {JOB_STATUS_FAILED, JOB_STATUS_INTERRUPTED} and latest_failure_code:
+        status = SOC_BRIEFING_HEALTH_FAILED
+        message = str(latest_failure_message or latest_failure_code).strip()[:500] or "Last SOC briefing worker execution failed."
+    elif latest_age_seconds is not None and latest_age_seconds <= 15 * 60 and latest_job_status in {JOB_STATUS_SUCCESS, JOB_STATUS_BLOCKED, JOB_STATUS_SKIPPED}:
+        status = SOC_BRIEFING_HEALTH_RECENTLY_SUCCESSFUL
+        message = "SOC briefing worker completed a recent one-shot execution."
+    elif raw_status in {"healthy", "degraded"}:
+        status = SOC_BRIEFING_HEALTH_HEALTHY_WAITING
+        message = "SOC briefing worker timer is healthy and waiting for queued or scheduled work."
+    elif raw_status in {"offline", "unknown"} and (manual_active or scheduled_active):
+        status = SOC_BRIEFING_HEALTH_STALE
+        message = "SOC briefing worker has active queued work but no recent execution heartbeat."
+    elif controls["mode"] == BRIEFING_MODE_MANUAL_ONLY and not manual_active:
+        status = SOC_BRIEFING_HEALTH_HEALTHY_WAITING
+        message = "Manual-only mode is waiting for explicit Run Now requests."
+    elif next_schedule is None and not manual_active and not scheduled_active:
+        status = SOC_BRIEFING_HEALTH_TIMER_INACTIVE
+        message = "No active SOC briefing timer schedule is configured."
+    else:
+        status = SOC_BRIEFING_HEALTH_STALE if raw_status in {"offline", "unknown"} else raw_status
+        message = heartbeat.get("message") or "SOC briefing worker timer status is unavailable."
+
+    return {
+        **heartbeat,
+        "status": status,
+        "raw_heartbeat_status": raw_status,
+        "source": "timer_aware_worker_health",
+        "one_shot_timer": True,
+        "active_manual_jobs": manual_active,
+        "active_scheduled_jobs": scheduled_active,
+        "latest_job_status": latest_job_status or None,
+        "latest_failure_code": latest_failure_code,
+        "message": message,
+    }
+
+
+def _terminal_recovery_from_latest_run(cur, job: dict[str, Any], current: datetime) -> bool | None:
+    cur.execute(
+        """
+        SELECT r.status AS run_status,
+               r.error_code,
+               r.error_message,
+               b.id AS briefing_id,
+               b.status AS briefing_status,
+               b.content_status
+        FROM soc_briefing_runs r
+        LEFT JOIN soc_briefings b ON b.run_id = r.id
+        WHERE r.job_id = %s
+        ORDER BY r.started_at DESC, r.id DESC
+        LIMIT 1
+        """,
+        (job["id"],),
+    )
+    run = _fetchone_dict(cur)
+    if run is None:
+        return None
+    run_status = str(run.get("run_status") or "").lower()
+    briefing_id = run.get("briefing_id")
+    if run_status in {RUN_STATUS_SUCCESS, RUN_STATUS_PARTIAL, RUN_STATUS_BLOCKED, RUN_STATUS_SKIPPED} and briefing_id:
+        job_status = JOB_STATUS_SUCCESS if run_status in {RUN_STATUS_SUCCESS, RUN_STATUS_PARTIAL} else run_status
+        cur.execute(
+            """
+            UPDATE soc_briefing_jobs
+            SET status = %s,
+                recovery_count = recovery_count + 1,
+                failure_code = %s,
+                failure_message = %s,
+                completed_at = COALESCE(completed_at, %s),
+                lease_owner = NULL,
+                lease_acquired_at = NULL,
+                lease_heartbeat_at = NULL,
+                lease_expires_at = NULL,
+                updated_at = %s
+            WHERE id = %s
+              AND status = 'running'
+            """,
+            (
+                job_status,
+                run.get("error_code"),
+                run.get("error_message"),
+                current,
+                current,
+                job["id"],
+            ),
+        )
+        return True
+    return None
 
 
 def complete_run(

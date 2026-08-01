@@ -155,7 +155,42 @@ def test_schema_snapshot_marker_matches_latest_migration():
         migrations_dir=repo_root / "migrations",
     )
 
-    assert version == 30
+    assert version == 31
+
+
+def test_anakin_async_workflow_requests_migration_scope():
+    repo_root = Path(__file__).resolve().parent.parent
+    migration_path = repo_root / "migrations" / "0031_anakin_async_workflow_requests.sql"
+    migration_sql = migration_path.read_text(encoding="utf-8")
+    schema_sql = (repo_root / "schema.sql").read_text(encoding="utf-8")
+
+    assert "CREATE TABLE IF NOT EXISTS ai_workflow_requests" in migration_sql
+    assert "CREATE TABLE IF NOT EXISTS ai_workflow_requests" in schema_sql
+    for workflow in ("deep_investigate", "decision_support", "generate_artifact"):
+        assert workflow in migration_sql
+    for column in (
+        "request_id TEXT NOT NULL UNIQUE",
+        "idempotency_key TEXT NOT NULL",
+        "request_payload JSONB NOT NULL DEFAULT '{}'::jsonb",
+        "classification JSONB NOT NULL DEFAULT '{}'::jsonb",
+        "lifecycle JSONB NOT NULL DEFAULT '{}'::jsonb",
+        "result_payload JSONB",
+        "attempt_count INTEGER NOT NULL DEFAULT 0",
+        "max_attempts INTEGER NOT NULL DEFAULT 1",
+        "lease_owner TEXT",
+        "lease_expires_at TIMESTAMPTZ",
+    ):
+        assert column in migration_sql
+    for index in (
+        "idx_ai_workflow_requests_active_idempotency",
+        "idx_ai_workflow_requests_claim",
+        "idx_ai_workflow_requests_actor_created",
+        "idx_ai_workflow_requests_lease_expires",
+    ):
+        assert index in migration_sql
+        assert index in schema_sql
+    for destructive in ("DROP ", "TRUNCATE ", "DELETE FROM ", "ALTER TABLE ", "RENAME "):
+        assert destructive not in migration_sql.upper()
 
 
 def test_events_latest_environment_index_migration_scope():

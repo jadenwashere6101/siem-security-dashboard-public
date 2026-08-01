@@ -21,6 +21,9 @@ function AiResponsePanel({
   const classification = response.classification || metadata?.classification || null;
   const lifecycle = response.lifecycle || null;
   const toolCalls = Array.isArray(tools?.calls) ? tools.calls : [];
+  const elapsedSeconds = Number.isFinite(response.elapsed_ms)
+    ? Math.max(0, Math.round(response.elapsed_ms / 1000))
+    : null;
 
   return (
     <aside
@@ -41,7 +44,11 @@ function AiResponsePanel({
 
       {busy ? (
         <div style={bodyStyle}>
-          <p style={mutedStyle}>Anakin request is running. Backend lifecycle stages will appear when returned by the workflow service.</p>
+          <p style={mutedStyle}>
+            {formatBusyMessage(response)}
+            {elapsedSeconds !== null ? ` Elapsed: ${elapsedSeconds}s.` : ""}
+          </p>
+          {lifecycle ? <LifecycleStages lifecycle={lifecycle} /> : null}
           <button type="button" onClick={onCancel} style={secondaryButtonStyle}>Cancel</button>
         </div>
       ) : null}
@@ -102,6 +109,14 @@ function AiResponsePanel({
       ) : null}
     </aside>
   );
+}
+
+function formatBusyMessage(response = {}) {
+  const status = response.status ? formatDraftKey(response.status) : "running";
+  const currentStage = response.lifecycle?.current_stage || response.stage;
+  const stage = currentStage ? ` (${formatDraftKey(currentStage)})` : "";
+  const workflow = response.workflow ? `${formatDraftKey(response.workflow)} ` : "";
+  return `${workflow}request ${status}${stage}.`;
 }
 
 function WorkflowMetadata({ classification, metadata, workflow }) {

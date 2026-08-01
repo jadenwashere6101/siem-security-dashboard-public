@@ -1,7 +1,9 @@
 import {
   confirmAiAction,
   getAiStatus,
+  getAiWorkflowRequest,
   previewAiAction,
+  queueAiWorkflowRequest,
   requestAiChat,
   requestAiDraft,
   requestAiExplanation,
@@ -248,6 +250,65 @@ test("getAiStatus fetches status with credentials and abort signal", async () =>
   expect(result.read_only).toBe(true);
   expect(fetch).toHaveBeenCalledWith(
     expect.stringContaining("/ai/status"),
+    expect.objectContaining({
+      credentials: "include",
+      signal: controller.signal,
+    })
+  );
+});
+
+test("queueAiWorkflowRequest posts long-running workflow requests to the polling endpoint", async () => {
+  const controller = new AbortController();
+  fetch.mockResolvedValue({
+    ok: true,
+    status: 202,
+    json: async () => ({ status: "queued", request_id: "aiwf_123", workflow: "deep_investigate" }),
+  });
+
+  const result = await queueAiWorkflowRequest(
+    {
+      workflow: "deep_investigate",
+      prompt: "Investigate this alert.",
+      context_type: "alert",
+      context: { alert_id: 7 },
+    },
+    { signal: controller.signal }
+  );
+
+  expect(result.request_id).toBe("aiwf_123");
+  expect(fetch).toHaveBeenCalledWith(
+    expect.stringContaining("/ai/workflows/requests"),
+    expect.objectContaining({
+      method: "POST",
+      credentials: "include",
+      signal: controller.signal,
+      body: JSON.stringify({
+        workflow: "deep_investigate",
+        prompt: "Investigate this alert.",
+        context_type: "alert",
+        context: { alert_id: 7 },
+      }),
+    })
+  );
+});
+
+test("getAiWorkflowRequest polls workflow request status with credentials", async () => {
+  const controller = new AbortController();
+  fetch.mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      status: "completed",
+      request_id: "aiwf_123",
+      workflow: "decision_support",
+      result: { answer: "Escalate because the evidence is strong." },
+    }),
+  });
+
+  const result = await getAiWorkflowRequest("aiwf_123", { signal: controller.signal });
+
+  expect(result.status).toBe("completed");
+  expect(fetch).toHaveBeenCalledWith(
+    expect.stringContaining("/ai/workflows/requests/aiwf_123"),
     expect.objectContaining({
       credentials: "include",
       signal: controller.signal,

@@ -30,6 +30,23 @@ const postAiRequest = async (path, payload, { signal } = {}) => {
   return data;
 };
 
+const getAiRequest = async (path, { signal } = {}) => {
+  const res = await fetch(buildSiemPath(path), {
+    credentials: "include",
+    signal,
+  });
+  const data = await parseJsonResponse(res, aiFallback);
+
+  if (!res.ok) {
+    const error = new Error(getApiErrorMessage(data, "AI request failed", ["error", "message"]));
+    error.status = res.status;
+    error.payload = data;
+    throw error;
+  }
+
+  return data;
+};
+
 export const requestAiExplanation = (payload, options = {}) =>
   postAiRequest("/ai/explain", payload, options);
 
@@ -46,6 +63,12 @@ export const requestAiInvestigation = (payload, options = {}) =>
 
 export const requestAiWorkflow = (payload, options = {}) =>
   postAiRequest("/ai/workflows", payload, options);
+
+export const queueAiWorkflowRequest = (payload, options = {}) =>
+  postAiRequest("/ai/workflows/requests", payload, options);
+
+export const getAiWorkflowRequest = (requestId, options = {}) =>
+  getAiRequest(`/ai/workflows/requests/${encodeURIComponent(requestId)}`, options);
 
 export const previewAiAction = (payload, options = {}) =>
   postAiRequest("/ai/actions/preview", payload, options);

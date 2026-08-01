@@ -40,6 +40,8 @@ jest.mock('./services/alertsService', () => ({
 }));
 
 jest.mock('./services/aiService', () => ({
+  getAiWorkflowRequest: jest.fn(() => Promise.resolve({ status: 'completed', workflow: 'deep_investigate', result: { status: 'success', answer: 'done', metadata: {}, context: {} }, metadata: {}, context: {} })),
+  queueAiWorkflowRequest: jest.fn(() => Promise.resolve({ status: 'queued', workflow: 'deep_investigate', request_id: 'aiwf_test', metadata: {}, lifecycle: { stages: [{ stage: 'queued', status: 'running' }] } })),
   requestAiChat: jest.fn(() => Promise.resolve({ status: 'success', answer: 'ok', metadata: {}, context: {} })),
   requestAiDraft: jest.fn(() => Promise.resolve({ status: 'success', draft: {}, metadata: {}, context: {} })),
   requestAiExplanation: jest.fn(() => Promise.resolve({ status: 'success', answer: 'ok', metadata: {}, context: {} })),

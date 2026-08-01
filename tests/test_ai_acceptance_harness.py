@@ -58,6 +58,7 @@ def test_acceptance_rows_include_required_product_debug_fields():
         "POST /ai/drafts",
         "POST /ai/investigations",
         "POST /ai/workflows",
+        "POST /ai/workflows/requests",
         "POST /ai/repo/chat",
         "soc_briefing_worker",
     }
@@ -218,9 +219,9 @@ def test_live_representative_plan_uses_unique_safe_backend_paths():
     assert {key for _path, _profile, key in matrix} == expected_keys
     assert len(plan) == 10
     assert ("POST /ai/workflows", "fast_triage", "frontend.dashboard.quick_explain") in matrix
-    assert ("POST /ai/workflows", "guided_analysis", "frontend.alert.deep_investigate") in matrix
-    assert ("POST /ai/workflows", "guided_analysis", "frontend.alert.decision_support") in matrix
-    assert ("POST /ai/workflows", "guided_analysis", "frontend.alert.artifact.checklist") in matrix
+    assert ("POST /ai/workflows/requests", "guided_analysis", "frontend.alert.deep_investigate") in matrix
+    assert ("POST /ai/workflows/requests", "guided_analysis", "frontend.alert.decision_support") in matrix
+    assert ("POST /ai/workflows/requests", "guided_analysis", "frontend.alert.artifact.checklist") in matrix
     assert ("POST /ai/workflows", "fast_triage", "frontend.floating_anakin.ask") in matrix
     assert ("POST /ai/workflows", "fast_triage", "frontend.floating_anakin.low_confidence_chooser") in matrix
     assert ("POST /ai/repo/chat", "developer_assistant", "frontend.repo_architecture.chat.factual") in matrix
@@ -298,7 +299,8 @@ def test_live_backend_sweep_runs_status_checks_and_representative_plan_only(monk
     assert sweep["representative_calls_planned"] == len(build_production_safe_live_sweep_matrix())
     assert sweep["actions_invoked"] == len(build_production_safe_live_sweep_matrix())
     assert status_paths == ["/ai/status", "/ai/repo/status"]
-    assert representative_paths.count("POST /ai/workflows") == 6
+    assert representative_paths.count("POST /ai/workflows") == 3
+    assert representative_paths.count("POST /ai/workflows/requests") == 3
     assert representative_paths.count("POST /ai/repo/chat") == 2
     assert "POST /ai/actions/preview" in representative_paths
     assert "soc_briefing_worker" in representative_paths

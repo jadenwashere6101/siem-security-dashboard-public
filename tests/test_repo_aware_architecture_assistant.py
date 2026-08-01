@@ -11,11 +11,14 @@ from core.ai.config import AI_MODE_LOCAL_ONLY, AiGatewayConfig
 from core.ai.models import AI_STATUS_SUCCESS, AiGatewayRequest, AiGatewayResponse, AiRequestMetadata
 from core.ai.repo_assistant_service import (
     AI_STATUS_INSUFFICIENT_EVIDENCE,
+    AI_STATUS_SCOPE_BOUNDARY,
     QUESTION_TYPE_ARCHITECTURAL,
     QUESTION_TYPE_EVALUATIVE,
     QUESTION_TYPE_FACTUAL,
+    QUESTION_TYPE_LIVE_SIEM_DATA,
     answer_repo_question,
     classify_repo_question,
+    is_live_siem_data_question,
 )
 from core.ai.repo_index import RepoIndex
 from core.ai.repo_sources import (
@@ -282,6 +285,50 @@ def test_repo_assistant_classifies_factual_architectural_and_evaluative_question
     assert classify_repo_question("Where is the SOAR worker implemented?") == QUESTION_TYPE_FACTUAL
     assert classify_repo_question("How does the AI gateway fit into the worker flow?") == QUESTION_TYPE_ARCHITECTURAL
     assert classify_repo_question("What is my most impressive feature?") == QUESTION_TYPE_EVALUATIVE
+
+
+def test_repo_assistant_detects_live_siem_data_questions():
+    assert is_live_siem_data_question("What is my most severe alert?") is True
+    assert is_live_siem_data_question("Which detections are currently firing?") is True
+    assert is_live_siem_data_question("Where is the alert route implemented?") is False
+    assert is_live_siem_data_question("What is my most impressive feature?") is False
+
+
+def test_repo_assistant_live_alert_question_returns_boundary_without_retrieval(tmp_path):
+    gateway = RecordingRepoGateway()
+    index = RepoIndex(_repo(tmp_path))
+
+    with patch.object(index, "search", side_effect=AssertionError("repo retrieval must not run for live SIEM data")):
+        result = answer_repo_question(
+            {"message": "What is my most severe alert?", "refresh": True},
+            gateway=gateway,
+            config=_config(),
+            index=index,
+        )
+
+    assert result.status_code == 200
+    assert result.payload["status"] == AI_STATUS_SCOPE_BOUNDARY
+    assert result.payload["question_type"] == QUESTION_TYPE_LIVE_SIEM_DATA
+    assert "requires live SIEM data" in result.payload["answer"]
+    assert "Dashboard" in result.payload["answer"]
+    assert result.payload["retrieval"]["skipped"] is True
+    assert result.payload["citations"] == []
+    assert gateway.requests == []
+
+
+def test_repo_assistant_mixed_live_data_question_fails_conservatively_without_fabrication(tmp_path):
+    gateway = RecordingRepoGateway()
+    result = answer_repo_question(
+        {"message": "In the repo assistant, summarize my open incidents right now."},
+        gateway=gateway,
+        config=_config(),
+        index=RepoIndex(_repo(tmp_path)),
+    )
+
+    assert result.payload["status"] == AI_STATUS_SCOPE_BOUNDARY
+    assert result.payload["question_type"] == QUESTION_TYPE_LIVE_SIEM_DATA
+    assert "live SIEM data" in result.payload["answer"]
+    assert gateway.requests == []
 
 
 def test_repo_assistant_returns_insufficient_evidence_without_provider_call(tmp_path):
