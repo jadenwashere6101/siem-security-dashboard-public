@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import replace
 
 from core.ai.acceptance_harness import (
+    ROOT_CAUSE_FRONTEND_CONTRACT_MISMATCH,
     ROOT_CAUSE_INVALID_RESPONSE,
+    build_frontend_realistic_request,
     build_acceptance_cases,
     discover_frontend_ai_options,
     render_markdown_report,
@@ -74,6 +76,63 @@ def test_frontend_realistic_contracts_are_discovered_from_component_sources():
     assert options["frontend.source_ip.explain_ip"]["context"] == {"source_ip": "203.0.113.77"}
     assert options["frontend.incident.summarize_incident"]["context"] == {"incident_id": 2002}
     assert options["frontend.response_registry.explain_response"]["context"] == {"registry_id": 4004}
+
+
+def test_floating_anakin_chat_builds_message_based_payload_contract():
+    payload, route = build_frontend_realistic_request(
+        {
+            "route": "POST /ai/chat",
+            "message": "What should I inspect first?",
+            "visible_context": {"active_section": "dashboard", "recent_alerts": [{"id": 1}]},
+            "client_history": [{"role": "user", "content": "previous"}],
+        }
+    )
+
+    assert route == "POST /ai/chat"
+    assert payload == {
+        "message": "What should I inspect first?",
+        "visible_context": {"active_section": "dashboard", "recent_alerts": [{"id": 1}]},
+        "client_history": [{"role": "user", "content": "previous"}],
+        "use_tools": True,
+        "tool_policy": {"max_tool_calls": 5, "time_window_hours": 24},
+    }
+    assert "context_type" not in payload
+    assert "action" not in payload
+    assert "context" not in payload
+
+
+def test_repo_architecture_chat_builds_message_based_payload_contract():
+    payload, route = build_frontend_realistic_request(
+        {
+            "route": "POST /ai/repo/chat",
+            "message": "Where is the SOAR worker implemented?",
+            "client_history": [{"role": "assistant", "content": "prior"}],
+            "refresh": True,
+        }
+    )
+
+    assert route == "POST /ai/repo/chat"
+    assert payload == {
+        "message": "Where is the SOAR worker implemented?",
+        "client_history": [{"role": "assistant", "content": "prior"}],
+        "refresh": True,
+    }
+    assert "context_type" not in payload
+    assert "action" not in payload
+    assert "context" not in payload
+
+
+def test_invalid_context_with_timeout_seconds_metadata_is_not_provider_timeout():
+    from core.ai.acceptance_harness import _root_cause_from_live
+
+    root_cause = _root_cause_from_live(
+        status="invalid_context",
+        error="Unsupported context_type: analyst_workspace",
+        http_status=400,
+        body={"metadata": {"timeout_seconds": 90}, "status": "invalid_context"},
+    )
+
+    assert root_cause == ROOT_CAUSE_FRONTEND_CONTRACT_MISMATCH
 
 
 def test_acceptance_harness_groups_failures_by_root_cause(monkeypatch):

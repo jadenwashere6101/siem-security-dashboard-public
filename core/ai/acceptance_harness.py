@@ -504,12 +504,19 @@ def _route_path(backend_path: str) -> str:
 
 
 def _root_cause_from_live(*, status: Any, error: Any, http_status: int, body: dict[str, Any]) -> str:
-    text = f"{status or ''} {error or ''} {json.dumps(body, default=str)[:1000]}".lower()
+    status_text = str(status or body.get("status") or "").lower()
+    error_text = str(error or body.get("error") or body.get("error_code") or "").lower()
+    text = f"{status_text} {error_text}"
     if "prompt" in text and ("too large" in text or "exceed" in text):
         return ROOT_CAUSE_PROMPT_TOO_LARGE
     if "stale" in text:
         return ROOT_CAUSE_STALE_CONTEXT
-    if "timeout" in text:
+    if (
+        status_text in {"provider_timeout", "timeout", "timed_out"}
+        or error_text in {"provider_timeout", "timeout", "timed_out"}
+        or "timed out" in error_text
+        or "timeout" in error_text
+    ):
         return ROOT_CAUSE_PROVIDER_TIMEOUT
     if "citation" in text or "grounding" in text:
         return ROOT_CAUSE_CITATION_CONTRACT
@@ -781,6 +788,28 @@ def _case_for_entry(
 
 
 def build_frontend_realistic_request(options: dict[str, Any], *, active_section: str = "dashboard") -> tuple[dict[str, Any], str]:
+    explicit_route = options.get("route")
+    if explicit_route == "POST /ai/chat":
+        return (
+            {
+                "message": options.get("message") or options.get("question") or "What should I inspect first in this workspace?",
+                "visible_context": options.get("visible_context") if isinstance(options.get("visible_context"), dict) else _visible_context_fixture(active_section),
+                "client_history": options.get("client_history") if isinstance(options.get("client_history"), list) else [],
+                "use_tools": options.get("useTools", True) is not False,
+                "tool_policy": options.get("toolPolicy") or {"max_tool_calls": 5, "time_window_hours": 24},
+            },
+            "POST /ai/chat",
+        )
+    if explicit_route == "POST /ai/repo/chat":
+        payload = {
+            "message": options.get("message") or options.get("question") or "What is my most impressive feature?",
+        }
+        if isinstance(options.get("client_history"), list):
+            payload["client_history"] = options["client_history"]
+        if isinstance(options.get("refresh"), bool):
+            payload["refresh"] = options["refresh"]
+        return payload, "POST /ai/repo/chat"
+
     normalized_context_type = _normalize_context_type(options.get("contextType"))
     entity_context = options.get("context") if isinstance(options.get("context"), dict) else {}
     should_include_visible = normalized_context_type not in ENTITY_AI_CONTEXT_TYPES
@@ -997,13 +1026,20 @@ def _frontend_options_for_entry(
 ) -> dict[str, Any]:
     if entry.key == "frontend.floating_chat.general":
         return {
+            "route": "POST /ai/chat",
             "message": "What should I inspect first in this workspace?",
             "visible_context": _visible_context_fixture("dashboard"),
             "client_history": [],
             "source": "FloatingSiemChat",
         }
     if entry.key == "frontend.repo_architecture.chat":
-        return {"message": "What is my most impressive feature?", "source": "RepoArchitectureAssistantPanel"}
+        return {
+            "route": "POST /ai/repo/chat",
+            "message": "What is my most impressive feature?",
+            "client_history": [],
+            "refresh": False,
+            "source": "RepoArchitectureAssistantPanel",
+        }
     if entry.key == "worker.soc_briefing.manual_and_scheduled":
         return {"contextType": "soc_briefing", "action": "run_now", "source": "SocBriefingsPanel"}
     if entry.key in frontend_options:
