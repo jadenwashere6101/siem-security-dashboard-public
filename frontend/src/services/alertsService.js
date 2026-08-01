@@ -18,6 +18,9 @@ const summaryFallback = {
     window_start: null,
   },
   map_markers: [],
+  map_markers_total: 0,
+  map_markers_returned: 0,
+  map_markers_truncated: false,
 };
 
 function buildAlertQuery({

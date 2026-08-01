@@ -1,5 +1,6 @@
 import hashlib
 import os
+import time
 
 import requests
 from flask import current_app
@@ -8,9 +9,102 @@ from core.db import create_blocked_ip_record, get_db_connection
 
 
 geo_cache = {}
+geo_negative_cache = {}
+geo_provider_state = {
+    "failure_count": 0,
+    "opened_until": 0.0,
+    "last_log_at": 0.0,
+    "last_failure_reason": None,
+}
 REPUTATION_CACHE = {}
 ABUSEIPDB_API_KEY = os.getenv("SIEM_ABUSEIPDB_API_KEY") or os.getenv("ABUSEIPDB_API_KEY")
 CORRELATION_BONUS_CAP = 8
+
+
+def _int_env(name, default):
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+GEOLOCATION_NEGATIVE_CACHE_TTL_SECONDS = _int_env("GEOLOCATION_NEGATIVE_CACHE_TTL_SECONDS", 900)
+GEOLOCATION_PROVIDER_FAILURE_THRESHOLD = _int_env("GEOLOCATION_PROVIDER_FAILURE_THRESHOLD", 3)
+GEOLOCATION_PROVIDER_COOLDOWN_SECONDS = _int_env("GEOLOCATION_PROVIDER_COOLDOWN_SECONDS", 60)
+GEOLOCATION_FAILURE_LOG_THROTTLE_SECONDS = _int_env("GEOLOCATION_FAILURE_LOG_THROTTLE_SECONDS", 60)
+
+
+def _unknown_location():
+    return {
+        "country": None,
+        "city": None,
+        "lat": None,
+        "lon": None,
+    }
+
+
+def _log_geolocation_failure(message, *args):
+    try:
+        current_app.logger.warning(message, *args)
+    except RuntimeError:
+        return
+
+
+def _cache_unknown_location(ip_address, reason, now=None):
+    now = time.monotonic() if now is None else now
+    geo_negative_cache[ip_address] = {
+        "location": _unknown_location(),
+        "expires_at": now + max(1, GEOLOCATION_NEGATIVE_CACHE_TTL_SECONDS),
+        "reason": reason,
+    }
+    if len(geo_negative_cache) > 5000:
+        geo_negative_cache.clear()
+    return geo_negative_cache[ip_address]["location"]
+
+
+def _record_geolocation_provider_failure(ip_address, reason, now=None):
+    now = time.monotonic() if now is None else now
+    geo_provider_state["failure_count"] = int(geo_provider_state.get("failure_count") or 0) + 1
+    geo_provider_state["last_failure_reason"] = reason
+
+    if geo_provider_state["failure_count"] >= max(1, GEOLOCATION_PROVIDER_FAILURE_THRESHOLD):
+        geo_provider_state["opened_until"] = now + max(1, GEOLOCATION_PROVIDER_COOLDOWN_SECONDS)
+
+    last_log_at = float(geo_provider_state.get("last_log_at") or 0.0)
+    if now - last_log_at >= max(1, GEOLOCATION_FAILURE_LOG_THROTTLE_SECONDS):
+        geo_provider_state["last_log_at"] = now
+        if geo_provider_state.get("opened_until", 0.0) > now:
+            _log_geolocation_failure(
+                "Geolocation provider unavailable; circuit open for %.0fs after failure for ip=%s reason=%s",
+                geo_provider_state["opened_until"] - now,
+                ip_address,
+                reason,
+            )
+        else:
+            _log_geolocation_failure(
+                "Geolocation lookup failed for ip=%s reason=%s",
+                ip_address,
+                reason,
+            )
+
+
+def _reset_geolocation_provider_failures():
+    geo_provider_state["failure_count"] = 0
+    geo_provider_state["opened_until"] = 0.0
+    geo_provider_state["last_failure_reason"] = None
+
+
+def reset_geolocation_cache_state():
+    geo_cache.clear()
+    geo_negative_cache.clear()
+    geo_provider_state.update(
+        {
+            "failure_count": 0,
+            "opened_until": 0.0,
+            "last_log_at": 0.0,
+            "last_failure_reason": None,
+        }
+    )
 
 
 def _get_reputation_label(score):
@@ -251,20 +345,40 @@ def get_ip_reputation(source_ip, cur=None):
 
 
 def lookup_ip_location(ip_address):
-    try:
-        if ip_address in geo_cache:
-            return geo_cache[ip_address]
+    ip_address = str(ip_address or "").strip()
+    if not ip_address:
+        return _unknown_location()
 
+    now = time.monotonic()
+
+    if ip_address in geo_cache:
+        return geo_cache[ip_address]
+
+    negative_entry = geo_negative_cache.get(ip_address)
+    if negative_entry:
+        if float(negative_entry.get("expires_at") or 0.0) > now:
+            return negative_entry["location"]
+        geo_negative_cache.pop(ip_address, None)
+
+    if float(geo_provider_state.get("opened_until") or 0.0) > now:
+        return _cache_unknown_location(ip_address, "provider_circuit_open", now)
+
+    try:
         response = requests.get(f"http://ip-api.com/json/{ip_address}", timeout=2)
+        if getattr(response, "status_code", 200) != 200:
+            reason = f"http_{response.status_code}"
+            _record_geolocation_provider_failure(ip_address, reason, now)
+            return _cache_unknown_location(ip_address, reason, now)
+
         data = response.json()
+        if not isinstance(data, dict):
+            reason = "malformed_response"
+            _record_geolocation_provider_failure(ip_address, reason, now)
+            return _cache_unknown_location(ip_address, reason, now)
 
         if data.get("status") != "success":
-            return {
-                "country": None,
-                "city": None,
-                "lat": None,
-                "lon": None,
-            }
+            reason = str(data.get("message") or data.get("status") or "provider_unknown")
+            return _cache_unknown_location(ip_address, reason, now)
 
         location = {
             "country": data.get("country"),
@@ -272,19 +386,16 @@ def lookup_ip_location(ip_address):
             "lat": data.get("lat"),
             "lon": data.get("lon"),
         }
+        _reset_geolocation_provider_failures()
         geo_cache[ip_address] = location
         if len(geo_cache) > 5000:
             geo_cache.clear()
         return location
 
     except Exception as e:
-        current_app.logger.error("Error looking up IP location for %s: %s", ip_address, e)
-        return {
-            "country": None,
-            "city": None,
-            "lat": None,
-            "lon": None,
-        }
+        reason = type(e).__name__
+        _record_geolocation_provider_failure(ip_address, reason, now)
+        return _cache_unknown_location(ip_address, reason, now)
 
 
 def lookup_ip_reputation(ip_address):

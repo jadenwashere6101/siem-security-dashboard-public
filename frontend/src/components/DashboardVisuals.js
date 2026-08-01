@@ -10,6 +10,7 @@ function DashboardVisuals({
   topIPChartData,
   alertTimelineData,
   mapMarkers,
+  mapMarkersMeta,
   chartsGridStyle,
   tooltipStyle,
   tooltipLabelStyle,
@@ -106,6 +107,11 @@ function DashboardVisuals({
           </p>
         </div>
         <div style={{ padding: "20px" }}>
+          {mapMarkersMeta?.truncated ? (
+            <div style={mapLimitNoticeStyle} role="status">
+              Showing top {mapMarkersMeta.returned} of {mapMarkersMeta.total} sources
+            </div>
+          ) : null}
           <MapView alerts={mapMarkers} onOpenResponseRegistry={onOpenResponseRegistry} />
         </div>
       </div>
@@ -128,6 +134,19 @@ const agentClusterLabelStyle = {
   fontWeight: 800,
   letterSpacing: "0.04em",
   textTransform: "uppercase",
+};
+
+const mapLimitNoticeStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  margin: "0 0 12px",
+  padding: "6px 10px",
+  borderRadius: "6px",
+  border: "1px solid rgba(251, 191, 36, 0.32)",
+  background: "rgba(251, 191, 36, 0.1)",
+  color: "#facc15",
+  fontSize: "12px",
+  fontWeight: 700,
 };
 
 export default DashboardVisuals;

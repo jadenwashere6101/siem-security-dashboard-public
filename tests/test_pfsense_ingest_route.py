@@ -157,6 +157,28 @@ def test_valid_firewall_block_ingests_successfully(client, monkeypatch, postgres
     assert event[8]["destination_port"] == 443
 
 
+def test_valid_firewall_block_ingests_when_geolocation_is_unavailable(client, monkeypatch, postgres_db):
+    monkeypatch.setenv("SIEM_INGEST_API_KEY", VALID_API_KEY)
+    install_route_db(monkeypatch, postgres_db)
+    _conn, cur = postgres_db
+    import routes.ingest_routes as ingest_routes
+
+    monkeypatch.setattr(
+        ingest_routes,
+        "lookup_ip_location",
+        lambda _ip: {"country": None, "city": None, "lat": None, "lon": None},
+    )
+    source_ip = "198.51.100.66"
+
+    response = post_pfsense(client, valid_pfsense_block_payload(source_ip=source_ip))
+
+    assert response.status_code == 201
+    event = fetch_event(cur, source_ip)
+    assert event[0] == "firewall_block"
+    assert event[2] == source_ip
+    assert "location" not in event[8]
+
+
 def test_pfsense_event_timestamp_reaches_database_contract(client, monkeypatch, postgres_db):
     monkeypatch.setenv("SIEM_INGEST_API_KEY", VALID_API_KEY)
     install_route_db(monkeypatch, postgres_db)

@@ -1501,3 +1501,52 @@ def test_get_alerts_summary_excludes_synthetic_ips_before_aggregation_limit(clie
         "8.8.8.4",
         "8.8.8.5",
     }
+
+
+def test_get_alerts_summary_caps_map_markers_and_reports_metadata(client, postgres_db, monkeypatch):
+    conn, cur = postgres_db
+    monkeypatch.setenv("ALERT_SUMMARY_MAP_MARKER_LIMIT", "3")
+    values = []
+    params = []
+    for index, source_ip in enumerate(["8.8.4.101", "8.8.4.102", "8.8.4.103", "8.8.4.104", "8.8.4.105"]):
+        for repeat in range(index + 1):
+            values.append("(%s, %s, %s, %s, %s, %s, %s, %s, %s)")
+            params.extend(
+                [
+                    "capped_marker_source",
+                    "medium",
+                    source_ip,
+                    "pfsense",
+                    "firewall",
+                    f"marker source {source_ip} repeat {repeat}",
+                    "open",
+                    40.0 + index,
+                    -70.0 - index,
+                ]
+            )
+    cur.execute(
+        f"""
+        INSERT INTO alerts (
+            alert_type, severity, source_ip, source, source_type, message, status, latitude, longitude
+        )
+        VALUES {", ".join(values)}
+        """,
+        params,
+    )
+    conn.commit()
+
+    _login_as_super_admin(client)
+    summary_resp = _fetch_alert_summary_response(client, conn)
+
+    assert summary_resp.status_code == 200
+    payload = summary_resp.get_json()
+    assert payload["metrics"]["unique_source_ips"] == 5
+    assert payload["map_markers_total"] == 5
+    assert payload["map_markers_returned"] == 3
+    assert payload["map_markers_truncated"] is True
+    assert len(payload["map_markers"]) == 3
+    assert [marker["source_ip"] for marker in payload["map_markers"]] == [
+        "8.8.4.105",
+        "8.8.4.104",
+        "8.8.4.103",
+    ]

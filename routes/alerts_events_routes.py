@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -86,6 +87,8 @@ PFSENSE_WHY_FIRED_LABELS = {
 }
 DEFAULT_ALERT_LIMIT = 50
 MAX_ALERT_LIMIT = 100
+DEFAULT_ALERT_SUMMARY_MAP_MARKER_LIMIT = 500
+MAX_ALERT_SUMMARY_MAP_MARKER_LIMIT = 5000
 VALID_ALERT_SORT_OPTIONS = frozenset({"newest", "oldest", "severity"})
 VALID_RECON_STATUS_FILTERS = frozenset({"open", "monitoring", "resolved"})
 VALID_RECON_SEVERITY_FILTERS = frozenset({"low", "medium", "high"})
@@ -127,6 +130,15 @@ _ALERT_SELECT = """
         context
     FROM alerts
 """
+
+
+def _get_alert_summary_map_marker_limit() -> int:
+    raw_value = os.getenv("ALERT_SUMMARY_MAP_MARKER_LIMIT", str(DEFAULT_ALERT_SUMMARY_MAP_MARKER_LIMIT))
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        return DEFAULT_ALERT_SUMMARY_MAP_MARKER_LIMIT
+    return max(1, min(parsed, MAX_ALERT_SUMMARY_MAP_MARKER_LIMIT))
 
 
 def _parse_non_negative_int(value, default, field_name):
@@ -411,6 +423,20 @@ def _fetch_map_marker_rows(
 ):
     source_ip_exclusion_params = source_ip_exclusion_params or []
     source_where_clause = _build_source_ip_where_clause(where_clause, source_ip_exclusion_clause)
+    marker_limit = _get_alert_summary_map_marker_limit()
+    total_query = f"""
+        WITH filtered AS (
+            SELECT source_ip, latitude, longitude
+            FROM alerts
+            {source_where_clause}
+        )
+        SELECT COUNT(DISTINCT host(source_ip))
+        FROM filtered
+        WHERE latitude IS NOT NULL
+          AND longitude IS NOT NULL
+    """
+    cur.execute(total_query, tuple([*params, *source_ip_exclusion_params]))
+    total_markers = int(cur.fetchone()[0] or 0)
     query = f"""
         WITH filtered AS (
             SELECT *
@@ -477,9 +503,10 @@ def _fetch_map_marker_rows(
         JOIN source_counts
           ON source_counts.source_ip_key = host(latest.source_ip)
         ORDER BY source_counts.alert_count DESC, latest.created_at DESC, latest.id DESC
+        LIMIT %s
     """
-    cur.execute(query, tuple([*params, *source_ip_exclusion_params]))
-    return cur.fetchall()
+    cur.execute(query, tuple([*params, *source_ip_exclusion_params, marker_limit]))
+    return cur.fetchall(), total_markers
 
 
 def _resolve_alert_list_response_outcomes(conn, alert_ids: list[int]) -> dict[int, dict | None]:
@@ -1121,7 +1148,7 @@ def get_alerts_summary():
             params,
             query_args["timeline_range"],
         )
-        marker_rows = _fetch_map_marker_rows(
+        marker_rows, map_markers_total = _fetch_map_marker_rows(
             cur,
             where_clause,
             params,
@@ -1158,6 +1185,9 @@ def get_alerts_summary():
                         "window_start": timeline_payload["window_start"],
                     },
                     "map_markers": map_markers,
+                    "map_markers_total": map_markers_total,
+                    "map_markers_returned": len(map_markers),
+                    "map_markers_truncated": len(map_markers) < map_markers_total,
                 }
             ),
             200,

@@ -9,6 +9,7 @@ function DashboardSection({
   topIPChartData,
   alertTimelineData,
   mapMarkers,
+  mapMarkersMeta,
   alerts,
   alertsTableRef,
   canTakeAlertActions,
@@ -121,6 +122,7 @@ function DashboardSection({
         topIPChartData={topIPChartData}
         alertTimelineData={alertTimelineData}
         mapMarkers={mapMarkers}
+        mapMarkersMeta={mapMarkersMeta}
         chartsGridStyle={chartsGridStyle}
         tooltipStyle={tooltipStyle}
         tooltipLabelStyle={tooltipLabelStyle}

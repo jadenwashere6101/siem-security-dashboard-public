@@ -142,6 +142,11 @@ const createAlertSummaryState = () => ({
     windowStart: null,
   },
   mapMarkers: [],
+  mapMarkersMeta: {
+    total: 0,
+    returned: 0,
+    truncated: false,
+  },
   loading: true,
   refreshing: false,
   error: "",
@@ -653,6 +658,11 @@ function AppInner() {
           windowStart: summaryData?.timeline_meta?.window_start || null,
         },
         mapMarkers: Array.isArray(summaryData?.map_markers) ? summaryData.map_markers : [],
+        mapMarkersMeta: {
+          total: Number(summaryData?.map_markers_total) || 0,
+          returned: Number(summaryData?.map_markers_returned) || 0,
+          truncated: Boolean(summaryData?.map_markers_truncated),
+        },
         loading: false,
         refreshing: false,
         error: "",
@@ -671,6 +681,9 @@ function AppInner() {
         topSourceIps: current.hasLoadedOnce ? current.topSourceIps : [],
         timeline: current.hasLoadedOnce ? current.timeline : [],
         mapMarkers: current.hasLoadedOnce ? current.mapMarkers : [],
+        mapMarkersMeta: current.hasLoadedOnce
+          ? current.mapMarkersMeta
+          : { total: 0, returned: 0, truncated: false },
         loading: false,
         refreshing: false,
         error: message,
@@ -1621,6 +1634,10 @@ function AppInner() {
     () => alertSummaryState.mapMarkers,
     [alertSummaryState.mapMarkers]
   );
+  const alertMapMarkersMeta = useMemo(
+    () => alertSummaryState.mapMarkersMeta,
+    [alertSummaryState.mapMarkersMeta]
+  );
 
   const alertsBusy = alertsState.loading || alertsState.refreshing;
   const summaryBusy = alertSummaryState.loading || alertSummaryState.refreshing;
@@ -2221,6 +2238,7 @@ function AppInner() {
             topIPChartData={topIPChartData}
             alertTimelineData={alertTimelineData}
             mapMarkers={alertMapMarkers}
+            mapMarkersMeta={alertMapMarkersMeta}
             alerts={alertsState.items}
             alertsTableRef={alertsTableRef}
             canTakeAlertActions={canTakeAlertActions}
