@@ -24,6 +24,7 @@ from core.ai.soc_briefing_investigation_engine import (
     run_scheduled_investigation,
 )
 from core.ai.soc_briefing_runtime_store import (
+    BRIEFING_MODE_SCHEDULED_AUTONOMOUS,
     SERVICE_ACTOR,
     SERVICE_ACTOR_ROLE,
     create_or_get_job,
@@ -31,6 +32,7 @@ from core.ai.soc_briefing_runtime_store import (
     create_run,
     create_schedule,
     idempotency_key,
+    update_controls,
 )
 from core.ai.soc_tools import SocToolExecutionSummary, SocToolResult, SocToolSource
 from core.ai.soc_briefing_worker import SocBriefingWorkerConfig, run_soc_briefing_worker
@@ -48,31 +50,54 @@ class NoCloseConnection:
 
 
 class FakeGateway:
-    def __init__(self, *, content=None, status=AI_STATUS_SUCCESS, error=None, error_code=None, paid_request=False):
+    def __init__(self, *, content=None, status=AI_STATUS_SUCCESS, error=None, error_code=None, paid_request=False, responses=None):
         self.calls = []
         self.content = content
         self.status = status
         self.error = error
         self.error_code = error_code
         self.paid_request = paid_request
+        self.responses = list(responses or [])
 
     def generate(self, request):
         self.calls.append(request)
-        return AiGatewayResponse(
-            status=self.status,
+        if self.responses:
+            response = self.responses.pop(0)
+            if isinstance(response, AiGatewayResponse):
+                return response
+            if isinstance(response, dict):
+                return self._response(
+                    content=response.get("content"),
+                    status=response.get("status", AI_STATUS_SUCCESS),
+                    error=response.get("error"),
+                    error_code=response.get("error_code"),
+                    paid_request=bool(response.get("paid_request", False)),
+                )
+            return self._response(content=response)
+        return self._response(
             content=self.content,
+            status=self.status,
             error=self.error,
+            error_code=self.error_code,
+            paid_request=self.paid_request,
+        )
+
+    def _response(self, *, content=None, status=AI_STATUS_SUCCESS, error=None, error_code=None, paid_request=False):
+        return AiGatewayResponse(
+            status=status,
+            content=content,
+            error=error,
             metadata=AiRequestMetadata(
                 provider="fake-local",
                 model="fake-model",
                 mode="local_only",
-                status=self.status,
+                status=status,
                 estimated_prompt_tokens=10,
                 estimated_completion_tokens=5,
-                estimated_cost_usd=0.01 if self.paid_request else 0,
-                local_request=not self.paid_request,
-                paid_request=self.paid_request,
-                error_code=self.error_code,
+                estimated_cost_usd=0.01 if paid_request else 0,
+                local_request=not paid_request,
+                paid_request=paid_request,
+                error_code=error_code,
             ),
         )
 
@@ -152,6 +177,20 @@ def _success_content():
     )
 
 
+def _success_content_with_evidence():
+    return json.dumps(
+        {
+            "summary": "Critical alert trend needs analyst attention.",
+            "sections": {
+                **{key: [] for key in BRIEFING_SECTIONS},
+                "critical_findings": [{"title": "Critical firewall scan", "source_path": "/alerts/1"}],
+                "evidence": [{"source_path": "/alerts/1", "tool_name": "get_alert_detail"}],
+                "recommendations": [{"title": "Review alert 1", "read_only": True}],
+            },
+        }
+    )
+
+
 def _tool_summary(*, truncated=False):
     source = SocToolSource(
         tool_name="get_alert_detail",
@@ -221,7 +260,7 @@ def test_successful_engine_persists_structured_briefing_audit_and_steps(postgres
     assert len(gateway.calls) == 1
     prompt = gateway.calls[0].prompt
     assert "no_tool_calls" in prompt
-    assert "secret_token" not in prompt
+    assert "hidden" not in prompt
     with conn.cursor() as cur:
         cur.execute("SELECT status, lifecycle_status, content_status, summary, sections FROM soc_briefings")
         status, lifecycle, content_status, summary, sections = cur.fetchone()
@@ -264,7 +303,8 @@ def test_deduplication_skips_recent_same_fingerprint(postgres_db):
     conn, _cur = postgres_db
     alert_id = _insert_alert(conn)
     schedule, window, job, run = _schedule_window_job_run(conn)
-    candidate = plan_investigation_candidates(conn, window=window, budget=InvestigationBudget(max_entities=4))[0]
+    candidates, _skipped = plan_investigation_candidates(conn, window=window, budget=InvestigationBudget(max_entities=4))
+    candidate = candidates[0]
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -312,7 +352,8 @@ def test_new_evidence_bypasses_deduplication(postgres_db):
     conn, _cur = postgres_db
     _insert_alert(conn, severity="medium")
     schedule, window, job, run = _schedule_window_job_run(conn)
-    candidate = plan_investigation_candidates(conn, window=window, budget=InvestigationBudget(max_entities=4))[0]
+    candidates, _skipped = plan_investigation_candidates(conn, window=window, budget=InvestigationBudget(max_entities=4))
+    candidate = candidates[0]
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -437,6 +478,207 @@ def test_gateway_timeout_and_malformed_output_become_partial_briefings(postgres_
     assert malformed.error_code == "malformed_provider_output"
 
 
+def test_malformed_structured_briefing_json_is_repaired_once(postgres_db):
+    conn, _cur = postgres_db
+    _insert_alert(conn)
+    _schedule, _window, job, run = _schedule_window_job_run(conn)
+    gateway = FakeGateway(responses=["not-json", _success_content_with_evidence()])
+
+    outcome = run_scheduled_investigation(
+        conn,
+        job=job,
+        run=run,
+        gateway_config=AiGatewayConfig(
+            mode=AI_MODE_LOCAL_ONLY,
+            configured_mode=AI_MODE_LOCAL_ONLY,
+            local_base_url="http://127.0.0.1:11434",
+            local_model="llama",
+        ),
+        gateway=gateway,
+        tool_executor=lambda _planned, _context: _tool_summary(),
+    )
+    conn.commit()
+
+    assert outcome.run_status == "success"
+    assert outcome.summary == "Critical alert trend needs analyst attention."
+    assert len(gateway.calls) == 2
+    repair_request = gateway.calls[1]
+    assert repair_request.metadata["action"] == "soc_briefing_repair"
+    assert repair_request.metadata["repair_attempt"] == 1
+    assert repair_request.metadata["read_only"] is True
+    assert repair_request.metadata["no_actions"] is True
+    assert "secret_token" not in repair_request.prompt
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT sanitized_input, decision_summary
+            FROM soc_briefing_run_steps
+            WHERE run_id = %s AND step_type = 'ai_synthesis'
+            """,
+            (run["id"],),
+        )
+        sanitized_input, decision_summary = cur.fetchone()
+    assert sanitized_input["repair_attempted"] is True
+    assert sanitized_input["repair_count"] == 1
+    assert "bounded JSON repair" in decision_summary
+
+
+def test_unrecoverable_malformed_structured_briefing_fails_closed_after_one_repair(postgres_db):
+    conn, _cur = postgres_db
+    _insert_alert(conn)
+    _schedule, _window, job, run = _schedule_window_job_run(conn)
+    gateway = FakeGateway(responses=["not-json", "still-not-json"])
+
+    outcome = run_scheduled_investigation(
+        conn,
+        job=job,
+        run=run,
+        gateway_config=AiGatewayConfig(
+            mode=AI_MODE_LOCAL_ONLY,
+            configured_mode=AI_MODE_LOCAL_ONLY,
+            local_base_url="http://127.0.0.1:11434",
+            local_model="llama",
+        ),
+        gateway=gateway,
+        tool_executor=lambda _planned, _context: _tool_summary(),
+    )
+    conn.commit()
+
+    assert outcome.run_status == "partial"
+    assert outcome.error_code == "malformed_provider_output"
+    assert len(gateway.calls) == 2
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT status, error_code, sanitized_input
+            FROM soc_briefing_run_steps
+            WHERE run_id = %s AND step_type = 'ai_synthesis'
+            """,
+            (run["id"],),
+        )
+        status, error_code, sanitized_input = cur.fetchone()
+        cur.execute("SELECT status, sections, evidence_refs FROM soc_briefings WHERE run_id = %s", (run["id"],))
+        briefing_status, sections, evidence_refs = cur.fetchone()
+    assert (status, error_code) == ("partial", "malformed_provider_output")
+    assert sanitized_input["repair_attempted"] is True
+    assert sanitized_input["repair_count"] == 1
+    assert "AI briefing response was not valid JSON." in sanitized_input["validation_errors"]
+    assert briefing_status == "partial"
+    assert sections["evidence"] == evidence_refs
+
+
+def test_missing_required_sections_are_invalid_until_repaired(postgres_db):
+    conn, _cur = postgres_db
+    _insert_alert(conn)
+    _schedule, _window, job, run = _schedule_window_job_run(conn)
+    incomplete = json.dumps({"summary": "Incomplete", "sections": {"alerts_reviewed": []}})
+    gateway = FakeGateway(responses=[incomplete, _success_content()])
+
+    outcome = run_scheduled_investigation(
+        conn,
+        job=job,
+        run=run,
+        gateway_config=AiGatewayConfig(
+            mode=AI_MODE_LOCAL_ONLY,
+            configured_mode=AI_MODE_LOCAL_ONLY,
+            local_base_url="http://127.0.0.1:11434",
+            local_model="llama",
+        ),
+        gateway=gateway,
+        tool_executor=lambda _planned, _context: _tool_summary(),
+    )
+    conn.commit()
+
+    assert outcome.run_status == "success"
+    assert len(gateway.calls) == 2
+    assert "sections.critical_findings is required" in gateway.calls[1].prompt
+
+
+def test_non_array_sections_and_truncated_output_use_bounded_repair(postgres_db):
+    conn, _cur = postgres_db
+    _insert_alert(conn)
+    _schedule, _window, job, run = _schedule_window_job_run(conn)
+    truncated = '{"summary":"Truncated","sections":{"alerts_reviewed":[]'
+    gateway = FakeGateway(responses=[truncated, _success_content()])
+
+    outcome = run_scheduled_investigation(
+        conn,
+        job=job,
+        run=run,
+        gateway_config=AiGatewayConfig(
+            mode=AI_MODE_LOCAL_ONLY,
+            configured_mode=AI_MODE_LOCAL_ONLY,
+            local_base_url="http://127.0.0.1:11434",
+            local_model="llama",
+        ),
+        gateway=gateway,
+        tool_executor=lambda _planned, _context: _tool_summary(),
+    )
+
+    assert outcome.run_status == "success"
+    assert len(gateway.calls) == 2
+    assert len(gateway.calls[1].prompt) < 3200
+
+    _schedule2, _window2, job2, run2 = _schedule_window_job_run(conn, now=datetime(2026, 7, 27, 8, 30, tzinfo=timezone.utc))
+    non_array = json.dumps(
+        {
+            "summary": "Wrong shape",
+            "sections": {key: [] for key in BRIEFING_SECTIONS} | {"recommendations": "review this"},
+        }
+    )
+    gateway2 = FakeGateway(responses=[non_array, _success_content()])
+    outcome2 = run_scheduled_investigation(
+        conn,
+        job=job2,
+        run=run2,
+        gateway_config=AiGatewayConfig(
+            mode=AI_MODE_LOCAL_ONLY,
+            configured_mode=AI_MODE_LOCAL_ONLY,
+            local_base_url="http://127.0.0.1:11434",
+            local_model="llama",
+        ),
+        gateway=gateway2,
+        tool_executor=lambda _planned, _context: _tool_summary(),
+    )
+
+    assert outcome2.run_status == "success"
+    assert len(gateway2.calls) == 2
+    assert "sections.recommendations must be an array" in gateway2.calls[1].prompt
+
+
+def test_schema_invalid_provider_output_is_not_accepted_by_filling_sections(postgres_db):
+    conn, _cur = postgres_db
+    _insert_alert(conn)
+    _schedule, _window, job, run = _schedule_window_job_run(conn)
+    incomplete = json.dumps({"summary": "Incomplete", "sections": {"alerts_reviewed": []}})
+    gateway = FakeGateway(responses=[incomplete, incomplete])
+
+    outcome = run_scheduled_investigation(
+        conn,
+        job=job,
+        run=run,
+        gateway_config=AiGatewayConfig(
+            mode=AI_MODE_LOCAL_ONLY,
+            configured_mode=AI_MODE_LOCAL_ONLY,
+            local_base_url="http://127.0.0.1:11434",
+            local_model="llama",
+        ),
+        gateway=gateway,
+        tool_executor=lambda _planned, _context: _tool_summary(),
+    )
+    conn.commit()
+
+    assert outcome.run_status == "partial"
+    assert outcome.error_code == "malformed_provider_output"
+    assert len(gateway.calls) == 2
+    with conn.cursor() as cur:
+        cur.execute("SELECT status, summary, sections, evidence_refs FROM soc_briefings WHERE run_id = %s", (run["id"],))
+        status, summary, sections, evidence_refs = cur.fetchone()
+    assert status == "partial"
+    assert summary == "AI provider returned malformed briefing JSON; saved deterministic partial briefing."
+    assert sections["evidence"] == evidence_refs
+
+
 def test_paid_fallback_modes_are_blocked_for_scheduled_work(postgres_db):
     conn, _cur = postgres_db
     _insert_alert(conn)
@@ -493,6 +735,12 @@ def test_persistence_failure_aborts_loudly(postgres_db, monkeypatch):
 def test_worker_invokes_investigation_engine_after_claim_without_creating_extra_runtime_work(postgres_db):
     conn, _cur = postgres_db
     _insert_alert(conn)
+    update_controls(
+        conn,
+        mode=BRIEFING_MODE_SCHEDULED_AUTONOMOUS,
+        schedules_paused=False,
+        updated_by="test",
+    )
     create_schedule(
         conn,
         name="Morning SOC briefing",

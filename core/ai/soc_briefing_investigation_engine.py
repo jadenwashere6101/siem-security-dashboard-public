@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 import json
+import re
 import time
 from typing import Any, Callable
 
@@ -82,7 +83,7 @@ class InvestigationBudget:
     max_evidence_refs: int = 40
     max_prompt_chars: int = 8000
     max_prompt_tokens: int = 3000
-    max_completion_tokens: int = 800
+    max_completion_tokens: int = 1200
     max_estimated_cost_usd: float = 0.0
     dedup_horizon_hours: int = 24
 
@@ -518,7 +519,8 @@ def _synthesize_briefing(
     scheduled_config = _scheduled_gateway_config(gateway_config)
     started = time.monotonic()
 
-    response = (gateway or AiGateway(config=scheduled_config)).generate(
+    synthesis_gateway = gateway or AiGateway(config=scheduled_config)
+    response = synthesis_gateway.generate(
         AiGatewayRequest(
             prompt=prompt,
             capability="scheduled_soc_briefing",
@@ -571,7 +573,42 @@ def _synthesize_briefing(
             latency_ms=latency_ms,
             prompt_tokens=tokens,
         )
-    parsed = _parse_structured_response(response.content)
+    parsed, validation_errors = _validate_structured_response(response.content)
+    repair_attempted = False
+    if parsed is None:
+        repair_attempted = True
+        repair_started = time.monotonic()
+        repaired = _attempt_structured_briefing_repair(
+            synthesis_gateway,
+            original_content=response.content,
+            validation_errors=validation_errors,
+            profile_name=profile_for_soc_briefing(),
+        )
+        latency_ms += int((time.monotonic() - repair_started) * 1000)
+        if repaired is not None:
+            repair_metadata = repaired.metadata.as_dict()
+            if repair_metadata.get("paid_request") or (repair_metadata.get("estimated_cost_usd") or 0) > budget.max_estimated_cost_usd:
+                return _synthesis_result(
+                    RUN_STATUS_BLOCKED,
+                    JOB_STATUS_BLOCKED,
+                    "blocked",
+                    "blocked",
+                    "paid_fallback_blocked",
+                    "Scheduled autonomous investigation blocked paid provider spending during JSON repair.",
+                    selected=selected,
+                    skipped=skipped,
+                    evidence_refs=evidence_refs,
+                    step_status=STEP_STATUS_BLOCKED,
+                    ai_gateway_status=AI_STATUS_FALLBACK_BLOCKED,
+                    provider_status=repair_metadata.get("provider"),
+                    content_status="blocked",
+                    latency_ms=latency_ms,
+                    prompt_tokens=tokens,
+                    repair_attempted=repair_attempted,
+                    validation_errors=validation_errors,
+                )
+            response = repaired
+            parsed, validation_errors = _validate_structured_response(response.content)
     if parsed is None:
         return _synthesis_result(
             RUN_STATUS_PARTIAL,
@@ -589,6 +626,8 @@ def _synthesize_briefing(
             content_status="ready",
             latency_ms=latency_ms,
             prompt_tokens=tokens,
+            repair_attempted=repair_attempted,
+            validation_errors=validation_errors,
         )
     return {
         "run_status": RUN_STATUS_SUCCESS,
@@ -599,8 +638,17 @@ def _synthesize_briefing(
         "summary": _bounded_text(parsed.get("summary"), 2000) or "Scheduled SOC briefing generated.",
         "sections": _ensure_sections(parsed.get("sections"), selected=selected, skipped=skipped, evidence_refs=evidence_refs),
         "step_status": STEP_STATUS_SUCCESS,
-        "sanitized_input": {"prompt_tokens": tokens, "paid_request": False},
-        "decision_summary": "Generated structured advisory scheduled SOC briefing through AI Gateway.",
+        "sanitized_input": {
+            "prompt_tokens": tokens,
+            "paid_request": False,
+            "repair_attempted": repair_attempted,
+            "repair_count": 1 if repair_attempted else 0,
+        },
+        "decision_summary": (
+            "Generated structured advisory scheduled SOC briefing through AI Gateway."
+            if not repair_attempted
+            else "Generated structured advisory scheduled SOC briefing after one bounded JSON repair."
+        ),
         "error_code": None,
         "error_message": None,
         "ai_gateway_status": response.status,
@@ -659,6 +707,8 @@ def _synthesis_result(
     content_status: str,
     latency_ms: int = 0,
     prompt_tokens: int = 0,
+    repair_attempted: bool = False,
+    validation_errors: list[str] | None = None,
 ) -> dict[str, Any]:
     return {
         "run_status": run_status,
@@ -669,7 +719,13 @@ def _synthesis_result(
         "summary": message,
         "sections": _deterministic_sections(selected=selected, skipped=skipped, evidence_refs=evidence_refs, message=message),
         "step_status": step_status,
-        "sanitized_input": {"prompt_tokens": prompt_tokens, "paid_request": False},
+        "sanitized_input": {
+            "prompt_tokens": prompt_tokens,
+            "paid_request": False,
+            "repair_attempted": repair_attempted,
+            "repair_count": 1 if repair_attempted else 0,
+            "validation_errors": (validation_errors or [])[:8],
+        },
         "decision_summary": message,
         "error_code": error_code,
         "error_message": message if error_code else None,
@@ -1043,20 +1099,93 @@ def _ensure_sections(
 
 
 def _parse_structured_response(content: str | None) -> dict[str, Any] | None:
+    parsed, _errors = _validate_structured_response(content)
+    return parsed
+
+
+def _validate_structured_response(content: str | None) -> tuple[dict[str, Any] | None, list[str]]:
+    if not content:
+        return None, ["AI briefing response was empty."]
+    payload = _parse_json_object(content)
+    if not isinstance(payload, dict):
+        return None, ["AI briefing response was not valid JSON."]
+    errors = _structured_briefing_errors(payload)
+    if errors:
+        return None, errors
+    return payload, []
+
+
+def _parse_json_object(content: str | None) -> dict[str, Any] | None:
     if not content:
         return None
+    text = str(content).strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
     try:
-        payload = json.loads(content)
-    except (TypeError, ValueError):
-        return None
-    if not isinstance(payload, dict):
-        return None
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+        if not match:
+            return None
+        try:
+            payload = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _structured_briefing_errors(payload: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(payload.get("summary"), str):
+        errors.append("summary must be a string")
     sections = payload.get("sections")
     if not isinstance(sections, dict):
-        return None
-    if not all(key in sections for key in BRIEFING_SECTIONS):
-        return None
-    return payload
+        return [*errors, "sections must be an object"]
+    for key in BRIEFING_SECTIONS:
+        if key not in sections:
+            errors.append(f"sections.{key} is required")
+        elif not isinstance(sections.get(key), list):
+            errors.append(f"sections.{key} must be an array")
+    return errors
+
+
+def _attempt_structured_briefing_repair(
+    gateway: AiGateway,
+    *,
+    original_content: str | None,
+    validation_errors: list[str],
+    profile_name: str,
+):
+    bounded_original = str(original_content or "")[:2400]
+    bounded_errors = validation_errors[:8]
+    repair_prompt = (
+        "Repair this scheduled SOC briefing response. Return exactly one JSON object and no markdown.\n"
+        "Do not invent evidence, alerts, incidents, trends, conclusions, or actions. Use only the original response content.\n"
+        "The response must be read-only advisory content and must not claim anything was saved, applied, approved, executed, "
+        "blocked, deployed, committed, or changed.\n"
+        f"Required section keys: {json.dumps(list(BRIEFING_SECTIONS), sort_keys=True)}\n"
+        "Required schema: {\"summary\":\"string\",\"sections\":{\"alerts_reviewed\":[],"
+        "\"dismissed_low_priority_findings\":[],\"escalations\":[],\"critical_findings\":[],"
+        "\"evidence\":[],\"recommendations\":[]}}\n"
+        f"Validation errors: {json.dumps(bounded_errors, sort_keys=True)}\n"
+        f"Original response:\n{bounded_original}\n"
+    )
+    repaired = gateway.generate(
+        AiGatewayRequest(
+            prompt=repair_prompt,
+            capability="scheduled_soc_briefing",
+            profile=profile_name,
+            metadata={
+                "service_actor": SERVICE_ACTOR,
+                "read_only": True,
+                "action": "soc_briefing_repair",
+                "repair_attempt": 1,
+                "no_actions": True,
+            },
+        )
+    )
+    return repaired if repaired.status == AI_STATUS_SUCCESS else None
 
 
 def _budget_exhausted(
