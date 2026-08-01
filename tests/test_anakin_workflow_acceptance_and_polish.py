@@ -9,12 +9,15 @@ from core.ai.acceptance_harness import (
     build_complete_ai_inventory,
     build_frontend_realistic_request,
     build_golden_reasoning_cases,
+    build_production_like_alert_checklist_fixture,
     build_workflow_acceptance_summary,
     build_workflow_representative_fixtures,
     evaluate_golden_reasoning_answer,
     removed_frontend_ai_controls_present,
     run_offline_contract_tier,
 )
+from core.ai.config import AiGatewayConfig
+from core.ai.drafting_service import _build_draft_prompt
 from core.ai.explainer_service import AiServiceResult
 from core.ai.workflow_orchestrator import (
     DEEP_INVESTIGATE_LIFECYCLE_STAGES,
@@ -84,6 +87,22 @@ def test_representative_workflow_fixtures_cover_every_canonical_workflow_with_sa
             assert fixture["citations_backend_owned"] is True
 
 
+def test_acceptance_harness_includes_production_like_alert_checklist_fixture_under_limit():
+    fixture = build_production_like_alert_checklist_fixture()
+    prompt = _build_draft_prompt(
+        fixture["request"],
+        fixture["ai_context"],
+        fixture["tools"],
+        config=AiGatewayConfig(mode="disabled", max_prompt_chars=14000),
+        profile_max_prompt_chars=fixture["profile_max_prompt_chars"],
+    )
+
+    assert fixture["request"].draft_type == "investigation_checklist"
+    assert fixture["request"].context_type == "alert"
+    assert len(prompt) < fixture["profile_max_prompt_chars"]
+    assert '"related_events":500' in prompt
+
+
 def test_offline_inventory_maps_every_remaining_ai_control_to_one_canonical_workflow():
     inventory, _frontend_options = build_complete_ai_inventory()
     cases = build_acceptance_cases()
@@ -92,6 +111,29 @@ def test_offline_inventory_maps_every_remaining_ai_control_to_one_canonical_work
     assert set(cases) == {entry.key for entry in inventory}
     assert all(entry.workflow in CANONICAL_ACCEPTANCE_WORKFLOWS for entry in inventory)
     assert all(result.success for result in report.results)
+
+
+def test_all_approved_generate_artifact_types_are_covered_by_acceptance_inventory():
+    inventory, _frontend_options = build_complete_ai_inventory()
+    cases = build_acceptance_cases()
+    artifact_types = set()
+    for entry in inventory:
+        case = cases[entry.key]
+        if entry.workflow != WORKFLOW_GENERATE_ARTIFACT:
+            continue
+        artifact = case.request_payload.get("artifact") if isinstance(case.request_payload.get("artifact"), dict) else {}
+        draft_type = case.request_payload.get("draft_type") or artifact.get("type")
+        if draft_type:
+            artifact_types.add(draft_type)
+
+    assert artifact_types >= {
+        "incident_note",
+        "investigation_checklist",
+        "escalation_summary",
+        "playbook_draft",
+        "detection_rule_change",
+        "response_recommendation",
+    }
 
 
 def test_auto_routing_low_confidence_chooser_cannot_reach_restricted_workflows_or_mutating_paths():

@@ -18,6 +18,7 @@ from core.ai.draft_schemas import (
     SUPPORTED_DRAFT_TYPES,
     validate_draft_payload,
 )
+from core.ai.acceptance_harness import build_production_like_alert_checklist_fixture
 from core.ai.drafting_service import _build_draft_prompt, create_draft
 from core.ai.models import AI_STATUS_DISABLED, AI_STATUS_SUCCESS, AiGatewayRequest, AiGatewayResponse, AiRequestMetadata
 from core.ai.soc_tools import SocToolExecutionSummary, SocToolResult, SocToolSource
@@ -256,6 +257,77 @@ def test_other_draft_prompts_do_not_use_detection_specific_example():
     assert '"false_positive_notes"' not in prompt
     assert "summary" in prompt
     assert "recommended_next_steps" in prompt
+
+
+def test_alert_investigation_checklist_prompt_is_compacted_under_guided_profile_limit():
+    fixture = build_production_like_alert_checklist_fixture()
+
+    prompt = _build_draft_prompt(
+        fixture["request"],
+        fixture["ai_context"],
+        fixture["tools"],
+        config=_config(max_prompt_chars=fixture["profile_max_prompt_chars"]),
+        profile_max_prompt_chars=fixture["profile_max_prompt_chars"],
+    )
+
+    assert len(prompt) < fixture["profile_max_prompt_chars"]
+    assert "Relevant SIEM evidence packet" in prompt
+    assert "Read-only SOC tool evidence summary" in prompt
+    assert "/alerts/1001" in prompt
+    assert "/alerts/1001/events" in prompt
+    assert '"related_events":500' in prompt
+    assert '"input_omitted_count":475' in prompt
+    assert '"omitted_count"' in prompt
+    assert "raw firewall payload omitted by prompt compaction" not in prompt
+    assert "verbose tool evidence omitted by compaction" not in prompt
+
+
+def test_alert_checklist_compaction_preserves_source_identity_and_truncation_metadata():
+    fixture = build_production_like_alert_checklist_fixture()
+    prompt = _build_draft_prompt(
+        fixture["request"],
+        fixture["ai_context"],
+        fixture["tools"],
+        config=_config(max_prompt_chars=fixture["profile_max_prompt_chars"]),
+        profile_max_prompt_chars=fixture["profile_max_prompt_chars"],
+    )
+
+    assert '"source_type":"alert"' in prompt
+    assert '"source_type":"events"' in prompt
+    assert '"source_path":"/alerts/1001"' in prompt
+    assert '"truncated":true' in prompt
+    assert '"compacted":true' in prompt
+    assert '"record_ids":[0,1,2,3,4,5,6,7]' in prompt
+
+
+def test_all_supported_generate_artifact_prompts_stay_within_guided_profile_limit():
+    contexts = {
+        "detection_rule_change": ("alert", {"alert_id": 7}),
+        "playbook_draft": ("alert", {"alert_id": 7}),
+        "incident_note": ("incident", {"incident_id": 7}),
+        "escalation_summary": ("incident", {"incident_id": 7}),
+        "response_recommendation": ("source_ip", {"source_ip": "198.51.100.10"}),
+        "investigation_checklist": ("alert", {"alert_id": 7}),
+    }
+
+    for draft_type in SUPPORTED_DRAFT_TYPES:
+        context_type, context = contexts[draft_type]
+        request = DraftRequest(
+            draft_type=draft_type,
+            instruction=f"Draft {draft_type} for review only.",
+            context_type=context_type,
+            context=context,
+        )
+        prompt = _build_draft_prompt(
+            request,
+            _context_payload(context_type),
+            SocToolExecutionSummary(used=False),
+            config=_config(max_prompt_chars=14000),
+            profile_max_prompt_chars=14000,
+        )
+        assert len(prompt) < 14000, draft_type
+        assert "Required JSON schema shape" in prompt
+        assert "Valid JSON example matching this exact draft schema" in prompt
 
 
 def test_create_draft_reuses_context_gateway_and_redacts_secrets(monkeypatch):

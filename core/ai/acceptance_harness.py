@@ -36,7 +36,7 @@ from core.ai.profile_registry import (
 from core.ai.repo_assistant_service import _build_prompt as build_repo_prompt, classify_repo_question
 from core.ai.repo_index import RepoChunk
 from core.ai.soc_briefing_investigation_engine import InvestigationBudget
-from core.ai.soc_tools import SocToolExecutionSummary
+from core.ai.soc_tools import SocToolExecutionSummary, SocToolResult, SocToolSource
 from core.ai.workflow_orchestrator import (
     WORKFLOW_AUTO,
     WORKFLOW_DEEP_INVESTIGATE,
@@ -600,6 +600,104 @@ def build_workflow_representative_fixtures() -> tuple[dict[str, Any], ...]:
             "citations_backend_owned": True,
         },
     )
+
+
+def build_production_like_alert_checklist_fixture() -> dict[str, Any]:
+    related_events = [
+        {
+            "id": idx,
+            "timestamp": f"2026-08-01T12:{idx % 60:02d}:00Z",
+            "source_ip": "203.0.113.77",
+            "destination_ip": f"10.0.{idx % 8}.{idx % 250}",
+            "destination_port": 443 + (idx % 80),
+            "protocol": "tcp",
+            "action": "deny",
+            "message": "Repeated deny event against protected edge service with verbose firewall enrichment metadata.",
+            "raw_event": "raw firewall payload omitted by prompt compaction " * 12,
+        }
+        for idx in range(500)
+    ]
+    ai_context = AiContextPayload(
+        context_type="alert",
+        data={
+            "summary": {
+                "headline": "Repeated deny alert with many neighboring events",
+                "counts": {"related_events": len(related_events), "distinct_targets": 84},
+            },
+            "alert": {
+                "id": 1001,
+                "alert_type": "pfsense_firewall_repeated_deny",
+                "severity": "high",
+                "status": "open",
+                "source_ip": "203.0.113.77",
+                "message": "Repeated deny threshold exceeded",
+            },
+            "why_fired": {"rule": "Repeated deny threshold exceeded", "threshold": 25, "observed": 612},
+            "related_events": related_events,
+            "related_alerts": [
+                {
+                    "id": idx,
+                    "alert_type": "pfsense_firewall_repeated_deny",
+                    "severity": "high",
+                    "status": "open",
+                    "source_ip": "203.0.113.77",
+                    "message": "Neighbor alert with verbose analyst-facing explanation " * 8,
+                }
+                for idx in range(80)
+            ],
+            "_evidence": {
+                "source_references": ["/alerts/1001", "/alerts/1001/events", "/source-ip-context/203.0.113.77"],
+                "counts": {"events": len(related_events), "neighbor_alerts": 80},
+            },
+        },
+        sources=[
+            AiContextSource("alert", "/alerts/1001", [1001]),
+            AiContextSource("events", "/alerts/1001/events", list(range(500)), truncated=True, omitted_count=475),
+        ],
+        truncated=True,
+        omitted_count=475,
+    )
+    tool_sources = [
+        SocToolSource(
+            tool_name=f"alert_evidence_tool_{idx}",
+            source_type="events",
+            source_path=f"/alerts/1001/tool-evidence-{idx}",
+            source_helper="core.ai.soc_tools",
+            record_ids=list(range(idx * 25, idx * 25 + 25)),
+            truncated=True,
+            omitted_count=400,
+        )
+        for idx in range(5)
+    ]
+    tool_calls = [
+        SocToolResult(
+            tool_name=source.tool_name,
+            status="success",
+            data={"related_events": related_events, "raw_notes": "verbose tool evidence omitted by compaction " * 200},
+            sources=[source],
+            truncated=True,
+            omitted_count=400,
+        )
+        for source in tool_sources
+    ]
+    return {
+        "request": DraftRequest(
+            draft_type="investigation_checklist",
+            instruction="Generate an investigation checklist for review only.",
+            context_type="alert",
+            context={"alert_id": 1001, "source_ip": "203.0.113.77"},
+            client_request_id="acceptance-prod-like-alert-checklist",
+        ),
+        "ai_context": ai_context,
+        "tools": SocToolExecutionSummary(
+            used=True,
+            calls=tool_calls,
+            sources=tool_sources,
+            truncated=True,
+            omitted_count=2000,
+        ),
+        "profile_max_prompt_chars": 14000,
+    }
 
 
 def build_production_safe_live_sweep_matrix() -> tuple[dict[str, Any], ...]:
@@ -2425,6 +2523,7 @@ __all__ = [
     "discover_frontend_ai_options",
     "build_complete_ai_inventory",
     "build_golden_reasoning_cases",
+    "build_production_like_alert_checklist_fixture",
     "build_production_safe_live_sweep_matrix",
     "build_workflow_acceptance_summary",
     "build_workflow_representative_fixtures",

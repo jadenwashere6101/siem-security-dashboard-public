@@ -43,7 +43,6 @@ from core.ai.soc_tool_executor import (
     execute_tool_plan,
     normalize_tool_policy,
     should_skip_tools_for_gateway,
-    tool_summary_for_prompt,
 )
 from core.ai.soc_tools import SocToolExecutionSummary
 
@@ -300,37 +299,39 @@ def _build_draft_prompt(
     profile_max_prompt_chars: int | None = None,
 ) -> str:
     definition = get_draft_definition(request.draft_type)
-    schema_json = json.dumps(_schema_for_prompt(definition), sort_keys=True, indent=2)
+    schema_json = json.dumps(_schema_for_prompt(definition), sort_keys=True, separators=(",", ":"))
     required_fields = _required_fields_for_prompt(definition)
-    example_json = json.dumps(_example_for_prompt(definition), sort_keys=True, indent=2)
-    tool_budget = max(1000, (profile_max_prompt_chars or config.max_prompt_chars) // 3)
+    example_json = json.dumps(_example_for_prompt(definition), sort_keys=True, separators=(",", ":"))
+    prompt_limit = profile_max_prompt_chars or config.max_prompt_chars
+    tool_budget = max(900, min(2200, prompt_limit // 6))
     tools_json = json.dumps(
-        tool_summary_for_prompt(tools, max_chars=tool_budget),
+        _draft_tool_evidence_for_prompt(tools, max_chars=tool_budget),
         default=str,
         sort_keys=True,
-        indent=2,
+        separators=(",", ":"),
     )
-    prompt_limit = profile_max_prompt_chars or config.max_prompt_chars
-    fixed_budget = len(schema_json) + len(example_json) + len(tools_json) + 2600
-    context_budget = max(1800, min(prompt_limit // 2, prompt_limit - fixed_budget))
-    context_json = _draft_context_json_for_prompt(ai_context, max_chars=context_budget)
+    fixed_budget = len(schema_json) + len(example_json) + len(tools_json) + len(artifact_policy()) + 1700
+    context_budget = max(1200, min(3600, prompt_limit - fixed_budget))
+    context_json = _draft_context_json_for_prompt(
+        ai_context,
+        max_chars=context_budget,
+        draft_type=request.draft_type,
+    )
     return (
         f"{artifact_policy()}"
-        "Return exactly one JSON object matching the requested draft schema. Do not wrap it in markdown.\n"
-        "Every required field must be present, non-empty, and use the exact field name shown. Missing required fields are rejected.\n"
-        "Do not claim anything was saved, applied, approved, executed, blocked, deployed, committed, or changed.\n"
-        "Do not include secrets, credentials, shell commands, migration commands, or production-mutating payloads.\n"
-        "The draft is AI-generated review content only and requires analyst review before any future workflow.\n\n"
+        "Return exactly one JSON object matching the requested schema; no markdown.\n"
+        "Required fields must be present, non-empty, and use exact field names.\n"
+        "Review-only: do not claim anything was saved, applied, approved, executed, blocked, deployed, committed, or changed.\n\n"
         f"Draft type: {request.draft_type}\n"
         f"Draft purpose: {definition.description}\n"
         f"Analyst instruction: {request.instruction}\n"
         f"Context type: {ai_context.context_type}\n"
-        f"Context sources: {json.dumps(ai_context.metadata(), default=str, sort_keys=True)}\n\n"
-        f"Required fields that must appear exactly once: {', '.join(required_fields)}\n\n"
+        f"Context sources: {json.dumps(_source_identity_for_prompt(ai_context), default=str, sort_keys=True, separators=(',', ':'))}\n\n"
+        f"Required fields that must appear exactly once: {', '.join(required_fields)}\n"
         f"Required JSON schema shape:\n{schema_json}\n\n"
         f"Valid JSON example matching this exact draft schema:\n{example_json}\n\n"
-        f"SIEM context:\n{context_json}\n\n"
-        f"Read-only SOC tool evidence:\n{tools_json}\n"
+        f"Relevant SIEM evidence packet:\n{context_json}\n\n"
+        f"Read-only SOC tool evidence summary:\n{tools_json}\n"
     )
 
 
@@ -374,30 +375,247 @@ def _example_for_prompt(definition) -> dict[str, Any]:
     return example
 
 
-def _draft_context_json_for_prompt(ai_context: AiContextPayload, *, max_chars: int) -> str:
-    compacted = _compact_draft_value(redact_draft_value(ai_context.data), max_depth=4)
-    if isinstance(compacted, dict):
-        compacted["_context_bounds"] = {
-            "included_sources": len(ai_context.sources),
-            "truncated": ai_context.truncated,
-            "omitted_count": ai_context.omitted_count,
-            "max_chars": max_chars,
-        }
-    rendered = json.dumps(compacted, default=str, sort_keys=True, indent=2)
+def _draft_context_json_for_prompt(ai_context: AiContextPayload, *, max_chars: int, draft_type: str | None = None) -> str:
+    packet = _draft_evidence_packet(ai_context, draft_type=draft_type, max_chars=max_chars)
+    rendered = json.dumps(packet, default=str, sort_keys=True, separators=(",", ":"))
+    if len(rendered) <= max_chars:
+        return rendered
+    packet = _draft_evidence_packet(ai_context, draft_type=draft_type, max_chars=max_chars, row_limit=3)
+    rendered = json.dumps(packet, default=str, sort_keys=True, separators=(",", ":"))
     if len(rendered) <= max_chars:
         return rendered
     fallback = {
-        "summary": _compact_draft_value(ai_context.data.get("summary") if isinstance(ai_context.data, dict) else None, max_depth=1),
-        "_evidence": _compact_draft_value(ai_context.data.get("_evidence") if isinstance(ai_context.data, dict) else None, max_depth=2),
+        "context_type": ai_context.context_type,
+        "primary": _compact_draft_value(_primary_context_value(ai_context.data, ai_context.context_type), max_depth=2, max_items=3),
+        "evidence_counts": _evidence_counts(ai_context.data),
+        "source_identity": _source_identity_for_prompt(ai_context),
         "_context_bounds": {
             "included_sources": len(ai_context.sources),
             "truncated": True,
-            "omitted_count": ai_context.omitted_count,
+            "input_truncated": ai_context.truncated,
+            "input_omitted_count": ai_context.omitted_count,
+            "omitted_count": ai_context.omitted_count + _estimated_omitted_count(ai_context.data),
             "truncation_reason": "draft_prompt_budget",
             "max_chars": max_chars,
         },
     }
-    return json.dumps(fallback, default=str, sort_keys=True, indent=2)
+    return json.dumps(fallback, default=str, sort_keys=True, separators=(",", ":"))
+
+
+def _draft_evidence_packet(
+    ai_context: AiContextPayload,
+    *,
+    draft_type: str | None,
+    max_chars: int,
+    row_limit: int = 6,
+) -> dict[str, Any]:
+    data = redact_draft_value(ai_context.data)
+    if not isinstance(data, dict):
+        data = {"value": data}
+    omitted = 0
+    relevant_keys = _relevant_context_keys(ai_context.context_type, draft_type)
+    relevant: dict[str, Any] = {}
+    for key in relevant_keys:
+        if key not in data:
+            continue
+        value, value_omitted = _compact_relevant_draft_value(key, data[key], row_limit=row_limit)
+        relevant[key] = value
+        omitted += value_omitted
+    evidence_counts = _evidence_counts(data)
+    packet = {
+        "context_type": ai_context.context_type,
+        "draft_type": draft_type,
+        "primary": _compact_draft_value(_primary_context_value(data, ai_context.context_type), max_depth=2, max_items=4),
+        "relevant_evidence": relevant,
+        "evidence_counts": evidence_counts,
+        "source_identity": _source_identity_for_prompt(ai_context),
+        "_context_bounds": {
+            "included_sources": len(ai_context.sources),
+            "input_truncated": ai_context.truncated,
+            "input_omitted_count": ai_context.omitted_count,
+            "compacted": True,
+            "truncated": ai_context.truncated or omitted > 0,
+            "omitted_count": ai_context.omitted_count + omitted,
+            "max_chars": max_chars,
+        },
+    }
+    if "[REDACTED]" in json.dumps(data, default=str):
+        packet["redaction"] = {"sensitive_values": "[REDACTED]"}
+    return packet
+
+
+def _relevant_context_keys(context_type: str, draft_type: str | None) -> tuple[str, ...]:
+    if context_type == "alert" and draft_type == "investigation_checklist":
+        return ("summary", "why_fired", "_evidence", "reputation", "signals", "related_events", "related_alerts")
+    if draft_type == "detection_rule_change":
+        return ("summary", "alert", "why_fired", "rule", "detection", "related_events", "related_alerts", "_evidence")
+    if draft_type == "response_recommendation":
+        return ("summary", "alert", "incident", "source_ip", "registry_record", "reputation", "outcome_history", "response_outcomes", "related_alerts", "_evidence")
+    if draft_type in {"incident_note", "escalation_summary"}:
+        return ("summary", "incident", "alert", "timeline", "linked_alerts", "related_alerts", "_evidence")
+    if draft_type == "playbook_draft":
+        return ("summary", "alert", "incident", "source_ip", "response_outcomes", "related_alerts", "related_events", "_evidence")
+    return ("summary", "alert", "incident", "source_ip", "recon_activity", "registry_record", "related_events", "related_alerts", "_evidence")
+
+
+def _primary_context_value(data: Any, context_type: str) -> Any:
+    if not isinstance(data, dict):
+        return data
+    if context_type == "alert":
+        return data.get("alert") or data.get("summary")
+    if context_type == "incident":
+        return data.get("incident") or data.get("summary")
+    if context_type == "source_ip":
+        return {"source_ip": data.get("source_ip"), "reputation": data.get("reputation")}
+    if context_type == "recon_activity":
+        return data.get("recon_activity") or data.get("summary")
+    if context_type == "response_registry":
+        return data.get("registry_record") or data.get("summary")
+    return data.get("summary") or data.get("visible_context") or data
+
+
+def _compact_relevant_draft_value(key: str, value: Any, *, row_limit: int) -> tuple[Any, int]:
+    if isinstance(value, list):
+        fields = _row_fields_for_key(key)
+        rows = [_select_row_fields(item, fields) for item in value[:row_limit]]
+        omitted = max(0, len(value) - len(rows))
+        return {"count": len(value), "rows": rows, "omitted_count": omitted, "truncated": omitted > 0}, omitted
+    if isinstance(value, dict):
+        compacted = _compact_draft_value(value, max_depth=3, max_items=row_limit)
+        omitted = _estimated_omitted_count(value, row_limit=row_limit)
+        return compacted, omitted
+    if isinstance(value, str) and len(value) > 320:
+        return value[:320] + "... [truncated]", 1
+    return value, 0
+
+
+def _row_fields_for_key(key: str) -> tuple[str, ...]:
+    if key in {"related_events", "timeline"}:
+        return ("id", "timestamp", "created_at", "event_type", "source", "source_ip", "destination_ip", "target_ip", "destination_port", "target_port", "action", "outcome", "status", "severity")
+    if key in {"related_alerts", "linked_alerts", "recent_alerts"}:
+        return ("id", "alert_id", "alert_type", "severity", "status", "source_ip", "target_ip", "created_at", "timestamp")
+    if key in {"outcome_history", "response_outcomes"}:
+        return ("id", "action", "action_type", "status", "execution_state", "execution_mode", "external_executed", "tracking_recorded", "created_at")
+    return ("id", "type", "name", "severity", "status", "source_ip", "target_ip", "count", "created_at", "timestamp")
+
+
+def _select_row_fields(row: Any, fields: tuple[str, ...]) -> Any:
+    if not isinstance(row, dict):
+        return _compact_draft_value(row, max_depth=1, max_items=3)
+    selected = {field: row[field] for field in fields if field in row and row[field] not in (None, "", [], {})}
+    if not selected:
+        selected = {key: row[key] for key in list(row.keys())[:4]}
+    return _compact_draft_value(selected, max_depth=2, max_items=4)
+
+
+def _evidence_counts(data: Any) -> dict[str, int]:
+    if not isinstance(data, dict):
+        return {}
+    counts: dict[str, int] = {}
+    for key, value in data.items():
+        if isinstance(value, list):
+            counts[key] = len(value)
+        elif isinstance(value, dict):
+            nested_count = value.get("count") or value.get("total") or value.get("observed")
+            if isinstance(nested_count, int):
+                counts[key] = nested_count
+    return counts
+
+
+def _estimated_omitted_count(value: Any, *, row_limit: int = 6) -> int:
+    if isinstance(value, list):
+        return max(0, len(value) - row_limit)
+    if isinstance(value, dict):
+        omitted = max(0, len(value) - 12)
+        for nested in value.values():
+            omitted += _estimated_omitted_count(nested, row_limit=row_limit)
+        return omitted
+    return 0
+
+
+def _source_identity_for_prompt(ai_context: AiContextPayload) -> dict[str, Any]:
+    return {
+        "context_type": ai_context.context_type,
+        "sources": [
+            {
+                "source_type": source.source_type,
+                "source_path": source.source_path,
+                "record_ids": source.record_ids[:8],
+                "truncated": source.truncated,
+                "omitted_count": source.omitted_count,
+            }
+            for source in ai_context.sources[:8]
+        ],
+        "source_count": len(ai_context.sources),
+        "truncated": ai_context.truncated,
+        "omitted_count": ai_context.omitted_count,
+    }
+
+
+def _draft_tool_evidence_for_prompt(tools: SocToolExecutionSummary, *, max_chars: int) -> dict[str, Any]:
+    compact = {
+        "used": tools.used,
+        "read_only": tools.read_only,
+        "truncated": tools.truncated,
+        "omitted_count": tools.omitted_count,
+        "error_code": tools.error_code,
+        "sources": [
+            {
+                "tool_name": source.tool_name,
+                "source_type": source.source_type,
+                "source_path": source.source_path,
+                "record_ids": source.record_ids[:8],
+                "truncated": source.truncated,
+                "omitted_count": source.omitted_count,
+            }
+            for source in tools.sources[:8]
+        ],
+        "calls": [_compact_tool_call(call) for call in tools.calls[:4]],
+    }
+    rendered = json.dumps(compact, default=str, sort_keys=True, separators=(",", ":"))
+    if len(rendered) <= max_chars:
+        return compact
+    return {
+        "used": tools.used,
+        "read_only": True,
+        "truncated": True,
+        "omitted_count": tools.omitted_count + max(0, len(tools.calls) - 2),
+        "sources": compact["sources"][:4],
+        "calls": [
+            {
+                "tool_name": call.tool_name,
+                "status": call.status,
+                "truncated": True,
+                "omitted_count": call.omitted_count,
+                "source_paths": [source.source_path for source in call.sources[:3]],
+            }
+            for call in tools.calls[:2]
+        ],
+    }
+
+
+def _compact_tool_call(call) -> dict[str, Any]:
+    data = call.data if isinstance(call.data, dict) else {}
+    summary: dict[str, Any] = {}
+    for key, value in data.items():
+        if isinstance(value, list):
+            rows, omitted = _compact_relevant_draft_value(key, value, row_limit=4)
+            summary[key] = rows
+            if omitted:
+                summary.setdefault("_omitted_count", 0)
+                summary["_omitted_count"] += omitted
+        elif key in {"summary", "counts", "alert", "incident", "source_ip", "reputation", "why_fired"}:
+            summary[key] = _compact_draft_value(value, max_depth=2, max_items=4)
+    return {
+        "tool_name": call.tool_name,
+        "status": call.status,
+        "truncated": call.truncated,
+        "omitted_count": call.omitted_count,
+        "latency_ms": call.latency_ms,
+        "error_code": call.error_code,
+        "source_paths": [source.source_path for source in call.sources[:4]],
+        "data_summary": summary,
+    }
 
 
 def _compact_draft_value(value: Any, *, max_depth: int, max_items: int = 8) -> Any:
