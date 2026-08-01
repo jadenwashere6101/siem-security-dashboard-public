@@ -151,6 +151,10 @@ def test_legacy_local_timeout_does_not_override_profile_defaults(monkeypatch):
 
     config = load_ai_gateway_config()
 
+    assert DEFAULT_FAST_TIMEOUT_SECONDS == 45.0
+    assert DEFAULT_GUIDED_TIMEOUT_SECONDS == 120.0
+    assert DEFAULT_DEEP_TIMEOUT_SECONDS == 150.0
+    assert DEFAULT_DEVELOPER_TIMEOUT_SECONDS == 120.0
     assert config.local_timeout_seconds == 30
     assert config.profile(AI_PROFILE_FAST_TRIAGE).timeout_seconds == DEFAULT_FAST_TIMEOUT_SECONDS
     assert config.profile(AI_PROFILE_GUIDED_ANALYSIS).timeout_seconds == DEFAULT_GUIDED_TIMEOUT_SECONDS
