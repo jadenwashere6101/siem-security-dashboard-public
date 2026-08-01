@@ -144,9 +144,7 @@ def _profile_model(name: str, default: str, legacy_local_model: str) -> str:
     return default
 
 
-def _profile_timeout(name: str, default: float, legacy_timeout: float) -> float:
-    if os.getenv(name) is None and legacy_timeout > 0:
-        return legacy_timeout
+def _profile_timeout(name: str, default: float) -> float:
     return _env_positive_float(name, default)
 
 
@@ -155,6 +153,7 @@ def default_ai_profiles(
     local_model: str = "",
     local_timeout_seconds: float = DEFAULT_LOCAL_TIMEOUT_SECONDS,
 ) -> dict[str, AiModelProfile]:
+    del local_timeout_seconds
     return {
         AI_PROFILE_FAST_TRIAGE: AiModelProfile(
             name=AI_PROFILE_FAST_TRIAGE,
@@ -168,7 +167,7 @@ def default_ai_profiles(
         AI_PROFILE_GUIDED_ANALYSIS: AiModelProfile(
             name=AI_PROFILE_GUIDED_ANALYSIS,
             model=_profile_model("AI_GUIDED_MODEL", DEFAULT_GUIDED_MODEL, local_model),
-            timeout_seconds=_profile_timeout("AI_GUIDED_TIMEOUT_SECONDS", DEFAULT_GUIDED_TIMEOUT_SECONDS, local_timeout_seconds),
+            timeout_seconds=_profile_timeout("AI_GUIDED_TIMEOUT_SECONDS", DEFAULT_GUIDED_TIMEOUT_SECONDS),
             max_prompt_chars=_env_positive_int("AI_GUIDED_MAX_PROMPT_CHARS", DEFAULT_GUIDED_MAX_PROMPT_CHARS),
             max_output_tokens=_env_positive_int("AI_GUIDED_MAX_OUTPUT_TOKENS", DEFAULT_GUIDED_MAX_OUTPUT_TOKENS),
             temperature=_env_positive_float("AI_GUIDED_TEMPERATURE", 0.2),
@@ -177,7 +176,7 @@ def default_ai_profiles(
         AI_PROFILE_DEEP_BRIEFING: AiModelProfile(
             name=AI_PROFILE_DEEP_BRIEFING,
             model=_profile_model("AI_DEEP_MODEL", DEFAULT_DEEP_MODEL, local_model),
-            timeout_seconds=_profile_timeout("AI_DEEP_TIMEOUT_SECONDS", DEFAULT_DEEP_TIMEOUT_SECONDS, local_timeout_seconds),
+            timeout_seconds=_profile_timeout("AI_DEEP_TIMEOUT_SECONDS", DEFAULT_DEEP_TIMEOUT_SECONDS),
             max_prompt_chars=_env_positive_int("AI_DEEP_MAX_PROMPT_CHARS", DEFAULT_DEEP_MAX_PROMPT_CHARS),
             max_output_tokens=_env_positive_int("AI_DEEP_MAX_OUTPUT_TOKENS", DEFAULT_DEEP_MAX_OUTPUT_TOKENS),
             temperature=_env_positive_float("AI_DEEP_TEMPERATURE", 0.1),
@@ -186,7 +185,7 @@ def default_ai_profiles(
         AI_PROFILE_DEVELOPER_ASSISTANT: AiModelProfile(
             name=AI_PROFILE_DEVELOPER_ASSISTANT,
             model=_profile_model("AI_DEVELOPER_MODEL", DEFAULT_DEVELOPER_MODEL, local_model),
-            timeout_seconds=_profile_timeout("AI_DEVELOPER_TIMEOUT_SECONDS", DEFAULT_DEVELOPER_TIMEOUT_SECONDS, local_timeout_seconds),
+            timeout_seconds=_profile_timeout("AI_DEVELOPER_TIMEOUT_SECONDS", DEFAULT_DEVELOPER_TIMEOUT_SECONDS),
             max_prompt_chars=_env_positive_int("AI_DEVELOPER_MAX_PROMPT_CHARS", DEFAULT_DEVELOPER_MAX_PROMPT_CHARS),
             max_output_tokens=_env_positive_int("AI_DEVELOPER_MAX_OUTPUT_TOKENS", DEFAULT_DEVELOPER_MAX_OUTPUT_TOKENS),
             temperature=_env_positive_float("AI_DEVELOPER_TEMPERATURE", 0.1),

@@ -1,7 +1,16 @@
 from dataclasses import replace
 from unittest.mock import MagicMock
 
-from core.ai.config import AI_MODE_LOCAL_ONLY, AiGatewayConfig, default_ai_profiles
+from core.ai.config import (
+    AI_MODE_LOCAL_ONLY,
+    DEFAULT_DEEP_TIMEOUT_SECONDS,
+    DEFAULT_DEVELOPER_TIMEOUT_SECONDS,
+    DEFAULT_FAST_TIMEOUT_SECONDS,
+    DEFAULT_GUIDED_TIMEOUT_SECONDS,
+    AiGatewayConfig,
+    default_ai_profiles,
+    load_ai_gateway_config,
+)
 from core.ai.context_builder import build_ai_context
 from core.ai.draft_schemas import DRAFT_DEFINITIONS
 from core.ai.explainer_service import ALLOWED_EXPLAIN_ACTIONS, explain_context
@@ -109,6 +118,55 @@ def test_profile_inventory_covers_backend_ai_selectors():
     assert profile_for_investigation() == AI_PROFILE_GUIDED_ANALYSIS
     assert profile_for_soc_briefing() == AI_PROFILE_DEEP_BRIEFING
     assert profile_for_repo_assistant() == AI_PROFILE_DEVELOPER_ASSISTANT
+
+
+def test_legacy_local_timeout_does_not_override_profile_defaults(monkeypatch):
+    for name in (
+        "AI_FAST_TIMEOUT_SECONDS",
+        "AI_GUIDED_TIMEOUT_SECONDS",
+        "AI_DEEP_TIMEOUT_SECONDS",
+        "AI_DEVELOPER_TIMEOUT_SECONDS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AI_LOCAL_TIMEOUT_SECONDS", "30")
+
+    config = load_ai_gateway_config()
+
+    assert config.local_timeout_seconds == 30
+    assert config.profile(AI_PROFILE_FAST_TRIAGE).timeout_seconds == DEFAULT_FAST_TIMEOUT_SECONDS
+    assert config.profile(AI_PROFILE_GUIDED_ANALYSIS).timeout_seconds == DEFAULT_GUIDED_TIMEOUT_SECONDS
+    assert config.profile(AI_PROFILE_DEEP_BRIEFING).timeout_seconds == DEFAULT_DEEP_TIMEOUT_SECONDS
+    assert config.profile(AI_PROFILE_DEVELOPER_ASSISTANT).timeout_seconds == DEFAULT_DEVELOPER_TIMEOUT_SECONDS
+
+
+def test_profile_specific_timeout_overrides_win(monkeypatch):
+    monkeypatch.setenv("AI_LOCAL_TIMEOUT_SECONDS", "30")
+    monkeypatch.setenv("AI_FAST_TIMEOUT_SECONDS", "31")
+    monkeypatch.setenv("AI_GUIDED_TIMEOUT_SECONDS", "91")
+    monkeypatch.setenv("AI_DEEP_TIMEOUT_SECONDS", "151")
+    monkeypatch.setenv("AI_DEVELOPER_TIMEOUT_SECONDS", "121")
+
+    config = load_ai_gateway_config()
+
+    assert config.profile(AI_PROFILE_FAST_TRIAGE).timeout_seconds == 31
+    assert config.profile(AI_PROFILE_GUIDED_ANALYSIS).timeout_seconds == 91
+    assert config.profile(AI_PROFILE_DEEP_BRIEFING).timeout_seconds == 151
+    assert config.profile(AI_PROFILE_DEVELOPER_ASSISTANT).timeout_seconds == 121
+
+
+def test_invalid_profile_timeout_values_fall_back_safely(monkeypatch):
+    monkeypatch.setenv("AI_LOCAL_TIMEOUT_SECONDS", "30")
+    monkeypatch.setenv("AI_FAST_TIMEOUT_SECONDS", "not-a-number")
+    monkeypatch.setenv("AI_GUIDED_TIMEOUT_SECONDS", "0")
+    monkeypatch.setenv("AI_DEEP_TIMEOUT_SECONDS", "-1")
+    monkeypatch.setenv("AI_DEVELOPER_TIMEOUT_SECONDS", "")
+
+    config = load_ai_gateway_config()
+
+    assert config.profile(AI_PROFILE_FAST_TRIAGE).timeout_seconds == DEFAULT_FAST_TIMEOUT_SECONDS
+    assert config.profile(AI_PROFILE_GUIDED_ANALYSIS).timeout_seconds == DEFAULT_GUIDED_TIMEOUT_SECONDS
+    assert config.profile(AI_PROFILE_DEEP_BRIEFING).timeout_seconds == DEFAULT_DEEP_TIMEOUT_SECONDS
+    assert config.profile(AI_PROFILE_DEVELOPER_ASSISTANT).timeout_seconds == DEFAULT_DEVELOPER_TIMEOUT_SECONDS
 
 
 def test_ollama_provider_uses_profile_model_timeout_and_generation_options(monkeypatch):
