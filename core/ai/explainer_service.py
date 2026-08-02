@@ -315,8 +315,8 @@ def _is_decision_support_action(action: str) -> bool:
 
 
 def _context_json_for_prompt(ai_context: AiContextPayload, *, budget: int, tools_json: str) -> str:
-    static_budget = 3600
-    max_context_chars = max(1200, budget - static_budget - len(tools_json))
+    static_budget = 4600
+    max_context_chars = max(800, budget - static_budget - len(tools_json))
     bounded = _bound_prompt_value(ai_context.data)
     context_json = json.dumps(bounded, default=str, sort_keys=True, indent=2)
     if len(context_json) <= max_context_chars:

@@ -17,7 +17,9 @@ FILLER_PATTERN_PHRASES = (
     "based on the context",
     "based on the details",
     "based on what was provided",
+    "the alert indicates",
     "the alert is indicating",
+    "the information suggests that further",
     "further investigation may reveal",
     "additional investigation may reveal",
     "conclusions may change",
@@ -76,9 +78,33 @@ READ_ONLY_BOUNDARY = (
     "Recommendations are analyst next steps only unless a separate preview/confirm workflow is explicitly used.\n"
 )
 
+NATURAL_CONVERSATION_RULES = (
+    "Interactive style rules:\n"
+    "- Answer immediately; do not repeat the user's question.\n"
+    "- Use short, natural sentences and plain English.\n"
+    "- Avoid formal preambles, filler, and narrating the structure.\n"
+    "- Every paragraph must add reasoning, evidence, uncertainty, or a concrete next step.\n"
+    "- Do not restate visible fields unless they support a conclusion.\n"
+    "- Lead with the most useful observation; disagree directly when the user's assumption is weak.\n"
+    "- End with the next step, unresolved question, or recommendation, never a generic disclaimer or invitation for more questions.\n"
+)
+
+INTERACTIVE_STYLE_EXAMPLES = (
+    "Style examples for interactive answers; do not copy conclusions unless evidence supports them.\n"
+    "User: bro is this IP actually bad or is this just noise?\n"
+    "Bad: This alert indicates potentially malicious activity. Further investigation is recommended.\n"
+    "Good: Honestly, this looks more like noisy recon. I don't see exploitation or a successful login yet. Check the same subnet before escalating.\n"
+    "User: This is obviously an attack. Block it now, right?\n"
+    "Good: I wouldn't block it yet. The threshold fired, but follow-up evidence is weak. Check whether the source is an approved scanner first.\n"
+)
+
 
 def base_persona_policy() -> str:
     return f"{ANAKIN_PERSONA_POLICY}{ANAKIN_REASONING_RULES}{TONE_ADAPTATION_RULES}{READ_ONLY_BOUNDARY}"
+
+
+def interactive_persona_policy() -> str:
+    return f"{base_persona_policy()}{NATURAL_CONVERSATION_RULES}{INTERACTIVE_STYLE_EXAMPLES}"
 
 
 def classify_tone(prompt: str | None, *, workflow: str | None = None, context: dict[str, Any] | None = None) -> str:
@@ -151,9 +177,9 @@ def tone_instruction(tone: str | None, *, shareable: bool = False) -> str:
     if shareable:
         resolved = TONE_PROFESSIONAL
     detail = {
-        TONE_CASUAL: "Use natural, direct wording. Casual means plainspoken, not slangy or performative.",
-        TONE_TECHNICAL: "Use precise technical language and keep assumptions explicit.",
-        TONE_PROFESSIONAL: "Use a professional, concise analyst-to-analyst tone.",
+        TONE_CASUAL: "Use contractions naturally and answer directly. Lightly mirror the user's energy, but do not force slang or sound scripted.",
+        TONE_TECHNICAL: "Use precise, implementation-focused language and security terminology where it helps. Avoid unnecessary definitions unless asked.",
+        TONE_PROFESSIONAL: "Use a clear, calm, concise analyst-to-analyst tone. Avoid corporate filler.",
     }[resolved]
     suffix = " Do not use profanity, slang, or casual mirroring." if shareable else ""
     return f"Tone classification: {resolved}. {detail}{suffix}\n"
@@ -161,10 +187,10 @@ def tone_instruction(tone: str | None, *, shareable: bool = False) -> str:
 
 def quick_explain_policy(tone: str | None = None) -> str:
     return (
-        f"{base_persona_policy()}"
+        f"{interactive_persona_policy()}"
         f"{tone_instruction(tone)}"
         "Quick Explain mode: use already-loaded bounded context only; do not ask for or imply tool use.\n"
-        "Keep the answer short by default, usually 3-6 sentences: what happened, what actually matters, confidence, and one concrete next check.\n"
+        "Keep the answer short by default, usually 2-6 concise sentences: what happened, what actually matters, confidence, and at most one concrete next check.\n"
         "Do not open with a formal preamble such as 'I'd like to clarify' or 'The alert is indicating'.\n"
         "Avoid essay-style headings unless the analyst explicitly asks for structure.\n"
     )
@@ -172,7 +198,7 @@ def quick_explain_policy(tone: str | None = None) -> str:
 
 def deep_investigate_policy(tone: str | None = None) -> str:
     return (
-        f"{base_persona_policy()}"
+        f"{interactive_persona_policy()}"
         f"{tone_instruction(tone)}"
         "Deep Investigate mode: behave like the experienced SOC analyst on the case.\n"
         "Lead with evidence, then compare competing hypotheses.\n"
@@ -185,7 +211,7 @@ def deep_investigate_policy(tone: str | None = None) -> str:
 
 def decision_support_policy(tone: str | None = None) -> str:
     return (
-        f"{base_persona_policy()}"
+        f"{interactive_persona_policy()}"
         f"{tone_instruction(tone)}"
         "Decision Support mode: answer 'what should I do and why?'\n"
         "Put the recommendation first. Give one primary recommendation, credible alternatives, risks, confidence, and what evidence would change the recommendation.\n"
@@ -225,6 +251,8 @@ def repo_assistant_policy(tone: str | None = None) -> str:
     return (
         "You are Anakin, a read-only repository architecture assistant for this SIEM.\n"
         "Answer directly and naturally, like an experienced engineer speaking to another engineer.\n"
+        f"{NATURAL_CONVERSATION_RULES}"
+        f"{INTERACTIVE_STYLE_EXAMPLES}"
         f"{tone_instruction(tone)}"
         "Do not roleplay, perform a character, use generic assistant boilerplate, or sound like documentation.\n"
         "Match the user's technical level while keeping the answer concise by default.\n"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import re
 from typing import Any
 
 from core.ai.config import AiGatewayConfig
@@ -481,8 +482,27 @@ def _recommendation_first_answer(answer: Any) -> tuple[Any, bool]:
 
 
 def _is_recommendation_line(line: str) -> bool:
+    normalized = _normalize_recommendation_label(line)
+    if normalized.startswith(("i recommend", "i would", "i wouldn", "do not ", "don't ")):
+        return True
+    return bool(
+        re.match(
+            r"^(primary\s+recommendation|recommendation)(\s*[:\-–—]\s*|\s*$)",
+            normalized,
+        )
+    )
+
+
+def _normalize_recommendation_label(line: str) -> str:
     normalized = str(line or "").strip().lower()
-    return normalized.startswith(("recommendation", "primary recommendation", "i recommend", "i would", "do not ", "don't "))
+    normalized = re.sub(r"^\s*(?:>\s*)+", "", normalized)
+    normalized = re.sub(r"^\s*#{1,6}\s*", "", normalized)
+    normalized = re.sub(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)", "", normalized)
+    normalized = normalized.strip()
+    normalized = re.sub(r"^[*_`~\s]+|[*_`~\s]+$", "", normalized)
+    normalized = re.sub(r"[*_`~]+", "", normalized)
+    normalized = re.sub(r"\s+", " ", normalized)
+    return normalized.strip()
 
 
 def _run_generate_artifact(payload: dict[str, Any], *, gateway: AiGateway | None, config: AiGatewayConfig | None) -> DraftServiceResult:

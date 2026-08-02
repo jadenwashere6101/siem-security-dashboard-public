@@ -54,7 +54,6 @@ FAST_EXPLAIN_ACTIONS = frozenset(
         "general_chat",
         "summarize",
         "explain",
-        "suggestedactions",
         "explain_alert",
         "why_important",
         "ask_dashboard",
@@ -235,7 +234,7 @@ AI_INVOCATION_INVENTORY: tuple[AiInvocationInventoryEntry, ...] = (
         "POST /ai/explain",
         "explain_action",
         "suggestedactions",
-        AI_PROFILE_FAST_TRIAGE,
+        AI_PROFILE_GUIDED_ANALYSIS,
     ),
     AiInvocationInventoryEntry(
         "frontend.floating_chat.general",

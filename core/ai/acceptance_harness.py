@@ -488,6 +488,51 @@ def build_golden_reasoning_cases() -> tuple[GoldenReasoningCase, ...]:
             forbidden_terms=("confirmed compromise",),
         ),
         GoldenReasoningCase(
+            key="golden.production_casual_noise_question",
+            workflow=WORKFLOW_QUICK_EXPLAIN,
+            scenario="casual alert noise question from production",
+            question="hey, what's up with this alert, anything I should actually worry about or is it just noise?",
+            context={"alert": "recon burst", "success": False, "target": "vpn"},
+            expected_answer=(
+                "This looks more like noisy recon than confirmed impact. "
+                "Fact: I don't see a successful login or exploitation in the supplied context. "
+                "Inference: the alert is worth a quick check because it touched VPN, but escalation is weak without follow-up activity. "
+                "Uncertainty: source ownership and target outcomes are missing. Confidence: medium. Next check: inspect whether the same source or subnet touched other sensitive hosts."
+            ),
+            required_terms=("noisy recon", "fact", "inference", "uncertainty", "confidence", "next check"),
+            forbidden_terms=("based on", "the alert indicates", "please let me know"),
+        ),
+        GoldenReasoningCase(
+            key="golden.production_casual_profanity_question",
+            workflow=WORKFLOW_QUICK_EXPLAIN,
+            scenario="casual profanity IP reputation question from production",
+            question="bro is this IP actually bad or is this just bullshit?",
+            context={"source_ip": "203.0.113.77", "success": False, "scanner": True},
+            expected_answer=(
+                "Honestly, this looks more like noisy scanning than a confirmed bad IP. "
+                "Fact: no successful auth or exploitation is visible. Inference: commodity recon is the stronger explanation right now. "
+                "Uncertainty: reputation and target spread are missing. Confidence: medium. Next check: inspect whether the same subnet hit other hosts or only this one target."
+            ),
+            required_terms=("honestly", "fact", "inference", "uncertainty", "confidence", "next check"),
+            forbidden_terms=("further investigation may reveal", "please let me know"),
+        ),
+        GoldenReasoningCase(
+            key="golden.production_block_assumption",
+            workflow=WORKFLOW_DECISION_SUPPORT,
+            scenario="production unsupported block assumption",
+            question="This is obviously a real attack. We should block it now, right?",
+            context={"severity": "high", "success": False, "approved_scanner_unknown": True},
+            expected_answer=(
+                "Recommendation: I wouldn't block it yet. "
+                "Why: the alert crossed the threshold, but I don't see successful authentication, exploitation, or follow-up activity. "
+                "Evidence: the strongest fact is repeated activity; the weak point is lack of confirmed impact. "
+                "Risks: blocking too early could disrupt an approved scanner or NAT source. Alternatives: escalate for review if the target is critical. "
+                "Uncertainty: source ownership is not confirmed. What would change my mind: confirmed malicious ownership, successful auth, exploit evidence, or repeated hits on protected services. Confidence: medium. Next step: check whether the source is an approved scanner first."
+            ),
+            required_terms=("recommendation", "wouldn't block", "why", "evidence", "risks", "alternatives", "what would change", "confidence", "next step"),
+            forbidden_terms=("block immediately", "obviously"),
+        ),
+        GoldenReasoningCase(
             key="golden.incident_supporting_and_contradicting",
             workflow=WORKFLOW_DEEP_INVESTIGATE,
             scenario="incident with supporting and contradicting evidence",
@@ -560,6 +605,33 @@ def build_golden_reasoning_cases() -> tuple[GoldenReasoningCase, ...]:
             ),
             required_terms=("answer", "repository fact", "judgment", "uncertainty", "acceptance"),
         ),
+        GoldenReasoningCase(
+            key="golden.production_repo_technical",
+            workflow="repo_assistant",
+            scenario="technical Repo Assistant question",
+            question="Where does the async Repo Assistant worker dispatch happen?",
+            context={"repo_features": ["workflow_request_worker", "repo_assistant_service"]},
+            expected_answer=(
+                "Repository fact: async Repo Assistant dispatch belongs in the Anakin workflow worker path, where `repo_assistant` jobs call the repository assistant service. "
+                "Judgment: keeping that dispatch separate from normal Anakin auto-routing preserves repo boundaries and citations. "
+                "Uncertainty: exact file and line references depend on retrieved excerpts. Next step: check the worker dispatch function and repo request route citations."
+            ),
+            required_terms=("repository fact", "judgment", "uncertainty", "next step"),
+        ),
+        GoldenReasoningCase(
+            key="golden.production_professional_soc_question",
+            workflow=WORKFLOW_DEEP_INVESTIGATE,
+            scenario="professional SOC analyst question",
+            question="Please assess whether this alert should be escalated.",
+            context={"severity": "high", "follow_up": False, "target": "admin service"},
+            expected_answer=(
+                "Most important: escalation is reasonable only if the admin service is critical or related auth outcomes are worse than shown. "
+                "Fact: the supplied context shows high-severity activity against an administrative surface. Inference: credential testing is plausible. "
+                "Contradictory evidence: no successful login or post-auth activity is visible. Missing evidence: target criticality, account outcomes, and source ownership. "
+                "Confidence: medium. Next step: inspect target-side auth outcomes before escalating."
+            ),
+            required_terms=("most important", "fact", "inference", "contradictory evidence", "missing evidence", "confidence", "next step"),
+        ),
     )
 
 
@@ -577,8 +649,10 @@ def evaluate_golden_reasoning_answer(case: GoldenReasoningCase, answer: str) -> 
         "states_uncertainty_or_missing_evidence": any(term in text for term in ("uncertainty", "missing evidence", "evidence gaps")),
         "not_generic_monitoring": not generic_continue,
         "no_filler_phrases": not any(filler.values()),
+        "no_robotic_preamble": not _has_robotic_preamble(text),
         "no_generic_disclaimer_ending": not _has_generic_disclaimer_ending(text),
         "not_visible_field_only": not _looks_like_visible_field_restatement(text),
+        "paragraphs_add_value": _paragraphs_add_value(text),
         **required,
         **forbidden,
     }
@@ -626,6 +700,57 @@ def _has_generic_disclaimer_ending(text: str) -> bool:
         "conclusions may change.",
     )
     return normalized.endswith(endings)
+
+
+def _has_robotic_preamble(text: str) -> bool:
+    normalized = " ".join(str(text or "").lower().split()).strip()
+    preambles = (
+        "based on",
+        "the alert indicates",
+        "the alert is indicating",
+        "this alert indicates",
+        "it is important to note",
+        "i'd like to clarify",
+        "i would like to clarify",
+        "as an ai",
+    )
+    return normalized.startswith(preambles)
+
+
+def _paragraphs_add_value(text: str) -> bool:
+    paragraphs = [paragraph.strip().lower() for paragraph in re.split(r"\n\s*\n", str(text or "")) if paragraph.strip()]
+    if not paragraphs:
+        return False
+    value_terms = (
+        "because",
+        "matters",
+        "suggests",
+        "supports",
+        "argues against",
+        "against it",
+        "fact:",
+        "inference:",
+        "uncertainty:",
+        "missing evidence",
+        "evidence gaps",
+        "confidence",
+        "next check",
+        "next step",
+        "next action",
+        "recommendation",
+        "risk",
+        "alternative",
+        "would change",
+        "i don't see",
+        "i wouldn",
+        "not enough evidence",
+    )
+    for paragraph in paragraphs:
+        if _looks_like_visible_field_restatement(paragraph):
+            return False
+        if not any(term in paragraph for term in value_terms):
+            return False
+    return True
 
 
 def removed_frontend_ai_controls_present(source_root: Path | None = None) -> dict[str, list[str]]:
