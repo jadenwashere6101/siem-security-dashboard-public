@@ -303,6 +303,51 @@ def _punctuation_shape_content():
     )
 
 
+def _polish_shape_content():
+    return json.dumps(
+        {
+            "summary": (
+                "Two blocked firewall scan alerts came from source IP 4.155.252.113 during the briefing window. "
+                "Current evidence suggests reconnaissance, although intent cannot yet be confirmed because no successful follow-up activity is visible. "
+                "Review firewall activity next to determine whether additional reconnaissance or connections occurred."
+            ),
+            "sections": {
+                "alerts_reviewed": [],
+                "dismissed_low_priority_findings": [],
+                "escalations": [
+                    {
+                        "what_happened": "Repeated blocked scan attempts from 4.155.252.113 touched perimeter services.",
+                        "supporting_evidence": "Multiple blocked connection attempts were observed in firewall activity.",
+                        "why_it_matters": "The same source may continue probing exposed services during the next shift.",
+                        "urgency": "same-shift",
+                        "recommended_action": "Review firewall and authentication activity for follow-up connections.",
+                    }
+                ],
+                "critical_findings": [
+                    {
+                        "what_happened": "Repeated blocked scan attempts from 4.155.252.113 touched perimeter services.",
+                        "supporting_evidence": "Multiple blocked connection attempts were observed in firewall activity.",
+                        "why_it_matters": "Repeated perimeter scans can precede exploit attempts if exposed services are found.",
+                        "confidence": "Medium",
+                        "recommended_action": "Correlate the scan with related firewall and authentication events.",
+                    }
+                ],
+                "evidence": [
+                    {
+                        "fact": "Multiple blocked scan attempts were observed from 4.155.252.113.",
+                        "inference": "The activity is consistent with reconnaissance, but exploitation is not confirmed.",
+                    }
+                ],
+                "recommendations": [
+                    {"action": "Inspect network logs", "target": "4.155.252.113"},
+                    {"action": "Review the source IP", "target": "Source IP"},
+                    {"recommended_action": "Review destination host activity", "target": "Destination Host", "reason": "The destination may have received follow-up attempts."},
+                ],
+            },
+        }
+    )
+
+
 def _success_content_with_evidence():
     return json.dumps(
         {
@@ -1034,17 +1079,60 @@ def test_production_observed_dict_shapes_are_normalized_without_raw_python_repr(
     assert "Repeated deny activity was visible with no confirmed impact." in evidence
     assert "Related attempts remained blocked." in evidence
     assert "Priority 1: Review firewall logs for source IP 8.231.67.182." in recommendations
-    assert "Review firewall and authentication logs for follow-up activity from 8.231.67.182" in recommendations
+    assert "Review firewall and authentication logs associated with source IP 8.231.67.182" in recommendations
     assert "Verify whether 8.231.67.182 is an approved scanner. Reason: The activity resembles scanning but source ownership is unknown." in recommendations
     assert "What happened: Critical port-scan alert from 8.231.67.182." in critical
     assert "Supporting evidence: The alert pattern showed repeated connection attempts." in critical
     assert "Why it matters: A repeated scan can precede exploitation if it touches exposed services." in critical
-    assert "Confidence: medium." in critical
-    assert "Escalation note:" in escalations or "Repeated attempts targeted the perimeter from 8.231.67.182." in escalations
+    assert "Confidence: Medium - The alert pattern showed repeated connection attempts, but no confirmed exploitation or successful follow-up is shown in the reviewed evidence." in critical
+    assert "Immediate attention:" in escalations
+    assert "Next action:" in escalations
+    assert "Why this cannot wait:" in escalations
     assert "Downgraded:" in low_priority
     assert evidence_refs[0]["source_path"] == "/alerts/1"
     assert evidence_refs[0]["tool_name"] == "get_alert_detail"
     _assert_no_internal_analyst_terms(summary, sections)
+
+
+def test_polish_distinguishes_findings_escalations_and_natural_recommendations(postgres_db):
+    conn, _cur = postgres_db
+    _insert_alert(conn, severity="critical", source_ip="4.155.252.113")
+    _schedule, _window, job, run = _schedule_window_job_run(conn)
+
+    outcome = run_scheduled_investigation(
+        conn,
+        job=job,
+        run=run,
+        gateway_config=AiGatewayConfig(
+            mode=AI_MODE_LOCAL_ONLY,
+            configured_mode=AI_MODE_LOCAL_ONLY,
+            local_base_url="http://127.0.0.1:11434",
+            local_model="llama",
+        ),
+        gateway=FakeGateway(content=_polish_shape_content()),
+        tool_executor=lambda _planned, _context: _tool_summary(),
+    )
+
+    assert outcome.run_status == "success"
+    critical = " ".join(outcome.sections["critical_findings"])
+    escalations = " ".join(outcome.sections["escalations"])
+    recommendations = " ".join(outcome.sections["recommendations"])
+    evidence = " ".join(outcome.sections["evidence"])
+
+    assert "What happened:" in critical
+    assert "Why it matters:" in critical
+    assert "Confidence: Medium - Multiple blocked connection attempts were observed in firewall activity, but no confirmed exploitation or successful follow-up is shown in the reviewed evidence." in critical
+    assert "Immediate attention:" in escalations
+    assert "Next action:" in escalations
+    assert "Why this cannot wait:" in escalations
+    assert "Evidence basis: Multiple blocked connection attempts were observed in firewall activity." in escalations
+    assert critical != escalations
+    assert "Review firewall and authentication logs associated with source IP 4.155.252.113 to determine whether additional reconnaissance or follow-up connections occurred." in recommendations
+    assert "for Source IP" not in recommendations
+    assert "for Destination Host" not in recommendations
+    assert "consistent with reconnaissance, but exploitation is not confirmed" in evidence
+    assert "likely malicious" not in _analyst_text(outcome.summary, outcome.sections).lower()
+    _assert_no_internal_analyst_terms(outcome.summary, outcome.sections)
 
 
 def test_duplicate_punctuation_is_normalized_in_analyst_sections(postgres_db):

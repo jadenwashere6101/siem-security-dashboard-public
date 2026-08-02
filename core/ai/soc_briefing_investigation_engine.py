@@ -725,12 +725,12 @@ def _build_synthesis_prompt_payload(
                 "Do not mention selected candidates, bounded evidence references, skipped candidates, source paths, tool names, record counts, or investigation-engine mechanics.",
             ],
             "critical_findings": [
-                "Each finding must include what happened, supporting evidence, why it matters, confidence, and recommended action.",
+                "Each finding must explain what happened, evidence, why it matters, evidence-qualified confidence, and action without duplicating escalation prose.",
                 "If no critical findings exist, explain why the evidence does not justify a critical finding.",
             ],
             "escalations": [
                 "Only include items requiring analyst attention.",
-                "Explain why escalation is warranted, urgency, and supporting evidence.",
+                "State immediate action, urgency, evidence, and why it cannot wait without duplicating Critical Findings.",
             ],
             "low_priority_findings": [
                 "Explain downgrades using evidence: expected scanner, isolated event, duplicate alert, or insufficient evidence.",
@@ -741,13 +741,13 @@ def _build_synthesis_prompt_payload(
             ],
             "recommendations": [
                 "Reference specific analyst-meaningful evidence such as source IP, alert behavior, alert family, or related events.",
-                "Avoid generic instructions like 'Inspect logs' without naming what to inspect and why.",
+                "Use natural instructions naming what to inspect and why; avoid generic or mechanically concatenated field labels.",
             ],
             "correlation": [
                 "Correlate by same source IP, destination, subnet, alert family, repeated behavior, and timeline relationships when evidence supports it.",
             ],
             "analyst_judgment": [
-                "State whether activity is probably malicious, expected, noisy, or uncertain, and what evidence supports or contradicts that judgment.",
+                "State whether activity is malicious, expected, noisy, or uncertain and why; scanning or blocked attempts alone do not prove malicious intent.",
                 "State uncertainty naturally without generic disclaimers.",
             ],
         },
@@ -1505,7 +1505,7 @@ def _recommendation_dict_text(item: dict[str, Any], values: dict[str, str]) -> s
     if values.get("action") and values.get("target"):
         action = _recommendation_action(values["action"])
         reason = f" Reason: {values['reason']}." if values.get("reason") else ""
-        return f"{action}{target} to determine whether the activity had successful follow-up or touched additional internal hosts.{reason}"
+        return f"{action}{target} to determine whether additional reconnaissance or follow-up connections occurred.{reason}"
     if values.get("step") and values.get("description"):
         return f"Priority {values['step']}: {_recommendation_action(values['description'])}."
     if values.get("recommended_action"):
@@ -1528,6 +1528,18 @@ def _finding_dict_text(
     matters = values.get("why_it_matters") or values.get("inference")
     confidence = values.get("confidence") or ("medium" if critical else "")
     action = values.get("recommended_action") or values.get("action")
+    if escalation:
+        immediate = happened or evidence or "This item requires analyst review"
+        next_action = _recommendation_action(action or "Review related firewall and authentication activity")
+        why_wait = matters or evidence or "available severity and activity context indicate this should be reviewed before the shift handoff is closed"
+        urgency = values.get("urgency") or "same-shift"
+        evidence_basis = f" Evidence basis: {evidence}." if evidence else ""
+        return (
+            f"Immediate attention: {immediate}. "
+            f"Next action: {next_action}. "
+            f"Why this cannot wait: {why_wait}. "
+            f"Urgency: {urgency}.{evidence_basis}"
+        )
     parts = []
     if happened:
         parts.append(f"What happened: {happened}")
@@ -1535,10 +1547,8 @@ def _finding_dict_text(
         parts.append(f"Supporting evidence: {evidence}")
     if matters:
         parts.append(f"Why it matters: {matters}")
-    if escalation and values.get("urgency"):
-        parts.append(f"Urgency: {values['urgency']}")
     if confidence:
-        parts.append(f"Confidence: {confidence}")
+        parts.append(f"Confidence: {_confidence_text(confidence, evidence=evidence, matters=matters)}")
     if action:
         parts.append(f"Recommended action: {_recommendation_action(action)}")
     if parts:
@@ -1682,6 +1692,10 @@ def _recommendation_action(value: Any) -> str:
     lowered = text.lower()
     if "inspect network logs" in lowered or lowered == "inspect logs":
         return "Review firewall and authentication logs"
+    if lowered.startswith("review the source ip") or lowered.startswith("review source ip"):
+        return "Review firewall activity"
+    if lowered.startswith("review the destination host") or lowered.startswith("review destination host"):
+        return "Review destination-host activity"
     if lowered.startswith("inspect "):
         return "Review " + text[8:]
     if lowered.startswith("investigate "):
@@ -1693,9 +1707,23 @@ def _target_phrase(target: str | None) -> str:
     if not target:
         return ""
     target = _sanitize_analyst_text(target)
+    if target.lower() in {"source ip", "the source ip", "destination host", "the destination host", "target", "host"}:
+        return ""
     if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", target):
-        return f" for follow-up activity from {target}"
-    return f" for {target}"
+        return f" associated with source IP {target}"
+    return f" associated with {target}"
+
+
+def _confidence_text(confidence: str, *, evidence: str | None, matters: str | None) -> str:
+    text = _sanitize_analyst_text(confidence)
+    if not text:
+        text = "Medium"
+    if any(term in text.lower() for term in ("because", "but", "observed", "evidence", "successful", "confirmed", "available")):
+        return text[0].upper() + text[1:]
+    rationale = (evidence or matters or "").rstrip(".!? ")
+    if rationale:
+        return f"{text[0].upper() + text[1:]} - {rationale}, but no confirmed exploitation or successful follow-up is shown in the reviewed evidence."
+    return f"{text[0].upper() + text[1:]} - available evidence supports review, but does not confirm exploitation or impact."
 
 
 def _alerts_reviewed_texts(selected: list[InvestigationCandidate]) -> list[str]:
@@ -1719,22 +1747,28 @@ def _alerts_reviewed_texts(selected: list[InvestigationCandidate]) -> list[str]:
 def _critical_finding_text(candidate: InvestigationCandidate, evidence_refs: list[dict[str, Any]]) -> str:
     evidence = _best_evidence_phrase(candidate, evidence_refs)
     source = f" from source IP {_display_ip(candidate.source_ip)}" if candidate.source_ip else ""
+    if candidate.source_ip:
+        next_action = f"review firewall and authentication activity associated with source IP {_display_ip(candidate.source_ip)} before considering containment"
+    else:
+        next_action = "correlate the alert with related firewall and authentication outcomes before considering containment"
     return (
         f"What happened: {candidate.label}{source} appeared during the briefing window. "
-        f"Supporting evidence: {evidence}. "
         "Why it matters: critical severity can indicate activity that may affect protected assets or require fast triage if correlated with successful outcomes. "
-        "Confidence: medium, based on the alert severity and absence of confirmed exploitation in the reviewed context. "
-        f"Recommended action: review {evidence} and check related event or authentication outcomes before containment."
+        f"Supporting evidence: {evidence}. "
+        "Confidence: Medium - critical alert severity and supporting evidence justify same-shift review, but no confirmed exploitation or successful follow-up is shown in the reviewed context. "
+        f"Recommended action: {next_action}."
     )
 
 
 def _escalation_text(candidate: InvestigationCandidate, evidence_refs: list[dict[str, Any]]) -> str:
     evidence = _best_evidence_phrase(candidate, evidence_refs)
     urgency = "immediate" if str(candidate.metadata.get("severity") or "").lower() == "critical" or str(candidate.metadata.get("priority") or "") == "P1" else "same-shift"
-    source = f" Source IP: {_display_ip(candidate.source_ip)}." if candidate.source_ip else ""
+    source = f" Source IP: {_display_ip(candidate.source_ip)}." if candidate.source_ip else "."
     return (
-        f"Escalation warranted for {candidate.label}. Urgency: {urgency}. "
-        f"Evidence: {evidence}.{source} Reason: severity or priority suggests analyst attention is required, but action should remain evidence-gated."
+        f"Immediate attention: {candidate.label}{source} "
+        f"Next action: review firewall and authentication activity tied to this item before closing the handoff. "
+        f"Why this cannot wait: severity or priority indicates the next analyst should confirm whether the activity progressed beyond blocked or denied attempts. "
+        f"Urgency: {urgency}. Evidence basis: {evidence}."
     )
 
 
@@ -1757,7 +1791,7 @@ def _recommendation_texts(selected: list[InvestigationCandidate], evidence_refs:
     source_ips = sorted({_display_ip(candidate.source_ip) for candidate in selected if candidate.source_ip})
     if source_ips:
         recommendations.append(
-            f"Review firewall, related-event, and authentication logs for source IP {source_ips[0]} to determine whether additional internal hosts were contacted after the observed activity."
+            f"Review firewall activity associated with source IP {source_ips[0]} to determine whether additional reconnaissance or follow-up connections occurred."
         )
     if evidence_refs:
         recommendations.append(
