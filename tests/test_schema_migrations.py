@@ -155,7 +155,7 @@ def test_schema_snapshot_marker_matches_latest_migration():
         migrations_dir=repo_root / "migrations",
     )
 
-    assert version == 32
+    assert version == 33
 
 
 def test_anakin_async_workflow_requests_migration_scope():

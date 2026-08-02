@@ -116,7 +116,8 @@ def test_migration_0012_is_pending_when_db_at_0011(capsys):
     assert "Would apply migration 0028 0028_investigation_workflow" in output
     assert "Would apply migration 0029 0029_investigation_centered_workspace" in output
     assert "Would apply migration 0030 0030_manual_soc_briefing_mode" in output
-    assert "Dry run complete. 19 pending migration(s)." in output
+    assert "Would apply migration 0033 0033_anakin_session_memory_foundation" in output
+    assert "Dry run complete. 22 pending migration(s)." in output
 
 
 def test_migration_0013_is_pending_when_db_at_0012(capsys):
@@ -142,7 +143,8 @@ def test_migration_0013_is_pending_when_db_at_0012(capsys):
     assert "Would apply migration 0028 0028_investigation_workflow" in output
     assert "Would apply migration 0029 0029_investigation_centered_workspace" in output
     assert "Would apply migration 0030 0030_manual_soc_briefing_mode" in output
-    assert "Dry run complete. 18 pending migration(s)." in output
+    assert "Would apply migration 0033 0033_anakin_session_memory_foundation" in output
+    assert "Dry run complete. 21 pending migration(s)." in output
 
 
 def test_migration_0018_is_noop_when_already_applied(capsys):
@@ -162,7 +164,8 @@ def test_migration_0018_is_noop_when_already_applied(capsys):
     assert "Would apply migration 0028 0028_investigation_workflow" in output
     assert "Would apply migration 0029 0029_investigation_centered_workspace" in output
     assert "Would apply migration 0030 0030_manual_soc_briefing_mode" in output
-    assert "Dry run complete. 12 pending migration(s)." in output
+    assert "Would apply migration 0033 0033_anakin_session_memory_foundation" in output
+    assert "Dry run complete. 15 pending migration(s)." in output
 
 
 def test_migration_0014_is_pending_when_db_at_0013(capsys):
@@ -187,7 +190,8 @@ def test_migration_0014_is_pending_when_db_at_0013(capsys):
     assert "Would apply migration 0028 0028_investigation_workflow" in output
     assert "Would apply migration 0029 0029_investigation_centered_workspace" in output
     assert "Would apply migration 0030 0030_manual_soc_briefing_mode" in output
-    assert "Dry run complete. 17 pending migration(s)." in output
+    assert "Would apply migration 0033 0033_anakin_session_memory_foundation" in output
+    assert "Dry run complete. 20 pending migration(s)." in output
 
 
 def test_migration_0015_is_pending_when_db_at_0014(capsys):
@@ -211,7 +215,8 @@ def test_migration_0015_is_pending_when_db_at_0014(capsys):
     assert "Would apply migration 0028 0028_investigation_workflow" in output
     assert "Would apply migration 0029 0029_investigation_centered_workspace" in output
     assert "Would apply migration 0030 0030_manual_soc_briefing_mode" in output
-    assert "Dry run complete. 16 pending migration(s)." in output
+    assert "Would apply migration 0033 0033_anakin_session_memory_foundation" in output
+    assert "Dry run complete. 19 pending migration(s)." in output
 
 
 def test_migration_0016_is_pending_when_db_at_0015(capsys):
@@ -234,7 +239,8 @@ def test_migration_0016_is_pending_when_db_at_0015(capsys):
     assert "Would apply migration 0028 0028_investigation_workflow" in output
     assert "Would apply migration 0029 0029_investigation_centered_workspace" in output
     assert "Would apply migration 0030 0030_manual_soc_briefing_mode" in output
-    assert "Dry run complete. 15 pending migration(s)." in output
+    assert "Would apply migration 0033 0033_anakin_session_memory_foundation" in output
+    assert "Dry run complete. 18 pending migration(s)." in output
 
 
 def test_migration_0018_is_pending_when_db_at_0017(capsys):
@@ -255,7 +261,8 @@ def test_migration_0018_is_pending_when_db_at_0017(capsys):
     assert "Would apply migration 0028 0028_investigation_workflow" in output
     assert "Would apply migration 0029 0029_investigation_centered_workspace" in output
     assert "Would apply migration 0030 0030_manual_soc_briefing_mode" in output
-    assert "Dry run complete. 13 pending migration(s)." in output
+    assert "Would apply migration 0033 0033_anakin_session_memory_foundation" in output
+    assert "Dry run complete. 16 pending migration(s)." in output
 
 
 def test_migration_0020_and_0021_are_pending_when_db_at_0019(capsys):
@@ -274,7 +281,8 @@ def test_migration_0020_and_0021_are_pending_when_db_at_0019(capsys):
     assert "Would apply migration 0028 0028_investigation_workflow" in output
     assert "Would apply migration 0029 0029_investigation_centered_workspace" in output
     assert "Would apply migration 0030 0030_manual_soc_briefing_mode" in output
-    assert "Dry run complete. 11 pending migration(s)." in output
+    assert "Would apply migration 0033 0033_anakin_session_memory_foundation" in output
+    assert "Dry run complete. 14 pending migration(s)." in output
 
 
 def test_migration_0018_execution_mode_sql_targets_membership_check_not_boolean_guards():
