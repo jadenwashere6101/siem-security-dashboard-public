@@ -11,11 +11,13 @@ from core.ai.session_memory_store import (
     SessionMemoryValidationError,
     ThreadExpiredError,
     append_turn,
+    active_workflow_request_for_thread,
     create_thread,
     get_thread,
     list_turns,
     reset_thread,
 )
+from core.ai.workflow_request_store import serialize_request
 from core.db import get_db_connection
 
 
@@ -56,9 +58,39 @@ def read_thread_request(thread_id: str, *, owner_username: str) -> tuple[dict[st
     def operation(conn):
         thread = get_thread(conn, thread_id=thread_id, owner_username=owner_username)
         _validate_stored_thread_target(conn, thread, owner_username=owner_username)
-        return {"thread": thread}, 200
+        active_request = active_workflow_request_for_thread(
+            conn,
+            thread_id=thread_id,
+            owner_username=owner_username,
+        )
+        return {"thread": thread, "active_request": serialize_request(active_request)}, 200
 
     return _transaction(operation)
+
+
+def validate_owned_thread(conn, *, thread_id: str, owner_username: str) -> dict[str, Any]:
+    thread = get_thread(conn, thread_id=thread_id, owner_username=owner_username)
+    _validate_stored_thread_target(conn, thread, owner_username=owner_username)
+    return thread
+
+
+def validate_conversation_entity(
+    conn,
+    *,
+    owner_username: str,
+    entity_type: str,
+    entity_id: str,
+) -> None:
+    normalized_type = str(entity_type or "").strip().lower().replace("-", "_")
+    if normalized_type not in SUPPORTED_ENTITY_TYPES:
+        raise SessionMemoryValidationError("conversation entity type is unsupported.")
+    _validate_target_access(
+        conn,
+        owner_username=owner_username,
+        investigation_id=None,
+        entity_type=normalized_type,
+        entity_id=str(entity_id or "").strip(),
+    )
 
 
 def list_thread_turns_request(

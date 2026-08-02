@@ -335,6 +335,8 @@ def is_live_siem_data_question(message: str) -> bool:
 def _validate_payload(payload: dict[str, Any]) -> str:
     if not isinstance(payload, dict):
         raise RepoAssistantValidationError("JSON object body is required.")
+    if payload.get("conversation") is not None or payload.get("conversation_context") is not None:
+        raise RepoAssistantValidationError("Repo Assistant cannot use SIEM conversation memory.")
     message = str(payload.get("message") or "").strip()
     if not message:
         raise RepoAssistantValidationError("message is required.")

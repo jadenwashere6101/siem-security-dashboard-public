@@ -1,7 +1,10 @@
 import {
+  createAiThread,
   confirmAiAction,
   getAiStatus,
   getAiWorkflowRequest,
+  getAiThread,
+  getAiThreadTurns,
   previewAiAction,
   queueAiWorkflowRequest,
   requestAiChat,
@@ -314,6 +317,31 @@ test("getAiWorkflowRequest polls workflow request status with credentials", asyn
       signal: controller.signal,
     })
   );
+});
+
+test("thread services use authenticated server-owned conversation endpoints", async () => {
+  fetch
+    .mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ thread: { thread_id: "ath_1", version: 3 } }),
+    })
+    .mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ thread: { thread_id: "ath_1", version: 3 }, active_request: null }),
+    })
+    .mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ turns: [], next_cursor: null }),
+    });
+
+  await createAiThread({ domain: "siem", primary_entity: { type: "alert", id: "7" }, is_default: true });
+  await getAiThread("ath_1");
+  await getAiThreadTurns("ath_1", { cursor: 2, limit: 25 });
+
+  expect(fetch.mock.calls[0][0]).toEqual(expect.stringContaining("/ai/threads"));
+  expect(fetch.mock.calls[0][1]).toMatchObject({ method: "POST", credentials: "include" });
+  expect(fetch.mock.calls[1][0]).toEqual(expect.stringContaining("/ai/threads/ath_1"));
+  expect(fetch.mock.calls[2][0]).toEqual(expect.stringContaining("/ai/threads/ath_1/turns?cursor=2&limit=25"));
 });
 
 test("requestAiExplanation maps server errors without logging payloads", async () => {

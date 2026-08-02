@@ -457,15 +457,17 @@ def append_turn(
         turn = dict(cur.fetchone())
         expires_at = current + ACTIVE_RETENTION
         delete_after = current + CONTENT_RETENTION
+        focus_state = _focus_state_for_snapshot(thread.get("focus_state"), clean_snapshot)
         cur.execute(
             """
             UPDATE anakin_threads
             SET next_sequence = %s, version = version + 1, updated_at = %s,
-                last_active_at = %s, expires_at = %s, delete_after = %s
+                last_active_at = %s, expires_at = %s, delete_after = %s,
+                focus_state = %s
             WHERE thread_id = %s AND owner_username = %s
             RETURNING *
             """,
-            (sequence + 1, current, current, expires_at, delete_after, identifier, owner),
+            (sequence + 1, current, current, expires_at, delete_after, Json(focus_state), identifier, owner),
         )
         updated_thread = dict(cur.fetchone())
         cur.execute(
@@ -474,7 +476,11 @@ def append_turn(
                 thread_id, owner_username, entity_type, entity_id, display_alias,
                 ordinal, salience, first_referenced_sequence, last_referenced_sequence,
                 created_at, updated_at
-            ) VALUES (%s, %s, %s, %s, %s, 1, 1.0, %s, %s, %s, %s)
+            ) VALUES (
+                %s, %s, %s, %s, %s,
+                (SELECT COALESCE(MAX(ordinal), 0) + 1 FROM anakin_thread_entities WHERE thread_id = %s),
+                1.0, %s, %s, %s, %s
+            )
             ON CONFLICT (thread_id, entity_type, entity_id) DO UPDATE
             SET last_referenced_sequence = EXCLUDED.last_referenced_sequence,
                 salience = GREATEST(anakin_thread_entities.salience, EXCLUDED.salience),
@@ -486,13 +492,238 @@ def append_turn(
                 updated_thread["primary_entity_type"],
                 updated_thread["primary_entity_id"],
                 clean_snapshot.get("display_alias"),
+                identifier,
                 sequence,
                 sequence,
                 current,
                 current,
             ),
         )
+        _upsert_snapshot_entities(
+            cur,
+            thread_id=identifier,
+            owner_username=owner,
+            snapshot=clean_snapshot,
+            sequence=sequence,
+            now=current,
+        )
     return serialize_turn(turn), serialize_thread(updated_thread), True
+
+
+def get_turn_by_client_request(
+    conn,
+    *,
+    thread_id: str,
+    owner_username: str,
+    client_request_id: str,
+) -> dict[str, Any] | None:
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT * FROM anakin_turns
+            WHERE thread_id = %s AND owner_username = %s AND client_request_id = %s
+            """,
+            (thread_id, owner_username, client_request_id),
+        )
+        row = cur.fetchone()
+    return serialize_turn(dict(row)) if row is not None else None
+
+
+def get_turn_by_id(conn, *, thread_id: str, owner_username: str, turn_id: int) -> dict[str, Any] | None:
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            "SELECT * FROM anakin_turns WHERE id = %s AND thread_id = %s AND owner_username = %s",
+            (turn_id, thread_id, owner_username),
+        )
+        row = cur.fetchone()
+    return serialize_turn(dict(row)) if row is not None else None
+
+
+def linked_workflow_request_for_turn(conn, *, thread_id: str, owner_username: str, turn_id: int) -> dict[str, Any] | None:
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT * FROM ai_workflow_requests
+            WHERE thread_id = %s AND turn_id = %s AND actor_username = %s
+            """,
+            (thread_id, turn_id, owner_username),
+        )
+        row = cur.fetchone()
+    return dict(row) if row is not None else None
+
+
+def active_workflow_request_for_thread(conn, *, thread_id: str, owner_username: str) -> dict[str, Any] | None:
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT request_id, workflow, status, stage, lifecycle, thread_id, turn_id, created_at, updated_at
+            FROM ai_workflow_requests
+            WHERE thread_id = %s AND actor_username = %s
+              AND status IN ('queued', 'running')
+            ORDER BY id DESC LIMIT 1
+            """,
+            (thread_id, owner_username),
+        )
+        row = cur.fetchone()
+    return dict(row) if row is not None else None
+
+
+def finalize_execution_turn(
+    conn,
+    *,
+    thread_id: str,
+    owner_username: str,
+    user_turn_id: int,
+    expected_thread_version: int,
+    workflow: str,
+    content: str,
+    client_request_id: str,
+    structured_payload: dict[str, Any] | None = None,
+    entity_snapshot: dict[str, Any] | None = None,
+    artifact_preview: bool = False,
+    now: datetime | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    current = _as_utc(now) or utc_now()
+    clean_content = sanitize_text(content)
+    clean_payload = sanitize_structured_value(structured_payload or {}, field_name="assistant structured_payload")
+    clean_snapshot = sanitize_structured_value(entity_snapshot or {}, field_name="assistant entity_snapshot")
+    if not isinstance(clean_payload, dict) or not isinstance(clean_snapshot, dict):
+        raise SessionMemoryValidationError("assistant structured payload and entity snapshot must be objects.")
+    assertion_type = "artifact_preview" if artifact_preview else MODEL_PROVENANCE
+    if assertion_type == MODEL_PROVENANCE:
+        if clean_payload.get("confidence") not in {"low", "medium", "high"} or not clean_payload.get("provenance"):
+            raise SessionMemoryValidationError("assistant inference requires confidence and provenance.")
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        thread = _lock_mutable_thread(cur, thread_id=thread_id, owner_username=owner_username, now=current)
+        if int(thread["version"]) != expected_thread_version:
+            raise ThreadVersionConflictError(
+                f"Thread version conflict: expected {expected_thread_version}, current {thread['version']}."
+            )
+        cur.execute(
+            """
+            SELECT * FROM anakin_turns
+            WHERE id = %s AND thread_id = %s AND owner_username = %s FOR UPDATE
+            """,
+            (user_turn_id, thread_id, owner_username),
+        )
+        user_turn = cur.fetchone()
+        if user_turn is None:
+            raise ThreadNotFoundError("Conversation execution turn not found.")
+        if int(user_turn["thread_version_after_append"]) != expected_thread_version:
+            raise ThreadVersionConflictError("Conversation execution turn version is stale.")
+        if user_turn["lifecycle_status"] not in {"queued", "running"}:
+            raise ThreadClosedError("Conversation execution turn is no longer active.")
+        sequence = int(thread["next_sequence"])
+        assistant_turn_id = f"atn_{uuid.uuid4().hex}"
+        assistant_request_id = _required_text(client_request_id, "client_request_id", 256)
+        cur.execute(
+            """
+            INSERT INTO anakin_turns (
+                turn_id, thread_id, owner_username, sequence, thread_version_after_append,
+                role, workflow, content, structured_payload, assertion_type,
+                client_request_id, parent_turn_id, entity_snapshot, lifecycle_status,
+                preview_only, persisted, applied, approval_required, created_at, completed_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, 'assistant', %s, %s, %s, %s,
+                %s, %s, %s, 'completed', %s, FALSE, FALSE, %s, %s, %s
+            ) RETURNING *
+            """,
+            (
+                assistant_turn_id,
+                thread_id,
+                owner_username,
+                sequence,
+                expected_thread_version + 1,
+                workflow,
+                clean_content,
+                Json(clean_payload),
+                assertion_type,
+                assistant_request_id,
+                user_turn_id,
+                Json(clean_snapshot),
+                artifact_preview,
+                artifact_preview,
+                current,
+                current,
+            ),
+        )
+        assistant_turn = dict(cur.fetchone())
+        cur.execute(
+            """
+            UPDATE anakin_turns SET lifecycle_status = 'completed', completed_at = %s
+            WHERE id = %s AND thread_id = %s AND owner_username = %s
+            RETURNING *
+            """,
+            (current, user_turn_id, thread_id, owner_username),
+        )
+        completed_user = dict(cur.fetchone())
+        focus_state = _focus_state_for_snapshot(thread.get("focus_state"), clean_snapshot)
+        expires_at = current + ACTIVE_RETENTION
+        delete_after = current + CONTENT_RETENTION
+        cur.execute(
+            """
+            UPDATE anakin_threads
+            SET next_sequence = %s, version = version + 1, updated_at = %s,
+                last_active_at = %s, expires_at = %s, delete_after = %s,
+                focus_state = %s, compact_summary = %s, summary_version = summary_version + 1
+            WHERE thread_id = %s AND owner_username = %s
+            RETURNING *
+            """,
+            (
+                sequence + 1,
+                current,
+                current,
+                expires_at,
+                delete_after,
+                Json(focus_state),
+                _summary_with_latest(thread.get("compact_summary"), completed_user.get("content"), clean_content),
+                thread_id,
+                owner_username,
+            ),
+        )
+        updated_thread = dict(cur.fetchone())
+        _merge_derived_state(
+            cur,
+            thread_id=thread_id,
+            owner_username=owner_username,
+            user_turn=completed_user,
+            assistant_turn=assistant_turn,
+            workflow=workflow,
+            artifact_preview=artifact_preview,
+            now=current,
+        )
+        _upsert_snapshot_entities(
+            cur,
+            thread_id=thread_id,
+            owner_username=owner_username,
+            snapshot=clean_snapshot,
+            sequence=sequence,
+            now=current,
+        )
+    return serialize_turn(completed_user), serialize_turn(assistant_turn), serialize_thread(updated_thread)
+
+
+def fail_execution_turn(
+    conn,
+    *,
+    thread_id: str,
+    owner_username: str,
+    turn_id: int,
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
+    current = _as_utc(now) or utc_now()
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """
+            UPDATE anakin_turns SET lifecycle_status = 'failed', completed_at = %s
+            WHERE id = %s AND thread_id = %s AND owner_username = %s
+              AND lifecycle_status IN ('queued', 'running')
+            RETURNING *
+            """,
+            (current, turn_id, thread_id, owner_username),
+        )
+        row = cur.fetchone()
+    return serialize_turn(dict(row)) if row is not None else None
 
 
 def reset_thread(
@@ -993,6 +1224,178 @@ def serialize_turn(row: dict[str, Any]) -> dict[str, Any]:
         "created_at": _iso(row.get("created_at")),
         "completed_at": _iso(row.get("completed_at")),
     }
+
+
+def _focus_state_for_snapshot(current_value: Any, snapshot: dict[str, Any]) -> dict[str, Any]:
+    current = current_value if isinstance(current_value, dict) else {}
+    active = current.get("active") if isinstance(current.get("active"), dict) else None
+    history = [item for item in current.get("history", []) if isinstance(item, dict)] if isinstance(current.get("history"), list) else []
+    requested = snapshot.get("active_entity") if isinstance(snapshot.get("active_entity"), dict) else None
+    if requested and requested.get("type") and requested.get("id"):
+        normalized = {
+            "type": str(requested["type"]).strip().lower().replace("-", "_"),
+            "id": str(requested["id"]).strip(),
+            "display_alias": requested.get("display_alias"),
+        }
+        if active and (str(active.get("type")), str(active.get("id"))) != (normalized["type"], normalized["id"]):
+            history.append(active)
+        active = normalized
+    return {"active": active, "history": history[-8:]}
+
+
+def _upsert_snapshot_entities(
+    cur,
+    *,
+    thread_id: str,
+    owner_username: str,
+    snapshot: dict[str, Any],
+    sequence: int,
+    now: datetime,
+) -> None:
+    candidates = []
+    active = snapshot.get("active_entity")
+    if isinstance(active, dict):
+        candidates.append(active)
+    if isinstance(snapshot.get("entities"), list):
+        candidates.extend(item for item in snapshot["entities"] if isinstance(item, dict))
+    seen: set[tuple[str, str]] = set()
+    for candidate in candidates[:20]:
+        entity_type = str(candidate.get("type") or "").strip().lower().replace("-", "_")
+        entity_id = str(candidate.get("id") or "").strip()
+        key = (entity_type, entity_id)
+        if not entity_type or not entity_id or key in seen:
+            continue
+        seen.add(key)
+        cur.execute(
+            """
+            INSERT INTO anakin_thread_entities (
+                thread_id, owner_username, entity_type, entity_id, display_alias,
+                ordinal, salience, first_referenced_sequence, last_referenced_sequence,
+                created_at, updated_at
+            ) VALUES (
+                %s, %s, %s, %s, %s,
+                (SELECT COALESCE(MAX(ordinal), 0) + 1 FROM anakin_thread_entities WHERE thread_id = %s),
+                %s, %s, %s, %s, %s
+            )
+            ON CONFLICT (thread_id, entity_type, entity_id) DO UPDATE
+            SET display_alias = COALESCE(EXCLUDED.display_alias, anakin_thread_entities.display_alias),
+                salience = GREATEST(anakin_thread_entities.salience, EXCLUDED.salience),
+                last_referenced_sequence = GREATEST(anakin_thread_entities.last_referenced_sequence, EXCLUDED.last_referenced_sequence),
+                updated_at = EXCLUDED.updated_at
+            """,
+            (
+                thread_id,
+                owner_username,
+                entity_type,
+                entity_id,
+                str(candidate.get("display_alias") or "").strip() or None,
+                thread_id,
+                1.0 if candidate is active else 0.7,
+                sequence,
+                sequence,
+                now,
+                now,
+            ),
+        )
+
+
+def _merge_derived_state(
+    cur,
+    *,
+    thread_id: str,
+    owner_username: str,
+    user_turn: dict[str, Any],
+    assistant_turn: dict[str, Any],
+    workflow: str,
+    artifact_preview: bool,
+    now: datetime,
+) -> None:
+    cur.execute(
+        "SELECT * FROM anakin_thread_state WHERE thread_id = %s AND owner_username = %s FOR UPDATE",
+        (thread_id, owner_username),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return
+    state = dict(row)
+    conclusions = list(state.get("conclusions") or [])
+    unresolved = list(state.get("unresolved_questions") or [])
+    recommendations = list(state.get("recommendations") or [])
+    corrections = list(state.get("corrections") or [])
+    user_assertion = user_turn.get("assertion_type")
+    user_payload = user_turn.get("structured_payload") if isinstance(user_turn.get("structured_payload"), dict) else {}
+    resolution = user_payload.get("reference_resolution") if isinstance(user_payload.get("reference_resolution"), dict) else {}
+    referent = resolution.get("referent") if isinstance(resolution.get("referent"), dict) else {}
+    if resolution.get("status") == "resolved" and referent.get("type") == "unresolved_question" and unresolved:
+        resolved_value = referent.get("value")
+        unresolved = [item for item in unresolved if item != resolved_value]
+        if len(unresolved) == len(state.get("unresolved_questions") or []):
+            unresolved = unresolved[:-1]
+    if user_assertion == "correction":
+        corrections.append(
+            {
+                "assertion_type": "correction",
+                "content": user_turn.get("content"),
+                "turn_id": user_turn.get("turn_id"),
+                "supersedes_turn_id": user_turn.get("parent_turn_id"),
+            }
+        )
+        conclusions = [
+            item for item in conclusions
+            if not isinstance(item, dict) or item.get("turn_database_id") != user_turn.get("parent_turn_id")
+        ]
+    if user_assertion == "unresolved_question":
+        unresolved.append(
+            {
+                "assertion_type": "unresolved_question",
+                "content": user_turn.get("content"),
+                "turn_id": user_turn.get("turn_id"),
+            }
+        )
+    if not artifact_preview:
+        inference = {
+            "assertion_type": MODEL_PROVENANCE,
+            "content": assistant_turn.get("content"),
+            "confidence": (assistant_turn.get("structured_payload") or {}).get("confidence", "medium"),
+            "provenance": (assistant_turn.get("structured_payload") or {}).get("provenance") or {"workflow": workflow},
+            "turn_id": assistant_turn.get("turn_id"),
+            "turn_database_id": assistant_turn.get("id"),
+        }
+        conclusions.append(inference)
+        if workflow == "decision_support":
+            recommendations.append(inference)
+    summary = _summary_with_latest(state.get("compact_summary"), user_turn.get("content"), assistant_turn.get("content"))
+    cur.execute(
+        """
+        UPDATE anakin_thread_state
+        SET state_version = state_version + 1,
+            conclusions = %s, unresolved_questions = %s, recommendations = %s,
+            corrections = %s, compact_summary = %s,
+            rebuild_metadata = %s, rebuild_required = FALSE, updated_at = %s
+        WHERE thread_id = %s AND owner_username = %s
+        """,
+        (
+            Json(conclusions[-8:]),
+            Json(unresolved[-8:]),
+            Json(recommendations[-8:]),
+            Json(corrections[-8:]),
+            summary,
+            Json({"source": "deterministic_turn_completion", "last_sequence": assistant_turn.get("sequence")}),
+            now,
+            thread_id,
+            owner_username,
+        ),
+    )
+
+
+def _summary_with_latest(existing: Any, user_content: Any, assistant_content: Any) -> str:
+    parts = []
+    if existing:
+        parts.append(str(existing).strip())
+    parts.append(f"Analyst: {str(user_content or '').strip()}")
+    parts.append(f"Anakin: {str(assistant_content or '').strip()}")
+    combined = "\n".join(part for part in parts if part)
+    return combined[-4000:]
 
 
 def _lock_mutable_thread(cur, *, thread_id: str, owner_username: str, now: datetime) -> dict[str, Any]:

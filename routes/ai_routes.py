@@ -47,6 +47,8 @@ from core.ai.session_memory_service import (
     submit_thread_turn_request,
 )
 from core.ai.session_memory_store import SessionMemoryError
+from core.ai.conversation_context import ConversationContextError
+from core.ai.conversation_orchestration_service import run_conversational_workflow
 from core.audit_helpers import log_audit_event
 from core.auth import analyst_or_super_admin_required, super_admin_required
 
@@ -241,8 +243,16 @@ def ai_workflows_route():
         return jsonify({"error": "JSON object body is required."}), 400
 
     try:
-        result = run_workflow(payload)
+        result = run_conversational_workflow(
+            payload,
+            owner_username=_thread_owner(),
+            actor_role=str(getattr(current_user, "role", "") or ""),
+        )
         return jsonify(result.payload), result.status_code
+    except SessionMemoryError as error:
+        return _thread_error(error)
+    except ConversationContextError as error:
+        return jsonify({"status": "error", "error_code": error.error_code, "error": str(error)}), error.status_code
     except (AiContextError, DraftValidationError, InvestigationPlannerError, WorkflowValidationError) as error:
         status_code = getattr(error, "status_code", 400)
         return jsonify(
@@ -292,6 +302,10 @@ def ai_workflow_requests_route():
             },
         )
         return jsonify(result), status_code
+    except SessionMemoryError as error:
+        return _thread_error(error)
+    except ConversationContextError as error:
+        return jsonify({"status": "error", "error_code": error.error_code, "error": str(error)}), error.status_code
     except WorkflowValidationError as error:
         status_code = getattr(error, "status_code", 400)
         return jsonify(

@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import App from './App';
 import { loadCurrentSession } from './services/authService';
 import { loadAlertDashboardSummary, loadAlertRuleOptions, loadAlerts } from './services/alertsService';
-import { getAiWorkflowRequest, queueAiWorkflowRequest, requestAiExplanation, requestAiWorkflow } from './services/aiService';
+import { createAiThread, getAiWorkflowRequest, queueAiWorkflowRequest, requestAiExplanation, requestAiWorkflow } from './services/aiService';
 import {
   createEvidenceReference,
   createInvestigation,
@@ -40,6 +40,7 @@ jest.mock('./services/alertsService', () => ({
 }));
 
 jest.mock('./services/aiService', () => ({
+  createAiThread: jest.fn(() => Promise.resolve({ thread: { thread_id: 'ath_test', version: 1 } })),
   getAiWorkflowRequest: jest.fn(() => Promise.resolve({ status: 'completed', workflow: 'deep_investigate', result: { status: 'success', answer: 'done', metadata: {}, context: {} }, metadata: {}, context: {} })),
   queueAiWorkflowRequest: jest.fn(() => Promise.resolve({ status: 'queued', workflow: 'deep_investigate', request_id: 'aiwf_test', metadata: {}, lifecycle: { stages: [{ stage: 'queued', status: 'running' }] } })),
   requestAiChat: jest.fn(() => Promise.resolve({ status: 'success', answer: 'ok', metadata: {}, context: {} })),
@@ -262,6 +263,7 @@ beforeEach(() => {
     value: 1280,
   });
   loadCurrentSession.mockResolvedValue({ authenticated: false });
+  createAiThread.mockResolvedValue({ thread: { thread_id: 'ath_test', version: 1 } });
   loadAlerts.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0, sort: 'newest' });
   loadAlertDashboardSummary.mockResolvedValue({
     metrics: {
@@ -821,9 +823,19 @@ test('freeform Ask Anakin auto route queues and polls backend-classified long wo
   await userEvent.click(screen.getByRole('button', { name: /submit ask anakin question/i }));
 
   await waitFor(() => expect(queueAiWorkflowRequest).toHaveBeenCalled());
+  expect(createAiThread).toHaveBeenCalledWith({
+    domain: 'siem',
+    primary_entity: { type: 'dashboard', id: 'dashboard' },
+    is_default: true,
+  });
   expect(queueAiWorkflowRequest.mock.calls[0][0]).toMatchObject({
     workflow: 'auto',
     prompt: 'Deep investigate this alert and evidence gaps',
+    conversation: {
+      thread_id: 'ath_test',
+      expected_version: 1,
+      client_request_id: expect.any(String),
+    },
   });
   expect(requestAiWorkflow).not.toHaveBeenCalled();
   await waitFor(() => expect(getAiWorkflowRequest).toHaveBeenCalledWith('aiwf_auto_deep', expect.any(Object)));

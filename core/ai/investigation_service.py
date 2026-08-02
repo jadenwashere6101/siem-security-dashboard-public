@@ -61,6 +61,7 @@ from core.ai.soc_tool_executor import (
     tool_summary_for_prompt,
 )
 from core.ai.soc_tools import SocToolExecutionSummary, redact_sensitive_values
+from core.ai.conversation_context import prompt_block
 
 _LOGGER = logging.getLogger(__name__)
 _SAFE_RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,120}$")
@@ -95,6 +96,7 @@ def run_investigation(
     context_type = str(payload.get("context_type") or "").strip().lower()
     question = _question_from_payload(payload)
     context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    conversation_context = payload.get("conversation_context") if isinstance(payload.get("conversation_context"), dict) else None
     tool_policy = normalize_tool_policy(payload.get("tool_policy"))
     allow_automatic_draft = payload.get("allow_automatic_draft") is not False
     steps: list[InvestigationStepResult] = []
@@ -313,6 +315,7 @@ def run_investigation(
             config=resolved_config,
             profile_max_prompt_chars=profile.max_prompt_chars,
             tone=tone,
+            conversation_context=conversation_context,
         )
         if len(prompt) > profile.max_prompt_chars:
             raise InvestigationPlannerError("Investigation prompt exceeded configured AI profile size limit", error_code="prompt_too_large")
@@ -595,6 +598,7 @@ def _build_correlation_prompt(
     config: AiGatewayConfig,
     profile_max_prompt_chars: int | None = None,
     tone: str | None = None,
+    conversation_context: dict[str, Any] | None = None,
 ) -> str:
     prompt_budget = profile_max_prompt_chars or config.max_prompt_chars
     tools_json = json.dumps(
@@ -603,10 +607,16 @@ def _build_correlation_prompt(
         sort_keys=True,
         indent=2,
     )
-    context_json = _correlation_context_json_for_prompt(ai_context, budget=prompt_budget, tools_json=tools_json)
+    memory = prompt_block(conversation_context)
+    context_json = _correlation_context_json_for_prompt(
+        ai_context,
+        budget=max(5000, prompt_budget - len(memory)),
+        tools_json=tools_json,
+    )
     sources_json = json.dumps(_all_sources(ai_context, tools), default=str, sort_keys=True)
     return (
         f"{deep_investigate_policy(tone)}"
+        f"{memory}"
         "Cite source paths or record ids for material findings.\n"
         "Return concise sections: Assessment, Correlated Evidence, Contradictions And Uncertainty, Evidence Gaps, Read-Only Next Steps.\n\n"
         f"Workflow type: {plan.workflow_type}\n"

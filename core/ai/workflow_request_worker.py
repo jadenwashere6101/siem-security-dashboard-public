@@ -39,6 +39,11 @@ from core.ai.workflow_request_store import (
 )
 from core.db import get_db_connection
 from core.worker_heartbeat_store import WORKER_HEARTBEAT_INTERVAL_SECONDS, upsert_worker_heartbeat
+from core.ai.conversation_orchestration_service import (
+    complete_worker_conversation,
+    fail_worker_conversation,
+    prepare_worker_conversation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +174,7 @@ def _process_request(
     request_id = job["request_id"]
     payload = job.get("request_payload") if isinstance(job.get("request_payload"), dict) else {}
     try:
+        payload, current_actor_role = prepare_worker_conversation(conn, job)
         update_request_stage(conn, request_id, lease_owner=lease_owner, stage=STAGE_GATHERING_CONTEXT, now=clock())
         conn.commit()
         workflow = job.get("workflow")
@@ -198,7 +204,7 @@ def _process_request(
             payload,
             workflow=workflow,
             actor_username=job["actor_username"],
-            actor_role=job["actor_role"],
+            actor_role=current_actor_role,
             flask_app=flask_app,
         )
         update_request_stage(
@@ -208,6 +214,7 @@ def _process_request(
             stage=STAGE_VALIDATING_CITATIONS if workflow == ASYNC_WORKFLOW_REPO_ASSISTANT else STAGE_VALIDATING_RESPONSE,
             now=clock(),
         )
+        result = complete_worker_conversation(conn, {**job, "request_payload": payload}, result)
         status = _terminal_status_for_result(result.payload, result.status_code)
         error_code, error_message = _error_fields(result.payload)
         completed = complete_request(
@@ -226,6 +233,8 @@ def _process_request(
         return _stats_key(status)
     except Exception as error:
         logger.exception("anakin_workflow_request_failed request_id=%s", request_id)
+        conn.rollback()
+        fail_worker_conversation(conn, job)
         failed = fail_request(
             conn,
             request_id,

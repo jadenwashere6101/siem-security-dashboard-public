@@ -26,6 +26,7 @@ from core.ai.soc_tool_executor import (
     tool_summary_for_prompt,
 )
 from core.ai.soc_tools import SocToolExecutionSummary
+from core.ai.conversation_context import prompt_block
 
 ALLOWED_EXPLAIN_ACTIONS = frozenset(
     {
@@ -99,6 +100,7 @@ def explain_context(
         use_tools=use_tools,
         tool_policy=tool_policy,
         planning_context=context,
+        conversation_context=payload.get("conversation_context"),
     )
 
 
@@ -177,6 +179,7 @@ def _answer_from_context(
     use_tools: bool = False,
     tool_policy: dict[str, Any] | None = None,
     planning_context: dict[str, Any] | None = None,
+    conversation_context: dict[str, Any] | None = None,
 ) -> AiServiceResult:
     profile_name = profile_for_explain_action(action)
     profile = config.profile(profile_name)
@@ -219,6 +222,7 @@ def _answer_from_context(
         config=config,
         profile_max_prompt_chars=profile.max_prompt_chars,
         tone=tone,
+        conversation_context=conversation_context,
     )
     if len(prompt) > profile.max_prompt_chars:
         return AiServiceResult(
@@ -278,6 +282,7 @@ def _build_prompt(
     config: AiGatewayConfig | None = None,
     profile_max_prompt_chars: int | None = None,
     tone: str | None = None,
+    conversation_context: dict[str, Any] | None = None,
 ) -> str:
     budget = profile_max_prompt_chars or (config.max_prompt_chars if config else 12000)
     tool_budget = max(1000, budget // 3)
@@ -287,11 +292,13 @@ def _build_prompt(
         sort_keys=True,
         indent=2,
     )
-    context_json = _context_json_for_prompt(ai_context, budget=budget, tools_json=tools_json)
+    memory = prompt_block(conversation_context)
+    context_json = _context_json_for_prompt(ai_context, budget=max(4000, budget - len(memory)), tools_json=tools_json)
     question_line = question or _default_question(action, ai_context.context_type)
     policy = decision_support_policy(tone) if _is_decision_support_action(action) else quick_explain_policy(tone)
     return (
         f"{policy}\n"
+        f"{memory}"
         f"Action: {action}\n"
         f"Question: {question_line}\n"
         f"Context type: {ai_context.context_type}\n"

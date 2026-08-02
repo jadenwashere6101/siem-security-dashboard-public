@@ -267,6 +267,21 @@ def test_run_now_route_returns_existing_active_job_without_duplicate(client, moc
     audit.assert_called_once()
 
 
+def test_run_now_rejects_conversation_memory_before_job_creation(client, mock_db):
+    p1, p2 = _login_role(client, "brief_boundary_analyst", "apass", "analyst")
+    with p1, p2:
+        assert client.post("/login", json={"username": "brief_boundary_analyst", "password": "apass"}).status_code == 200
+        with patch("routes.soc_briefing_routes.create_manual_briefing_job") as create_job:
+            response = client.post(
+                "/soc-briefings/run-now",
+                json={"conversation": {"thread_id": "ath_not_allowed"}},
+            )
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "conversation_workflow_boundary"
+    create_job.assert_not_called()
+
+
 def test_manual_run_status_route_returns_lifecycle_and_worker_state(client, mock_db):
     p1, p2 = _login_role(client, "brief_analyst", "apass", "analyst")
     lifecycle_payload = {

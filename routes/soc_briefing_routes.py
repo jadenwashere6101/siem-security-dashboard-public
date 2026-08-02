@@ -239,6 +239,12 @@ def update_soc_briefing_pause():
 def run_soc_briefing_now():
     conn = None
     try:
+        data = request.get_json(silent=True) or {}
+        if isinstance(data, dict) and (data.get("conversation") is not None or data.get("conversation_context") is not None):
+            return jsonify({
+                "error": "conversation_workflow_boundary",
+                "message": "SOC Briefing cannot use SIEM conversation memory.",
+            }), 400
         username, role = _actor()
         conn = get_db_connection()
         job, created = create_manual_briefing_job(conn, requested_by=username)

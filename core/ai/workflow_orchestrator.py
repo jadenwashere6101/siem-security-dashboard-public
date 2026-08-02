@@ -515,6 +515,7 @@ def _run_generate_artifact(payload: dict[str, Any], *, gateway: AiGateway | None
         "use_tools": payload.get("use_tools", True),
         "tool_policy": payload.get("tool_policy"),
         "client_request_id": payload.get("client_request_id"),
+        "conversation_context": payload.get("conversation_context"),
     }
     return create_draft(draft_payload, gateway=gateway, config=config)
 
@@ -527,6 +528,7 @@ def _run_deep_investigate(payload: dict[str, Any], *, gateway: AiGateway | None,
         "tool_policy": payload.get("tool_policy") or {"max_tool_calls": 5, "time_window_hours": 24},
         "client_request_id": payload.get("client_request_id"),
         "allow_automatic_draft": payload.get("allow_automatic_draft", False),
+        "conversation_context": payload.get("conversation_context"),
     }
     return run_investigation(investigation_payload, gateway=gateway, config=config)
 
@@ -539,6 +541,7 @@ def _explain_payload_from_envelope(payload: dict[str, Any], *, action: str) -> d
         "context": _context_from_envelope(payload),
         "use_tools": payload.get("use_tools", False),
         "tool_policy": payload.get("tool_policy"),
+        "conversation_context": payload.get("conversation_context"),
     }
 
 

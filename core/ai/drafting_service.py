@@ -45,6 +45,7 @@ from core.ai.soc_tool_executor import (
     should_skip_tools_for_gateway,
 )
 from core.ai.soc_tools import SocToolExecutionSummary
+from core.ai.conversation_context import prompt_block
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -110,6 +111,7 @@ def create_draft(
         tools,
         config=resolved_config,
         profile_max_prompt_chars=profile.max_prompt_chars,
+        conversation_context=payload.get("conversation_context"),
     )
     if len(prompt) > profile.max_prompt_chars:
         return _draft_state_response(
@@ -297,6 +299,7 @@ def _build_draft_prompt(
     *,
     config: AiGatewayConfig,
     profile_max_prompt_chars: int | None = None,
+    conversation_context: dict[str, Any] | None = None,
 ) -> str:
     definition = get_draft_definition(request.draft_type)
     schema_json = json.dumps(_schema_for_prompt(definition), sort_keys=True, separators=(",", ":"))
@@ -310,7 +313,8 @@ def _build_draft_prompt(
         sort_keys=True,
         separators=(",", ":"),
     )
-    fixed_budget = len(schema_json) + len(example_json) + len(tools_json) + len(artifact_policy()) + 1700
+    memory = prompt_block(conversation_context)
+    fixed_budget = len(schema_json) + len(example_json) + len(tools_json) + len(artifact_policy()) + len(memory) + 1700
     context_budget = max(1200, min(3600, prompt_limit - fixed_budget))
     context_json = _draft_context_json_for_prompt(
         ai_context,
@@ -319,6 +323,7 @@ def _build_draft_prompt(
     )
     return (
         f"{artifact_policy()}"
+        f"{memory}"
         "Return exactly one JSON object matching the requested schema; no markdown.\n"
         "Required fields must be present, non-empty, and use exact field names.\n"
         "Review-only: do not claim anything was saved, applied, approved, executed, blocked, deployed, committed, or changed.\n\n"

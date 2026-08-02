@@ -78,7 +78,10 @@ def as_utc(value: datetime | None) -> datetime | None:
 def idempotency_key_for_payload(payload: dict[str, Any], *, actor_username: str) -> str:
     explicit = str(payload.get("client_request_id") or payload.get("idempotency_key") or "").strip()
     if explicit:
-        raw = f"{actor_username}:explicit:{explicit}"
+        conversation = payload.get("conversation") if isinstance(payload.get("conversation"), dict) else {}
+        execution = payload.get("_conversation_execution") if isinstance(payload.get("_conversation_execution"), dict) else {}
+        thread_scope = str(conversation.get("thread_id") or execution.get("thread_id") or "stateless").strip()
+        raw = f"{actor_username}:{thread_scope}:explicit:{explicit}"
     else:
         safe = redact_sensitive_values(payload)
         raw = f"{actor_username}:payload:{repr(_stable_jsonish(safe))}"
@@ -449,6 +452,8 @@ def serialize_request(row: dict[str, Any] | None) -> dict[str, Any] | None:
         error = result_payload.get("error")
     return {
         "request_id": row.get("request_id"),
+        "thread_id": row.get("thread_id"),
+        "turn_id": row.get("turn_id"),
         "status": row.get("status"),
         "workflow": row.get("workflow"),
         "classification": row.get("classification") or {},

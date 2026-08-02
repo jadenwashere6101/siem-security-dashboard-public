@@ -20,6 +20,11 @@ from core.ai.workflow_request_store import (
     serialize_request,
 )
 from core.db import get_db_connection
+from core.ai.conversation_orchestration_service import (
+    has_conversation_envelope,
+    queue_conversational_request,
+    run_conversational_workflow,
+)
 
 FORBIDDEN_ASYNC_FIELDS = frozenset(
     {
@@ -74,7 +79,15 @@ def queue_workflow_request(payload: dict[str, Any], *, actor_username: str, acto
             200,
         )
     if requested_workflow == WORKFLOW_AUTO and workflow == WORKFLOW_QUICK_EXPLAIN:
-        result = run_workflow(payload)
+        result = (
+            run_conversational_workflow(
+                payload,
+                owner_username=actor_username,
+                actor_role=actor_role,
+            )
+            if has_conversation_envelope(payload)
+            else run_workflow(payload)
+        )
         quick_payload = dict(result.payload)
         quick_payload.setdefault("metadata", {})
         if isinstance(quick_payload["metadata"], dict):
@@ -111,6 +124,14 @@ def queue_workflow_request(payload: dict[str, Any], *, actor_username: str, acto
             )
     if workflow in {WORKFLOW_DEEP_INVESTIGATE, WORKFLOW_GENERATE_ARTIFACT} and not payload.get("context_type"):
         raise WorkflowValidationError("context_type is required.", error_code="context_type_required")
+
+    if has_conversation_envelope(payload):
+        return queue_conversational_request(
+            payload,
+            classification=classification,
+            actor_username=actor_username,
+            actor_role=actor_role,
+        )
 
     key = idempotency_key_for_payload(payload, actor_username=actor_username)
     conn = None

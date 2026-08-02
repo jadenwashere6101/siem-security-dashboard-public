@@ -70,6 +70,20 @@ export const queueAiWorkflowRequest = (payload, options = {}) =>
 export const getAiWorkflowRequest = (requestId, options = {}) =>
   getAiRequest(`/ai/workflows/requests/${encodeURIComponent(requestId)}`, options);
 
+export const createAiThread = (payload, options = {}) =>
+  postAiRequest("/ai/threads", payload, options);
+
+export const getAiThread = (threadId, options = {}) =>
+  getAiRequest(`/ai/threads/${encodeURIComponent(threadId)}`, options);
+
+export const getAiThreadTurns = (threadId, { cursor, limit, ...options } = {}) => {
+  const params = new URLSearchParams();
+  if (cursor !== undefined && cursor !== null) params.set("cursor", String(cursor));
+  if (limit !== undefined && limit !== null) params.set("limit", String(limit));
+  const query = params.toString();
+  return getAiRequest(`/ai/threads/${encodeURIComponent(threadId)}/turns${query ? `?${query}` : ""}`, options);
+};
+
 export const previewAiAction = (payload, options = {}) =>
   postAiRequest("/ai/actions/preview", payload, options);
 

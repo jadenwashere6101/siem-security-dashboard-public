@@ -46,6 +46,7 @@ import {
 import { updateAlertStatusRequest } from "./services/alertStatusService";
 import { loadAlertDashboardSummary, loadAlertRuleOptions, loadAlerts } from "./services/alertsService";
 import {
+  createAiThread,
   getAiWorkflowRequest,
   queueAiWorkflowRequest,
   requestAiDraft,
@@ -214,6 +215,26 @@ function stableAiEntityId(context = {}) {
     context.rule_id ??
     null
   );
+}
+
+function conversationEntity(contextType, context = {}, activeSection = "dashboard") {
+  const normalizedType = normalizeAiContextType(contextType);
+  const entityId = stableAiEntityId(context);
+  if (ENTITY_AI_CONTEXT_TYPES.has(normalizedType) && entityId !== null) {
+    const numericOnlyTypes = new Set(["alert", "incident", "recon_activity", "response_registry", "detection"]);
+    if (!numericOnlyTypes.has(normalizedType) || /^\d+$/.test(String(entityId))) {
+      return { type: normalizedType, id: String(entityId) };
+    }
+  }
+  if (normalizedType === "dashboard") return { type: "dashboard", id: "dashboard" };
+  return { type: "general", id: String(entityId || activeSection || "workspace") };
+}
+
+function newAiClientRequestId() {
+  if (typeof window !== "undefined" && typeof window.crypto?.randomUUID === "function") {
+    return window.crypto.randomUUID();
+  }
+  return `anakin-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function normalizeAiWorkflowResponse(response) {
@@ -2274,7 +2295,7 @@ function AppInner() {
   }, [canTakeAlertActions, aiPanelState.status, runQueuedAiRequest]);
 
   const handleAskAi = useCallback(
-    (options) => {
+    async (options) => {
       if (!options) return;
       const visibleContext = buildVisibleAiContext();
       const contextualCommand = normalizeContextualAiOptions(options);
@@ -2304,6 +2325,29 @@ function AppInner() {
       const usesWorkflowRoute = Boolean(options.workflow || options.artifactType);
       const requestedWorkflow = options.artifactType ? "generate_artifact" : (options.workflow || "auto");
       const usesAsyncWorkflowRoute = ASYNC_ANAKIN_WORKFLOWS.has(requestedWorkflow);
+      const clientRequestId = options.clientRequestId || newAiClientRequestId();
+      let conversation = null;
+      if (usesWorkflowRoute) {
+        try {
+          const entity = conversationEntity(normalizedContextType, entityContext, activeSection);
+          const resolved = await createAiThread({ domain: "siem", primary_entity: entity, is_default: true });
+          conversation = {
+            thread_id: resolved.thread.thread_id,
+            expected_version: resolved.thread.version,
+            client_request_id: clientRequestId,
+          };
+        } catch (error) {
+          setAiPanelState({
+            status: "error",
+            title: options.title || "Ask Anakin",
+            response: error.payload || null,
+            error: error.message || "Unable to restore the Anakin investigation thread.",
+            stale: false,
+            request: null,
+          });
+          return;
+        }
+      }
       const payload = usesWorkflowRoute
         ? {
             workflow: requestedWorkflow,
@@ -2317,7 +2361,8 @@ function AppInner() {
                 ? { max_tool_calls: 5, time_window_hours: 24 }
                 : undefined
             ),
-            client_request_id: options.clientRequestId,
+            client_request_id: clientRequestId,
+            conversation,
           }
         : options.draftType
         ? {
@@ -2368,34 +2413,21 @@ function AppInner() {
         return;
       }
       if (command.intent === ANAKIN_COMMAND_INTENTS.ask && runtime.question?.trim()) {
-        const visibleContext = buildVisibleAiContext();
         const requestedWorkflow = command.workflow || "auto";
-        const runner = ASYNC_ANAKIN_WORKFLOWS.has(requestedWorkflow) ? runQueuedAiRequest : runAiRequest;
-        runner({
+        handleAskAi({
           title: "Ask Anakin",
-          request: {
-            workflow: requestedWorkflow,
-            prompt: runtime.question.trim(),
-            context_type: activeSection,
-            context: {
-              ...visibleContext,
-              command_context: anakinCommandContext,
-            },
-            tool_policy: { max_tool_calls: 5, time_window_hours: 24 },
-          },
-          executor: ASYNC_ANAKIN_WORKFLOWS.has(requestedWorkflow) ? queueAiWorkflowRequest : requestAiWorkflow,
-          contextKey: JSON.stringify({
-            section: activeSection,
-            filters: visibleContext.visible_filters,
-            command: command.id,
-          }),
+          workflow: requestedWorkflow,
+          prompt: runtime.question.trim(),
+          contextType: activeSection,
+          context: { command_context: anakinCommandContext },
+          toolPolicy: { max_tool_calls: 5, time_window_hours: 24 },
         });
         return;
       }
       const options = commandToAiOptions(command, anakinCommandContext, runtime.question || "");
       handleAskAi(options);
     },
-    [activeSection, anakinCommandContext, buildVisibleAiContext, handleAskAi, handleNavigate, runAiRequest, runQueuedAiRequest]
+    [activeSection, anakinCommandContext, handleAskAi, handleNavigate]
   );
 
   const executePaletteCommand = useCallback(
