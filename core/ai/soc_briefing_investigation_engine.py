@@ -72,6 +72,35 @@ BRIEFING_SECTIONS = (
     "recommendations",
 )
 TERMINAL_SUCCESS_STATUSES = {RUN_STATUS_SUCCESS, RUN_STATUS_PARTIAL}
+PLACEHOLDER_SUMMARY_PHRASES = (
+    "analysis of provided evidence",
+    "analysis of the provided evidence",
+    "scheduled soc briefing generated",
+    "local soc briefing generated",
+)
+ANALYST_FACING_INTERNAL_TERMS = (
+    "selected candidate",
+    "candidate(s)",
+    "bounded evidence reference",
+    "evidence reference(s)",
+    "skipped duplicate candidate",
+    "skipped candidate",
+    "source_path",
+    "tool_name",
+    "record_ids",
+    "record(s)",
+    "get_alert_detail",
+    "get_related_events",
+    "get_incident_timeline",
+    "get_response_registry_context",
+    "read-tool",
+    "soc read tool",
+    "source path",
+    "tool metadata",
+    "investigation engine",
+    "candidate planning",
+    "selected alert severity",
+)
 
 
 @dataclass(frozen=True)
@@ -635,7 +664,7 @@ def _synthesize_briefing(
         "window_status": "success",
         "briefing_status": "success",
         "content_status": "ready",
-        "summary": _bounded_text(parsed.get("summary"), 2000) or "Scheduled SOC briefing generated.",
+        "summary": _briefing_summary(parsed.get("summary"), selected=selected, skipped=skipped, evidence_refs=evidence_refs),
         "sections": _ensure_sections(parsed.get("sections"), selected=selected, skipped=skipped, evidence_refs=evidence_refs),
         "step_status": STEP_STATUS_SUCCESS,
         "sanitized_input": {
@@ -678,6 +707,48 @@ def _build_synthesis_prompt_payload(
             "prioritize_attention": True,
             "avoid_raw_alert_inventory": True,
             "call_out_low_value_noise": True,
+        },
+        "analyst_quality_contract": {
+            "executive_summary": [
+                "Answer what happened, why it matters, what changed, and what deserves immediate attention.",
+                "Use approximately 2-4 concise paragraphs.",
+                "Never use placeholder summaries such as 'Analysis of provided evidence'.",
+                "Do not mention selected candidates, bounded evidence references, skipped candidates, source paths, tool names, record counts, or investigation-engine mechanics.",
+            ],
+            "critical_findings": [
+                "Each finding must include what happened, supporting evidence, why it matters, confidence, and recommended action.",
+                "If no critical findings exist, explain why the evidence does not justify a critical finding.",
+            ],
+            "escalations": [
+                "Only include items requiring analyst attention.",
+                "Explain why escalation is warranted, urgency, and supporting evidence.",
+            ],
+            "low_priority_findings": [
+                "Explain downgrades using evidence: expected scanner, isolated event, duplicate alert, or insufficient evidence.",
+            ],
+            "evidence_reviewed": [
+                "Do not dump raw JSON.",
+                "Explain what was learned from each source in analyst-readable language; do not name backend routes, tool names, source paths, or record counts.",
+            ],
+            "recommendations": [
+                "Reference specific analyst-meaningful evidence such as source IP, alert behavior, alert family, or related events.",
+                "Avoid generic instructions like 'Inspect logs' without naming what to inspect and why.",
+            ],
+            "correlation": [
+                "Correlate by same source IP, destination, subnet, alert family, repeated behavior, and timeline relationships when evidence supports it.",
+            ],
+            "analyst_judgment": [
+                "State whether activity is probably malicious, expected, noisy, or uncertain, and what evidence supports or contradicts that judgment.",
+                "State uncertainty naturally without generic disclaimers.",
+            ],
+        },
+        "section_item_guidance": {
+            "alerts_reviewed": "Readable alert observations and correlations, not raw inventory.",
+            "dismissed_low_priority_findings": "Downgraded items with reason and evidence.",
+            "escalations": "Only analyst-attention items with urgency, why, and evidence.",
+            "critical_findings": "Reasoned findings with evidence, why it matters, confidence, and recommended action.",
+            "evidence": "Evidence Reviewed in readable prose describing what was learned; never raw JSON, source paths, tool names, or record counts.",
+            "recommendations": "Evidence-specific read-only next steps.",
         },
         "candidates": [candidate.as_ref() for candidate in selected],
         "skipped": skipped[: budget.max_entities],
@@ -1046,33 +1117,31 @@ def _deterministic_sections(
     evidence_refs: list[dict[str, Any]],
     message: str,
 ) -> dict[str, Any]:
-    alerts = [candidate.as_ref() for candidate in selected if candidate.entity_type == "alert"]
     critical = [
-        candidate.as_ref()
+        _critical_finding_text(candidate, evidence_refs)
         for candidate in selected
         if str(candidate.metadata.get("severity") or "").lower() == "critical"
     ]
     escalations = [
-        candidate.as_ref()
+        _escalation_text(candidate, evidence_refs)
         for candidate in selected
         if str(candidate.metadata.get("severity") or "").lower() in {"critical", "high"}
         or str(candidate.metadata.get("priority") or "") == "P1"
     ]
-    dismissed = [item for item in skipped if item.get("reason") == "duplicate_recent_investigation"]
+    dismissed = [_low_priority_text(item) for item in skipped if item.get("reason") == "duplicate_recent_investigation"]
+    evidence = [_evidence_ref_text(ref) for ref in evidence_refs]
+    recommendations = _recommendation_texts(selected, evidence_refs, message)
     return {
-        "alerts_reviewed": alerts,
-        "dismissed_low_priority_findings": dismissed,
-        "escalations": escalations,
-        "critical_findings": critical,
-        "evidence": evidence_refs,
-        "recommendations": [
-            {
-                "title": "Review scheduled SOC briefing evidence",
-                "detail": message,
-                "advisory": True,
-                "read_only": True,
-            }
-        ],
+        "alerts_reviewed": _alerts_reviewed_texts(selected),
+        "dismissed_low_priority_findings": dismissed
+        or ["No low-priority findings were separated out. The reviewed activity does not include an obvious approved scanner, duplicate alert pattern, or isolated benign explanation that would justify downgrading it without more context."],
+        "escalations": escalations
+        or ["No escalation is warranted from the collected evidence because the reviewed activity did not show critical/high severity, P1 priority, or a confirmed impact signal."],
+        "critical_findings": critical
+        or ["No critical finding is listed because the available evidence does not show confirmed compromise, successful exploitation, or a critical-severity pattern requiring immediate containment."],
+        "evidence": evidence
+        or ["No detailed evidence was available for this briefing window. Treat the judgment as limited until alert details, related events, endpoint telemetry, or authentication outcomes are reviewed."],
+        "recommendations": recommendations,
     }
 
 
@@ -1094,8 +1163,237 @@ def _ensure_sections(
     merged: dict[str, Any] = {}
     for key in BRIEFING_SECTIONS:
         value = sections.get(key, base[key])
-        merged[key] = value if isinstance(value, list) else base[key]
+        merged[key] = _normalize_section_items(value if isinstance(value, list) else base[key], fallback=base[key])
     return redact_sensitive_values(merged)
+
+
+def _briefing_summary(
+    value: Any,
+    *,
+    selected: list[InvestigationCandidate],
+    skipped: list[dict[str, Any]],
+    evidence_refs: list[dict[str, Any]],
+) -> str:
+    text = _bounded_text(value, 2000)
+    if text and not _is_placeholder_summary(text) and not _has_internal_analyst_term(text):
+        return text
+    critical_count = sum(1 for item in selected if str(item.metadata.get("severity") or "").lower() == "critical")
+    high_count = sum(1 for item in selected if str(item.metadata.get("severity") or "").lower() == "high")
+    source_ips = sorted({_display_ip(item.source_ip) for item in selected if item.source_ip})
+    activity = _activity_overview(selected, source_ips)
+    judgment = _security_judgment(selected, evidence_refs)
+    attention = _attention_sentence(critical_count, high_count, source_ips)
+    next_action = _next_action_sentence(selected, evidence_refs)
+    return (
+        f"{activity} {judgment}\n\n"
+        f"{attention} {next_action}"
+    )
+
+
+def _is_placeholder_summary(text: str) -> bool:
+    normalized = " ".join(str(text or "").lower().split())
+    return any(phrase in normalized for phrase in PLACEHOLDER_SUMMARY_PHRASES)
+
+
+def _has_internal_analyst_term(text: str) -> bool:
+    normalized = " ".join(str(text or "").lower().split())
+    if re.search(r"/(?:alerts|incidents|events|recon|response-registry)/\d+", normalized):
+        return True
+    return any(term in normalized for term in ANALYST_FACING_INTERNAL_TERMS)
+
+
+def _activity_overview(selected: list[InvestigationCandidate], source_ips: list[str]) -> str:
+    if not selected:
+        return "No alerts or related security activity stood out during this briefing window."
+    entity_counts: dict[str, int] = {}
+    for candidate in selected:
+        entity_counts[candidate.entity_type] = entity_counts.get(candidate.entity_type, 0) + 1
+    families = sorted({_friendly_label(candidate.label) for candidate in selected if candidate.label})
+    family_text = families[0] if len(families) == 1 else ", ".join(families[:3])
+    if source_ips:
+        return f"{_count_word(len(selected)).capitalize()} {family_text or 'security'} item(s) involved source IP {', '.join(source_ips[:3])} during the briefing window."
+    return f"{_count_word(len(selected)).capitalize()} {family_text or 'security'} item(s) appeared during the briefing window, but the available context did not include a source IP to correlate."
+
+
+def _security_judgment(selected: list[InvestigationCandidate], evidence_refs: list[dict[str, Any]]) -> str:
+    if not selected:
+        return "There is not enough activity here to call this malicious; the main judgment is that no immediate handoff item is visible."
+    critical_or_high = any(str(candidate.metadata.get("severity") or "").lower() in {"critical", "high"} for candidate in selected)
+    if critical_or_high:
+        return (
+            "This is suspicious enough for same-shift review, but the available evidence does not show exploitation, successful authentication, or confirmed impact. "
+            "That makes the current judgment reconnaissance or scanning rather than confirmed compromise."
+        )
+    if evidence_refs:
+        return (
+            "This currently looks like lower-confidence activity: evidence exists, but it does not show impact or a successful follow-up action. "
+            "Keep it in view if the source repeats or touches protected services."
+        )
+    return "The available context is too thin to classify as malicious or benign; treat it as uncertain until alert details and related activity are available."
+
+
+def _attention_sentence(critical_count: int, high_count: int, source_ips: list[str]) -> str:
+    if critical_count or high_count:
+        source = f" Source IP {source_ips[0]} is the first pivot." if source_ips else ""
+        return f"What matters most: critical or high-severity activity needs analyst review before it is dismissed.{source}"
+    return "What can wait: there is no critical finding or escalation signal in the reviewed evidence."
+
+
+def _next_action_sentence(selected: list[InvestigationCandidate], evidence_refs: list[dict[str, Any]]) -> str:
+    source_ips = sorted({_display_ip(candidate.source_ip) for candidate in selected if candidate.source_ip})
+    if source_ips:
+        return f"Next action: verify whether {source_ips[0]} belongs to an approved scanner, then check firewall and authentication activity for successful follow-up against internal hosts."
+    if evidence_refs:
+        return "Next action: review the alert detail and related-event timeline to determine whether the activity progressed beyond blocked or denied attempts."
+    return "Next action: collect alert detail, related events, endpoint telemetry, and authentication outcomes before escalating."
+
+
+def _normalize_section_items(value: list[Any], *, fallback: list[Any]) -> list[str]:
+    items = value or fallback
+    normalized = [_readable_item_text(item) for item in items]
+    normalized = [item for item in normalized if item]
+    normalized = [item for item in normalized if not _has_internal_analyst_term(item)]
+    if normalized:
+        return normalized
+    fallback_items = [_readable_item_text(item) for item in fallback]
+    return [item for item in fallback_items if item and not _has_internal_analyst_term(item)]
+
+
+def _readable_item_text(item: Any) -> str:
+    if isinstance(item, str):
+        return item.strip()
+    if isinstance(item, dict):
+        parts = []
+        for field in ("title", "summary", "detail", "what_happened", "supporting_evidence", "why_it_matters", "confidence", "recommended_action", "reason"):
+            value = item.get(field)
+            if value not in (None, "", [], {}):
+                parts.append(f"{field.replace('_', ' ').title()}: {value}")
+        if parts:
+            return ". ".join(str(part).strip().rstrip(".") for part in parts) + "."
+        if item.get("source_ip"):
+            return f"Observed activity involving source IP {_display_ip(item.get('source_ip'))} for {item.get('label') or item.get('entity_type') or 'a briefing candidate'}."
+        if item.get("source_path"):
+            return _evidence_source_path_text(str(item.get("source_path") or ""))
+        if item.get("entity_type") or item.get("entity_id"):
+            return f"Reviewed {item.get('entity_type') or 'entity'} {item.get('entity_id') or 'unknown'}: {item.get('label') or 'no label available'}."
+    return str(item).strip()
+
+
+def _alerts_reviewed_texts(selected: list[InvestigationCandidate]) -> list[str]:
+    if not selected:
+        return ["No alerts or related entities were selected for detailed review in this briefing window."]
+    items = []
+    by_source: dict[str, list[InvestigationCandidate]] = {}
+    for candidate in selected:
+        if candidate.source_ip:
+            by_source.setdefault(_display_ip(candidate.source_ip), []).append(candidate)
+    for source_ip, candidates in sorted(by_source.items()):
+        if len(candidates) > 1:
+            labels = ", ".join(candidate.label for candidate in candidates[:4])
+            items.append(f"Correlation: {_count_word(len(candidates)).capitalize()} related item(s) share source IP {source_ip}, including {labels}.")
+    for candidate in selected:
+        source = f" from source IP {_display_ip(candidate.source_ip)}" if candidate.source_ip else ""
+        items.append(f"Reviewed {candidate.entity_type} {candidate.entity_id}: {candidate.label}{source}.")
+    return items
+
+
+def _critical_finding_text(candidate: InvestigationCandidate, evidence_refs: list[dict[str, Any]]) -> str:
+    evidence = _best_evidence_phrase(candidate, evidence_refs)
+    source = f" from source IP {_display_ip(candidate.source_ip)}" if candidate.source_ip else ""
+    return (
+        f"What happened: {candidate.label}{source} appeared during the briefing window. "
+        f"Supporting evidence: {evidence}. "
+        "Why it matters: critical severity can indicate activity that may affect protected assets or require fast triage if correlated with successful outcomes. "
+        "Confidence: medium, based on the alert severity and absence of confirmed exploitation in the reviewed context. "
+        f"Recommended action: review {evidence} and check related event or authentication outcomes before containment."
+    )
+
+
+def _escalation_text(candidate: InvestigationCandidate, evidence_refs: list[dict[str, Any]]) -> str:
+    evidence = _best_evidence_phrase(candidate, evidence_refs)
+    urgency = "immediate" if str(candidate.metadata.get("severity") or "").lower() == "critical" or str(candidate.metadata.get("priority") or "") == "P1" else "same-shift"
+    source = f" Source IP: {_display_ip(candidate.source_ip)}." if candidate.source_ip else ""
+    return (
+        f"Escalation warranted for {candidate.label}. Urgency: {urgency}. "
+        f"Evidence: {evidence}.{source} Reason: severity or priority suggests analyst attention is required, but action should remain evidence-gated."
+    )
+
+
+def _low_priority_text(item: dict[str, Any]) -> str:
+    label = item.get("label") or item.get("entity_id") or "candidate"
+    reason = item.get("reason") or "insufficient evidence"
+    source = f" Source IP {_display_ip(item.get('source_ip'))}." if item.get("source_ip") else ""
+    return f"Downgraded {label} because it was classified as {reason}; this can wait unless new related evidence appears.{source}"
+
+
+def _evidence_ref_text(ref: dict[str, Any]) -> str:
+    path = str(ref.get("source_path") or "")
+    learned = _evidence_source_path_text(path)
+    truncated = " The result was truncated, so absence of additional rows should not be treated as proof of absence." if ref.get("truncated") else ""
+    return f"{learned}{truncated}"
+
+
+def _recommendation_texts(selected: list[InvestigationCandidate], evidence_refs: list[dict[str, Any]], message: str) -> list[str]:
+    recommendations: list[str] = []
+    source_ips = sorted({_display_ip(candidate.source_ip) for candidate in selected if candidate.source_ip})
+    if source_ips:
+        recommendations.append(
+            f"Review firewall, related-event, and authentication logs for source IP {source_ips[0]} to determine whether additional internal hosts were contacted after the observed activity."
+        )
+    if evidence_refs:
+        recommendations.append(
+            "Confirm whether the observed pattern has successful outcomes or only blocked/denied activity before escalating or opening containment work."
+        )
+    if not recommendations:
+        recommendations.append(f"Use the briefing limitation as the next step: {message} Re-run with available alert, endpoint, or authentication evidence before making containment decisions.")
+    return recommendations
+
+
+def _best_evidence_phrase(candidate: InvestigationCandidate, evidence_refs: list[dict[str, Any]]) -> str:
+    for ref in evidence_refs:
+        path = str(ref.get("source_path") or "")
+        record_ids = {str(item) for item in ref.get("record_ids") or []}
+        if candidate.entity_id in record_ids or candidate.entity_id in path:
+            return _evidence_source_path_text(path)
+    if evidence_refs:
+        ref = evidence_refs[0]
+        return _evidence_source_path_text(str(ref.get("source_path") or ""))
+    return f"{candidate.entity_type} {candidate.entity_id} was present in the briefing context, but no detailed evidence was available"
+
+
+def _evidence_source_path_text(path: str) -> str:
+    match = re.search(r"/alerts/(\d+)", str(path or ""))
+    if match:
+        return f"Alert {match.group(1)} showed activity that matched the briefing concern; the reviewed context did not show confirmed exploitation or successful authentication."
+    match = re.search(r"/incidents/(\d+)", str(path or ""))
+    if match:
+        return f"Incident {match.group(1)} provided timeline context for the briefing concern; review is still evidence-gated because impact was not confirmed."
+    if path:
+        return "A supporting security record was reviewed, but it did not provide enough analyst-facing detail to prove impact."
+    return "Supporting evidence was available, but the briefing context did not include enough detail to describe impact."
+
+
+def _friendly_label(label: str) -> str:
+    text = str(label or "").replace("_", " ").strip()
+    text = re.sub(r"\b(pfsense|firewall)\b", "", text, flags=re.IGNORECASE)
+    text = " ".join(text.split())
+    return text or "security"
+
+
+def _count_word(value: int) -> str:
+    words = {
+        0: "no",
+        1: "one",
+        2: "two",
+        3: "three",
+        4: "four",
+        5: "five",
+    }
+    return words.get(value, str(value))
+
+
+def _display_ip(value: Any) -> str:
+    return str(value or "").split("/", 1)[0]
 
 
 def _parse_structured_response(content: str | None) -> dict[str, Any] | None:

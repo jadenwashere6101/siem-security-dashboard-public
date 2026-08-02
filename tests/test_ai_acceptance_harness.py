@@ -161,6 +161,24 @@ def test_acceptance_harness_groups_failures_by_root_cause(monkeypatch):
     assert all(not result.success for result in report.results)
 
 
+def test_soc_briefing_acceptance_rejects_internal_pipeline_terms(monkeypatch):
+    from core.ai.acceptance_harness import _sample_response_for_case as original_sample
+
+    def fake_sample(entry, case):
+        if entry.backend_path == "soc_briefing_worker":
+            return "Assessment: 2 selected candidate(s) and 1 bounded evidence reference(s) were reviewed from /alerts/1 with get_alert_detail."
+        return original_sample(entry, case)
+
+    monkeypatch.setattr("core.ai.acceptance_harness._sample_response_for_case", fake_sample)
+
+    report = run_offline_contract_tier()
+    failed = [result for result in report.results if result.backend_route == "soc_briefing_worker"]
+
+    assert failed
+    assert all(not result.success for result in failed)
+    assert ROOT_CAUSE_INVALID_RESPONSE in report.failures_by_root_cause
+
+
 def test_acceptance_harness_detects_unexpected_profile_prompt_limit_regression():
     from core.ai.acceptance_harness import _acceptance_config
 

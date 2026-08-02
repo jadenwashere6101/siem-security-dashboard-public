@@ -37,6 +37,29 @@ from core.ai.soc_briefing_runtime_store import (
 from core.ai.soc_tools import SocToolExecutionSummary, SocToolResult, SocToolSource
 from core.ai.soc_briefing_worker import SocBriefingWorkerConfig, run_soc_briefing_worker
 
+FORBIDDEN_ANALYST_TERMS = (
+    "selected candidate",
+    "candidate(s)",
+    "bounded evidence reference",
+    "evidence reference(s)",
+    "skipped duplicate candidate",
+    "skipped candidate",
+    "source_path",
+    "tool_name",
+    "record_ids",
+    "record(s)",
+    "get_alert_detail",
+    "get_related_events",
+    "get_incident_timeline",
+    "get_response_registry_context",
+    "read-tool",
+    "soc read tool",
+    "source path",
+    "tool metadata",
+    "investigation engine",
+    "candidate planning",
+)
+
 
 class NoCloseConnection:
     def __init__(self, conn):
@@ -177,6 +200,15 @@ def _success_content():
     )
 
 
+def _placeholder_content():
+    return json.dumps(
+        {
+            "summary": "Analysis of provided evidence",
+            "sections": {key: [] for key in BRIEFING_SECTIONS},
+        }
+    )
+
+
 def _success_content_with_evidence():
     return json.dumps(
         {
@@ -218,6 +250,19 @@ def _tool_summary(*, truncated=False):
         truncated=truncated,
         omitted_count=2 if truncated else 0,
     )
+
+
+def _analyst_text(summary, sections):
+    rendered_sections = " ".join(item for values in sections.values() for item in values)
+    return f"{summary or ''} {rendered_sections}"
+
+
+def _assert_no_internal_analyst_terms(summary, sections):
+    rendered = _analyst_text(summary, sections).lower()
+    for term in FORBIDDEN_ANALYST_TERMS:
+        assert term not in rendered
+    assert "/alerts/" not in rendered
+    assert "/incidents/" not in rendered
 
 
 def test_planning_is_deterministic_and_bounded(postgres_db):
@@ -267,6 +312,8 @@ def test_successful_engine_persists_structured_briefing_audit_and_steps(postgres
         assert (status, lifecycle, content_status) == ("success", "content_ready", "ready")
         assert summary == "Structured morning SOC briefing."
         assert sorted(sections) == sorted(BRIEFING_SECTIONS)
+        assert "What happened:" in sections["critical_findings"][0]
+        _assert_no_internal_analyst_terms(summary, sections)
         cur.execute("SELECT COUNT(*) FROM soc_briefing_run_steps WHERE run_id = %s", (run["id"],))
         assert cur.fetchone()[0] >= 5
         cur.execute("SELECT actor_username, actor_role, details FROM audit_log WHERE event_type = 'SCHEDULED_SOC_INVESTIGATION'")
@@ -564,7 +611,9 @@ def test_unrecoverable_malformed_structured_briefing_fails_closed_after_one_repa
     assert sanitized_input["repair_count"] == 1
     assert "AI briefing response was not valid JSON." in sanitized_input["validation_errors"]
     assert briefing_status == "partial"
-    assert sections["evidence"] == evidence_refs
+    assert sections["evidence"][0].startswith("Alert 1 showed activity")
+    assert evidence_refs[0]["source_path"] == "/alerts/1"
+    _assert_no_internal_analyst_terms("AI provider returned malformed briefing JSON; saved deterministic partial briefing.", sections)
 
 
 def test_missing_required_sections_are_invalid_until_repaired(postgres_db):
@@ -676,7 +725,80 @@ def test_schema_invalid_provider_output_is_not_accepted_by_filling_sections(post
         status, summary, sections, evidence_refs = cur.fetchone()
     assert status == "partial"
     assert summary == "AI provider returned malformed briefing JSON; saved deterministic partial briefing."
-    assert sections["evidence"] == evidence_refs
+    assert sections["evidence"][0].startswith("Alert 1 showed activity")
+    _assert_no_internal_analyst_terms(summary, sections)
+
+
+def test_briefing_post_processing_replaces_placeholder_and_adds_analyst_quality(postgres_db):
+    conn, _cur = postgres_db
+    _insert_alert(conn, severity="critical", source_ip="8.231.67.182")
+    _insert_alert(conn, severity="medium", source_ip="8.231.67.182")
+    _schedule, _window, job, run = _schedule_window_job_run(conn)
+
+    outcome = run_scheduled_investigation(
+        conn,
+        job=job,
+        run=run,
+        gateway_config=AiGatewayConfig(
+            mode=AI_MODE_LOCAL_ONLY,
+            configured_mode=AI_MODE_LOCAL_ONLY,
+            local_base_url="http://127.0.0.1:11434",
+            local_model="llama",
+        ),
+        gateway=FakeGateway(content=_placeholder_content()),
+        tool_executor=lambda _planned, _context: _tool_summary(),
+    )
+    conn.commit()
+
+    assert outcome.run_status == "success"
+    assert "Analysis of provided evidence" not in outcome.summary
+    with conn.cursor() as cur:
+        cur.execute("SELECT summary, sections, evidence_refs FROM soc_briefings WHERE run_id = %s", (run["id"],))
+        summary, sections, evidence_refs = cur.fetchone()
+
+    assert "Analysis of provided evidence" not in summary
+    assert "source IP 8.231.67.182" in " ".join(sections["alerts_reviewed"])
+    assert "Correlation:" in " ".join(sections["alerts_reviewed"])
+    assert "Two" in " ".join(sections["alerts_reviewed"])
+    critical = " ".join(sections["critical_findings"])
+    assert "What happened:" in critical
+    assert "Supporting evidence:" in critical
+    assert "Why it matters:" in critical
+    assert "Confidence:" in critical
+    assert "Recommended action:" in critical
+    assert sections["evidence"][0].startswith("Alert 1 showed activity")
+    assert "8.231.67.182" in " ".join(sections["recommendations"])
+    assert "No escalation" not in " ".join(sections["escalations"])
+    assert evidence_refs[0]["source_path"] == "/alerts/1"
+    assert evidence_refs[0]["tool_name"] == "get_alert_detail"
+    _assert_no_internal_analyst_terms(summary, sections)
+
+
+def test_empty_sections_explain_why_without_no_entries_recorded(postgres_db):
+    conn, _cur = postgres_db
+    _schedule, _window, job, run = _schedule_window_job_run(conn)
+
+    outcome = run_scheduled_investigation(
+        conn,
+        job=job,
+        run=run,
+        gateway_config=AiGatewayConfig(
+            mode=AI_MODE_LOCAL_ONLY,
+            configured_mode=AI_MODE_LOCAL_ONLY,
+            local_base_url="http://127.0.0.1:11434",
+            local_model="llama",
+        ),
+        gateway=FakeGateway(content=_placeholder_content()),
+        tool_executor=lambda _planned, _context: SocToolExecutionSummary(used=False),
+    )
+
+    assert outcome.run_status == "success"
+    rendered = " ".join(item for values in outcome.sections.values() for item in values)
+    assert "No entries recorded" not in rendered
+    assert "No critical finding is listed because" in rendered
+    assert "No escalation is warranted" in rendered
+    assert "No detailed evidence was available" in rendered
+    _assert_no_internal_analyst_terms(outcome.summary, outcome.sections)
 
 
 def test_paid_fallback_modes_are_blocked_for_scheduled_work(postgres_db):

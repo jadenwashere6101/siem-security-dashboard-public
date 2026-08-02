@@ -56,6 +56,29 @@ ROOT_CAUSE_INVALID_RESPONSE = "invalid_response"
 ROOT_CAUSE_WORKER_UNAVAILABLE = "worker_unavailable"
 ROOT_CAUSE_CITATION_CONTRACT = "citation_contract"
 ROOT_CAUSE_FRONTEND_CONTRACT_MISMATCH = "frontend_contract_mismatch"
+SOC_BRIEFING_ANALYST_FORBIDDEN_TERMS = (
+    "selected candidate",
+    "candidate(s)",
+    "bounded evidence reference",
+    "evidence reference(s)",
+    "skipped duplicate candidate",
+    "skipped candidate",
+    "source_path",
+    "tool_name",
+    "record_ids",
+    "record(s)",
+    "get_alert_detail",
+    "get_related_events",
+    "get_incident_timeline",
+    "get_response_registry_context",
+    "read-tool",
+    "soc read tool",
+    "source path",
+    "tool metadata",
+    "investigation engine",
+    "candidate planning",
+    "analysis of provided evidence",
+)
 
 TERMINAL_MANUAL_BRIEFING_STATES = {"completed", "partial", "degraded", "failed", "blocked", "timed_out"}
 LIVE_STATUS_ROUTE = "GET"
@@ -586,10 +609,11 @@ def build_golden_reasoning_cases() -> tuple[GoldenReasoningCase, ...]:
                 "Attention first: VPN denies against the protected target increased and deserve review. "
                 "Probably ignore: commodity scanner noise with no successful follow-up. "
                 "Trend: repeated VPN targeting is rising in the window. Evidence gaps: target-side auth outcomes and whether the source repeats across incidents. "
+                "Confidence: medium because repeated denies are visible but endpoint telemetry is missing. "
                 "Next actions: inspect VPN auth successes, source-IP history, and target criticality before containment."
             ),
-            required_terms=("attention first", "probably ignore", "trend", "evidence gaps", "next actions"),
-            forbidden_terms=("raw alert inventory",),
+            required_terms=("attention first", "probably ignore", "trend", "evidence gaps", "confidence", "next actions"),
+            forbidden_terms=("raw alert inventory", "analysis of provided evidence"),
         ),
         GoldenReasoningCase(
             key="golden.repo_most_impressive_feature",
@@ -1566,7 +1590,10 @@ def _run_case(entry: AiInvocationInventoryEntry, case: AcceptanceCase, config: A
         prompt_error = str(error)
     response_time_ms = int((time.monotonic() - started) * 1000)
     prompt_size = len(prompt)
-    usefulness = _usefulness_checks(_sample_response_for_case(entry, case))
+    sample_response = _sample_response_for_case(entry, case)
+    usefulness = _usefulness_checks(sample_response)
+    if entry.backend_path == "soc_briefing_worker":
+        usefulness.update(_soc_briefing_analyst_quality_checks(sample_response))
     if entry.backend_path == "POST /ai/drafts" or (
         entry.backend_path in {"POST /ai/workflows", ASYNC_WORKFLOW_REQUEST_ROUTE}
         and case.request_payload.get("workflow") == WORKFLOW_GENERATE_ARTIFACT
@@ -2664,6 +2691,13 @@ def _repo_chunks() -> list[RepoChunk]:
 
 
 def _sample_response_for_case(entry: AiInvocationInventoryEntry, case: AcceptanceCase) -> str:
+    if entry.backend_path == "soc_briefing_worker":
+        return (
+            "Assessment: attention first, VPN denies against one protected target increased during the briefing window.\n"
+            "Evidence: repeated denies from source IP 198.51.100.25 and related firewall evidence support the trend; no successful authentication is shown.\n"
+            "Uncertainty and evidence gaps: endpoint telemetry and target-side auth outcomes were not available, so this resembles scanning but reconnaissance cannot be ruled out.\n"
+            "Recommended next steps: review firewall and VPN auth logs for source IP 198.51.100.25, then check whether any additional internal hosts were contacted."
+        )
     if entry.backend_path == "POST /ai/drafts" or (
         entry.backend_path in {"POST /ai/workflows", ASYNC_WORKFLOW_REQUEST_ROUTE}
         and case.request_payload.get("workflow") == WORKFLOW_GENERATE_ARTIFACT
@@ -2758,6 +2792,16 @@ def _usefulness_checks(response: str) -> dict[str, bool]:
         "has_uncertainty_or_gaps": "uncertainty" in normalized or "gap" in normalized,
         "has_next_steps_or_checks": "next step" in normalized or "checks" in normalized,
         "not_generic_monitoring_only": normalized != "continue monitoring.",
+    }
+
+
+def _soc_briefing_analyst_quality_checks(response: str) -> dict[str, bool]:
+    normalized = str(response or "").strip().lower()
+    return {
+        "soc_briefing_no_internal_terms": not any(term in normalized for term in SOC_BRIEFING_ANALYST_FORBIDDEN_TERMS),
+        "soc_briefing_no_raw_routes": re.search(r"/(?:alerts|incidents|events|recon|response-registry)/\d+", normalized) is None,
+        "soc_briefing_has_judgment": any(term in normalized for term in ("looks like", "appears", "judgment", "confirmed compromise", "reconnaissance", "benign", "uncertain")),
+        "soc_briefing_has_prioritized_action": any(term in normalized for term in ("attention first", "what matters most", "recommended next steps", "next action")),
     }
 
 
