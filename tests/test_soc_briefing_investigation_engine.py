@@ -216,6 +216,15 @@ def _placeholder_content():
     )
 
 
+def _content_with_summary(summary):
+    return json.dumps(
+        {
+            "summary": summary,
+            "sections": {key: [] for key in BRIEFING_SECTIONS},
+        }
+    )
+
+
 def _production_shape_content():
     return json.dumps(
         {
@@ -276,6 +285,19 @@ def _production_shape_content():
                     {"recommended_action": "Verify whether 8.231.67.182 is an approved scanner", "reason": "The activity resembles scanning but source ownership is unknown."},
                     {"dedup_key": "scheduled-soc-investigation-alert-1", "storage_state": "content_ready"},
                 ],
+            },
+        }
+    )
+
+
+def _punctuation_shape_content():
+    return json.dumps(
+        {
+            "summary": "Two port-scan alerts came from source IP 8.231.67.182. This looks like reconnaissance rather than confirmed compromise because no successful authentication is shown. Review firewall and authentication logs next.",
+            "sections": {
+                **{key: [] for key in BRIEFING_SECTIONS},
+                "evidence": [{"fact": "The network.. showed repeated denies.."}],
+                "recommendations": [{"recommended_action": "Review firewall logs..", "reason": "Source ownership is unknown.."}],
             },
         }
     )
@@ -386,7 +408,10 @@ def test_successful_engine_persists_structured_briefing_audit_and_steps(postgres
         cur.execute("SELECT status, lifecycle_status, content_status, summary, sections FROM soc_briefings")
         status, lifecycle, content_status, summary, sections = cur.fetchone()
         assert (status, lifecycle, content_status) == ("success", "content_ready", "ready")
-        assert summary == "Structured morning SOC briefing."
+        assert summary != "Structured morning SOC briefing."
+        assert "source IP 203.0.113.10" in summary
+        assert "reconnaissance or scanning rather than confirmed compromise" in summary
+        assert "Next action:" in summary
         assert sorted(sections) == sorted(BRIEFING_SECTIONS)
         assert "What happened:" in sections["critical_findings"][0]
         _assert_no_internal_analyst_terms(summary, sections)
@@ -623,7 +648,9 @@ def test_malformed_structured_briefing_json_is_repaired_once(postgres_db):
     conn.commit()
 
     assert outcome.run_status == "success"
-    assert outcome.summary == "Critical alert trend needs analyst attention."
+    assert outcome.summary != "Critical alert trend needs analyst attention."
+    assert "reconnaissance or scanning rather than confirmed compromise" in outcome.summary
+    assert "Next action:" in outcome.summary
     assert len(gateway.calls) == 2
     repair_request = gateway.calls[1]
     assert repair_request.metadata["action"] == "soc_briefing_repair"
@@ -850,6 +877,73 @@ def test_briefing_post_processing_replaces_placeholder_and_adds_analyst_quality(
     _assert_no_internal_analyst_terms(summary, sections)
 
 
+@pytest.mark.parametrize(
+    "bad_summary",
+    [
+        "Potential Scanning Activity",
+        "pfSense Firewall Port Scans",
+        "Repeated Deny Alert",
+    ],
+)
+def test_executive_summary_rejects_bare_titles_and_uses_deterministic_handoff(postgres_db, bad_summary):
+    conn, _cur = postgres_db
+    _insert_alert(conn, severity="critical", source_ip="8.231.67.182")
+    _schedule, _window, job, run = _schedule_window_job_run(conn)
+
+    outcome = run_scheduled_investigation(
+        conn,
+        job=job,
+        run=run,
+        gateway_config=AiGatewayConfig(
+            mode=AI_MODE_LOCAL_ONLY,
+            configured_mode=AI_MODE_LOCAL_ONLY,
+            local_base_url="http://127.0.0.1:11434",
+            local_model="llama",
+        ),
+        gateway=FakeGateway(content=_content_with_summary(bad_summary)),
+        tool_executor=lambda _planned, _context: _tool_summary(),
+    )
+    conn.commit()
+
+    assert outcome.run_status == "success"
+    assert outcome.summary != bad_summary
+    summary = outcome.summary.lower()
+    assert "source ip 8.231.67.182" in summary
+    assert "reconnaissance or scanning rather than confirmed compromise" in summary
+    assert "next action:" in summary
+    assert "verify whether 8.231.67.182 belongs to an approved scanner" in summary
+    _assert_no_internal_analyst_terms(outcome.summary, outcome.sections)
+
+
+def test_complete_shift_handoff_summary_is_preserved(postgres_db):
+    conn, _cur = postgres_db
+    _insert_alert(conn, severity="critical", source_ip="8.231.67.182")
+    _schedule, _window, job, run = _schedule_window_job_run(conn)
+    good_summary = (
+        "Two port-scan alerts came from source IP 8.231.67.182 during the briefing window. "
+        "This looks like reconnaissance rather than confirmed compromise because the reviewed evidence does not show successful authentication or exploitation. "
+        "Review firewall and authentication logs next to verify whether the source is an approved scanner and whether any internal hosts were contacted afterward."
+    )
+
+    outcome = run_scheduled_investigation(
+        conn,
+        job=job,
+        run=run,
+        gateway_config=AiGatewayConfig(
+            mode=AI_MODE_LOCAL_ONLY,
+            configured_mode=AI_MODE_LOCAL_ONLY,
+            local_base_url="http://127.0.0.1:11434",
+            local_model="llama",
+        ),
+        gateway=FakeGateway(content=_content_with_summary(good_summary)),
+        tool_executor=lambda _planned, _context: _tool_summary(),
+    )
+
+    assert outcome.run_status == "success"
+    assert outcome.summary == good_summary
+    _assert_no_internal_analyst_terms(outcome.summary, outcome.sections)
+
+
 def test_empty_sections_explain_why_without_no_entries_recorded(postgres_db):
     conn, _cur = postgres_db
     _schedule, _window, job, run = _schedule_window_job_run(conn)
@@ -875,6 +969,31 @@ def test_empty_sections_explain_why_without_no_entries_recorded(postgres_db):
     assert "No escalation is warranted" in rendered
     assert "No detailed evidence was available" in rendered
     _assert_no_internal_analyst_terms(outcome.summary, outcome.sections)
+
+
+def test_placeholder_summary_still_uses_deterministic_handoff(postgres_db):
+    conn, _cur = postgres_db
+    _insert_alert(conn, severity="critical", source_ip="8.231.67.182")
+    _schedule, _window, job, run = _schedule_window_job_run(conn)
+
+    outcome = run_scheduled_investigation(
+        conn,
+        job=job,
+        run=run,
+        gateway_config=AiGatewayConfig(
+            mode=AI_MODE_LOCAL_ONLY,
+            configured_mode=AI_MODE_LOCAL_ONLY,
+            local_base_url="http://127.0.0.1:11434",
+            local_model="llama",
+        ),
+        gateway=FakeGateway(content=_placeholder_content()),
+        tool_executor=lambda _planned, _context: _tool_summary(),
+    )
+
+    assert outcome.run_status == "success"
+    assert "Analysis of provided evidence" not in outcome.summary
+    assert "next action:" in outcome.summary.lower()
+    assert "reconnaissance or scanning rather than confirmed compromise" in outcome.summary.lower()
 
 
 def test_production_observed_dict_shapes_are_normalized_without_raw_python_repr(postgres_db):
@@ -926,6 +1045,34 @@ def test_production_observed_dict_shapes_are_normalized_without_raw_python_repr(
     assert evidence_refs[0]["source_path"] == "/alerts/1"
     assert evidence_refs[0]["tool_name"] == "get_alert_detail"
     _assert_no_internal_analyst_terms(summary, sections)
+
+
+def test_duplicate_punctuation_is_normalized_in_analyst_sections(postgres_db):
+    conn, _cur = postgres_db
+    _insert_alert(conn, severity="critical", source_ip="8.231.67.182")
+    _schedule, _window, job, run = _schedule_window_job_run(conn)
+
+    outcome = run_scheduled_investigation(
+        conn,
+        job=job,
+        run=run,
+        gateway_config=AiGatewayConfig(
+            mode=AI_MODE_LOCAL_ONLY,
+            configured_mode=AI_MODE_LOCAL_ONLY,
+            local_base_url="http://127.0.0.1:11434",
+            local_model="llama",
+        ),
+        gateway=FakeGateway(content=_punctuation_shape_content()),
+        tool_executor=lambda _planned, _context: _tool_summary(),
+    )
+
+    rendered = _analyst_text(outcome.summary, outcome.sections)
+    assert "network.." not in rendered
+    assert "denies.." not in rendered
+    assert "logs.." not in rendered
+    assert "unknown.." not in rendered
+    assert "The network. showed repeated denies." in rendered
+    _assert_no_internal_analyst_terms(outcome.summary, outcome.sections)
 
 
 def test_paid_fallback_modes_are_blocked_for_scheduled_work(postgres_db):

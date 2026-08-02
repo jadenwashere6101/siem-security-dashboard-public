@@ -1234,8 +1234,18 @@ def _briefing_summary(
     evidence_refs: list[dict[str, Any]],
 ) -> str:
     text = _bounded_text(value, 2000)
-    if text and not _is_placeholder_summary(text) and not _has_internal_analyst_term(text):
+    if _summary_has_analyst_quality(text):
         return text
+    return _deterministic_summary(selected=selected, skipped=skipped, evidence_refs=evidence_refs)
+
+
+def _deterministic_summary(
+    *,
+    selected: list[InvestigationCandidate],
+    skipped: list[dict[str, Any]],
+    evidence_refs: list[dict[str, Any]],
+) -> str:
+    del skipped
     critical_count = sum(1 for item in selected if str(item.metadata.get("severity") or "").lower() == "critical")
     high_count = sum(1 for item in selected if str(item.metadata.get("severity") or "").lower() == "high")
     source_ips = sorted({_display_ip(item.source_ip) for item in selected if item.source_ip})
@@ -1247,6 +1257,82 @@ def _briefing_summary(
         f"{activity} {judgment}\n\n"
         f"{attention} {next_action}"
     )
+
+
+def _summary_has_analyst_quality(text: str | None) -> bool:
+    if not text:
+        return False
+    cleaned = _sanitize_analyst_text(text)
+    if not cleaned or _is_placeholder_summary(cleaned) or _has_internal_analyst_term(cleaned):
+        return False
+    normalized = " ".join(cleaned.lower().split())
+    words = re.findall(r"\b[\w.-]+\b", normalized)
+    if len(words) < 18:
+        return False
+    sentences = [part for part in re.split(r"[.!?]+", cleaned) if part.strip()]
+    if len(sentences) < 2:
+        return False
+    alert_family_only = (
+        len(words) <= 8
+        and any(term in normalized for term in ("scan", "scanning", "port scan", "firewall", "alert", "activity"))
+        and not any(term in normalized for term in ("because", "but", "so", "therefore", "verify", "review"))
+    )
+    if alert_family_only:
+        return False
+    has_activity = any(
+        term in normalized
+        for term in (
+            "scan",
+            "scanning",
+            "connection",
+            "attempt",
+            "alert",
+            "source ip",
+            "firewall",
+            "authentication",
+            "deny",
+            "denied",
+            "traffic",
+            "activity",
+            "incident",
+        )
+    )
+    has_judgment = any(
+        term in normalized
+        for term in (
+            "looks like",
+            "appears",
+            "suggests",
+            "matters",
+            "because",
+            "confirmed compromise",
+            "reconnaissance",
+            "benign",
+            "malicious",
+            "uncertain",
+            "not show",
+            "does not show",
+            "no successful",
+            "impact",
+            "confidence",
+        )
+    )
+    has_direction = any(
+        term in normalized
+        for term in (
+            "next",
+            "review",
+            "verify",
+            "check",
+            "escalate",
+            "monitor",
+            "attention",
+            "what matters",
+            "before escalating",
+            "investigate",
+        )
+    )
+    return has_activity and has_judgment and has_direction
 
 
 def _is_placeholder_summary(text: str) -> bool:
@@ -1556,6 +1642,8 @@ def _sanitize_analyst_text(value: Any, *, field_name: str | None = None) -> str:
     text = text.replace("{", "").replace("}", "").replace("[", "").replace("]", "")
     text = text.replace("'", "").replace('"', "")
     text = " ".join(text.split())
+    text = re.sub(r"([.!?]){2,}", r"\1", text)
+    text = re.sub(r"\s+([.!?,;:])", r"\1", text)
     return text.strip(" ,:;")
 
 

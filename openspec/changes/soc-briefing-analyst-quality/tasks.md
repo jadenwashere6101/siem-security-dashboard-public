@@ -13,6 +13,8 @@
 - [x] 2.6 Correct production raw-dict leakage by replacing direct dict stringification with section-aware semantic normalization.
 - [x] 2.7 Expand internal-term filtering for `dedup_key`, source/tool metadata, record metadata, bounded-evidence language, and lifecycle/storage terminology.
 - [x] 2.8 Strengthen synthesis and repair schema guidance with preferred section-specific object shapes while keeping post-processing tolerant.
+- [x] 2.9 Add deterministic Executive Summary quality gate for bare titles, fragments, alert-family labels, and summaries lacking judgment plus analyst direction.
+- [x] 2.10 Normalize duplicate punctuation in analyst-facing section prose.
 
 ## 3. Tests And Acceptance
 
@@ -26,6 +28,8 @@
 - [x] 3.8 Add production-regression tests for observed Evidence Reviewed dict shapes: `fact`, `fact` + `inference` + `uncertainty`, `type` + `description`, and type-only.
 - [x] 3.9 Add production-regression tests for observed Recommendation dict shapes: `step` + `description`, `action` + `target`, and `recommended_action` + `reason`.
 - [x] 3.10 Add production-regression tests for unknown and nested dict/list shapes, metadata preservation in `evidence_refs`, and absence of Python/JSON literal output.
+- [x] 3.11 Add production-regression tests rejecting "Potential Scanning Activity", "pfSense Firewall Port Scans", and short alert-family titles as Executive Summary content.
+- [x] 3.12 Add regression tests preserving complete shift-handoff summaries and normalizing duplicate punctuation.
 
 ## 4. Verification
 

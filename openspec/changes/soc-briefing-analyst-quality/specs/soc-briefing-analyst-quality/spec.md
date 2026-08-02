@@ -6,12 +6,27 @@
 
 SOC Briefing SHALL provide a concise executive summary that answers what happened, why it matters, what changed, and what deserves immediate attention.
 
+SOC Briefing SHALL preserve a model-generated Executive Summary only when deterministic quality checks show that it communicates the activity, security judgment or why it matters, and analyst direction or next action.
+
 #### Scenario: Placeholder summaries are not accepted
 
 - **GIVEN** provider output contains placeholder summary text
 - **WHEN** SOC Briefing post-processing runs
 - **THEN** the persisted summary SHALL be replaced with deterministic analyst-readable language
 - **AND** it SHALL NOT include placeholder wording such as "Analysis of provided evidence".
+
+#### Scenario: Bare title summaries are not accepted
+
+- **GIVEN** provider output contains an Executive Summary such as "Potential Scanning Activity", "pfSense Firewall Port Scans", or another short alert-family title
+- **WHEN** SOC Briefing post-processing runs
+- **THEN** the persisted summary SHALL be replaced with deterministic handoff language
+- **AND** the replacement SHALL include activity, security judgment, and a next analyst action.
+
+#### Scenario: Complete shift-handoff summaries are preserved
+
+- **GIVEN** provider output contains a concise summary that describes the activity, states a security judgment or why it matters, and gives analyst direction
+- **WHEN** SOC Briefing post-processing runs
+- **THEN** the model-generated summary SHALL be preserved.
 
 ### Requirement: SOC Briefing sections are analyst-readable
 
@@ -47,6 +62,12 @@ SOC Briefing SHALL NOT directly stringify dictionaries, lists, raw JSON, or Pyth
 - **THEN** useful scalar analyst-facing values SHALL be extracted and sanitized
 - **AND** internal metadata SHALL be omitted
 - **AND** if no useful value remains, a deterministic section-specific explanation SHALL be used.
+
+#### Scenario: Duplicate punctuation is normalized
+
+- **GIVEN** provider section content includes duplicate punctuation such as "network.."
+- **WHEN** SOC Briefing post-processing runs
+- **THEN** analyst-facing prose SHALL normalize the duplicate punctuation.
 
 #### Scenario: Empty sections explain why
 

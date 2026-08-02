@@ -23,6 +23,10 @@ The correction replaces direct dict stringification with deterministic, section-
 - Unknown dicts recursively extract sanitized scalar values, omit internal metadata keys, and produce readable section-specific prose or a deterministic empty-section judgment.
 - Analyst-facing output never uses `str(dict)`, `repr(dict)`, raw JSON, source paths, tool names, record IDs/counts, `dedup_key`, or lifecycle/storage terminology.
 
+A later production check found a second Executive Summary defect: `_briefing_summary()` accepted any non-empty model summary that was not a known placeholder and did not contain internal terminology. Bare labels such as "Potential Scanning Activity" and "pfSense Firewall Port Scans" therefore became the Executive Summary.
+
+The correction adds a deterministic Executive Summary quality gate. A model summary is preserved only when it has enough structure and analyst substance to communicate activity, security judgment or why it matters, and analyst direction or next action. Bare titles, fragments, short alert-family labels, placeholder-style summaries, and summaries lacking both judgment and direction fall back to the deterministic handoff composer built from `_activity_overview`, `_security_judgment`, `_attention_sentence`, and `_next_action_sentence`. No model repair is requested solely for summary quality.
+
 ## Non-Goals
 
 - No persistence changes.
