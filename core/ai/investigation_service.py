@@ -44,7 +44,7 @@ from core.ai.investigation_models import (
     STEP_SUGGEST_RESPONSE_PLAN,
     STEP_VALIDATE_EVIDENCE,
 )
-from core.ai.anakin_persona import deep_investigate_policy
+from core.ai.anakin_persona import classify_tone, deep_investigate_policy
 from core.ai.investigation_planner import (
     InvestigationPlan,
     InvestigationPlannerError,
@@ -297,6 +297,7 @@ def run_investigation(
     )
 
     gateway_response = None
+    tone = classify_tone(question, workflow="deep_investigate", context={"context_type": plan.context_type})
     try:
         _raise_if_cancelled(cancel_check)
         _raise_if_timeout(started, timeout_seconds)
@@ -311,6 +312,7 @@ def run_investigation(
             routing=routing,
             config=resolved_config,
             profile_max_prompt_chars=profile.max_prompt_chars,
+            tone=tone,
         )
         if len(prompt) > profile.max_prompt_chars:
             raise InvestigationPlannerError("Investigation prompt exceeded configured AI profile size limit", error_code="prompt_too_large")
@@ -325,10 +327,12 @@ def run_investigation(
                     "context_type": plan.context_type,
                     "routing_profile": routing.profile,
                     "read_only": True,
+                    "tone": tone,
                 },
             )
         )
         gateway_payload = gateway_response.as_dict()
+        gateway_payload["metadata"] = {**gateway_payload["metadata"], "tone": tone}
         provider_metadata.append(gateway_payload["metadata"])
         if gateway_response.status == AI_STATUS_SUCCESS:
             summary = gateway_response.content
@@ -590,6 +594,7 @@ def _build_correlation_prompt(
     routing,
     config: AiGatewayConfig,
     profile_max_prompt_chars: int | None = None,
+    tone: str | None = None,
 ) -> str:
     prompt_budget = profile_max_prompt_chars or config.max_prompt_chars
     tools_json = json.dumps(
@@ -601,7 +606,7 @@ def _build_correlation_prompt(
     context_json = _correlation_context_json_for_prompt(ai_context, budget=prompt_budget, tools_json=tools_json)
     sources_json = json.dumps(_all_sources(ai_context, tools), default=str, sort_keys=True)
     return (
-        f"{deep_investigate_policy()}"
+        f"{deep_investigate_policy(tone)}"
         "Cite source paths or record ids for material findings.\n"
         "Return concise sections: Assessment, Correlated Evidence, Contradictions And Uncertainty, Evidence Gaps, Read-Only Next Steps.\n\n"
         f"Workflow type: {plan.workflow_type}\n"

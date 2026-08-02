@@ -59,7 +59,7 @@ def test_acceptance_rows_include_required_product_debug_fields():
         "POST /ai/investigations",
         "POST /ai/workflows",
         "POST /ai/workflows/requests",
-        "POST /ai/repo/chat",
+        "POST /ai/repo/requests",
         "soc_briefing_worker",
     }
     assert required_routes.issubset({result.backend_route for result in report.results})
@@ -120,14 +120,14 @@ def test_floating_anakin_builds_auto_workflow_payload_contract():
 def test_repo_architecture_chat_builds_message_based_payload_contract():
     payload, route = build_frontend_realistic_request(
         {
-            "route": "POST /ai/repo/chat",
+            "route": "POST /ai/repo/requests",
             "message": "Where is the SOAR worker implemented?",
             "client_history": [{"role": "assistant", "content": "prior"}],
             "refresh": True,
         }
     )
 
-    assert route == "POST /ai/repo/chat"
+    assert route == "POST /ai/repo/requests"
     assert payload == {
         "message": "Where is the SOAR worker implemented?",
         "client_history": [{"role": "assistant", "content": "prior"}],
@@ -224,8 +224,8 @@ def test_live_representative_plan_uses_unique_safe_backend_paths():
     assert ("POST /ai/workflows/requests", "guided_analysis", "frontend.alert.artifact.checklist") in matrix
     assert ("POST /ai/workflows/requests", "fast_triage", "frontend.floating_anakin.ask") in matrix
     assert ("POST /ai/workflows/requests", "fast_triage", "frontend.floating_anakin.low_confidence_chooser") in matrix
-    assert ("POST /ai/repo/chat", "developer_assistant", "frontend.repo_architecture.chat.factual") in matrix
-    assert ("POST /ai/repo/chat", "developer_assistant", "frontend.repo_architecture.chat.evaluative") in matrix
+    assert ("POST /ai/repo/requests", "developer_assistant", "frontend.repo_architecture.chat.factual") in matrix
+    assert ("POST /ai/repo/requests", "developer_assistant", "frontend.repo_architecture.chat.evaluative") in matrix
     assert ("POST /ai/actions/preview", "guided_analysis", "frontend.ai_action.preview.add_incident_note") in matrix
     assert ("soc_briefing_worker", "deep_briefing", "worker.soc_briefing.manual_run_now") in matrix
     assert all(path != "POST /ai/actions/confirm" for path, _profile, _key in matrix)
@@ -301,7 +301,7 @@ def test_live_backend_sweep_runs_status_checks_and_representative_plan_only(monk
     assert status_paths == ["/ai/status", "/ai/repo/status"]
     assert representative_paths.count("POST /ai/workflows") == 1
     assert representative_paths.count("POST /ai/workflows/requests") == 5
-    assert representative_paths.count("POST /ai/repo/chat") == 2
+    assert representative_paths.count("POST /ai/repo/requests") == 2
     assert "POST /ai/actions/preview" in representative_paths
     assert "soc_briefing_worker" in representative_paths
     assert "POST /ai/explain" not in representative_paths

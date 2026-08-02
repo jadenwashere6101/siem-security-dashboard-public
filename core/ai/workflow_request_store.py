@@ -14,6 +14,7 @@ WORKFLOW_REQUEST_WORKER_NAME = "anakin_workflow_worker"
 ASYNC_WORKFLOW_DEEP_INVESTIGATE = "deep_investigate"
 ASYNC_WORKFLOW_DECISION_SUPPORT = "decision_support"
 ASYNC_WORKFLOW_GENERATE_ARTIFACT = "generate_artifact"
+ASYNC_WORKFLOW_REPO_ASSISTANT = "repo_assistant"
 ASYNC_WORKFLOWS = frozenset(
     {
         ASYNC_WORKFLOW_DEEP_INVESTIGATE,
@@ -53,6 +54,10 @@ STAGE_GENERATING_ANALYSIS = "generating_analysis"
 STAGE_VALIDATING_RESPONSE = "validating_response"
 STAGE_COMPLETE = "complete"
 STAGE_FAILED = "failed"
+STAGE_RETRIEVING_REPOSITORY_EVIDENCE = "retrieving_repository_evidence"
+STAGE_PREPARING_REPOSITORY_CONTEXT = "preparing_repository_context"
+STAGE_GENERATING_ANSWER = "generating_answer"
+STAGE_VALIDATING_CITATIONS = "validating_citations"
 
 DEFAULT_LEASE_DURATION_SECONDS = 180
 DEFAULT_MAX_ATTEMPTS = 1
@@ -132,7 +137,7 @@ def create_or_get_request(
                 key,
                 Json(safe_payload),
                 Json(classification),
-                Json(_lifecycle(STATUS_QUEUED, STAGE_QUEUED)),
+                Json(_lifecycle(STATUS_QUEUED, STAGE_QUEUED, workflow=workflow)),
                 Json({"read_only": True, "async": True}),
                 actor_username,
                 actor_role,
@@ -224,6 +229,7 @@ def update_request_stage(
     now: datetime | None = None,
 ) -> dict[str, Any] | None:
     current = as_utc(now) or utc_now()
+    workflow = _request_workflow_for_lease(conn, request_id, lease_owner=lease_owner)
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -242,7 +248,7 @@ def update_request_stage(
             (
                 status,
                 stage,
-                Json(_lifecycle(status, stage)),
+                Json(_lifecycle(status, stage, workflow=workflow)),
                 Json(metadata or {}),
                 current,
                 current,
@@ -294,6 +300,7 @@ def complete_request(
 ) -> dict[str, Any] | None:
     current = as_utc(now) or utc_now()
     final_stage = STAGE_COMPLETE if status in {STATUS_COMPLETED, STATUS_PARTIAL, STATUS_DEGRADED} else STAGE_FAILED
+    workflow = _request_workflow_for_lease(conn, request_id, lease_owner=lease_owner)
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -321,7 +328,7 @@ def complete_request(
                 final_stage,
                 Json(result_payload) if result_payload is not None else None,
                 Json(metadata or {}),
-                Json(_lifecycle(status, final_stage)),
+                Json(_lifecycle(status, final_stage, workflow=workflow)),
                 error_code,
                 (error_message or "")[:1000] if error_message else None,
                 current,
@@ -431,6 +438,8 @@ def serialize_request(row: dict[str, Any] | None) -> dict[str, Any] | None:
         return None
     result_payload = row.get("result_payload") if isinstance(row.get("result_payload"), dict) else None
     result = result_payload.get("result") if isinstance(result_payload, dict) else None
+    if result is None and row.get("workflow") == ASYNC_WORKFLOW_REPO_ASSISTANT and isinstance(result_payload, dict):
+        result = result_payload
     metadata = dict(row.get("metadata") or {})
     if isinstance(result_payload, dict) and isinstance(result_payload.get("metadata"), dict):
         metadata = {**result_payload.get("metadata"), **metadata}
@@ -443,7 +452,7 @@ def serialize_request(row: dict[str, Any] | None) -> dict[str, Any] | None:
         "status": row.get("status"),
         "workflow": row.get("workflow"),
         "classification": row.get("classification") or {},
-        "lifecycle": row.get("lifecycle") or _lifecycle(row.get("status") or STATUS_QUEUED, row.get("stage") or STAGE_QUEUED),
+        "lifecycle": row.get("lifecycle") or _lifecycle(row.get("status") or STATUS_QUEUED, row.get("stage") or STAGE_QUEUED, workflow=row.get("workflow")),
         "result": result,
         "metadata": metadata,
         "error": error,
@@ -467,7 +476,23 @@ def _fetchone_dict(cur) -> dict[str, Any] | None:
     return dict(zip(columns, row))
 
 
-def _lifecycle(status: str, stage: str) -> dict[str, Any]:
+def _request_workflow_for_lease(conn, request_id: str, *, lease_owner: str) -> str | None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT workflow
+            FROM ai_workflow_requests
+            WHERE request_id = %s
+              AND lease_owner = %s
+              AND status = 'running'
+            """,
+            (request_id, lease_owner),
+        )
+        row = cur.fetchone()
+    return str(row[0]) if row and row[0] else None
+
+
+def _lifecycle(status: str, stage: str, *, workflow: str | None = None) -> dict[str, Any]:
     terminal = status in TERMINAL_STATUSES
     stages = []
     order = [
@@ -481,6 +506,21 @@ def _lifecycle(status: str, stage: str) -> dict[str, Any]:
         STAGE_VALIDATING_RESPONSE,
         STAGE_COMPLETE,
     ]
+    if workflow == ASYNC_WORKFLOW_REPO_ASSISTANT or stage in {
+        STAGE_RETRIEVING_REPOSITORY_EVIDENCE,
+        STAGE_PREPARING_REPOSITORY_CONTEXT,
+        STAGE_GENERATING_ANSWER,
+        STAGE_VALIDATING_CITATIONS,
+    }:
+        order = [
+            STAGE_QUEUED,
+            STAGE_RUNNING,
+            STAGE_RETRIEVING_REPOSITORY_EVIDENCE,
+            STAGE_PREPARING_REPOSITORY_CONTEXT,
+            STAGE_GENERATING_ANSWER,
+            STAGE_VALIDATING_CITATIONS,
+            STAGE_COMPLETE,
+        ]
     if stage not in order and stage != STAGE_FAILED:
         stage = STAGE_RUNNING if status == STATUS_RUNNING else STAGE_QUEUED
     for item in order:

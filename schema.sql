@@ -1,4 +1,4 @@
--- Schema snapshot version: 0031
+-- Schema snapshot version: 0032
 
 CREATE TABLE IF NOT EXISTS events (
     id SERIAL PRIMARY KEY,
@@ -1645,7 +1645,7 @@ CREATE TABLE IF NOT EXISTS ai_workflow_requests (
     id SERIAL PRIMARY KEY,
     request_id TEXT NOT NULL UNIQUE,
     workflow TEXT NOT NULL
-        CHECK (workflow IN ('deep_investigate', 'decision_support', 'generate_artifact')),
+        CHECK (workflow IN ('deep_investigate', 'decision_support', 'generate_artifact', 'repo_assistant')),
     status TEXT NOT NULL DEFAULT 'queued'
         CHECK (status IN ('queued', 'running', 'completed', 'partial', 'degraded', 'failed', 'timed_out', 'cancelled', 'expired')),
     stage TEXT NOT NULL DEFAULT 'queued'
@@ -1658,6 +1658,10 @@ CREATE TABLE IF NOT EXISTS ai_workflow_requests (
             'preparing_evidence',
             'generating_analysis',
             'validating_response',
+            'retrieving_repository_evidence',
+            'preparing_repository_context',
+            'generating_answer',
+            'validating_citations',
             'complete',
             'failed'
         )),

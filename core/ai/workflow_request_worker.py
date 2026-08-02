@@ -9,9 +9,11 @@ from typing import Callable
 
 from flask_login import login_user
 
+from core.ai.repo_assistant_service import answer_repo_question
 from core.auth import User
 from core.ai.workflow_orchestrator import run_workflow
 from core.ai.workflow_request_store import (
+    ASYNC_WORKFLOW_REPO_ASSISTANT,
     STATUS_COMPLETED,
     STATUS_DEGRADED,
     STATUS_FAILED,
@@ -19,8 +21,12 @@ from core.ai.workflow_request_store import (
     STATUS_TIMED_OUT,
     STAGE_GATHERING_CONTEXT,
     STAGE_GENERATING_ANALYSIS,
+    STAGE_GENERATING_ANSWER,
     STAGE_QUERYING_TOOLS,
+    STAGE_PREPARING_REPOSITORY_CONTEXT,
+    STAGE_RETRIEVING_REPOSITORY_EVIDENCE,
     STAGE_RETRIEVING_EVIDENCE,
+    STAGE_VALIDATING_CITATIONS,
     STAGE_VALIDATING_RESPONSE,
     WORKFLOW_REQUEST_WORKER_NAME,
     claim_next_request,
@@ -166,12 +172,20 @@ def _process_request(
         update_request_stage(conn, request_id, lease_owner=lease_owner, stage=STAGE_GATHERING_CONTEXT, now=clock())
         conn.commit()
         workflow = job.get("workflow")
-        if workflow == "deep_investigate":
+        if workflow == ASYNC_WORKFLOW_REPO_ASSISTANT:
+            update_request_stage(conn, request_id, lease_owner=lease_owner, stage=STAGE_RETRIEVING_REPOSITORY_EVIDENCE, now=clock())
+            conn.commit()
+            update_request_stage(conn, request_id, lease_owner=lease_owner, stage=STAGE_PREPARING_REPOSITORY_CONTEXT, now=clock())
+            conn.commit()
+            update_request_stage(conn, request_id, lease_owner=lease_owner, stage=STAGE_GENERATING_ANSWER, now=clock())
+            conn.commit()
+        elif workflow == "deep_investigate":
             update_request_stage(conn, request_id, lease_owner=lease_owner, stage=STAGE_RETRIEVING_EVIDENCE, now=clock())
             conn.commit()
             update_request_stage(conn, request_id, lease_owner=lease_owner, stage=STAGE_QUERYING_TOOLS, now=clock())
             conn.commit()
-        update_request_stage(conn, request_id, lease_owner=lease_owner, stage=STAGE_GENERATING_ANALYSIS, now=clock())
+        if workflow != ASYNC_WORKFLOW_REPO_ASSISTANT:
+            update_request_stage(conn, request_id, lease_owner=lease_owner, stage=STAGE_GENERATING_ANALYSIS, now=clock())
         heartbeat_request(
             conn,
             request_id,
@@ -182,11 +196,18 @@ def _process_request(
         conn.commit()
         result = _run_with_user_context(
             payload,
+            workflow=workflow,
             actor_username=job["actor_username"],
             actor_role=job["actor_role"],
             flask_app=flask_app,
         )
-        update_request_stage(conn, request_id, lease_owner=lease_owner, stage=STAGE_VALIDATING_RESPONSE, now=clock())
+        update_request_stage(
+            conn,
+            request_id,
+            lease_owner=lease_owner,
+            stage=STAGE_VALIDATING_CITATIONS if workflow == ASYNC_WORKFLOW_REPO_ASSISTANT else STAGE_VALIDATING_RESPONSE,
+            now=clock(),
+        )
         status = _terminal_status_for_result(result.payload, result.status_code)
         error_code, error_message = _error_fields(result.payload)
         completed = complete_request(
@@ -218,13 +239,15 @@ def _process_request(
         return "failed"
 
 
-def _run_with_user_context(payload: dict, *, actor_username: str, actor_role: str, flask_app=None):
+def _run_with_user_context(payload: dict, *, workflow: str | None = None, actor_username: str, actor_role: str, flask_app=None):
     app = flask_app
     if app is None:
         from siem_backend import app as app
 
     with app.test_request_context("/ai/workflows/requests/worker", method="POST", json={}):
         login_user(User(actor_username, role=actor_role))
+        if workflow == ASYNC_WORKFLOW_REPO_ASSISTANT:
+            return answer_repo_question(payload)
         return run_workflow(payload)
 
 

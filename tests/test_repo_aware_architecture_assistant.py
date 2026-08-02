@@ -20,6 +20,7 @@ from core.ai.repo_assistant_service import (
     classify_repo_question,
     is_live_siem_data_question,
 )
+from core.ai.repo_assistant_request_service import queue_repo_assistant_request, read_repo_assistant_request
 from core.ai.repo_index import RepoIndex
 from core.ai.repo_sources import (
     LABEL_CURRENT,
@@ -31,6 +32,19 @@ from core.ai.repo_sources import (
     excluded_repo_path,
     stronger_source,
 )
+from core.ai.workflow_request_store import ASYNC_WORKFLOW_REPO_ASSISTANT
+from core.ai.workflow_request_worker import AnakinWorkflowWorkerConfig, run_anakin_workflow_worker
+
+
+class NoCloseConnection:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def close(self):
+        return None
 
 
 class RecordingRepoGateway:
@@ -278,6 +292,7 @@ def test_repo_assistant_builds_grounded_prompt_preserves_metadata_and_redacts_ex
         "action": "repo_architecture_chat",
         "read_only": True,
         "question_type": QUESTION_TYPE_FACTUAL,
+        "tone": "technical",
     }
 
 
@@ -467,6 +482,103 @@ def test_repo_assistant_routes_require_super_admin_and_validate_payload(client):
         assert response.status_code == 400
     finally:
         _stop_patchers(patchers)
+
+
+def test_repo_assistant_request_routes_require_super_admin(client, postgres_db, monkeypatch):
+    conn, _cur = postgres_db
+    monkeypatch.setattr("core.ai.repo_assistant_request_service.get_db_connection", lambda: NoCloseConnection(conn))
+
+    response = client.post("/ai/repo/requests", json={"message": "Where are routes?"})
+    assert response.status_code in {302, 401}
+
+    for role in ("analyst", "viewer"):
+        patchers = _login_role(client, role=role)
+        try:
+            response = client.post("/ai/repo/requests", json={"message": "Where are routes?"})
+            assert response.status_code == 403
+        finally:
+            client.post("/logout")
+            _stop_patchers(patchers)
+
+
+def test_repo_assistant_factual_question_queues_idempotently(postgres_db, monkeypatch):
+    conn, _cur = postgres_db
+    monkeypatch.setattr("core.ai.repo_assistant_request_service.get_db_connection", lambda: NoCloseConnection(conn))
+    payload = {"message": "Where is the SOAR worker implemented?", "client_request_id": "repo-async-1"}
+
+    first, first_status = queue_repo_assistant_request(payload, actor_username="admin", actor_role="super_admin")
+    second, second_status = queue_repo_assistant_request(payload, actor_username="admin", actor_role="super_admin")
+
+    assert first_status == 202
+    assert second_status == 200
+    assert first["request_id"] == second["request_id"]
+    assert first["workflow"] == ASYNC_WORKFLOW_REPO_ASSISTANT
+    assert first["result"] is None
+    with conn.cursor() as cur:
+        cur.execute("SELECT workflow, status FROM ai_workflow_requests")
+        assert cur.fetchone() == (ASYNC_WORKFLOW_REPO_ASSISTANT, "queued")
+
+
+def test_repo_assistant_live_siem_boundary_returns_immediately_without_job(postgres_db, monkeypatch):
+    conn, _cur = postgres_db
+    monkeypatch.setattr("core.ai.repo_assistant_request_service.get_db_connection", lambda: NoCloseConnection(conn))
+
+    result, status = queue_repo_assistant_request(
+        {"message": "What is my most severe alert?", "client_request_id": "repo-boundary-1"},
+        actor_username="admin",
+        actor_role="super_admin",
+    )
+
+    assert status == 200
+    assert result["status"] == AI_STATUS_SCOPE_BOUNDARY
+    assert result["metadata"]["immediate"] is True
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM ai_workflow_requests")
+        assert cur.fetchone()[0] == 0
+
+
+def test_repo_assistant_worker_completes_with_backend_citations(postgres_db, monkeypatch):
+    conn, _cur = postgres_db
+    monkeypatch.setattr("core.ai.repo_assistant_request_service.get_db_connection", lambda: NoCloseConnection(conn))
+
+    queued, _status = queue_repo_assistant_request(
+        {"message": "Where is the SOAR worker implemented?", "client_request_id": "repo-worker-1"},
+        actor_username="admin",
+        actor_role="super_admin",
+    )
+
+    def fake_answer(payload):
+        assert payload["workflow"] == ASYNC_WORKFLOW_REPO_ASSISTANT
+        from core.ai.repo_assistant_service import RepoAssistantResult
+
+        return RepoAssistantResult(
+            {
+                "status": AI_STATUS_SUCCESS,
+                "answer": "The SOAR worker is implemented in scripts/run_playbook_worker_once.py.",
+                "insufficient_evidence": False,
+                "citations": [{"path": "scripts/run_playbook_worker_once.py", "line_start": 1, "line_end": 40}],
+                "retrieval": {"matched_chunks": 1, "indexed_files": 10},
+                "metadata": {"status": AI_STATUS_SUCCESS, "profile": "developer_assistant", "paid_request": False},
+                "error": None,
+                "question_type": QUESTION_TYPE_FACTUAL,
+            },
+            200,
+        )
+
+    monkeypatch.setattr("core.ai.workflow_request_worker.answer_repo_question", fake_answer)
+    stats = run_anakin_workflow_worker(
+        config=AnakinWorkflowWorkerConfig(batch_size=1, max_runtime_seconds=30),
+        worker_id="repo-worker-test",
+        connect=lambda: NoCloseConnection(conn),
+    )
+
+    assert stats["processed"] == 1
+    assert stats["success"] == 1
+    result, read_status = read_repo_assistant_request(queued["request_id"], actor_username="admin")
+    assert read_status == 200
+    assert result["status"] == "completed"
+    assert result["result"]["citations"][0]["path"] == "scripts/run_playbook_worker_once.py"
+    assert result["metadata"]["async"] is True
 
 
 def test_repo_assistant_implementation_has_no_shell_db_or_mutation_calls():

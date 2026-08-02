@@ -4,7 +4,9 @@ from core.ai.anakin_persona import (
     artifact_policy,
     banned_filler_phrases,
     base_persona_policy,
+    classify_tone,
     decision_support_policy,
+    filler_pattern_phrases,
     quick_explain_policy,
     repo_assistant_policy,
 )
@@ -76,6 +78,13 @@ def test_shared_persona_has_tone_adaptation_without_false_personality():
     assert "do not answer by merely restating visible ui fields" in policy
 
 
+def test_tone_classifier_is_deterministic_and_conservative():
+    assert classify_tone("what's actually going on with this thing?") == "casual"
+    assert classify_tone("Explain the Sigma correlation and auth failure pattern") == "technical"
+    assert classify_tone("Please provide a concise assessment.") == "professional"
+    assert classify_tone("draft this damn response", workflow="generate_artifact") == "professional"
+
+
 def test_filler_phrases_are_canonical_and_rejected_by_acceptance():
     assert "based on the information provided" in banned_filler_phrases()
     case = build_golden_reasoning_cases()[0]
@@ -87,6 +96,19 @@ def test_filler_phrases_are_canonical_and_rejected_by_acceptance():
 
     assert checks["no_filler_phrases"] is False
     assert checks["not_visible_field_only"] is False
+
+    paraphrase_checks = evaluate_golden_reasoning_answer(
+        case,
+        "The alert is indicating suspicious behavior. Next step: inspect auth logs. Uncertainty: target outcome is missing.",
+    )
+    assert "the alert is indicating" in filler_pattern_phrases()
+    assert paraphrase_checks["no_filler_phrases"] is False
+
+    disclaimer_checks = evaluate_golden_reasoning_answer(
+        case,
+        "Most important: auth failures matter. Missing evidence: success outcome. Next step: inspect auth logs. Conclusions may change.",
+    )
+    assert disclaimer_checks["no_generic_disclaimer_ending"] is False
 
 
 def test_persona_keeps_professional_artifacts_and_conservative_profanity():
@@ -155,7 +177,15 @@ def test_decision_support_prompt_is_recommendation_only_and_not_artifact_path(mo
         captured["payload"] = payload
         from core.ai.explainer_service import AiServiceResult
 
-        return AiServiceResult({"status": "success", "answer": "Monitor with a specific auth-log check.", "metadata": {}, "context": {}}, 200)
+        return AiServiceResult(
+            {
+                "status": "success",
+                "answer": "Assessment: weak evidence.\nRecommendation: I would monitor with a specific auth-log check.",
+                "metadata": {"tone": "professional"},
+                "context": {},
+            },
+            200,
+        )
 
     monkeypatch.setattr("core.ai.workflow_orchestrator.explain_context", fake_explain)
 
@@ -171,7 +201,11 @@ def test_decision_support_prompt_is_recommendation_only_and_not_artifact_path(mo
 
     assert result.payload["workflow"] == WORKFLOW_DECISION_SUPPORT
     assert "do not draft artifacts" in captured["payload"]["question"].lower()
+    assert "first rendered content must be recommendation" in captured["payload"]["question"].lower()
     assert captured["payload"]["use_tools"] is False
+    assert result.payload["result"]["answer"].startswith("Recommendation:")
+    assert result.payload["metadata"]["decision_support_contract"] == "recommendation_first"
+    assert result.payload["metadata"]["recommendation_first_enforced"] is True
     assert result.payload["result"]["decision_support"]["artifacts_generated"] is False
 
     try:
@@ -205,6 +239,8 @@ def test_generate_artifact_prompt_preserves_schema_and_demands_specific_evidence
     ).lower()
 
     assert "generate artifact mode" in prompt
+    assert "tone classification: professional" in prompt
+    assert "free of slang or profanity" in prompt
     assert "evidence-specific review content" in prompt
     assert "return exactly one json object" in prompt
     assert "required json schema shape" in prompt
@@ -224,6 +260,7 @@ def test_soc_briefing_prompt_prioritizes_handoff_over_inventory():
     policy = payload["anakin_persona_policy"].lower()
 
     assert "soc briefing mode" in policy
+    assert "tone classification: professional" in policy
     assert "concise analyst handoff" in policy
     assert "what can probably be ignored" in policy
     assert payload["policy"]["avoid_raw_alert_inventory"] is True
@@ -240,6 +277,7 @@ def test_repo_assistant_prompt_distinguishes_fact_from_judgment():
     ).lower()
 
     assert "read-only repository architecture assistant" in prompt
+    assert "tone classification:" in prompt
     assert "distinguish repository facts from architectural judgment" in prompt
     assert "repository fact" in prompt
     assert "judgment" in prompt

@@ -155,7 +155,7 @@ def test_schema_snapshot_marker_matches_latest_migration():
         migrations_dir=repo_root / "migrations",
     )
 
-    assert version == 31
+    assert version == 32
 
 
 def test_anakin_async_workflow_requests_migration_scope():
@@ -190,6 +190,28 @@ def test_anakin_async_workflow_requests_migration_scope():
         assert index in migration_sql
         assert index in schema_sql
     for destructive in ("DROP ", "TRUNCATE ", "DELETE FROM ", "ALTER TABLE ", "RENAME "):
+        assert destructive not in migration_sql.upper()
+
+
+def test_repo_assistant_async_workflow_constraint_migration_scope():
+    repo_root = Path(__file__).resolve().parent.parent
+    migration_path = repo_root / "migrations" / "0032_repo_assistant_async_workflow_constraints.sql"
+    migration_sql = migration_path.read_text(encoding="utf-8")
+    schema_sql = (repo_root / "schema.sql").read_text(encoding="utf-8")
+
+    assert "repo_assistant" in migration_sql
+    assert "repo_assistant" in schema_sql
+    for stage in (
+        "retrieving_repository_evidence",
+        "preparing_repository_context",
+        "generating_answer",
+        "validating_citations",
+    ):
+        assert stage in migration_sql
+        assert stage in schema_sql
+    assert "DROP CONSTRAINT IF EXISTS ai_workflow_requests_workflow_check" in migration_sql
+    assert "DROP CONSTRAINT IF EXISTS ai_workflow_requests_stage_check" in migration_sql
+    for destructive in ("TRUNCATE ", "DELETE FROM ", "RENAME "):
         assert destructive not in migration_sql.upper()
 
 

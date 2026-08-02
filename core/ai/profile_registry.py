@@ -276,7 +276,7 @@ AI_INVOCATION_INVENTORY: tuple[AiInvocationInventoryEntry, ...] = (
     AiInvocationInventoryEntry(
         "frontend.repo_architecture.chat",
         "RepoArchitectureAssistantPanel",
-        "POST /ai/repo/chat",
+        "POST /ai/repo/requests",
         "route",
         "repo_architecture_chat",
         AI_PROFILE_DEVELOPER_ASSISTANT,

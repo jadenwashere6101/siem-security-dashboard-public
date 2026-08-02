@@ -1,12 +1,15 @@
 import React, { useEffect, useRef, useState } from "react";
 import { providerCostLabel, providerStatusLabel } from "../utils/aiDisplay";
-import { getRepoAssistantStatus, sendRepoAssistantMessage } from "../services/repoAssistantService";
+import { getRepoAssistantStatus, pollRepoAssistantRequest, sendRepoAssistantMessage } from "../services/repoAssistantService";
+
+const ACTIVE_REPO_REQUEST_KEY = "anakin.repoAssistant.activeRequest";
 
 const initialState = {
   status: "idle",
   response: null,
   error: "",
   lastRequest: null,
+  progress: null,
 };
 
 function RepoArchitectureAssistantPanel({
@@ -36,31 +39,81 @@ function RepoArchitectureAssistantPanel({
     return () => controller.abort();
   }, []);
 
+  useEffect(() => {
+    const raw = window.sessionStorage?.getItem(ACTIVE_REPO_REQUEST_KEY);
+    if (!raw) return undefined;
+    let saved = null;
+    try {
+      saved = JSON.parse(raw);
+    } catch (_error) {
+      window.sessionStorage?.removeItem(ACTIVE_REPO_REQUEST_KEY);
+      return undefined;
+    }
+    if (!saved?.request_id) return undefined;
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    setRequestState({ status: "loading", response: null, error: "", lastRequest: saved.payload || null, progress: saved });
+    pollRepoAssistantRequest(saved.request_id, {
+      signal: controller.signal,
+      onProgress: (progress) => setRequestState((current) => ({ ...current, progress })),
+    })
+      .then((response) => {
+        if (requestIdRef.current !== requestId) return;
+        window.sessionStorage?.removeItem(ACTIVE_REPO_REQUEST_KEY);
+        setRequestState({ status: "success", response, error: "", lastRequest: saved.payload || null, progress: null });
+      })
+      .catch((error) => {
+        if (error.name === "AbortError" || requestIdRef.current !== requestId) return;
+        window.sessionStorage?.removeItem(ACTIVE_REPO_REQUEST_KEY);
+        setRequestState({
+          status: "error",
+          response: error.payload || null,
+          error: error.message || "Repository assistant request failed.",
+          lastRequest: saved.payload || null,
+          progress: null,
+        });
+      });
+    return () => controller.abort();
+  }, []);
+
   const cancelRequest = () => {
     requestIdRef.current += 1;
     if (controllerRef.current) {
       controllerRef.current.abort();
     }
+    window.sessionStorage?.removeItem(ACTIVE_REPO_REQUEST_KEY);
     setRequestState((current) =>
-      current.status === "loading" ? { ...current, status: "idle", response: null, error: "" } : current
+      current.status === "loading" ? { ...current, status: "idle", response: null, error: "", progress: null } : current
     );
   };
 
   const submitRequest = async (overrideRequest = null) => {
     const trimmed = String(overrideRequest?.message ?? message).trim();
     if (!trimmed) return;
+    if (requestState.status === "loading") return;
     cancelRequest();
     const controller = new AbortController();
     controllerRef.current = controller;
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
     const payload = overrideRequest || { message: trimmed, client_history: history, refresh };
-    setRequestState({ status: "loading", response: null, error: "", lastRequest: payload });
+    setRequestState({ status: "loading", response: null, error: "", lastRequest: payload, progress: null });
 
     try {
-      const response = await sendRepoAssistantMessage(payload, { signal: controller.signal });
+      const response = await sendRepoAssistantMessage(payload, {
+        signal: controller.signal,
+        onProgress: (progress) => {
+          if (progress?.request_id && !progress?.terminal) {
+            window.sessionStorage?.setItem(ACTIVE_REPO_REQUEST_KEY, JSON.stringify({ request_id: progress.request_id, payload }));
+          }
+          setRequestState((current) => ({ ...current, progress }));
+        },
+      });
       if (requestIdRef.current !== requestId) return;
-      setRequestState({ status: "success", response, error: "", lastRequest: payload });
+      window.sessionStorage?.removeItem(ACTIVE_REPO_REQUEST_KEY);
+      setRequestState({ status: "success", response, error: "", lastRequest: payload, progress: null });
       setHistory((current) =>
         [
           ...current,
@@ -72,15 +125,17 @@ function RepoArchitectureAssistantPanel({
     } catch (error) {
       if (error.name === "AbortError") {
         if (requestIdRef.current !== requestId) return;
-        setRequestState((current) => ({ ...current, status: "idle", error: "", response: null }));
+        setRequestState((current) => ({ ...current, status: "idle", error: "", response: null, progress: null }));
         return;
       }
       if (requestIdRef.current !== requestId) return;
+      window.sessionStorage?.removeItem(ACTIVE_REPO_REQUEST_KEY);
       setRequestState({
         status: "error",
         response: error.payload || null,
         error: error.message || "Repository assistant request failed.",
         lastRequest: payload,
+        progress: null,
       });
     } finally {
       if (controllerRef.current === controller && requestIdRef.current === requestId) {
@@ -99,6 +154,7 @@ function RepoArchitectureAssistantPanel({
   const citations = Array.isArray(response.citations) ? response.citations : [];
   const retrieval = response.retrieval || {};
   const questionType = formatQuestionType(response.question_type);
+  const progressLabel = formatProgress(requestState.progress);
 
   return (
     <section style={{ ...cardStyle, ...panelStyle }} aria-label="Repo-aware architecture assistant">
@@ -154,7 +210,7 @@ function RepoArchitectureAssistantPanel({
       </form>
 
       {requestState.status === "loading" ? (
-        <div role="status" style={noticeStyle}>Retrieving cited repository evidence...</div>
+        <div role="status" style={noticeStyle}>{progressLabel || "Retrieving cited repository evidence..."}</div>
       ) : null}
 
       {requestState.status === "error" ? (
@@ -227,6 +283,20 @@ function formatQuestionType(questionType) {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function formatProgress(progress) {
+  const stage = progress?.lifecycle?.stage || progress?.stage || progress?.status;
+  const labels = {
+    queued: "Queued for Repo Assistant...",
+    running: "Starting Repo Assistant...",
+    retrieving_repository_evidence: "Retrieving cited repository evidence...",
+    preparing_repository_context: "Preparing repository context...",
+    generating_answer: "Generating repository answer...",
+    validating_citations: "Validating citations...",
+    complete: "Finalizing answer...",
+  };
+  return labels[stage] || "";
 }
 
 const panelStyle = {

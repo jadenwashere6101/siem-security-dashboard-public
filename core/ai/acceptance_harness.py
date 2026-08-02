@@ -10,7 +10,7 @@ from typing import Any
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
-from core.ai.anakin_persona import banned_filler_phrases
+from core.ai.anakin_persona import banned_filler_phrases, filler_pattern_phrases
 from core.ai.config import AI_MODE_LOCAL_ONLY, AiGatewayConfig, default_ai_profiles, load_ai_gateway_config
 from core.ai.context_builder import AiContextPayload, AiContextSource
 from core.ai.drafting_service import _build_draft_prompt
@@ -570,13 +570,14 @@ def evaluate_golden_reasoning_answer(case: GoldenReasoningCase, answer: str) -> 
     generic_continue = "continue monitoring" in text and not any(
         term in text for term in ("inspect", "auth", "source", "target", "window", "successful", "destination")
     )
-    filler = {phrase: phrase in text for phrase in banned_filler_phrases()}
+    filler = {phrase: phrase in text for phrase in (*banned_filler_phrases(), *filler_pattern_phrases())}
     return {
         "not_empty": bool(text.strip()),
         "specific_next_step": any(term in text for term in ("next check", "next step", "next action", "next actions")),
         "states_uncertainty_or_missing_evidence": any(term in text for term in ("uncertainty", "missing evidence", "evidence gaps")),
         "not_generic_monitoring": not generic_continue,
         "no_filler_phrases": not any(filler.values()),
+        "no_generic_disclaimer_ending": not _has_generic_disclaimer_ending(text),
         "not_visible_field_only": not _looks_like_visible_field_restatement(text),
         **required,
         **forbidden,
@@ -610,6 +611,21 @@ def _looks_like_visible_field_restatement(text: str) -> bool:
         if term in normalized
     )
     return visible_terms >= 3 and not has_reasoning
+
+
+def _has_generic_disclaimer_ending(text: str) -> bool:
+    normalized = " ".join(str(text or "").lower().split())
+    if not normalized:
+        return False
+    endings = (
+        "as more information becomes available.",
+        "if more information becomes available.",
+        "with additional information.",
+        "as additional details emerge.",
+        "further investigation may reveal more.",
+        "conclusions may change.",
+    )
+    return normalized.endswith(endings)
 
 
 def removed_frontend_ai_controls_present(source_root: Path | None = None) -> dict[str, list[str]]:
@@ -716,7 +732,7 @@ def build_workflow_representative_fixtures() -> tuple[dict[str, Any], ...]:
             "context_type": "repository",
             "prompt": "What is my most impressive feature?",
             "expected_profile": AI_PROFILE_DEVELOPER_ASSISTANT,
-            "expected_route": "POST /ai/repo/chat",
+            "expected_route": "POST /ai/repo/requests",
             "citations_backend_owned": True,
         },
     )
@@ -830,8 +846,8 @@ def build_production_safe_live_sweep_matrix() -> tuple[dict[str, Any], ...]:
         {"key": "frontend.alert.artifact.checklist", "route": ASYNC_WORKFLOW_REQUEST_ROUTE, "workflow": WORKFLOW_GENERATE_ARTIFACT, "mutation": False, "non_persistent": True},
         {"key": "frontend.floating_anakin.ask", "route": ASYNC_WORKFLOW_REQUEST_ROUTE, "workflow": WORKFLOW_AUTO, "mutation": False},
         {"key": "frontend.floating_anakin.low_confidence_chooser", "route": ASYNC_WORKFLOW_REQUEST_ROUTE, "workflow": WORKFLOW_AUTO, "expected_status": "chooser_required", "mutation": False},
-        {"key": "frontend.repo_architecture.chat.factual", "route": "POST /ai/repo/chat", "workflow": WORKFLOW_REPO_ASSISTANT, "mutation": False},
-        {"key": "frontend.repo_architecture.chat.evaluative", "route": "POST /ai/repo/chat", "workflow": WORKFLOW_REPO_ASSISTANT, "mutation": False},
+        {"key": "frontend.repo_architecture.chat.factual", "route": "POST /ai/repo/requests", "workflow": WORKFLOW_REPO_ASSISTANT, "mutation": False},
+        {"key": "frontend.repo_architecture.chat.evaluative", "route": "POST /ai/repo/requests", "workflow": WORKFLOW_REPO_ASSISTANT, "mutation": False},
         {"key": "worker.soc_briefing.manual_run_now", "route": "GET /soc-briefings/control", "workflow": WORKFLOW_SOC_BRIEFING, "mutation": False, "status_only_default": True},
         {"key": "frontend.ai_action.preview.add_incident_note", "route": "POST /ai/actions/preview", "workflow": WORKFLOW_GENERATE_ARTIFACT, "mutation": False, "confirmation_skipped": True},
     )
@@ -1201,15 +1217,34 @@ def _live_repo_assistant_checks(base_url: str, cookie: str, config: AiGatewayCon
         ("repo.evaluative.impressive_feature", "What is my most impressive feature?"),
     ):
         started = time.monotonic()
-        status_code, body = _live_post_json(base_url, "/ai/repo/chat", {"message": question}, cookie)
-        metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
-        error_value = body.get("error")
-        success = 200 <= status_code < 300 and body.get("status") == "success" and bool(body.get("answer"))
+        status_code, body = _live_post_json(base_url, "/ai/repo/requests", {"message": question}, cookie)
+        if 200 <= status_code < 300 and body.get("request_id"):
+            poll_deadline = time.monotonic() + ASYNC_WORKFLOW_LIVE_POLL_SECONDS
+            while str(body.get("status") or "").lower() not in ASYNC_WORKFLOW_TERMINAL_STATES and time.monotonic() < poll_deadline:
+                time.sleep(ASYNC_WORKFLOW_LIVE_POLL_INTERVAL_SECONDS)
+                status_code, body = _live_get_json_with_status(base_url, f"/ai/repo/requests/{body['request_id']}", cookie)
+            if str(body.get("status") or "").lower() not in ASYNC_WORKFLOW_TERMINAL_STATES:
+                body.setdefault("error", "Repo Assistant request did not reach a terminal state before live sweep polling timed out.")
+                body["status"] = "timed_out"
+        result = body.get("result") if isinstance(body.get("result"), dict) else body
+        metadata = {}
+        if isinstance(result.get("metadata"), dict):
+            metadata.update(result["metadata"])
+        if isinstance(body.get("metadata"), dict):
+            metadata.update(body["metadata"])
+        error_value = result.get("error") or body.get("error")
+        provider_status = metadata.get("status") or result.get("status") or body.get("status")
+        success = (
+            200 <= status_code < 300
+            and str(body.get("status") or result.get("status") or "").lower() in {"success", *ASYNC_WORKFLOW_SUCCESS_STATES}
+            and bool(result.get("answer"))
+            and not error_value
+        )
         rows.append(
             {
                 "frontend_action_id": label,
                 "action": question,
-                "route": "/ai/repo/chat",
+                "route": "/ai/repo/requests",
                 "entity": "repository",
                 "context_type": "repository",
                 "profile": AI_PROFILE_DEVELOPER_ASSISTANT,
@@ -1218,11 +1253,11 @@ def _live_repo_assistant_checks(base_url: str, cookie: str, config: AiGatewayCon
                 "prompt_limit": profile.max_prompt_chars,
                 "latency_ms": int((time.monotonic() - started) * 1000),
                 "http_status": status_code,
-                "provider_status": metadata.get("status") or body.get("status"),
+                "provider_status": provider_status,
                 "success": success,
-                "error_code": None if success else body.get("status"),
+                "error_code": None if success else body.get("status") or result.get("status"),
                 "error": error_value,
-                "root_cause": None if success else _root_cause_from_live(status=body.get("status"), error=error_value, http_status=status_code, body=body),
+                "root_cause": None if success else _root_cause_from_live(status=body.get("status") or result.get("status"), error=error_value, http_status=status_code, body=body),
             }
         )
     return rows
@@ -1230,7 +1265,7 @@ def _live_repo_assistant_checks(base_url: str, cookie: str, config: AiGatewayCon
 
 def _live_payload_for_case(entry: AiInvocationInventoryEntry, case: AcceptanceCase, ids: dict[str, Any]) -> dict[str, Any]:
     payload = json.loads(json.dumps(case.request_payload, default=str))
-    if entry.backend_path in {"POST /ai/chat", "POST /ai/repo/chat"}:
+    if entry.backend_path in {"POST /ai/chat", "POST /ai/repo/requests"}:
         return payload
     if entry.backend_path == "POST /ai/actions/preview":
         preview_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
@@ -1576,7 +1611,7 @@ def _prompt_for_case(entry: AiInvocationInventoryEntry, case: AcceptanceCase, co
             config=config,
             profile_max_prompt_chars=profile.max_prompt_chars,
         )
-    if entry.backend_path == "POST /ai/repo/chat":
+    if entry.backend_path == "POST /ai/repo/requests":
         return build_repo_prompt(
             case.sample_question,
             history=[],
@@ -1619,7 +1654,7 @@ def _case_for_entry(
     options = _frontend_options_for_entry(entry, fallback_context_type, frontend_options)
     context_type = _normalize_context_type(options.get("contextType")) or fallback_context_type
     payload, route = build_frontend_realistic_request(options, active_section=_active_section_for_context(context_type))
-    if entry.backend_path in {"soc_briefing_worker", "POST /ai/repo/chat"}:
+    if entry.backend_path in {"soc_briefing_worker", "POST /ai/repo/requests"}:
         route = entry.backend_path
     else:
         route = entry.backend_path
@@ -1662,7 +1697,7 @@ def build_frontend_realistic_request(options: dict[str, Any], *, active_section:
             },
             "POST /ai/chat",
         )
-    if explicit_route == "POST /ai/repo/chat":
+    if explicit_route == "POST /ai/repo/requests":
         payload = {
             "message": options.get("message") or options.get("question") or "What is my most impressive feature?",
         }
@@ -1670,7 +1705,7 @@ def build_frontend_realistic_request(options: dict[str, Any], *, active_section:
             payload["client_history"] = options["client_history"]
         if isinstance(options.get("refresh"), bool):
             payload["refresh"] = options["refresh"]
-        return payload, "POST /ai/repo/chat"
+        return payload, "POST /ai/repo/requests"
 
     normalized_context_type = _normalize_context_type(options.get("contextType"))
     entity_context = options.get("context") if isinstance(options.get("context"), dict) else {}
@@ -1800,7 +1835,7 @@ def _inventory_entry_for_static_contract(options: dict[str, Any]) -> HarnessInve
     elif route == "POST /ai/chat":
         selector_type = "route"
         profile = profile_for_chat()
-    elif route == "POST /ai/repo/chat":
+    elif route == "POST /ai/repo/requests":
         selector_type = "route"
         profile = profile_for_repo_assistant()
     elif route == "soc_briefing_worker":
@@ -1898,21 +1933,21 @@ def _static_surface_contracts() -> list[dict[str, Any]]:
         {
             "contract_key": "frontend.command_palette.repo_assistant",
             "surface": "Command Palette Repo Assistant",
-            "route": "POST /ai/repo/chat",
+            "route": "POST /ai/repo/requests",
             "message": "Where is the SOAR worker implemented?",
             "source": "anakinCommandRegistry.repoAssistant",
         },
         {
             "contract_key": "frontend.repo_architecture.chat.factual",
             "surface": "RepoArchitectureAssistantPanel factual question",
-            "route": "POST /ai/repo/chat",
+            "route": "POST /ai/repo/requests",
             "message": "Where is the SOAR worker implemented?",
             "source": "RepoArchitectureAssistantPanel",
         },
         {
             "contract_key": "frontend.repo_architecture.chat.evaluative",
             "surface": "RepoArchitectureAssistantPanel evaluative question",
-            "route": "POST /ai/repo/chat",
+            "route": "POST /ai/repo/requests",
             "message": "What is my most impressive feature?",
             "source": "RepoArchitectureAssistantPanel",
         },
@@ -2129,7 +2164,7 @@ def _default_command_contracts() -> list[dict[str, Any]]:
         {
             "contract_key": "frontend.command_registry.repo_assistant",
             "contextType": "repository",
-            "route": "POST /ai/repo/chat",
+            "route": "POST /ai/repo/requests",
             "message": "Where is the SOAR worker implemented?",
             "source": "anakinCommandRegistry.commandToAiOptions",
         },
@@ -2151,7 +2186,7 @@ def _frontend_options_for_entry(
         }
     if entry.key == "frontend.repo_architecture.chat":
         return {
-            "route": "POST /ai/repo/chat",
+            "route": "POST /ai/repo/requests",
             "message": "What is my most impressive feature?",
             "client_history": [],
             "refresh": False,
@@ -2187,9 +2222,9 @@ def _legacy_options_for_inventory_entry(entry: AiInvocationInventoryEntry) -> di
             "client_history": [],
             "source": "legacy_backend_compatibility_adapter",
         }
-    if entry.backend_path == "POST /ai/repo/chat":
+    if entry.backend_path == "POST /ai/repo/requests":
         return {
-            "route": "POST /ai/repo/chat",
+            "route": "POST /ai/repo/requests",
             "message": "What is my most impressive feature?",
             "client_history": [],
             "refresh": False,
@@ -2334,7 +2369,7 @@ def _stale_policy_for_entry(entry: AiInvocationInventoryEntry) -> str:
 
 
 def _question_for_entry(entry: AiInvocationInventoryEntry, context_type: str) -> str:
-    if entry.backend_path == "POST /ai/repo/chat":
+    if entry.backend_path == "POST /ai/repo/requests":
         return "What is my most impressive feature?"
     if entry.backend_path == "soc_briefing_worker":
         return "Run Anakin Briefing Now using current bounded SIEM evidence."

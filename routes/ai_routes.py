@@ -28,6 +28,7 @@ from core.ai.repo_assistant_service import (
     answer_repo_question,
     get_repo_assistant_status,
 )
+from core.ai.repo_assistant_request_service import queue_repo_assistant_request, read_repo_assistant_request
 from core.ai.workflow_orchestrator import (
     WorkflowValidationError,
     legacy_chat_about_siem as chat_about_siem,
@@ -288,4 +289,41 @@ def ai_repo_chat_route():
         return jsonify({"status": error.error_code, "error": str(error)}), error.status_code
     except Exception as error:
         current_app.logger.error("Error in ai_repo_chat_route status=failed error=%s", error)
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@ai_bp.route("/ai/repo/requests", methods=["POST"])
+@login_required
+@super_admin_required
+def ai_repo_request_route():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "JSON object body is required."}), 400
+
+    try:
+        body, status_code = queue_repo_assistant_request(
+            payload,
+            actor_username=getattr(current_user, "username", None) or "unknown",
+            actor_role=getattr(current_user, "role", None) or "viewer",
+        )
+        return jsonify(body), status_code
+    except RepoAssistantValidationError as error:
+        return jsonify({"status": error.error_code, "error": str(error)}), error.status_code
+    except Exception as error:
+        current_app.logger.error("Error in ai_repo_request_route status=failed error=%s", error)
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@ai_bp.route("/ai/repo/requests/<request_id>", methods=["GET"])
+@login_required
+@super_admin_required
+def ai_repo_request_status_route(request_id):
+    try:
+        body, status_code = read_repo_assistant_request(
+            request_id,
+            actor_username=getattr(current_user, "username", None) or "unknown",
+        )
+        return jsonify(body), status_code
+    except Exception as error:
+        current_app.logger.error("Error in ai_repo_request_status_route status=failed error=%s", error)
         return jsonify({"error": "Internal server error"}), 500

@@ -1,15 +1,17 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import RepoArchitectureAssistantPanel from "./RepoArchitectureAssistantPanel";
-import { getRepoAssistantStatus, sendRepoAssistantMessage } from "../services/repoAssistantService";
+import { getRepoAssistantStatus, pollRepoAssistantRequest, sendRepoAssistantMessage } from "../services/repoAssistantService";
 
 jest.mock("../services/repoAssistantService", () => ({
   getRepoAssistantStatus: jest.fn(),
+  pollRepoAssistantRequest: jest.fn(),
   sendRepoAssistantMessage: jest.fn(),
 }));
 
 beforeEach(() => {
   jest.clearAllMocks();
+  window.sessionStorage.clear();
   getRepoAssistantStatus.mockResolvedValue({ status: "available", indexed_files: 42 });
 });
 
@@ -67,8 +69,63 @@ test("submits repo question, displays answer, citations, trust labels, metadata,
       message: "Where do detection rules live?",
       refresh: true,
     }),
-    expect.objectContaining({ signal: expect.any(AbortSignal) })
+    expect.objectContaining({ signal: expect.any(AbortSignal), onProgress: expect.any(Function) })
   );
+});
+
+test("shows repo polling progress from queued request lifecycle", async () => {
+  let resolveRequest;
+  sendRepoAssistantMessage.mockImplementation((_payload, options) => {
+    options.onProgress({ request_id: "repo-1", lifecycle: { stage: "generating_answer" }, terminal: false });
+    return new Promise((resolve) => {
+      resolveRequest = () =>
+        resolve({
+          status: "success",
+          answer: "Async repo answer.",
+          insufficient_evidence: false,
+          citations: [],
+          retrieval: { indexed_files: 42, matched_chunks: 1, refreshed: false, excluded_matches: [] },
+          question_type: "architectural",
+          metadata: { status: "success", provider: "ollama", model: "repo-model" },
+          error: null,
+        });
+    });
+  });
+
+  render(<RepoArchitectureAssistantPanel />);
+  expect(await screen.findByText(/42 files indexed/i)).toBeInTheDocument();
+  await userEvent.type(screen.getByLabelText(/repository question/i), "How does the worker run?");
+  await userEvent.click(screen.getByRole("button", { name: /ask repo ai/i }));
+
+  expect(await screen.findByText(/generating repository answer/i)).toBeInTheDocument();
+  resolveRequest();
+  expect(await screen.findByText(/async repo answer/i)).toBeInTheDocument();
+});
+
+test("recovers active repo request after remount", async () => {
+  window.sessionStorage.setItem(
+    "anakin.repoAssistant.activeRequest",
+    JSON.stringify({ request_id: "repo-restore", payload: { message: "Where is the worker?" } })
+  );
+  pollRepoAssistantRequest.mockResolvedValue({
+    status: "success",
+    answer: "Recovered answer.",
+    insufficient_evidence: false,
+    citations: [],
+    retrieval: { indexed_files: 42, matched_chunks: 1, refreshed: false, excluded_matches: [] },
+    question_type: "factual",
+    metadata: { status: "success" },
+    error: null,
+  });
+
+  render(<RepoArchitectureAssistantPanel />);
+
+  expect(await screen.findByText(/recovered answer/i)).toBeInTheDocument();
+  expect(pollRepoAssistantRequest).toHaveBeenCalledWith(
+    "repo-restore",
+    expect.objectContaining({ signal: expect.any(AbortSignal), onProgress: expect.any(Function) })
+  );
+  expect(window.sessionStorage.getItem("anakin.repoAssistant.activeRequest")).toBeNull();
 });
 
 test("supports insufficient evidence, grounding failure, retry, cancel, and dismiss", async () => {

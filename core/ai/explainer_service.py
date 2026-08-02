@@ -16,7 +16,7 @@ from core.ai.context_builder import (
 )
 from core.ai.gateway import AiGateway
 from core.ai.models import AiGatewayRequest, AiRequestMetadata
-from core.ai.anakin_persona import decision_support_policy, quick_explain_policy
+from core.ai.anakin_persona import classify_tone, decision_support_policy, quick_explain_policy
 from core.ai.profile_registry import profile_for_explain_action
 from core.ai.soc_tool_executor import (
     build_deterministic_tool_plan,
@@ -180,6 +180,7 @@ def _answer_from_context(
 ) -> AiServiceResult:
     profile_name = profile_for_explain_action(action)
     profile = config.profile(profile_name)
+    tone = classify_tone(question, workflow="decision_support" if _is_decision_support_action(action) else "quick_explain", context={"context_type": ai_context.context_type})
     tools = _empty_tool_summary()
     if use_tools and not should_skip_tools_for_gateway(config):
         plan = build_deterministic_tool_plan(
@@ -217,6 +218,7 @@ def _answer_from_context(
         tools=tools,
         config=config,
         profile_max_prompt_chars=profile.max_prompt_chars,
+        tone=tone,
     )
     if len(prompt) > profile.max_prompt_chars:
         return AiServiceResult(
@@ -246,17 +248,20 @@ def _answer_from_context(
                 "context_type": ai_context.context_type,
                 "action": action,
                 "read_only": True,
+                "tone": tone,
             },
         )
     )
     response_payload = gateway_response.as_dict()
+    response_metadata = dict(response_payload["metadata"])
+    response_metadata["tone"] = tone
     return AiServiceResult(
         {
             "status": response_payload["status"],
             "answer": response_payload["content"],
             "insufficient_context": False,
             "context": ai_context.metadata(),
-            "metadata": response_payload["metadata"],
+            "metadata": response_metadata,
             "tools": tools.as_dict(),
             "error": response_payload["error"],
         },
@@ -272,6 +277,7 @@ def _build_prompt(
     tools: SocToolExecutionSummary | None = None,
     config: AiGatewayConfig | None = None,
     profile_max_prompt_chars: int | None = None,
+    tone: str | None = None,
 ) -> str:
     budget = profile_max_prompt_chars or (config.max_prompt_chars if config else 12000)
     tool_budget = max(1000, budget // 3)
@@ -283,7 +289,7 @@ def _build_prompt(
     )
     context_json = _context_json_for_prompt(ai_context, budget=budget, tools_json=tools_json)
     question_line = question or _default_question(action, ai_context.context_type)
-    policy = decision_support_policy() if _is_decision_support_action(action) else quick_explain_policy()
+    policy = decision_support_policy(tone) if _is_decision_support_action(action) else quick_explain_policy(tone)
     return (
         f"{policy}\n"
         f"Action: {action}\n"

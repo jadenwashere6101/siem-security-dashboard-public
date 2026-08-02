@@ -304,7 +304,7 @@ def workflow_for_inventory_path(backend_path: str, selector_type: str, selector:
         return WORKFLOW_GENERATE_ARTIFACT
     if backend_path == "POST /ai/investigations":
         return WORKFLOW_DEEP_INVESTIGATE
-    if backend_path == "POST /ai/repo/chat":
+    if backend_path in {"POST /ai/repo/chat", "POST /ai/repo/requests"}:
         return WORKFLOW_REPO_ASSISTANT
     if backend_path == "soc_briefing_worker":
         return WORKFLOW_SOC_BRIEFING
@@ -424,6 +424,9 @@ def _run_decision_support(payload: dict[str, Any], *, gateway: AiGateway | None,
             **payload,
             "prompt": "",
             "question": (
+                "First rendered content must be recommendation. Use this exact order: "
+                "recommendation, why, evidence, risks, alternatives, what_would_change_my_mind, confidence. "
+                "If the analyst's conclusion is not supported, explicitly say you disagree before explaining why. "
                 "Recommend whether the analyst should block, monitor, escalate, ignore, or gather more evidence. "
                 "Explain reasoning, confidence, prerequisites, risks, alternatives, and missing evidence. "
                 "Do not draft artifacts, save anything, preview actions, confirm actions, or claim action was taken. "
@@ -434,6 +437,25 @@ def _run_decision_support(payload: dict[str, Any], *, gateway: AiGateway | None,
     )
     result = explain_context(explain_payload, gateway=gateway, config=config)
     payload_with_decision = dict(result.payload)
+    answer, normalized = _recommendation_first_answer(payload_with_decision.get("answer"))
+    payload_with_decision["answer"] = answer
+    metadata = dict(payload_with_decision.get("metadata") or {})
+    metadata.update(
+        {
+            "decision_support_contract": "recommendation_first",
+            "recommendation_first_enforced": normalized,
+            "required_sections": [
+                "recommendation",
+                "why",
+                "evidence",
+                "risks",
+                "alternatives",
+                "what_would_change_my_mind",
+                "confidence",
+            ],
+        }
+    )
+    payload_with_decision["metadata"] = metadata
     payload_with_decision["decision_support"] = {
         "allowed_recommendations": sorted(DECISION_RECOMMENDATIONS),
         "read_only": True,
@@ -441,6 +463,26 @@ def _run_decision_support(payload: dict[str, Any], *, gateway: AiGateway | None,
         "actions_taken": False,
     }
     return AiServiceResult(payload_with_decision, result.status_code)
+
+
+def _recommendation_first_answer(answer: Any) -> tuple[Any, bool]:
+    if not isinstance(answer, str) or not answer.strip():
+        return answer, False
+    lines = [line.strip() for line in answer.splitlines() if line.strip()]
+    if not lines:
+        return answer, False
+    if _is_recommendation_line(lines[0]):
+        return answer, False
+    for index, line in enumerate(lines[1:], start=1):
+        if _is_recommendation_line(line):
+            reordered = [line, *lines[:index], *lines[index + 1 :]]
+            return "\n".join(reordered), True
+    return answer, False
+
+
+def _is_recommendation_line(line: str) -> bool:
+    normalized = str(line or "").strip().lower()
+    return normalized.startswith(("recommendation", "primary recommendation", "i recommend", "i would", "do not ", "don't "))
 
 
 def _run_generate_artifact(payload: dict[str, Any], *, gateway: AiGateway | None, config: AiGatewayConfig | None) -> DraftServiceResult:

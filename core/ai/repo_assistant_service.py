@@ -8,7 +8,7 @@ from typing import Any
 from core.ai.config import AiGatewayConfig, load_ai_gateway_config
 from core.ai.gateway import AiGateway
 from core.ai.models import AI_STATUS_SUCCESS, AiGatewayRequest, AiRequestMetadata, estimate_tokens
-from core.ai.anakin_persona import repo_assistant_policy
+from core.ai.anakin_persona import classify_tone, repo_assistant_policy
 from core.ai.profile_registry import profile_for_repo_assistant
 from core.ai.repo_index import DEFAULT_TOP_K, RepoChunk, RepoIndex
 from core.ai.repo_sources import LABEL_HISTORICAL, historical_context_requested
@@ -88,6 +88,7 @@ def answer_repo_question(
             )
         )
     question_type = classify_repo_question(message)
+    tone = classify_tone(message, workflow="repo_assistant", context={"question_type": question_type})
     refresh = bool(payload.get("refresh", False))
     include_historical = historical_context_requested(message)
     resolved_config = config if config is not None else load_ai_gateway_config()
@@ -120,6 +121,7 @@ def answer_repo_question(
         chunks=search.chunks,
         max_prompt_chars=resolved_config.max_prompt_chars,
         question_type=question_type,
+        tone=tone,
     )
     if len(prompt) > resolved_config.max_prompt_chars:
         return RepoAssistantResult(
@@ -146,10 +148,12 @@ def answer_repo_question(
                 "action": "repo_architecture_chat",
                 "read_only": True,
                 "question_type": question_type,
+                "tone": tone,
             },
         )
     )
     response = gateway_response.as_dict()
+    response["metadata"] = {**response["metadata"], "tone": tone}
     if response["status"] != AI_STATUS_SUCCESS:
         return RepoAssistantResult(
             _repo_response(
@@ -181,6 +185,32 @@ def answer_repo_question(
             metadata=response["metadata"],
             error=None,
             question_type=question_type,
+        )
+    )
+
+
+def repo_scope_boundary_response(payload: dict[str, Any], *, config: AiGatewayConfig | None = None) -> RepoAssistantResult | None:
+    message = _validate_payload(payload)
+    if not is_live_siem_data_question(message):
+        return None
+    resolved_config = config if config is not None else load_ai_gateway_config()
+    return RepoAssistantResult(
+        _repo_response(
+            status=AI_STATUS_SCOPE_BOUNDARY,
+            answer=(
+                "That question requires live SIEM data. Ask Anakin from the Dashboard, "
+                "Alert Details, or SOC Command Center."
+            ),
+            insufficient_evidence=True,
+            citations=[],
+            retrieval={
+                "skipped": True,
+                "reason": "live_siem_data_boundary",
+                "recommended_surfaces": ["dashboard", "alert_details", "soc_command_center"],
+            },
+            metadata=_empty_metadata(AI_STATUS_SCOPE_BOUNDARY, mode=resolved_config.mode),
+            error="Repo Assistant is limited to repository source-code and architecture questions.",
+            question_type=QUESTION_TYPE_LIVE_SIEM_DATA,
         )
     )
 
@@ -341,6 +371,7 @@ def _build_prompt(
     chunks: list[RepoChunk],
     max_prompt_chars: int,
     question_type: str,
+    tone: str | None = None,
 ) -> str:
     snippets: list[dict[str, object]] = []
     for chunk in chunks:
@@ -358,11 +389,12 @@ def _build_prompt(
             history=history,
             snippets=[*snippets, candidate],
             question_type=question_type,
+            tone=tone,
         )
         if snippets and len(candidate_prompt) > max_prompt_chars:
             break
         snippets.append(candidate)
-    return _format_prompt(message, history=history, snippets=snippets, question_type=question_type)
+    return _format_prompt(message, history=history, snippets=snippets, question_type=question_type, tone=tone)
 
 
 def _format_prompt(
@@ -371,9 +403,10 @@ def _format_prompt(
     history: list[dict[str, str]],
     snippets: list[dict[str, object]],
     question_type: str,
+    tone: str | None = None,
 ) -> str:
     return (
-        f"{repo_assistant_policy()}"
+        f"{repo_assistant_policy(tone)}"
         "Mac repository policy and Tier 0 sources override lower-trust docs. Current source overrides stale docs for implemented behavior.\n"
         "Historical sources are context only and must be labeled historical in the answer.\n\n"
         f"Question type: {question_type}\n"
@@ -480,4 +513,5 @@ __all__ = [
     "classify_repo_question",
     "get_repo_assistant_status",
     "is_live_siem_data_question",
+    "repo_scope_boundary_response",
 ]

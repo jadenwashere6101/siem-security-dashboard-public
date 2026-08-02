@@ -1,4 +1,4 @@
-import { getRepoAssistantStatus, sendRepoAssistantMessage } from "./repoAssistantService";
+import { getRepoAssistantRequest, getRepoAssistantStatus, sendRepoAssistantMessage } from "./repoAssistantService";
 
 beforeEach(() => {
   global.fetch = jest.fn();
@@ -36,6 +36,7 @@ test("sendRepoAssistantMessage posts repo question with credentials and abort si
   };
   fetch.mockResolvedValue({
     ok: true,
+    status: 200,
     json: async () => ({ status: "success", answer: "ok" }),
   });
 
@@ -43,7 +44,7 @@ test("sendRepoAssistantMessage posts repo question with credentials and abort si
 
   expect(result.answer).toBe("ok");
   expect(fetch).toHaveBeenCalledWith(
-    expect.stringContaining("/ai/repo/chat"),
+    expect.stringContaining("/ai/repo/requests"),
     expect.objectContaining({
       method: "POST",
       credentials: "include",
@@ -51,6 +52,54 @@ test("sendRepoAssistantMessage posts repo question with credentials and abort si
       body: JSON.stringify(payload),
       signal: controller.signal,
     })
+  );
+});
+
+test("sendRepoAssistantMessage polls queued repo request to completion", async () => {
+  const progress = jest.fn();
+  fetch
+    .mockResolvedValueOnce({
+      ok: true,
+      status: 202,
+      json: async () => ({ status: "queued", request_id: "repo-1", lifecycle: { stage: "queued" } }),
+    })
+    .mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: "completed",
+        request_id: "repo-1",
+        terminal: true,
+        lifecycle: { stage: "complete" },
+        result: { status: "success", answer: "repo answer", citations: [], retrieval: {}, metadata: {} },
+      }),
+    });
+
+  const result = await sendRepoAssistantMessage(
+    { message: "Where is the worker implemented?" },
+    { onProgress: progress, pollIntervalMs: 0 }
+  );
+
+  expect(result.answer).toBe("repo answer");
+  expect(result.async_request.request_id).toBe("repo-1");
+  expect(progress).toHaveBeenCalledWith(expect.objectContaining({ request_id: "repo-1" }));
+  expect(fetch.mock.calls[0][0]).toEqual(expect.stringContaining("/ai/repo/requests"));
+  expect(fetch.mock.calls[1][0]).toEqual(expect.stringContaining("/ai/repo/requests/repo-1"));
+});
+
+test("getRepoAssistantRequest fetches request status", async () => {
+  fetch.mockResolvedValue({
+    ok: true,
+    status: 200,
+    json: async () => ({ status: "running", request_id: "repo-2" }),
+  });
+
+  const result = await getRepoAssistantRequest("repo-2");
+
+  expect(result.status).toBe("running");
+  expect(fetch).toHaveBeenCalledWith(
+    expect.stringContaining("/ai/repo/requests/repo-2"),
+    expect.objectContaining({ credentials: "include" })
   );
 });
 
