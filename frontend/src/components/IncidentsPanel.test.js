@@ -246,11 +246,11 @@ describe("IncidentsPanel", () => {
     await screen.findByText(incidentFixture.title);
     await userEvent.click(screen.getByText(incidentFixture.title));
 
-    await userEvent.click(await screen.findByRole("button", { name: "Deep Investigate" }));
-    await userEvent.click(screen.getByRole("button", { name: "Decision Support" }));
-    await userEvent.selectOptions(screen.getByLabelText("Generate Artifact"), "incident_note");
-    await userEvent.selectOptions(screen.getByLabelText("Generate Artifact"), "escalation_summary");
-    await userEvent.selectOptions(screen.getByLabelText("Generate Artifact"), "playbook_draft");
+    await userEvent.click(await screen.findByRole("button", { name: "Investigate further" }));
+    await userEvent.click(screen.getByRole("button", { name: "Recommend next action" }));
+    await userEvent.selectOptions(screen.getByLabelText("Draft an analyst artifact"), "incident_note");
+    await userEvent.selectOptions(screen.getByLabelText("Draft an analyst artifact"), "escalation_summary");
+    await userEvent.selectOptions(screen.getByLabelText("Draft an analyst artifact"), "playbook_draft");
 
     expect(onAskAi).toHaveBeenCalledWith(
       expect.objectContaining({

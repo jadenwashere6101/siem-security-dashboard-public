@@ -91,6 +91,8 @@ function DashboardSection({
   onResetFilters,
   onAskAi = null,
   aiEnabled = false,
+  anakinOpen = false,
+  onAlertDetailsOpenChange = null,
 }) {
   if (loading || error) {
     return (
@@ -205,6 +207,8 @@ function DashboardSection({
           onRefreshAlerts={onRefreshAlerts}
           onAskAi={onAskAi}
           aiEnabled={aiEnabled}
+          anakinOpen={anakinOpen}
+          onAlertDetailsOpenChange={onAlertDetailsOpenChange}
         />
       </div>
     </>

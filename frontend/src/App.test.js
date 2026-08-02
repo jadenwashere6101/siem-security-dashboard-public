@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import App from './App';
 import { loadCurrentSession } from './services/authService';
 import { loadAlertDashboardSummary, loadAlertRuleOptions, loadAlerts } from './services/alertsService';
-import { createAiThread, getAiWorkflowRequest, queueAiWorkflowRequest, requestAiExplanation, requestAiWorkflow } from './services/aiService';
+import { createAiThread, getAiThread, getAiThreadTurns, getAiWorkflowRequest, queueAiWorkflowRequest, requestAiExplanation, requestAiWorkflow, resetAiThread } from './services/aiService';
 import {
   createEvidenceReference,
   createInvestigation,
@@ -41,6 +41,17 @@ jest.mock('./services/alertsService', () => ({
 
 jest.mock('./services/aiService', () => ({
   createAiThread: jest.fn(() => Promise.resolve({ thread: { thread_id: 'ath_test', version: 1 } })),
+  getAiThread: jest.fn(() => Promise.resolve({
+    thread: {
+      thread_id: 'ath_test',
+      version: 1,
+      primary_entity: { type: 'dashboard', id: 'dashboard' },
+      focus_state: {},
+      state: { unresolved_questions: [], corrections: [] },
+    },
+    active_request: null,
+  })),
+  getAiThreadTurns: jest.fn(() => Promise.resolve({ turns: [], next_cursor: null, has_more: false })),
   getAiWorkflowRequest: jest.fn(() => Promise.resolve({ status: 'completed', workflow: 'deep_investigate', result: { status: 'success', answer: 'done', metadata: {}, context: {} }, metadata: {}, context: {} })),
   queueAiWorkflowRequest: jest.fn(() => Promise.resolve({ status: 'queued', workflow: 'deep_investigate', request_id: 'aiwf_test', metadata: {}, lifecycle: { stages: [{ stage: 'queued', status: 'running' }] } })),
   requestAiChat: jest.fn(() => Promise.resolve({ status: 'success', answer: 'ok', metadata: {}, context: {} })),
@@ -48,6 +59,7 @@ jest.mock('./services/aiService', () => ({
   requestAiExplanation: jest.fn(() => Promise.resolve({ status: 'success', answer: 'ok', metadata: {}, context: {} })),
   requestAiInvestigation: jest.fn(() => Promise.resolve({ status: 'success', investigation: {}, metadata: {}, context: {} })),
   requestAiWorkflow: jest.fn(() => Promise.resolve({ status: 'success', workflow: 'quick_explain', result: { status: 'success', answer: 'ok', metadata: {}, context: {} }, metadata: {}, context: {} })),
+  resetAiThread: jest.fn(),
 }));
 
 jest.mock('./services/investigationWorkspaceService', () => ({
@@ -73,7 +85,7 @@ jest.mock('./services/investigationWorkspaceService', () => ({
 }));
 
 jest.mock('./components/DashboardSection', () => (props) => (
-  <div data-testid="dashboard-section">
+  <div data-testid="dashboard-section" data-anakin-open={props.anakinOpen ? 'true' : 'false'}>
     <h2>Dashboard workspace</h2>
     Dashboard Section Mock search:{props.searchTerm || ''}
     <div>severity:{props.severityFilter || ''}</div>
@@ -121,6 +133,21 @@ jest.mock('./components/DashboardSection', () => (props) => (
     </button>
     <button type="button" onClick={() => props.onReviewIncident()}>
       Dashboard open incidents
+    </button>
+    <button type="button" onClick={() => props.onAlertDetailsOpenChange?.(true)}>
+      Dashboard open alert details mock
+    </button>
+    <button
+      type="button"
+      onClick={() => props.onAskAi?.({
+        workflow: 'quick_explain',
+        contextType: 'alert',
+        context: { alert_id: 7, source_ip: '203.0.113.7' },
+        question: 'Explain alert 7.',
+        title: 'Explain alert 7',
+      })}
+    >
+      Explain alert 7 mock
     </button>
     <div data-navigation-target="recent-alerts" tabIndex={-1}>Recent Alerts target</div>
   </div>
@@ -264,6 +291,25 @@ beforeEach(() => {
   });
   loadCurrentSession.mockResolvedValue({ authenticated: false });
   createAiThread.mockResolvedValue({ thread: { thread_id: 'ath_test', version: 1 } });
+  getAiThread.mockResolvedValue({
+    thread: {
+      thread_id: 'ath_test',
+      version: 1,
+      primary_entity: { type: 'dashboard', id: 'dashboard' },
+      focus_state: {},
+      state: { unresolved_questions: [], corrections: [] },
+    },
+    active_request: null,
+  });
+  getAiThreadTurns.mockResolvedValue({ turns: [], next_cursor: null, has_more: false });
+  resetAiThread.mockResolvedValue({
+    thread: {
+      thread_id: 'ath_replacement',
+      version: 1,
+      primary_entity: { type: 'dashboard', id: 'dashboard' },
+      focus_state: {},
+    },
+  });
   loadAlerts.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0, sort: 'newest' });
   loadAlertDashboardSummary.mockResolvedValue({
     metrics: {
@@ -815,6 +861,21 @@ test('freeform Ask Anakin auto route queues and polls backend-classified long wo
     metadata: { async: true },
     lifecycle: { stages: [{ stage: 'complete', status: 'completed' }] },
   });
+  getAiThreadTurns
+    .mockResolvedValueOnce({ turns: [], next_cursor: null, has_more: false })
+    .mockResolvedValueOnce({
+      turns: [{ turn_id: 'turn_auto_user', sequence: 1, role: 'user', content: 'Deep investigate this alert and evidence gaps' }],
+      next_cursor: null,
+      has_more: false,
+    })
+    .mockResolvedValueOnce({
+      turns: [
+        { turn_id: 'turn_auto_user', sequence: 1, role: 'user', content: 'Deep investigate this alert and evidence gaps' },
+        { turn_id: 'turn_auto_answer', sequence: 2, role: 'assistant', content: 'Correlated evidence is ready.' },
+      ],
+      next_cursor: null,
+      has_more: false,
+    });
 
   render(<App />);
 
@@ -859,6 +920,16 @@ test('freeform Ask Anakin auto route renders immediate quick result from queue e
     result: { status: 'success', answer: 'Short answer.', metadata: {}, context: {} },
     metadata: { async: false, immediate: true },
   });
+  getAiThreadTurns
+    .mockResolvedValueOnce({ turns: [], next_cursor: null, has_more: false })
+    .mockResolvedValueOnce({
+      turns: [
+        { turn_id: 'turn_quick_user', sequence: 1, role: 'user', content: 'Explain this alert briefly' },
+        { turn_id: 'turn_quick_answer', sequence: 2, role: 'assistant', content: 'Short answer.' },
+      ],
+      next_cursor: null,
+      has_more: false,
+    });
 
   render(<App />);
 
@@ -872,29 +943,142 @@ test('freeform Ask Anakin auto route renders immediate quick result from queue e
   expect(await screen.findByText(/short answer/i)).toBeInTheDocument();
 });
 
-test('recovers stored auto-routed async request after remount and polls terminal result', async () => {
+test('contextual controls hand foreground to the one canonical conversation surface', async () => {
+  loadCurrentSession.mockResolvedValue({ authenticated: true, user: 'analyst1', role: 'analyst' });
+  requestAiWorkflow.mockResolvedValueOnce({
+    status: 'success',
+    workflow: 'quick_explain',
+    result: { status: 'success', answer: 'Alert 7 needs review.', metadata: {}, context: {} },
+    metadata: { async: false, immediate: true },
+  });
+
+  render(<App />);
+
+  const dashboard = await screen.findByTestId('dashboard-section');
+  await userEvent.click(screen.getByRole('button', { name: 'Dashboard open alert details mock' }));
+  expect(dashboard).toHaveAttribute('data-anakin-open', 'false');
+  await userEvent.click(screen.getByRole('button', { name: 'Explain alert 7 mock' }));
+
+  await waitFor(() => expect(requestAiWorkflow).toHaveBeenCalledTimes(1));
+  expect(screen.getAllByRole('dialog', { name: 'Anakin conversation' })).toHaveLength(1);
+  expect(document.querySelectorAll('[data-anakin-surface="canonical"]')).toHaveLength(1);
+  expect(dashboard).toHaveAttribute('data-anakin-open', 'true');
+  expect(screen.queryByRole('dialog', { name: 'Anakin assistant response' })).not.toBeInTheDocument();
+});
+
+test('a delayed completion cannot attach after another foreground context takes ownership', async () => {
+  loadCurrentSession.mockResolvedValue({ authenticated: true, user: 'analyst1', role: 'analyst' });
+  let resolveQueue;
+  queueAiWorkflowRequest.mockReturnValueOnce(new Promise((resolve) => { resolveQueue = resolve; }));
+
+  render(<App />);
+  await userEvent.click(await screen.findByRole('button', { name: /open general anakin siem chat/i }));
+  await userEvent.type(screen.getByLabelText(/^ask anakin$/i), 'Investigate the current activity');
+  await userEvent.click(screen.getByRole('button', { name: /submit ask anakin question/i }));
+  await waitFor(() => expect(queueAiWorkflowRequest).toHaveBeenCalledTimes(1));
+
+  await userEvent.click(screen.getByRole('button', { name: 'Dashboard open alert details mock' }));
+  expect(screen.queryByRole('dialog', { name: 'Anakin conversation' })).not.toBeInTheDocument();
+
+  await act(async () => {
+    resolveQueue({
+      status: 'completed',
+      workflow: 'auto',
+      request_id: 'aiwf_stale',
+      result: { status: 'success', answer: 'Stale answer from the previous selection.' },
+    });
+  });
+
+  await userEvent.click(screen.getByRole('button', { name: /open general anakin siem chat/i }));
+  await waitFor(() => expect(screen.queryByText(/reviewing the available context/i)).not.toBeInTheDocument());
+  expect(screen.queryByText(/stale answer from the previous selection/i)).not.toBeInTheDocument();
+});
+
+test('reset replaces the active thread and New Thread intentionally creates a non-default thread', async () => {
+  loadCurrentSession.mockResolvedValue({ authenticated: true, user: 'analyst1', role: 'analyst' });
+  window.sessionStorage.setItem(
+    'anakin.activeThreadPointer.v1',
+    JSON.stringify({ owner: 'analyst1', threadId: 'ath_test', entity: { type: 'dashboard', id: 'dashboard' } })
+  );
+  createAiThread.mockResolvedValueOnce({
+    thread: { thread_id: 'ath_explicit', version: 1, primary_entity: { type: 'dashboard', id: 'dashboard' }, focus_state: {} },
+  });
+
+  render(<App />);
+  await waitFor(() => expect(getAiThread).toHaveBeenCalledWith('ath_test'));
+  await userEvent.click(screen.getByRole('button', { name: /open general anakin siem chat/i }));
+  await userEvent.click(screen.getByRole('button', { name: 'Reset' }));
+  await waitFor(() => expect(resetAiThread).toHaveBeenCalledWith('ath_test', { expected_version: 1 }));
+  await userEvent.click(screen.getByRole('button', { name: 'New thread' }));
+  await waitFor(() => expect(createAiThread).toHaveBeenCalledWith(expect.objectContaining({ is_default: false })));
+});
+
+test('logout clears thread and async request pointers before another identity can render them', async () => {
+  loadCurrentSession.mockResolvedValue({ authenticated: true, user: 'analyst1', role: 'analyst' });
+  window.sessionStorage.setItem('anakin.activeThreadPointer.v1', JSON.stringify({ owner: 'analyst1', threadId: 'ath_test' }));
+  window.sessionStorage.setItem('anakin.activeWorkflowRequests.v1', JSON.stringify({ saved: { requestId: 'aiwf_1' } }));
+
+  render(<App />);
+  await screen.findByText(/signed in as analyst1/i);
+  await userEvent.click(screen.getByRole('button', { name: /switch account \/ logout/i }));
+
+  await waitFor(() => expect(window.sessionStorage.getItem('anakin.activeThreadPointer.v1')).toBeNull());
+  expect(window.sessionStorage.getItem('anakin.activeWorkflowRequests.v1')).toBeNull();
+  expect(screen.queryByRole('dialog', { name: 'Anakin conversation' })).not.toBeInTheDocument();
+});
+
+test('restores every ordered turn page so newer responses are not omitted', async () => {
+  loadCurrentSession.mockResolvedValue({ authenticated: true, user: 'analyst1', role: 'analyst' });
+  window.sessionStorage.setItem(
+    'anakin.activeThreadPointer.v1',
+    JSON.stringify({ owner: 'analyst1', threadId: 'ath_test' })
+  );
+  getAiThreadTurns
+    .mockResolvedValueOnce({
+      turns: [{ turn_id: 'turn_1', sequence: 1, role: 'user', content: 'First question' }],
+      next_cursor: 1,
+      has_more: true,
+    })
+    .mockResolvedValueOnce({
+      turns: [{ turn_id: 'turn_2', sequence: 2, role: 'assistant', content: 'Newest answer' }],
+      next_cursor: null,
+      has_more: false,
+    });
+
+  render(<App />);
+  await waitFor(() => expect(getAiThreadTurns).toHaveBeenNthCalledWith(2, 'ath_test', { limit: 100, cursor: 1 }));
+  await userEvent.click(screen.getByRole('button', { name: /open general anakin siem chat/i }));
+
+  expect(await screen.findByText('First question')).toBeInTheDocument();
+  expect(screen.getByText('Newest answer')).toBeInTheDocument();
+});
+
+test('restores the authorized thread and resumes its active request after remount', async () => {
   loadCurrentSession.mockResolvedValue({
     authenticated: true,
     user: 'analyst1',
     role: 'analyst',
   });
   window.sessionStorage.setItem(
-    'anakin.activeWorkflowRequests.v1',
-    JSON.stringify({
-      dashboard_auto: {
-        requestId: 'aiwf_auto_saved',
-        title: 'Ask Anakin',
-        workflow: 'auto',
-        request: {
-          workflow: 'auto',
-          prompt: 'Should I escalate this alert?',
-          context_type: 'dashboard',
-          context: { active_section: 'dashboard' },
-        },
-        savedAt: '2026-08-01T12:00:00.000Z',
-      },
-    })
+    'anakin.activeThreadPointer.v1',
+    JSON.stringify({ owner: 'analyst1', threadId: 'ath_test', entity: { type: 'dashboard', id: 'dashboard' } })
   );
+  getAiThread.mockResolvedValueOnce({
+    thread: {
+      thread_id: 'ath_test',
+      version: 2,
+      primary_entity: { type: 'dashboard', id: 'dashboard' },
+      focus_state: {},
+      state: { unresolved_questions: [], corrections: [] },
+    },
+    active_request: {
+      request_id: 'aiwf_auto_saved',
+      thread_id: 'ath_test',
+      status: 'running',
+      workflow: 'decision_support',
+      terminal: false,
+    },
+  });
   getAiWorkflowRequest.mockResolvedValueOnce({
     status: 'completed',
     workflow: 'decision_support',
@@ -903,6 +1087,20 @@ test('recovers stored auto-routed async request after remount and polls terminal
     metadata: { async: true },
     lifecycle: { stages: [{ stage: 'complete', status: 'completed' }] },
   });
+  getAiThreadTurns
+    .mockResolvedValueOnce({
+      turns: [{ turn_id: 'turn_saved_user', sequence: 1, role: 'user', content: 'What should I do next?' }],
+      next_cursor: null,
+      has_more: false,
+    })
+    .mockResolvedValueOnce({
+      turns: [
+        { turn_id: 'turn_saved_user', sequence: 1, role: 'user', content: 'What should I do next?' },
+        { turn_id: 'turn_saved_answer', sequence: 2, role: 'assistant', content: 'Escalate based on confirmed follow-up.' },
+      ],
+      next_cursor: null,
+      has_more: false,
+    });
 
   render(<App />);
 

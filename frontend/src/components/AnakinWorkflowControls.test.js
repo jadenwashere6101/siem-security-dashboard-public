@@ -25,14 +25,14 @@ test("AnakinWorkflowControls renders compact workflow shortcuts and one artifact
   );
 
   expect(screen.getByText("Anakin")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Quick Explain" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Deep Investigate" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Decision Support" })).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Generate Artifact" })).not.toBeInTheDocument();
-  expect(screen.getByLabelText("Generate Artifact")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Explain alert" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Investigate further" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Recommend next action" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Draft an analyst artifact" })).not.toBeInTheDocument();
+  expect(screen.getByLabelText("Draft an analyst artifact")).toBeInTheDocument();
 
-  await userEvent.click(screen.getByRole("button", { name: "Deep Investigate" }));
-  await userEvent.selectOptions(screen.getByLabelText("Generate Artifact"), "response_recommendation");
+  await userEvent.click(screen.getByRole("button", { name: "Investigate further" }));
+  await userEvent.selectOptions(screen.getByLabelText("Draft an analyst artifact"), "response_recommendation");
 
   expect(onAskAi).toHaveBeenCalledWith(
     expect.objectContaining({

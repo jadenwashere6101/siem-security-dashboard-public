@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { assertReadOnlyPaletteCommand, groupCommands } from "../utils/anakinCommandRegistry";
 import { theme } from "../theme";
 
-function CommandPalette({ commands = [], objects = [], onExecute, disabled = false }) {
+function CommandPalette({ commands = [], objects = [], onExecute, onOpenChange, disabled = false }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
@@ -30,11 +30,12 @@ function CommandPalette({ commands = [], objects = [], onExecute, disabled = fal
 
   const execute = useCallback((command) => {
     if (disabled || !assertReadOnlyPaletteCommand(command)) return;
-    onExecute?.(command);
     setOpen(false);
+    onOpenChange?.(false);
     setQuery("");
+    onExecute?.(command);
     window.requestAnimationFrame?.(() => returnFocusRef.current?.focus?.());
-  }, [disabled, onExecute]);
+  }, [disabled, onExecute, onOpenChange]);
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -43,6 +44,7 @@ function CommandPalette({ commands = [], objects = [], onExecute, disabled = fal
         event.preventDefault();
         returnFocusRef.current = document.activeElement;
         setOpen(true);
+        onOpenChange?.(true);
         setActiveIndex(0);
         window.requestAnimationFrame?.(() => inputRef.current?.focus());
         return;
@@ -51,6 +53,7 @@ function CommandPalette({ commands = [], objects = [], onExecute, disabled = fal
       if (event.key === "Escape") {
         event.preventDefault();
         setOpen(false);
+        onOpenChange?.(false);
         setQuery("");
         window.requestAnimationFrame?.(() => returnFocusRef.current?.focus?.());
       } else if (event.key === "ArrowDown") {
@@ -66,7 +69,7 @@ function CommandPalette({ commands = [], objects = [], onExecute, disabled = fal
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeIndex, execute, open, results]);
+  }, [activeIndex, execute, onOpenChange, open, results]);
 
   if (!open) return null;
 

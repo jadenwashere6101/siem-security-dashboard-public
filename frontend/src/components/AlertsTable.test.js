@@ -52,7 +52,13 @@ const styles = {};
 const sidePanelResponseOutcome = () =>
   screen.getAllByText(/Response Outcome:/)[0].parentElement;
 
-function AlertsTableHarness({ initialAlerts, onSetAlerts, onOpenInvestigation = jest.fn() }) {
+function AlertsTableHarness({
+  initialAlerts,
+  onSetAlerts,
+  onOpenInvestigation = jest.fn(),
+  anakinOpen = false,
+  onAlertDetailsOpenChange = jest.fn(),
+}) {
   const [alerts, setAlertsState] = useState(initialAlerts);
   const [selectedAlertId, setSelectedAlertId] = useState(null);
   const handleSetAlerts = (nextAlerts) => {
@@ -113,9 +119,38 @@ function AlertsTableHarness({ initialAlerts, onSetAlerts, onOpenInvestigation = 
         handleSetAlerts(nextItems);
       }}
       onOpenInvestigation={onOpenInvestigation}
+      anakinOpen={anakinOpen}
+      onAlertDetailsOpenChange={onAlertDetailsOpenChange}
     />
   );
 }
+
+test("alert details yields foreground when the canonical Anakin surface opens", async () => {
+  const onAlertDetailsOpenChange = jest.fn();
+  const onSetAlerts = jest.fn();
+  const { rerender } = render(
+    <AlertsTableHarness
+      initialAlerts={[baseAlert]}
+      onSetAlerts={onSetAlerts}
+      onAlertDetailsOpenChange={onAlertDetailsOpenChange}
+    />
+  );
+
+  await userEvent.click(screen.getByText("failed_login_threshold"));
+  expect(screen.getByRole("dialog", { name: /alert details/i })).toBeInTheDocument();
+  expect(onAlertDetailsOpenChange).toHaveBeenCalledWith(true);
+
+  rerender(
+    <AlertsTableHarness
+      initialAlerts={[baseAlert]}
+      onSetAlerts={onSetAlerts}
+      anakinOpen
+      onAlertDetailsOpenChange={onAlertDetailsOpenChange}
+    />
+  );
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: /alert details/i })).not.toBeInTheDocument());
+  expect(onAlertDetailsOpenChange).toHaveBeenCalledWith(false);
+});
 
 test("exports include rule filter and exact alert filters", () => {
   render(

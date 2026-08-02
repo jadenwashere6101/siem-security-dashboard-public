@@ -1,0 +1,108 @@
+.anakin-shell {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 10020;
+  letter-spacing: 0;
+}
+
+.anakin-trigger {
+  border: 1px solid #38bdf8;
+  border-radius: 999px;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, #0f766e, #0284c7);
+  color: #fff;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 18px 40px rgba(14, 165, 233, 0.26);
+}
+
+.anakin-conversation-panel {
+  width: min(520px, calc(100vw - 32px));
+  height: min(760px, calc(100dvh - 32px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  border: 1px solid #155e75;
+  border-radius: 8px;
+  background: #0d1117;
+  color: #f0f6fc;
+  box-shadow: 0 22px 62px rgba(0, 0, 0, 0.52);
+}
+
+.anakin-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px;
+  border-bottom: 1px solid #30363d;
+  background: #161b22;
+}
+
+.anakin-header-copy { min-width: 0; }
+.anakin-eyebrow { color: #67e8f9; font-size: 11px; font-weight: 900; text-transform: uppercase; }
+.anakin-header h2 { margin: 3px 0 8px; font-size: 18px; line-height: 1.2; }
+.anakin-context-row, .anakin-header-actions, .anakin-shortcuts, .anakin-artifact-safety { display: flex; gap: 7px; flex-wrap: wrap; }
+.anakin-context-chip, .anakin-status-chip { max-width: 100%; padding: 4px 7px; border-radius: 4px; font-size: 11px; font-weight: 800; overflow-wrap: anywhere; }
+.anakin-context-chip { background: #0c4a6e; color: #bae6fd; }
+.anakin-status-chip { background: #422006; color: #fde68a; }
+.anakin-header-actions { justify-content: flex-end; }
+.anakin-text-button, .anakin-icon-button { border: 1px solid #30363d; background: #0d1117; color: #c9d1d9; cursor: pointer; }
+.anakin-text-button { padding: 6px 8px; border-radius: 4px; font-size: 11px; font-weight: 800; }
+.anakin-icon-button { width: 32px; height: 32px; border-radius: 4px; font-size: 20px; line-height: 1; }
+.anakin-text-button:disabled { color: #6e7681; cursor: not-allowed; }
+
+.anakin-transcript { min-height: 0; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.anakin-empty-state { margin: auto 0; padding: 20px 8px; text-align: center; color: #c9d1d9; }
+.anakin-empty-state strong { font-size: 17px; }
+.anakin-empty-state p { margin: 7px auto 0; max-width: 360px; color: #8b949e; line-height: 1.5; }
+.anakin-turn { max-width: 88%; padding: 11px 12px; border: 1px solid #30363d; border-radius: 8px; overflow-wrap: anywhere; }
+.anakin-turn p { margin: 7px 0 0; color: #e6edf3; line-height: 1.52; white-space: pre-wrap; }
+.anakin-turn small { display: block; margin-top: 7px; color: #8b949e; }
+.anakin-turn-user { align-self: flex-end; background: #0c4a6e; border-color: #0369a1; }
+.anakin-turn-assistant { align-self: flex-start; background: #161b22; }
+.anakin-turn-heading { display: flex; justify-content: space-between; gap: 10px; color: #67e8f9; font-size: 11px; }
+.anakin-turn-heading span { color: #8b949e; text-align: right; }
+.anakin-artifact-safety { margin-top: 10px; }
+.anakin-artifact-safety span { padding: 3px 6px; border: 1px solid #854d0e; border-radius: 4px; color: #fde68a; font-size: 10px; }
+.anakin-clarification-actions { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 10px; }
+.anakin-clarification-actions button { border: 1px solid #0e7490; border-radius: 4px; background: #0d1117; color: #bae6fd; padding: 6px 8px; cursor: pointer; }
+.anakin-progress, .anakin-error, .anakin-message { padding: 10px 12px; border-radius: 6px; }
+.anakin-progress { display: flex; align-items: center; gap: 8px; background: #082f49; color: #bae6fd; }
+.anakin-progress button, .anakin-error button { margin-left: auto; border: 1px solid #475569; border-radius: 4px; background: #0f172a; color: #fff; padding: 5px 8px; cursor: pointer; }
+.anakin-progress-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: #38bdf8; animation: anakin-pulse 1.3s ease-in-out infinite; }
+.anakin-error, .anakin-message-error { border: 1px solid #7f1d1d; background: #2b1115; color: #fecaca; }
+.anakin-error p, .anakin-message { margin: 0; }
+.anakin-message-neutral { background: #161b22; color: #c9d1d9; }
+
+.anakin-compose { padding: 12px 16px 14px; border-top: 1px solid #30363d; background: #161b22; }
+.anakin-shortcuts { margin-bottom: 10px; }
+.anakin-shortcut { border: 1px solid #0e7490; border-radius: 999px; background: #0d1117; color: #bae6fd; padding: 6px 9px; font-size: 11px; font-weight: 800; cursor: pointer; }
+.anakin-shortcut:disabled { color: #6e7681; border-color: #30363d; cursor: not-allowed; }
+.anakin-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: end; }
+.anakin-form label { grid-column: 1 / -1; color: #c9d1d9; font-size: 11px; font-weight: 800; }
+.anakin-form textarea { width: 100%; min-height: 68px; box-sizing: border-box; resize: none; border: 1px solid #30363d; border-radius: 6px; background: #0d1117; color: #f0f6fc; padding: 10px; font: inherit; line-height: 1.4; }
+.anakin-send-button { min-width: 68px; height: 40px; border: 1px solid #38bdf8; border-radius: 6px; background: #0284c7; color: #fff; font-weight: 900; cursor: pointer; }
+.anakin-send-button:disabled { border-color: #30363d; background: #21262d; color: #6e7681; cursor: not-allowed; }
+.anakin-memory-toggle { margin-top: 9px; border: 0; background: transparent; color: #8b949e; padding: 0; font-size: 11px; font-weight: 800; cursor: pointer; }
+.anakin-memory { margin-top: 8px; max-height: 130px; overflow-y: auto; border: 1px solid #30363d; border-radius: 6px; padding: 8px 10px; background: #0d1117; }
+.anakin-memory p { margin: 4px 0; color: #8b949e; font-size: 11px; line-height: 1.4; }
+
+@keyframes anakin-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+
+@media (max-width: 700px) {
+  .anakin-shell { inset: 0; right: 0; bottom: 0; pointer-events: none; }
+  .anakin-trigger { position: fixed; right: 12px; bottom: 12px; pointer-events: auto; }
+  .anakin-conversation-panel { width: 100vw; height: 100dvh; border: 0; border-radius: 0; pointer-events: auto; }
+  .anakin-header { padding: 12px; }
+  .anakin-header-actions { max-width: 170px; }
+  .anakin-text-button { padding: 5px 6px; }
+  .anakin-transcript { padding: 12px; }
+  .anakin-compose { padding: 10px 12px 12px; }
+  .anakin-turn { max-width: 94%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .anakin-progress-dot { animation: none; }
+}

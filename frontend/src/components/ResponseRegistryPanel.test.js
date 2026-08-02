@@ -191,9 +191,9 @@ test("renders response registry AI entry point for selected detail", async () =>
   );
   const detail = await openFirstRow();
 
-  await userEvent.click(within(detail).getByRole("button", { name: "Decision Support" }));
-  await userEvent.click(within(detail).getByRole("button", { name: "Deep Investigate" }));
-  await userEvent.selectOptions(within(detail).getByLabelText("Generate Artifact"), "response_recommendation");
+  await userEvent.click(within(detail).getByRole("button", { name: "Recommend next action" }));
+  await userEvent.click(within(detail).getByRole("button", { name: "Investigate further" }));
+  await userEvent.selectOptions(within(detail).getByLabelText("Draft an analyst artifact"), "response_recommendation");
 
   expect(onAskAi).toHaveBeenCalledWith(
     expect.objectContaining({

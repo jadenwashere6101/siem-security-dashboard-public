@@ -84,6 +84,12 @@ export const getAiThreadTurns = (threadId, { cursor, limit, ...options } = {}) =
   return getAiRequest(`/ai/threads/${encodeURIComponent(threadId)}/turns${query ? `?${query}` : ""}`, options);
 };
 
+export const submitAiThreadTurn = (threadId, payload, options = {}) =>
+  postAiRequest(`/ai/threads/${encodeURIComponent(threadId)}/turns`, payload, options);
+
+export const resetAiThread = (threadId, payload, options = {}) =>
+  postAiRequest(`/ai/threads/${encodeURIComponent(threadId)}/reset`, payload, options);
+
 export const previewAiAction = (payload, options = {}) =>
   postAiRequest("/ai/actions/preview", payload, options);
 

@@ -464,7 +464,8 @@ describe("SocCommandCenter", () => {
   });
 
   test("opens and closes source-IP context drawer from selected incident source", async () => {
-    renderPanel();
+    const onOverlayOpenChange = jest.fn();
+    const view = renderPanel({ onOverlayOpenChange });
 
     expect((await screen.findAllByText("High-risk identity incident")).length).toBeGreaterThan(0);
     await waitFor(() => expect(loadIncidentDetail).toHaveBeenCalledWith(7));
@@ -481,10 +482,22 @@ describe("SocCommandCenter", () => {
     expect(within(drawer).getByTestId("source-ip-context")).toBeInTheDocument();
     expect(within(drawer).getByText("203.0.113.10")).toBeInTheDocument();
     expect(within(drawer).getByText("Mocked normalized source-IP context")).toBeInTheDocument();
+    await waitFor(() => expect(onOverlayOpenChange).toHaveBeenLastCalledWith(true));
 
-    await userEvent.click(within(drawer).getByRole("button", { name: "Close source-IP context drawer" }));
+    view.rerender(
+      <SocCommandCenter
+        alerts={[]}
+        userRole="analyst"
+        currentUsername="analyst1"
+        onOpenIncident={jest.fn()}
+        onViewRelatedAlerts={jest.fn()}
+        anakinOpen
+        onOverlayOpenChange={onOverlayOpenChange}
+      />
+    );
 
-    expect(screen.queryByRole("dialog", { name: "Source-IP Context" })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Source-IP Context" })).not.toBeInTheDocument());
+    expect(onOverlayOpenChange).toHaveBeenLastCalledWith(false);
   });
 
   test("renders empty states for sparse API data", async () => {
@@ -634,10 +647,10 @@ describe("SocCommandCenter", () => {
     expect(await screen.findByText("Repeated VPN recon")).toBeInTheDocument();
     await waitFor(() => expect(loadReconActivity).toHaveBeenCalledWith(90));
     expect(await screen.findByText("Distributed commodity scanning.")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Deep Investigate" }));
-    await userEvent.click(screen.getByRole("button", { name: "Decision Support" }));
-    await userEvent.selectOptions(screen.getByLabelText("Generate Artifact"), "investigation_checklist");
-    await userEvent.selectOptions(screen.getByLabelText("Generate Artifact"), "response_recommendation");
+    await userEvent.click(screen.getByRole("button", { name: "Investigate further" }));
+    await userEvent.click(screen.getByRole("button", { name: "Recommend next action" }));
+    await userEvent.selectOptions(screen.getByLabelText("Draft an analyst artifact"), "investigation_checklist");
+    await userEvent.selectOptions(screen.getByLabelText("Draft an analyst artifact"), "response_recommendation");
 
     expect(onAskAi).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -158,11 +158,11 @@ test("SourceIpContext exposes source-IP AI entry points", async () => {
   render(<SourceIpContext sourceIp="8.8.8.8" onAskAi={onAskAi} aiEnabled />);
 
   await screen.findByText("Alerts");
-  await userEvent.click(screen.getByRole("button", { name: "Quick Explain" }));
-  await userEvent.click(screen.getByRole("button", { name: "Deep Investigate" }));
-  await userEvent.click(screen.getByRole("button", { name: "Decision Support" }));
-  await userEvent.selectOptions(screen.getByLabelText("Generate Artifact"), "response_recommendation");
-  await userEvent.selectOptions(screen.getByLabelText("Generate Artifact"), "investigation_checklist");
+  await userEvent.click(screen.getByRole("button", { name: "Explain source IP" }));
+  await userEvent.click(screen.getByRole("button", { name: "Investigate further" }));
+  await userEvent.click(screen.getByRole("button", { name: "Recommend next action" }));
+  await userEvent.selectOptions(screen.getByLabelText("Draft an analyst artifact"), "response_recommendation");
+  await userEvent.selectOptions(screen.getByLabelText("Draft an analyst artifact"), "investigation_checklist");
 
   expect(onAskAi).toHaveBeenCalledWith(
     expect.objectContaining({

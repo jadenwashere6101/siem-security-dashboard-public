@@ -1,50 +1,102 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-import { theme } from "../theme";
-import { Button, Chip, Panel, SectionHeader } from "./uiPrimitives";
+import { WORKFLOW_TASK_DESCRIPTIONS } from "./AnakinWorkflowControls";
+import "./AnakinCommandSurface.css";
+
+const TASK_WORKFLOWS = new Set([
+  "quick_explain",
+  "deep_investigate",
+  "decision_support",
+  "generate_artifact",
+]);
+
+const TASK_LABELS = {
+  quick_explain: "Explain this alert",
+  deep_investigate: "Investigate further",
+  decision_support: "Recommend next action",
+  generate_artifact: "Draft an analyst artifact",
+};
 
 function AnakinCommandSurface({
+  open: controlledOpen,
+  onOpen,
+  onClose,
   commands = [],
   context,
   onExecute,
   disabled = false,
-  status = "idle",
+  state = null,
+  thread = null,
+  turns = [],
+  threadLoading = false,
+  threadError = "",
+  activeRequest = null,
+  onRetry,
+  onCancel,
+  onChooseWorkflow,
+  onReset,
+  onNewThread,
   triggerAriaLabel = "Ask Anakin",
 }) {
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
   const [question, setQuestion] = useState("");
-  const toggleRef = useRef(null);
-  const panelRef = useRef(null);
-  const availableCommands = useMemo(() => commands.filter((command) => !command.disabled), [commands]);
+  const [rememberOpen, setRememberOpen] = useState(false);
+  const triggerRef = useRef(null);
+  const closeRef = useRef(null);
+  const transcriptRef = useRef(null);
+  const isControlled = controlledOpen !== undefined;
+  const open = isControlled ? controlledOpen : internalOpen;
+  const busy = state?.status === "loading" || Boolean(activeRequest && !activeRequest.terminal);
+
   const shortcutCommands = useMemo(
-    () => availableCommands.filter((command) =>
-      ["quick_explain", "deep_investigate", "decision_support", "generate_artifact"].includes(command.workflow)
-    ),
-    [availableCommands]
+    () => commands.filter((command) => TASK_WORKFLOWS.has(command.workflow) && !command.disabled),
+    [commands]
   );
 
   useEffect(() => {
     if (!open) return undefined;
+    const previousFocus = document.activeElement;
+    const fallbackTrigger = triggerRef.current;
     const onKeyDown = (event) => {
-      if (event.key === "Escape") {
-        setOpen(false);
-        window.requestAnimationFrame?.(() => toggleRef.current?.focus());
-      }
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closeSurface();
     };
     window.addEventListener("keydown", onKeyDown);
-    window.requestAnimationFrame?.(() => panelRef.current?.focus());
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open]);
+    window.requestAnimationFrame?.(() => closeRef.current?.focus());
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.requestAnimationFrame?.(() => previousFocus?.focus?.() || fallbackTrigger?.focus?.());
+    };
+    // closeSurface is intentionally represented by the stable controlled callbacks.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, onClose]);
 
-  const execute = (command) => {
-    if (typeof onExecute !== "function" || command.disabled) return;
-    onExecute(command, { question });
-    if (command.intent === "ask") setQuestion("");
+  useEffect(() => {
+    if (!open || !transcriptRef.current) return;
+    transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
+  }, [activeRequest, open, state?.status, turns]);
+
+  const setOpen = (nextOpen) => {
+    if (!isControlled) setInternalOpen(nextOpen);
+    if (nextOpen) onOpen?.(triggerRef.current);
+    else {
+      onClose?.();
+      window.setTimeout(() => triggerRef.current?.focus?.(), 0);
+    }
   };
 
-  const executeFreeform = () => {
-    if (typeof onExecute !== "function" || !question.trim()) return;
-    onExecute(
+  const closeSurface = () => setOpen(false);
+
+  const execute = (command, runtime = {}) => {
+    if (typeof onExecute !== "function" || command?.disabled || disabled) return;
+    onExecute(command, { ...runtime, threadId: thread?.thread_id || null });
+  };
+
+  const submitQuestion = () => {
+    const prompt = question.trim();
+    if (!prompt || busy || disabled) return;
+    execute(
       {
         id: "anakin.ask-freeform",
         label: "Ask Anakin",
@@ -53,154 +105,288 @@ function AnakinCommandSurface({
         workflow: "auto",
         readOnly: true,
       },
-      { question }
+      { question: prompt }
     );
     setQuestion("");
   };
 
+  const activeEntity = thread?.focus_state?.active || thread?.primary_entity || null;
+  const contextLabel = formatEntity(activeEntity, context);
+  const remembered = rememberedState(thread);
+
   return (
-    <div style={containerStyle}>
-      <button
-        type="button"
-        ref={toggleRef}
-        onClick={() => setOpen((current) => !current)}
-        disabled={disabled}
-        aria-label={triggerAriaLabel}
-        aria-expanded={open}
-        aria-controls="anakin-command-surface"
-        style={triggerStyle(disabled)}
-      >
-        Ask Anakin
-      </button>
-      {open ? (
-        <div
-          id="anakin-command-surface"
-          ref={panelRef}
-          tabIndex={-1}
-          role="dialog"
-          aria-label="Anakin command surface"
-          style={overlayStyle}
+    <div className="anakin-shell" data-anakin-surface="canonical">
+      {!open ? (
+        <button
+          type="button"
+          ref={triggerRef}
+          onClick={() => setOpen(true)}
+          disabled={disabled}
+          aria-label={triggerAriaLabel}
+          aria-expanded="false"
+          aria-controls="anakin-conversation-panel"
+          className="anakin-trigger"
         >
-          <Panel style={panelStyle}>
-            <SectionHeader
-              eyebrow="Anakin"
-              title="Analyst command surface"
-              subtitle="Run read-only AI commands using the current workspace context."
-              actions={
-                <button type="button" onClick={() => setOpen(false)} aria-label="Close Anakin command surface" style={closeStyle}>
-                  x
-                </button>
-              }
-            />
-            <div style={bodyStyle}>
-              <div style={contextStyle}>
-                <Chip tone="info">{context?.workspace?.activeSection || "workspace"}</Chip>
-                {status === "loading" ? <Chip tone="warning">Anakin running</Chip> : null}
-              </div>
-              <form
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  executeFreeform();
-                }}
-                style={askStyle}
-              >
-                <label style={labelStyle} htmlFor="anakin-command-question">Ask Anakin</label>
-                <textarea
-                  id="anakin-command-question"
-                  value={question}
-                  onChange={(event) => setQuestion(event.target.value)}
-                  placeholder="Ask a read-only question about this workspace..."
-                  rows={3}
-                  style={textareaStyle}
-                />
-                <Button
-                  variant="primary"
-                  disabled={disabled || !question.trim()}
-                  type="submit"
-                  aria-label="Submit Ask Anakin question"
-                >
-                  Ask Anakin
-                </Button>
-              </form>
-              <div style={shortcutRowStyle} aria-label="Anakin workflow shortcuts">
-                {shortcutCommands.map((command) => (
-                  <button
-                    key={command.id}
-                    type="button"
-                    aria-label={command.label}
-                    onClick={() => execute(command)}
-                    disabled={disabled}
-                    style={shortcutButtonStyle}
-                  >
-                    {command.label}
-                  </button>
-                ))}
+          Ask Anakin
+        </button>
+      ) : null}
+
+      {open ? (
+        <aside
+          id="anakin-conversation-panel"
+          role="dialog"
+          aria-modal="false"
+          aria-label="Anakin conversation"
+          className="anakin-conversation-panel"
+        >
+          <header className="anakin-header">
+            <div className="anakin-header-copy">
+              <span className="anakin-eyebrow">Anakin</span>
+              <h2>Ask Anakin</h2>
+              <div className="anakin-context-row">
+                <span className="anakin-context-chip">{contextLabel}</span>
+                {busy ? <span className="anakin-status-chip">Working</span> : null}
               </div>
             </div>
-          </Panel>
-        </div>
+            <div className="anakin-header-actions">
+              <button type="button" onClick={onNewThread} disabled={busy || !thread} className="anakin-text-button">
+                New thread
+              </button>
+              <button type="button" onClick={onReset} disabled={busy || !thread} className="anakin-text-button">
+                Reset
+              </button>
+              <button ref={closeRef} type="button" onClick={closeSurface} aria-label="Close Anakin conversation" className="anakin-icon-button">
+                ×
+              </button>
+            </div>
+          </header>
+
+          <div ref={transcriptRef} className="anakin-transcript" aria-live="polite">
+            {threadLoading ? <StatusMessage>Restoring this conversation…</StatusMessage> : null}
+            {threadError ? <StatusMessage tone="error">{threadError}</StatusMessage> : null}
+            {!threadLoading && !threadError && turns.length === 0 && state?.status === "idle" ? (
+              <div className="anakin-empty-state">
+                <strong>What needs a closer look?</strong>
+                <p>Ask about the selected alert, IP, incident, or current dashboard activity.</p>
+              </div>
+            ) : null}
+            {turns.map((turn) => <ConversationTurn key={turn.turn_id || turn.id || turn.sequence} turn={turn} />)}
+            <TransientResponse
+              state={state}
+              turns={turns}
+              onRetry={onRetry}
+              onCancel={onCancel}
+              onChooseWorkflow={onChooseWorkflow}
+            />
+          </div>
+
+          <section className="anakin-compose" aria-label="Ask a follow-up">
+            <div className="anakin-shortcuts" aria-label="Optional Anakin shortcuts">
+              {shortcutCommands.map((command) => (
+                <button
+                  key={command.id}
+                  type="button"
+                  onClick={() => execute(command)}
+                  disabled={busy || disabled}
+                  title={command.description || WORKFLOW_TASK_DESCRIPTIONS[command.workflow]}
+                  className="anakin-shortcut"
+                >
+                  {TASK_LABELS[command.workflow] || command.label}
+                </button>
+              ))}
+            </div>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                submitQuestion();
+              }}
+              className="anakin-form"
+            >
+              <label htmlFor="anakin-question">Ask Anakin</label>
+              <textarea
+                id="anakin-question"
+                value={question}
+                onChange={(event) => setQuestion(event.target.value)}
+                placeholder="Ask about the selected alert, IP, incident, or current dashboard activity"
+                rows={3}
+                disabled={disabled}
+              />
+              <button type="submit" disabled={busy || disabled || !question.trim()} aria-label="Submit Ask Anakin question" className="anakin-send-button">
+                Ask
+              </button>
+            </form>
+            <button
+              type="button"
+              className="anakin-memory-toggle"
+              onClick={() => setRememberOpen((current) => !current)}
+              aria-expanded={rememberOpen}
+            >
+              What Anakin remembers
+            </button>
+            {rememberOpen ? <RememberedState items={remembered} /> : null}
+          </section>
+        </aside>
       ) : null}
     </div>
   );
 }
 
-const containerStyle = {
-  position: "fixed",
-  right: "18px",
-  bottom: "18px",
-  zIndex: 9995,
-};
+function ConversationTurn({ turn }) {
+  const assistant = turn.role === "assistant";
+  const artifact = turn.assertion_type === "artifact_preview" || turn.artifact_safety?.preview_only;
+  return (
+    <article className={`anakin-turn ${assistant ? "anakin-turn-assistant" : "anakin-turn-user"}`} data-turn-sequence={turn.sequence}>
+      <div className="anakin-turn-heading">
+        <strong>{assistant ? "Anakin" : "You"}</strong>
+        {turn.workflow ? <span>{TASK_LABELS[turn.workflow] || "Analysis"}</span> : null}
+      </div>
+      <p>{safeText(turn.content) || "This turn did not include displayable text."}</p>
+      {turn.lifecycle_status && !["completed", "recorded"].includes(turn.lifecycle_status) ? (
+        <small>{lifecycleLabel(turn.lifecycle_status)}</small>
+      ) : null}
+      {artifact ? <ArtifactSafety /> : null}
+    </article>
+  );
+}
 
-const triggerStyle = (disabled) => ({
-  border: `1px solid ${theme.color.aiBorder}`,
-  borderRadius: "999px",
-  padding: "12px 16px",
-  background: disabled ? theme.color.bgRaised : "linear-gradient(135deg, #0f766e, #0ea5e9)",
-  color: disabled ? theme.color.textMuted : "#fff",
-  fontWeight: 800,
-  cursor: disabled ? "not-allowed" : "pointer",
-  boxShadow: disabled ? "none" : "0 18px 40px rgba(14, 165, 233, 0.26)",
-});
+function TransientResponse({ state, turns, onRetry, onCancel, onChooseWorkflow }) {
+  if (!state || state.status === "idle") return null;
+  const response = state.response || {};
+  const conversationTurnId = response.conversation?.assistant_turn?.turn_id;
+  if (conversationTurnId && turns.some((turn) => turn.turn_id === conversationTurnId)) return null;
+  if (state.status === "loading") {
+    return (
+      <div className="anakin-progress" role="status">
+        <span className="anakin-progress-dot" aria-hidden="true" />
+        <span>{progressLabel(response)}</span>
+        {onCancel ? <button type="button" onClick={onCancel}>Stop waiting</button> : null}
+      </div>
+    );
+  }
+  if (state.status === "error") {
+    return (
+      <div className="anakin-error" role="alert">
+        <p>{state.error || "Anakin could not complete this question."}</p>
+        {onRetry ? <button type="button" onClick={onRetry}>Retry</button> : null}
+      </div>
+    );
+  }
+  const answer = responseText(response);
+  const allowed = Array.isArray(response?.result?.allowed_workflows) ? response.result.allowed_workflows : [];
+  return (
+    <article className="anakin-turn anakin-turn-assistant">
+      <div className="anakin-turn-heading"><strong>Anakin</strong></div>
+      <p>{answer || "Anakin needs more context before it can answer safely."}</p>
+      {allowed.length ? (
+        <div className="anakin-clarification-actions" aria-label="Choose an analysis task">
+          {allowed.map((workflow) => (
+            <button key={workflow} type="button" onClick={() => onChooseWorkflow?.(workflow)}>
+              {TASK_LABELS[workflow] || "Ask Anakin"}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {response.draft || response.workflow === "generate_artifact" ? <ArtifactSafety /> : null}
+      {state.stale ? <small>This result belongs to a previously selected context.</small> : null}
+    </article>
+  );
+}
 
-const overlayStyle = {
-  position: "fixed",
-  inset: "auto 18px 76px auto",
-  width: "min(540px, calc(100vw - 32px))",
-  maxHeight: "min(720px, calc(100vh - 96px))",
-  overflowY: "auto",
-};
+function ArtifactSafety() {
+  return (
+    <div className="anakin-artifact-safety" aria-label="Artifact preview safety">
+      <span>Preview only</span>
+      <span>Not applied</span>
+      <span>Not persisted as an operational record</span>
+      <span>Approval required before apply</span>
+    </div>
+  );
+}
 
-const panelStyle = {
-  padding: 0,
-  borderColor: theme.color.aiBorder,
-  boxShadow: theme.shadow.overlay,
-};
+function RememberedState({ items }) {
+  return (
+    <div className="anakin-memory" role="region" aria-label="What Anakin remembers">
+      {items.length ? items.map((item) => <p key={item.label}><strong>{item.label}:</strong> {item.value}</p>) : (
+        <p>No conclusions or unresolved questions have been recorded in this thread yet.</p>
+      )}
+    </div>
+  );
+}
 
-const bodyStyle = { padding: theme.spacing.lg, display: "grid", gap: theme.spacing.lg };
-const contextStyle = { display: "flex", gap: theme.spacing.sm, flexWrap: "wrap" };
-const askStyle = { display: "grid", gap: theme.spacing.sm };
-const labelStyle = { color: theme.color.text, fontSize: "12px", fontWeight: 800 };
-const textareaStyle = {
-  width: "100%",
-  boxSizing: "border-box",
-  border: `1px solid ${theme.color.border}`,
-  borderRadius: theme.radius.sm,
-  backgroundColor: theme.color.bg,
-  color: theme.color.text,
-  padding: "10px",
-  resize: "vertical",
-};
-const shortcutRowStyle = { display: "flex", gap: theme.spacing.sm, flexWrap: "wrap" };
-const shortcutButtonStyle = {
-  border: `1px solid ${theme.color.border}`,
-  borderRadius: "999px",
-  backgroundColor: theme.color.bg,
-  color: theme.color.text,
-  padding: "8px 11px",
-  cursor: "pointer",
-  fontSize: "12px",
-  fontWeight: 800,
-};
-const closeStyle = { border: "none", background: "transparent", color: theme.color.text, fontSize: "18px", cursor: "pointer" };
+function StatusMessage({ children, tone = "neutral" }) {
+  return <p className={`anakin-message anakin-message-${tone}`} role={tone === "error" ? "alert" : "status"}>{children}</p>;
+}
+
+function rememberedState(thread) {
+  if (!thread) return [];
+  const state = thread.state || {};
+  const items = [];
+  const active = thread.focus_state?.active || thread.primary_entity;
+  if (active?.type && active?.id) items.push({ label: "Active context", value: formatEntity(active) });
+  const summary = safeText(state.compact_summary || thread.summary);
+  if (summary) items.push({ label: "Current conclusion", value: summary });
+  if (Array.isArray(state.unresolved_questions) && state.unresolved_questions.length) {
+    items.push({ label: "Open questions", value: `${state.unresolved_questions.length}` });
+  }
+  if (Array.isArray(state.corrections) && state.corrections.length) {
+    items.push({ label: "Analyst corrections", value: `${state.corrections.length}` });
+  }
+  return items;
+}
+
+function responseText(response) {
+  const candidates = [
+    response.answer,
+    response.result?.answer,
+    response.investigation?.summary,
+    response.result?.summary,
+    response.draft?.content,
+    response.error,
+  ];
+  return candidates.map(safeText).find(Boolean) || "";
+}
+
+function progressLabel(response) {
+  const workflow = response.workflow;
+  if (workflow === "deep_investigate") return "Correlating evidence and checking competing explanations…";
+  if (workflow === "decision_support") return "Evaluating the safest next action…";
+  if (workflow === "generate_artifact") return "Drafting a preview for analyst review…";
+  return "Reviewing the available context…";
+}
+
+function lifecycleLabel(value) {
+  const labels = {
+    queued: "Waiting to begin",
+    running: "In progress",
+    failed: "Did not complete",
+    partial: "Completed with evidence gaps",
+    degraded: "Completed with limited evidence",
+  };
+  return labels[value] || "Saved in this conversation";
+}
+
+function formatEntity(entity, context) {
+  if (entity?.type && entity?.id) {
+    const labels = {
+      alert: "Alert",
+      incident: "Incident",
+      source_ip: "Source IP",
+      recon_activity: "Recon activity",
+      response_registry: "Response indicator",
+      investigation: "Investigation",
+      dashboard: "Dashboard activity",
+      general: "Current workspace",
+    };
+    const label = labels[entity.type] || "Current context";
+    if (["dashboard", "general"].includes(entity.type)) return label;
+    return `${label} ${entity.id}`;
+  }
+  const activeSection = context?.workspace?.activeSection;
+  return activeSection ? `${String(activeSection).replaceAll("-", " ")} context` : "Current workspace";
+}
+
+function safeText(value) {
+  return typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
+}
 
 export default AnakinCommandSurface;

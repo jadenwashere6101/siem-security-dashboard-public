@@ -560,6 +560,8 @@ function SocCommandCenter({
   onOpenReconWorkspace = null,
   onAskAi = null,
   aiEnabled = false,
+  anakinOpen = false,
+  onOverlayOpenChange = null,
   restoreRequest = null,
   onHistoryStateChange = null,
 }) {
@@ -585,6 +587,14 @@ function SocCommandCenter({
     error: "",
   });
   const [selectedSourceIp, setSelectedSourceIp] = useState(null);
+
+  useEffect(() => {
+    if (anakinOpen && selectedSourceIp) setSelectedSourceIp(null);
+  }, [anakinOpen, selectedSourceIp]);
+
+  useEffect(() => {
+    onOverlayOpenChange?.(Boolean(selectedSourceIp));
+  }, [onOverlayOpenChange, selectedSourceIp]);
   const [reconReviewState, setReconReviewState] = useState(() => loadReconReviewState(currentUsername));
   const handledRestoreNonceRef = useRef(null);
   const viewportWidth = useViewportWidth();

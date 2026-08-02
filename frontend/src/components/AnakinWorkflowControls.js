@@ -10,12 +10,19 @@ export const ANAKIN_WORKFLOWS = Object.freeze({
   generateArtifact: "generate_artifact",
 });
 
-const WORKFLOW_LABELS = {
+export const WORKFLOW_TASKS = {
   [ANAKIN_WORKFLOWS.auto]: "Ask Anakin",
-  [ANAKIN_WORKFLOWS.quickExplain]: "Quick Explain",
-  [ANAKIN_WORKFLOWS.deepInvestigate]: "Deep Investigate",
-  [ANAKIN_WORKFLOWS.decisionSupport]: "Decision Support",
-  [ANAKIN_WORKFLOWS.generateArtifact]: "Generate Artifact",
+  [ANAKIN_WORKFLOWS.quickExplain]: "Explain this alert",
+  [ANAKIN_WORKFLOWS.deepInvestigate]: "Investigate further",
+  [ANAKIN_WORKFLOWS.decisionSupport]: "Recommend next action",
+  [ANAKIN_WORKFLOWS.generateArtifact]: "Draft an analyst artifact",
+};
+
+export const WORKFLOW_TASK_DESCRIPTIONS = {
+  [ANAKIN_WORKFLOWS.quickExplain]: "Fast explanation of why it fired and what to check next.",
+  [ANAKIN_WORKFLOWS.deepInvestigate]: "Correlate related evidence, competing explanations, and gaps.",
+  [ANAKIN_WORKFLOWS.decisionSupport]: "Read-only advice on monitor, escalate, or contain.",
+  [ANAKIN_WORKFLOWS.generateArtifact]: "Create a preview-only analyst artifact for review.",
 };
 
 function AnakinWorkflowControls({
@@ -62,15 +69,21 @@ function AnakinWorkflowControls({
     <div style={controlsStyle}>
       {showLabel ? <span style={labelStyle}>Anakin</span> : null}
       {controls.map((workflow) => (
-        <AiAssistantButton key={workflow} onClick={() => runWorkflow(workflow)}>
-          {WORKFLOW_LABELS[workflow] || workflow}
+        <AiAssistantButton
+          key={workflow}
+          onClick={() => runWorkflow(workflow)}
+          title={WORKFLOW_TASK_DESCRIPTIONS[workflow] || "Ask a question using the current context."}
+          variant={workflow === ANAKIN_WORKFLOWS.auto ? "primary" : "secondary"}
+        >
+          {taskLabel(workflow, contextType)}
         </AiAssistantButton>
       ))}
       {visibleArtifacts.length ? (
         <label style={artifactLabelStyle}>
-          <span style={srOnlyStyle}>Generate Artifact</span>
+          <span style={srOnlyStyle}>Draft an analyst artifact</span>
           <select
-            aria-label="Generate Artifact"
+            aria-label="Draft an analyst artifact"
+            title={WORKFLOW_TASK_DESCRIPTIONS[ANAKIN_WORKFLOWS.generateArtifact]}
             defaultValue=""
             onChange={(event) => {
               runArtifact(event.target.value);
@@ -78,7 +91,7 @@ function AnakinWorkflowControls({
             }}
             style={selectStyle}
           >
-            <option value="" disabled>Generate Artifact</option>
+            <option value="" disabled>Draft artifact</option>
             {visibleArtifacts.map((artifact) => (
               <option key={artifact.type} value={artifact.type}>{artifact.label}</option>
             ))}
@@ -89,11 +102,28 @@ function AnakinWorkflowControls({
   );
 }
 
+function taskLabel(workflow, contextType) {
+  if (workflow !== ANAKIN_WORKFLOWS.quickExplain) {
+    return WORKFLOW_TASKS[workflow] || workflow;
+  }
+  const nouns = {
+    alert: "alert",
+    source_ip: "source IP",
+    incident: "incident",
+    recon_activity: "activity",
+    response_registry: "indicator",
+    detection: "detection",
+    dashboard: "current activity",
+    general: "investigation",
+  };
+  return `Explain ${nouns[contextType] || "this context"}`;
+}
+
 function workflowTitle(workflow, titlePrefix) {
   if (workflow === ANAKIN_WORKFLOWS.auto) return `Ask Anakin: ${titlePrefix}`;
-  if (workflow === ANAKIN_WORKFLOWS.quickExplain) return `Quick explain: ${titlePrefix}`;
-  if (workflow === ANAKIN_WORKFLOWS.deepInvestigate) return `Deep investigate: ${titlePrefix}`;
-  if (workflow === ANAKIN_WORKFLOWS.decisionSupport) return `Decision support: ${titlePrefix}`;
+  if (workflow === ANAKIN_WORKFLOWS.quickExplain) return `Explain: ${titlePrefix}`;
+  if (workflow === ANAKIN_WORKFLOWS.deepInvestigate) return `Investigate: ${titlePrefix}`;
+  if (workflow === ANAKIN_WORKFLOWS.decisionSupport) return `Next action: ${titlePrefix}`;
   return titlePrefix;
 }
 

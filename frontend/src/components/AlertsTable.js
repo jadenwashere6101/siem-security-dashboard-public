@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import AlertDetailsPanel from "./AlertDetailsPanel";
 import AlertExpandedRow from "./AlertExpandedRow";
 import AlertGroupHeader from "./AlertGroupHeader";
@@ -106,6 +106,8 @@ function AlertsTable({
   onRefreshAlerts = null,
   onAskAi = null,
   aiEnabled = false,
+  anakinOpen = false,
+  onAlertDetailsOpenChange = null,
 }) {
   // ==========================================================================
   // Component State / Derived Values
@@ -121,6 +123,13 @@ function AlertsTable({
   const [toastMessage, setToastMessage] = useState("");
   const [toastType, setToastType] = useState("info");
   const [selectedAlert, setSelectedAlert] = useState(null);
+
+  useEffect(() => {
+    if (!anakinOpen) return;
+    setSelectedAlert(null);
+    setSelectedAlertId(null);
+    onAlertDetailsOpenChange?.(false);
+  }, [anakinOpen, onAlertDetailsOpenChange, setSelectedAlertId]);
   const [hoveredAlertId, setHoveredAlertId] = useState(null);
   const [collapsedGroups, setCollapsedGroups] = useState({});
   const latestSelectedAlert =
@@ -627,7 +636,9 @@ function AlertsTable({
                             if (selectedAlertId === alert.id) {
                               setSelectedAlertId(null);
                               setSelectedAlert(null);
+                              onAlertDetailsOpenChange?.(false);
                             } else {
+                              onAlertDetailsOpenChange?.(true);
                               setSelectedAlertId(alert.id);
                               setSelectedAlert(alert);
                               fetchResponseLog(alert.id);
@@ -734,6 +745,7 @@ function AlertsTable({
           onClose={() => {
             setSelectedAlert(null);
             setSelectedAlertId(null);
+            onAlertDetailsOpenChange?.(false);
           }}
         >
             <AlertDetailsPanel

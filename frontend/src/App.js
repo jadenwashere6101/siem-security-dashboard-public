@@ -24,7 +24,6 @@ import DetectionSimulatorPanel from "./components/DetectionSimulatorPanel";
 import SocBriefingsPanel from "./components/SocBriefingsPanel";
 import SettingsPanel from "./components/SettingsPanel";
 import SidebarLayout from "./components/SidebarLayout";
-import AiResponsePanel from "./components/AiResponsePanel";
 import AnakinCommandSurface from "./components/AnakinCommandSurface";
 import CommandPalette from "./components/CommandPalette";
 import AnalystWorkspace from "./components/AnalystWorkspace";
@@ -47,12 +46,15 @@ import { updateAlertStatusRequest } from "./services/alertStatusService";
 import { loadAlertDashboardSummary, loadAlertRuleOptions, loadAlerts } from "./services/alertsService";
 import {
   createAiThread,
+  getAiThread,
+  getAiThreadTurns,
   getAiWorkflowRequest,
   queueAiWorkflowRequest,
   requestAiDraft,
   requestAiExplanation,
   requestAiInvestigation,
   requestAiWorkflow,
+  resetAiThread,
 } from "./services/aiService";
 import {
   createEvidenceReference,
@@ -123,6 +125,7 @@ const ENTITY_AI_CONTEXT_TYPES = new Set([
 
 const ASYNC_ANAKIN_WORKFLOWS = new Set(["auto", "deep_investigate", "decision_support", "generate_artifact"]);
 const ASYNC_ANAKIN_STORAGE_KEY = "anakin.activeWorkflowRequests.v1";
+const ANAKIN_THREAD_POINTER_KEY = "anakin.activeThreadPointer.v1";
 const ASYNC_ANAKIN_TERMINAL_STATES = new Set([
   "completed",
   "partial",
@@ -134,6 +137,17 @@ const ASYNC_ANAKIN_TERMINAL_STATES = new Set([
 ]);
 const ASYNC_ANAKIN_SUCCESS_STATES = new Set(["completed", "partial", "degraded"]);
 const ASYNC_ANAKIN_POLL_INTERVAL_MS = 2500;
+
+function emptyAiPanelState() {
+  return {
+    status: "idle",
+    title: "",
+    response: null,
+    error: "",
+    stale: false,
+    request: null,
+  };
+}
 
 function readStoredAsyncAnakinRequests() {
   if (typeof window === "undefined") return {};
@@ -161,9 +175,15 @@ function writeStoredAsyncAnakinRequests(entries) {
 
 function saveAsyncAnakinRequest(contextKey, entry) {
   if (!contextKey || !entry?.requestId) return;
+  const pointer = {
+    requestId: entry.requestId,
+    threadId: entry.threadId || null,
+    workflow: entry.workflow || null,
+    savedAt: new Date().toISOString(),
+  };
   writeStoredAsyncAnakinRequests({
     ...readStoredAsyncAnakinRequests(),
-    [contextKey]: { ...entry, savedAt: new Date().toISOString() },
+    [contextKey]: pointer,
   });
 }
 
@@ -175,12 +195,56 @@ function removeAsyncAnakinRequest(contextKey) {
   writeStoredAsyncAnakinRequests(entries);
 }
 
-function newestStoredAsyncAnakinRequest() {
-  const entries = readStoredAsyncAnakinRequests();
-  return Object.entries(entries)
-    .map(([contextKey, entry]) => ({ ...entry, contextKey }))
-    .filter((entry) => entry.requestId && entry.request)
-    .sort((a, b) => String(b.savedAt || "").localeCompare(String(a.savedAt || "")))[0] || null;
+async function loadAllAnakinTurns(threadId) {
+  const turns = [];
+  let cursor = null;
+  do {
+    const page = await getAiThreadTurns(threadId, { limit: 100, ...(cursor ? { cursor } : {}) });
+    turns.push(...(Array.isArray(page.turns) ? page.turns : []));
+    if (!page.has_more) return turns;
+    if (!page.next_cursor || page.next_cursor === cursor) {
+      throw new Error("Conversation history returned an invalid pagination cursor.");
+    }
+    cursor = page.next_cursor;
+  } while (true);
+}
+
+function readStoredAnakinThreadPointer(username) {
+  if (typeof window === "undefined" || !username) return null;
+  try {
+    const parsed = JSON.parse(window.sessionStorage.getItem(ANAKIN_THREAD_POINTER_KEY) || "null");
+    if (!parsed || parsed.owner !== username || !parsed.threadId) return null;
+    return parsed;
+  } catch (_) {
+    return null;
+  }
+}
+
+function writeStoredAnakinThreadPointer(username, thread) {
+  if (typeof window === "undefined") return;
+  try {
+    if (!username || !thread?.thread_id) {
+      window.sessionStorage.removeItem(ANAKIN_THREAD_POINTER_KEY);
+      return;
+    }
+    window.sessionStorage.setItem(ANAKIN_THREAD_POINTER_KEY, JSON.stringify({
+      owner: username,
+      threadId: thread.thread_id,
+      entity: thread.primary_entity || null,
+    }));
+  } catch (_) {
+    // The server remains authoritative when safe pointer persistence is unavailable.
+  }
+}
+
+function clearStoredAnakinPointers() {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(ANAKIN_THREAD_POINTER_KEY);
+    window.sessionStorage.removeItem(ASYNC_ANAKIN_STORAGE_KEY);
+  } catch (_) {
+    // Logout state is still cleared in memory when browser storage is unavailable.
+  }
 }
 
 function sleep(ms, signal) {
@@ -261,10 +325,10 @@ function normalizeAiWorkflowResponse(response) {
 
 function workflowTitleForPanel(workflow) {
   const labels = {
-    quick_explain: "Quick Explain",
-    deep_investigate: "Deep Investigate",
-    decision_support: "Decision Support",
-    generate_artifact: "Generate Artifact",
+    quick_explain: "Explain this alert",
+    deep_investigate: "Investigate further",
+    decision_support: "Recommend next action",
+    generate_artifact: "Draft an analyst artifact",
   };
   return labels[workflow] || "Ask Anakin";
 }
@@ -419,14 +483,19 @@ function AppInner() {
   const resetWorkspaceHistoryRef = useRef(null);
   const isRestoringWorkspaceHistoryRef = useRef(false);
   const ignoreNextPopstateEntryIdRef = useRef(null);
-  const [aiPanelState, setAiPanelState] = useState({
-    status: "idle",
-    title: "",
-    response: null,
+  const [aiPanelState, setAiPanelState] = useState(emptyAiPanelState);
+  const [anakinOpen, setAnakinOpen] = useState(false);
+  const [foregroundLayer, setForegroundLayer] = useState(null);
+  const [anakinThreadState, setAnakinThreadState] = useState({
+    thread: null,
+    turns: [],
+    activeRequest: null,
+    loading: false,
     error: "",
-    stale: false,
-    request: null,
   });
+  const anakinEpochRef = useRef(0);
+  const anakinReloadRef = useRef(null);
+  const resumedRequestRef = useRef(null);
   const [investigationDrawerOpen, setInvestigationDrawerOpen] = useState(false);
   const [investigationAlert, setInvestigationAlert] = useState(null);
   const [workspaceState, setWorkspaceState] = useState(null);
@@ -708,6 +777,10 @@ function AppInner() {
         authenticated &&
         (previousSession.username !== nextUsername || previousSession.role !== nextRole)
       ) {
+        clearStoredAnakinPointers();
+        anakinEpochRef.current += 1;
+        setAnakinOpen(false);
+        setAnakinThreadState({ thread: null, turns: [], activeRequest: null, loading: false, error: "" });
         setSessionNotice("Session changed. Permissions updated.");
       }
 
@@ -736,6 +809,8 @@ function AppInner() {
       setAlertRuleOptions([]);
       resetWorkspaceHistory("dashboard");
       writeStoredSessionIdentity(null);
+      clearStoredAnakinPointers();
+      setAnakinThreadState({ thread: null, turns: [], activeRequest: null, loading: false, error: "" });
     } finally {
       setAuthLoading(false);
     }
@@ -874,6 +949,8 @@ function AppInner() {
       setAlertView(createAlertViewState());
       resetWorkspaceHistory("dashboard");
       writeStoredSessionIdentity(null);
+      clearStoredAnakinPointers();
+      setAnakinThreadState({ thread: null, turns: [], activeRequest: null, loading: false, error: "" });
     }
   };
 
@@ -894,6 +971,11 @@ function AppInner() {
       setAlertRuleOptions([]);
       resetWorkspaceHistory("dashboard");
       writeStoredSessionIdentity(null);
+      clearStoredAnakinPointers();
+      anakinEpochRef.current += 1;
+      setAnakinOpen(false);
+      setForegroundLayer(null);
+      setAnakinThreadState({ thread: null, turns: [], activeRequest: null, loading: false, error: "" });
     }
   };
 
@@ -1872,6 +1954,9 @@ function AppInner() {
         description: "Open the focused investigation drawer for the selected alert context.",
         availability: (context) => Boolean(context.object?.alert),
         execute: () => {
+          anakinEpochRef.current += 1;
+          setAnakinOpen(false);
+          setForegroundLayer("investigation");
           setInvestigationDrawerOpen(true);
           refreshAnalystWorkspace();
         },
@@ -2060,19 +2145,118 @@ function AppInner() {
     [activeSection, alertMapMarkers, alertTimelineData, alertView, alertsState.items, metrics, topIPChartData]
   );
 
-  const cancelAiRequest = useCallback(() => {
+  const openAnakinSurface = useCallback(() => {
+    setInvestigationDrawerOpen(false);
+    setInvestigationAlert(null);
+    setForegroundLayer("anakin");
+    setAnakinOpen(true);
+  }, []);
+
+  const closeAnakinSurface = useCallback(() => {
+    setAnakinOpen(false);
+    setForegroundLayer((current) => current === "anakin" ? null : current);
+  }, []);
+
+  const handleAlertDetailsOpenChange = useCallback((open) => {
+    if (open) {
+      anakinEpochRef.current += 1;
+      setAnakinOpen(false);
+      setForegroundLayer("alert");
+      return;
+    }
+    setForegroundLayer((current) => current === "alert" ? null : current);
+  }, []);
+
+  const handleContextOverlayOpenChange = useCallback((open) => {
+    if (open) {
+      anakinEpochRef.current += 1;
+      setAnakinOpen(false);
+      setForegroundLayer("modal");
+      return;
+    }
+    setForegroundLayer((current) => current === "modal" ? null : current);
+  }, []);
+
+  const loadAnakinThread = useCallback(async (threadId, { open = true, preserveEpoch = false } = {}) => {
+    if (!threadId || !currentUsername) return null;
+    const epoch = preserveEpoch ? anakinEpochRef.current : anakinEpochRef.current + 1;
+    anakinEpochRef.current = epoch;
+    if (open) openAnakinSurface();
+    setAnakinThreadState((current) => ({ ...current, loading: true, error: "" }));
+    try {
+      const [threadResponse, turns] = await Promise.all([
+        getAiThread(threadId),
+        loadAllAnakinTurns(threadId),
+      ]);
+      if (anakinEpochRef.current !== epoch) return null;
+      const nextState = {
+        thread: threadResponse.thread,
+        turns,
+        activeRequest: threadResponse.active_request || null,
+        loading: false,
+        error: "",
+      };
+      setAnakinThreadState(nextState);
+      if (!threadResponse.active_request) setAiPanelState(emptyAiPanelState());
+      writeStoredAnakinThreadPointer(currentUsername, threadResponse.thread);
+      return nextState;
+    } catch (error) {
+      if (anakinEpochRef.current !== epoch) return null;
+      const expired = error.status === 410;
+      if (expired || error.status === 403 || error.status === 404) {
+        writeStoredAnakinThreadPointer(null, null);
+      }
+      setAnakinThreadState((current) => ({
+        ...current,
+        thread: expired ? null : current.thread,
+        turns: expired ? [] : current.turns,
+        activeRequest: null,
+        loading: false,
+        error: expired
+          ? "This conversation expired. Start a new thread to continue."
+          : error.message || "Unable to restore this conversation.",
+      }));
+      return null;
+    }
+  }, [currentUsername, openAnakinSurface]);
+
+  useEffect(() => {
+    anakinReloadRef.current = loadAnakinThread;
+  }, [loadAnakinThread]);
+
+  const restoreAndOpenAnakinSurface = useCallback(() => {
+    openAnakinSurface();
+    if (anakinThreadState.thread?.thread_id) {
+      loadAnakinThread(anakinThreadState.thread.thread_id, { open: false, preserveEpoch: true });
+    }
+  }, [anakinThreadState.thread, loadAnakinThread, openAnakinSurface]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !currentUsername || anakinThreadState.thread) return;
+    const pointer = readStoredAnakinThreadPointer(currentUsername);
+    if (!pointer) return;
+    loadAnakinThread(pointer.threadId, { open: false });
+  }, [anakinThreadState.thread, currentUsername, isAuthenticated, loadAnakinThread]);
+
+  const stopAiPolling = useCallback(({ forget = false } = {}) => {
     if (aiRequestRef.current.controller) {
       aiRequestRef.current.controller.abort();
     }
-    removeAsyncAnakinRequest(aiRequestRef.current.contextKey);
+    if (forget) removeAsyncAnakinRequest(aiRequestRef.current.contextKey);
   }, []);
+
+  const cancelAiRequest = useCallback(() => {
+    stopAiPolling({ forget: true });
+  }, [stopAiPolling]);
 
   const runAiRequest = useCallback(async ({ title, request, executor, contextKey }) => {
     if (!canTakeAlertActions) return;
-    cancelAiRequest();
+    stopAiPolling();
     const controller = new AbortController();
     const requestId = aiRequestRef.current.id + 1;
-    aiRequestRef.current = { id: requestId, controller, contextKey };
+    const threadId = request?.conversation?.thread_id || null;
+    const epoch = anakinEpochRef.current;
+    aiRequestRef.current = { id: requestId, controller, contextKey, threadId, epoch };
     setAiPanelState({
       status: "loading",
       title,
@@ -2084,7 +2268,7 @@ function AppInner() {
 
     try {
       const response = await executor(request, { signal: controller.signal });
-      if (aiRequestRef.current.id !== requestId) return;
+      if (aiRequestRef.current.id !== requestId || aiRequestRef.current.threadId !== threadId || anakinEpochRef.current !== epoch) return;
       const displayResponse = normalizeAiWorkflowResponse(response);
       setAiPanelState({
         status: "success",
@@ -2094,6 +2278,7 @@ function AppInner() {
         stale: aiRequestRef.current.contextKey !== contextKey,
         request: { title, request, executor, contextKey },
       });
+      if (threadId) await anakinReloadRef.current?.(threadId, { open: false, preserveEpoch: true });
     } catch (error) {
       if (error.name === "AbortError") {
         setAiPanelState((current) => ({
@@ -2104,7 +2289,7 @@ function AppInner() {
         }));
         return;
       }
-      if (aiRequestRef.current.id !== requestId) return;
+      if (aiRequestRef.current.id !== requestId || aiRequestRef.current.threadId !== threadId || anakinEpochRef.current !== epoch) return;
       setAiPanelState({
         status: "error",
         title,
@@ -2118,7 +2303,7 @@ function AppInner() {
         aiRequestRef.current.controller = null;
       }
     }
-  }, [canTakeAlertActions, cancelAiRequest]);
+  }, [canTakeAlertActions, stopAiPolling]);
 
   const pollQueuedAiRequest = useCallback(async ({
     title,
@@ -2128,11 +2313,13 @@ function AppInner() {
     controller,
     runId,
     startedAt,
+    threadId,
+    epoch,
   }) => {
     while (true) {
       const response = await getAiWorkflowRequest(queuedRequestId, { signal: controller.signal });
       const displayResponse = normalizeAiWorkflowResponse(response);
-      if (aiRequestRef.current.id !== runId) return null;
+      if (aiRequestRef.current.id !== runId || aiRequestRef.current.threadId !== threadId || anakinEpochRef.current !== epoch) return null;
       const terminal = ASYNC_ANAKIN_TERMINAL_STATES.has(response.status);
       setAiPanelState((current) => ({
         ...current,
@@ -2156,11 +2343,13 @@ function AppInner() {
 
   const runQueuedAiRequest = useCallback(async ({ title, request, contextKey, existingRequestId }) => {
     if (!canTakeAlertActions) return;
-    cancelAiRequest();
+    stopAiPolling();
     const controller = new AbortController();
     const requestId = aiRequestRef.current.id + 1;
     const startedAt = Date.now();
-    aiRequestRef.current = { id: requestId, controller, contextKey };
+    const threadId = request?.conversation?.thread_id || null;
+    const epoch = anakinEpochRef.current;
+    aiRequestRef.current = { id: requestId, controller, contextKey, threadId, epoch };
     setAiPanelState({
       status: "loading",
       title,
@@ -2184,7 +2373,7 @@ function AppInner() {
       let queuedRequestId = existingRequestId;
       if (!queuedRequestId) {
         queueResponse = await queueAiWorkflowRequest(request, { signal: controller.signal });
-        if (aiRequestRef.current.id !== requestId) return;
+        if (aiRequestRef.current.id !== requestId || aiRequestRef.current.threadId !== threadId || anakinEpochRef.current !== epoch) return;
         const normalizedQueueResponse = normalizeAiWorkflowResponse(queueResponse);
         if (queueResponse?.status === "chooser_required" || !queueResponse?.request_id) {
           setAiPanelState({
@@ -2195,13 +2384,14 @@ function AppInner() {
             stale: false,
             request: { title, request, executor: queueAiWorkflowRequest, contextKey, queued: true },
           });
+          if (threadId) await anakinReloadRef.current?.(threadId, { open: false, preserveEpoch: true });
           return;
         }
         queuedRequestId = queueResponse.request_id;
+        resumedRequestRef.current = queuedRequestId;
         saveAsyncAnakinRequest(contextKey, {
           requestId: queuedRequestId,
-          title,
-          request,
+          threadId,
           workflow: queueResponse.workflow || request.workflow,
         });
         setAiPanelState((current) => ({
@@ -2212,6 +2402,7 @@ function AppInner() {
             elapsed_ms: Date.now() - startedAt,
           },
         }));
+        if (threadId) await anakinReloadRef.current?.(threadId, { open: false, preserveEpoch: true });
       }
 
       const terminalResponse = await pollQueuedAiRequest({
@@ -2222,8 +2413,10 @@ function AppInner() {
         controller,
         runId: requestId,
         startedAt,
+        threadId,
+        epoch,
       });
-      if (!terminalResponse || aiRequestRef.current.id !== requestId) return;
+      if (!terminalResponse || aiRequestRef.current.id !== requestId || aiRequestRef.current.threadId !== threadId || anakinEpochRef.current !== epoch) return;
       removeAsyncAnakinRequest(contextKey);
       const displayResponse = normalizeAiWorkflowResponse(terminalResponse);
       if (ASYNC_ANAKIN_SUCCESS_STATES.has(terminalResponse.status)) {
@@ -2253,6 +2446,7 @@ function AppInner() {
           request: { title, request, executor: queueAiWorkflowRequest, contextKey, queued: true },
         });
       }
+      if (threadId) await anakinReloadRef.current?.(threadId, { open: false, preserveEpoch: true });
     } catch (error) {
       if (error.name === "AbortError") {
         setAiPanelState((current) => ({
@@ -2263,7 +2457,7 @@ function AppInner() {
         }));
         return;
       }
-      if (aiRequestRef.current.id !== requestId) return;
+      if (aiRequestRef.current.id !== requestId || aiRequestRef.current.threadId !== threadId || anakinEpochRef.current !== epoch) return;
       const message = error.status === 504
         ? "Network/proxy timeout before Anakin returned a result."
         : error.message || "AI request failed.";
@@ -2280,23 +2474,35 @@ function AppInner() {
         aiRequestRef.current.controller = null;
       }
     }
-  }, [canTakeAlertActions, cancelAiRequest, pollQueuedAiRequest]);
+  }, [canTakeAlertActions, pollQueuedAiRequest, stopAiPolling]);
 
   useEffect(() => {
-    if (!canTakeAlertActions || aiPanelState.status !== "idle") return;
-    const stored = newestStoredAsyncAnakinRequest();
-    if (!stored) return;
+    const activeRequest = anakinThreadState.activeRequest;
+    const thread = anakinThreadState.thread;
+    if (!canTakeAlertActions || !thread || !activeRequest || activeRequest.terminal) return;
+    if (resumedRequestRef.current === activeRequest.request_id) return;
+    if (aiRequestRef.current.controller && aiRequestRef.current.threadId === thread.thread_id) return;
+    resumedRequestRef.current = activeRequest.request_id;
+    openAnakinSurface();
     runQueuedAiRequest({
-      title: stored.title || workflowTitleForPanel(stored.workflow),
-      request: stored.request,
-      contextKey: stored.contextKey,
-      existingRequestId: stored.requestId,
+      title: workflowTitleForPanel(activeRequest.workflow),
+      request: {
+        workflow: activeRequest.workflow,
+        conversation: {
+          thread_id: thread.thread_id,
+          expected_version: thread.version,
+          client_request_id: `resume-${activeRequest.request_id}`,
+        },
+      },
+      contextKey: `thread:${thread.thread_id}`,
+      existingRequestId: activeRequest.request_id,
     });
-  }, [canTakeAlertActions, aiPanelState.status, runQueuedAiRequest]);
+  }, [anakinThreadState.activeRequest, anakinThreadState.thread, canTakeAlertActions, openAnakinSurface, runQueuedAiRequest]);
 
   const handleAskAi = useCallback(
     async (options) => {
       if (!options) return;
+      openAnakinSurface();
       const visibleContext = buildVisibleAiContext();
       const contextualCommand = normalizeContextualAiOptions(options);
       const normalizedContextType = normalizeAiContextType(options.contextType);
@@ -2329,11 +2535,19 @@ function AppInner() {
       let conversation = null;
       if (usesWorkflowRoute) {
         try {
-          const entity = conversationEntity(normalizedContextType, entityContext, activeSection);
-          const resolved = await createAiThread({ domain: "siem", primary_entity: entity, is_default: true });
+          let resolvedThreadState = null;
+          if (options.threadId) {
+            resolvedThreadState = await loadAnakinThread(options.threadId, { open: false });
+          } else {
+            const entity = conversationEntity(normalizedContextType, entityContext, activeSection);
+            const resolved = await createAiThread({ domain: "siem", primary_entity: entity, is_default: true });
+            resolvedThreadState = await loadAnakinThread(resolved.thread.thread_id, { open: false });
+            if (!resolvedThreadState) resolvedThreadState = { thread: resolved.thread };
+          }
+          if (!resolvedThreadState?.thread) return;
           conversation = {
-            thread_id: resolved.thread.thread_id,
-            expected_version: resolved.thread.version,
+            thread_id: resolvedThreadState.thread.thread_id,
+            expected_version: resolvedThreadState.thread.version,
             client_request_id: clientRequestId,
           };
         } catch (error) {
@@ -2394,7 +2608,7 @@ function AppInner() {
         contextKey,
       });
     },
-    [activeSection, buildVisibleAiContext, runAiRequest, runQueuedAiRequest]
+    [activeSection, buildVisibleAiContext, loadAnakinThread, openAnakinSurface, runAiRequest, runQueuedAiRequest]
   );
 
   const executeAnakinCommand = useCallback(
@@ -2419,13 +2633,14 @@ function AppInner() {
           workflow: requestedWorkflow,
           prompt: runtime.question.trim(),
           contextType: activeSection,
-          context: { command_context: anakinCommandContext },
+          context: runtime.threadId ? {} : { command_context: anakinCommandContext },
+          threadId: runtime.threadId || null,
           toolPolicy: { max_tool_calls: 5, time_window_hours: 24 },
         });
         return;
       }
       const options = commandToAiOptions(command, anakinCommandContext, runtime.question || "");
-      handleAskAi(options);
+      handleAskAi(options ? { ...options, threadId: runtime.threadId || null } : null);
     },
     [activeSection, anakinCommandContext, handleAskAi, handleNavigate]
   );
@@ -2462,17 +2677,52 @@ function AppInner() {
     });
   }, [aiPanelState.request, runAiRequest, runQueuedAiRequest]);
 
-  const dismissAiPanel = useCallback(() => {
-    cancelAiRequest();
-    setAiPanelState({
-      status: "idle",
-      title: "",
-      response: null,
-      error: "",
-      stale: false,
-      request: null,
-    });
-  }, [cancelAiRequest]);
+  const resetVisibleAiState = useCallback(() => {
+    setAiPanelState(emptyAiPanelState());
+  }, []);
+
+  const resetAnakinThread = useCallback(async () => {
+    const thread = anakinThreadState.thread;
+    if (!thread || aiPanelState.status === "loading") return;
+    try {
+      const response = await resetAiThread(thread.thread_id, { expected_version: thread.version });
+      anakinEpochRef.current += 1;
+      resumedRequestRef.current = null;
+      resetVisibleAiState();
+      setAnakinThreadState({
+        thread: response.thread,
+        turns: [],
+        activeRequest: null,
+        loading: false,
+        error: "",
+      });
+      writeStoredAnakinThreadPointer(currentUsername, response.thread);
+    } catch (error) {
+      if (error.status === 409) {
+        await loadAnakinThread(thread.thread_id, { open: false });
+        return;
+      }
+      setAnakinThreadState((current) => ({ ...current, error: error.message || "Unable to reset this conversation." }));
+    }
+  }, [aiPanelState.status, anakinThreadState.thread, currentUsername, loadAnakinThread, resetVisibleAiState]);
+
+  const createNewAnakinThread = useCallback(async () => {
+    const currentThread = anakinThreadState.thread;
+    if (!currentThread || aiPanelState.status === "loading") return;
+    try {
+      const response = await createAiThread({
+        domain: "siem",
+        primary_entity: currentThread.focus_state?.active || currentThread.primary_entity,
+        investigation_id: currentThread.investigation_id || undefined,
+        is_default: false,
+      });
+      resumedRequestRef.current = null;
+      resetVisibleAiState();
+      await loadAnakinThread(response.thread.thread_id, { open: false });
+    } catch (error) {
+      setAnakinThreadState((current) => ({ ...current, error: error.message || "Unable to start a new conversation." }));
+    }
+  }, [aiPanelState.status, anakinThreadState.thread, loadAnakinThread, resetVisibleAiState]);
 
   useEffect(() => {
     setAiPanelState((current) => {
@@ -2700,6 +2950,9 @@ function AppInner() {
             onOpenResponseRegistry={handleOpenResponseRegistry}
             onReviewIncident={handleOpenIncidentWorkspace}
             onOpenInvestigation={(alert) => {
+              anakinEpochRef.current += 1;
+              setAnakinOpen(false);
+              setForegroundLayer("investigation");
               setInvestigationAlert(alert || null);
               setSelectedAlertId(null);
               setInvestigationDrawerOpen(true);
@@ -2731,6 +2984,8 @@ function AppInner() {
             onResetFilters={resetAlertView}
             onAskAi={handleAskAi}
             aiEnabled={canTakeAlertActions}
+            anakinOpen={foregroundLayer === "anakin"}
+            onAlertDetailsOpenChange={handleAlertDetailsOpenChange}
             />
           </>
         )}
@@ -2811,6 +3066,8 @@ function AppInner() {
             onOpenReconWorkspace={() => handleNavigate("recon-history")}
             onAskAi={handleAskAi}
             aiEnabled={canTakeAlertActions}
+            anakinOpen={foregroundLayer === "anakin"}
+            onOverlayOpenChange={handleContextOverlayOpenChange}
             restoreRequest={
               workspaceRestoreRequest?.sectionId === "soc-command-center" ? workspaceRestoreRequest : null
             }
@@ -3100,6 +3357,7 @@ function AppInner() {
             onClose={() => {
               setInvestigationDrawerOpen(false);
               setInvestigationAlert(null);
+              setForegroundLayer((current) => current === "investigation" ? null : current);
             }}
             alert={activeInvestigationAlert}
             timeline={alertTimelineData}
@@ -3119,21 +3377,36 @@ function AppInner() {
               objects={paletteObjects}
               onExecute={executePaletteCommand}
               disabled={aiPanelState.status === "loading"}
-            />
-            <AiResponsePanel
-              state={aiPanelState}
-              onDismiss={dismissAiPanel}
-              onRetry={retryAiRequest}
-              onChooseWorkflow={chooseAiWorkflow}
-              onCancel={cancelAiRequest}
-              userRole={userRole}
+              onOpenChange={(open) => {
+                if (open) {
+                  anakinEpochRef.current += 1;
+                  setAnakinOpen(false);
+                  setInvestigationDrawerOpen(false);
+                  setForegroundLayer("palette");
+                } else {
+                  setForegroundLayer((current) => current === "palette" ? null : current);
+                }
+              }}
             />
             <AnakinCommandSurface
+              open={anakinOpen}
+              onOpen={restoreAndOpenAnakinSurface}
+              onClose={closeAnakinSurface}
               commands={anakinCommands}
               context={anakinCommandContext}
               onExecute={executeAnakinCommand}
-              disabled={aiPanelState.status === "loading"}
-              status={aiPanelState.status}
+              disabled={false}
+              state={aiPanelState}
+              thread={anakinThreadState.thread}
+              turns={anakinThreadState.turns}
+              threadLoading={anakinThreadState.loading}
+              threadError={anakinThreadState.error}
+              activeRequest={anakinThreadState.activeRequest}
+              onRetry={retryAiRequest}
+              onCancel={cancelAiRequest}
+              onReset={resetAnakinThread}
+              onNewThread={createNewAnakinThread}
+              onChooseWorkflow={chooseAiWorkflow}
               triggerAriaLabel="Open general Anakin SIEM chat"
             />
           </>

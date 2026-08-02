@@ -157,12 +157,12 @@ test("AlertDetailsPanel exposes alert and detection AI entry points", async () =
     />
   );
 
-  await userEvent.click(screen.getByRole("button", { name: "Quick Explain" }));
-  await userEvent.click(screen.getByRole("button", { name: "Deep Investigate" }));
-  await userEvent.click(screen.getByRole("button", { name: "Decision Support" }));
-  await userEvent.selectOptions(screen.getByLabelText("Generate Artifact"), "investigation_checklist");
-  await userEvent.selectOptions(screen.getByLabelText("Generate Artifact"), "detection_rule_change");
-  await userEvent.selectOptions(screen.getByLabelText("Generate Artifact"), "response_recommendation");
+  await userEvent.click(screen.getByRole("button", { name: "Explain alert" }));
+  await userEvent.click(screen.getByRole("button", { name: "Investigate further" }));
+  await userEvent.click(screen.getByRole("button", { name: "Recommend next action" }));
+  await userEvent.selectOptions(screen.getByLabelText("Draft an analyst artifact"), "investigation_checklist");
+  await userEvent.selectOptions(screen.getByLabelText("Draft an analyst artifact"), "detection_rule_change");
+  await userEvent.selectOptions(screen.getByLabelText("Draft an analyst artifact"), "response_recommendation");
 
   expect(onAskAi).toHaveBeenCalledWith(
     expect.objectContaining({
