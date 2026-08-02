@@ -19,17 +19,34 @@ SOC Briefing SHALL avoid raw JSON-style section dumps and SHALL explain empty se
 
 SOC Briefing SHALL NOT expose internal pipeline terminology or raw backend/source metadata in analyst-facing summary or sections, including selected candidates, bounded evidence references, skipped candidates, source paths, tool names, record counts, or investigation-engine mechanics.
 
+SOC Briefing SHALL NOT directly stringify dictionaries, lists, raw JSON, or Python literal representations into analyst-facing summary or section prose.
+
 #### Scenario: Evidence reviewed is readable
 
 - **GIVEN** evidence refs or tool evidence exist
 - **WHEN** SOC Briefing is persisted
 - **THEN** Evidence Reviewed SHALL describe what was learned from the evidence in analyst-readable language rather than raw JSON, route/source paths, tool names, or record counts.
 
+#### Scenario: Production evidence dict shapes are normalized
+
+- **GIVEN** the provider returns Evidence Reviewed items shaped as `fact`, `fact` + `inference` + `uncertainty`, `type` + `description`, or type-only dictionaries
+- **WHEN** SOC Briefing post-processing runs
+- **THEN** each item SHALL be converted into readable evidence prose
+- **AND** the output SHALL NOT contain Python dict syntax, JSON syntax, key names, raw source paths, tool names, or internal IDs.
+
 #### Scenario: Internal metadata is not analyst-facing
 
 - **GIVEN** SOC Briefing uses candidate and evidence metadata internally
 - **WHEN** summary and sections are persisted
-- **THEN** analyst-facing prose SHALL NOT include selected-candidate counts, bounded evidence-reference counts, skipped-candidate counts, source paths, tool names, record counts, or investigation-engine mechanics.
+- **THEN** analyst-facing prose SHALL NOT include selected-candidate counts, bounded evidence-reference counts, skipped-candidate counts, source paths, tool names, record counts, `dedup_key`, lifecycle/storage terminology, or investigation-engine mechanics.
+
+#### Scenario: Unknown dictionaries are safe
+
+- **GIVEN** the provider returns a section item with unknown dictionary keys, nested dictionaries, nested arrays, or internal metadata
+- **WHEN** SOC Briefing post-processing runs
+- **THEN** useful scalar analyst-facing values SHALL be extracted and sanitized
+- **AND** internal metadata SHALL be omitted
+- **AND** if no useful value remains, a deterministic section-specific explanation SHALL be used.
 
 #### Scenario: Empty sections explain why
 
@@ -52,6 +69,14 @@ Critical findings and recommendations SHALL connect evidence, analyst judgment, 
 - **GIVEN** source IPs or evidence refs exist
 - **WHEN** recommendations are persisted
 - **THEN** recommendations SHALL reference specific analyst-meaningful evidence such as source IP, alert behavior, or observed outcome gaps without exposing raw source paths or tool metadata.
+
+#### Scenario: Production recommendation dict shapes are normalized
+
+- **GIVEN** the provider returns Recommendation items shaped as `step` + `description`, `action` + `target`, or `recommended_action` + `reason`
+- **WHEN** SOC Briefing post-processing runs
+- **THEN** each item SHALL be converted into a clear analyst instruction
+- **AND** the output SHALL remain evidence-specific
+- **AND** the output SHALL NOT contain Python dict syntax, JSON syntax, raw source paths, tool names, record metadata, or internal identifiers.
 
 ### Requirement: SOC Briefing correlates related alerts when possible
 

@@ -89,6 +89,15 @@ ANALYST_FACING_INTERNAL_TERMS = (
     "tool_name",
     "record_ids",
     "record(s)",
+    "record count",
+    "dedup_key",
+    "idempotency_key",
+    "lifecycle_status",
+    "content_status",
+    "storage",
+    "persisted",
+    "soc_briefing_runs",
+    "soc_briefings",
     "get_alert_detail",
     "get_related_events",
     "get_incident_timeline",
@@ -756,7 +765,57 @@ def _build_synthesis_prompt_payload(
         "evidence_refs": evidence_refs,
         "output_schema": {
             "summary": "string",
-            "sections": {key: "array" for key in BRIEFING_SECTIONS},
+            "sections": {
+                "alerts_reviewed": [
+                    {
+                        "what_happened": "string",
+                        "supporting_evidence": "string",
+                        "analyst_judgment": "string",
+                    }
+                ],
+                "dismissed_low_priority_findings": [
+                    {
+                        "what_happened": "string",
+                        "supporting_evidence": "string",
+                        "reason": "string",
+                        "recommended_action": "string",
+                    }
+                ],
+                "escalations": [
+                    {
+                        "what_happened": "string",
+                        "supporting_evidence": "string",
+                        "why_it_matters": "string",
+                        "urgency": "string",
+                        "recommended_action": "string",
+                    }
+                ],
+                "critical_findings": [
+                    {
+                        "what_happened": "string",
+                        "supporting_evidence": "string",
+                        "why_it_matters": "string",
+                        "confidence": "string",
+                        "recommended_action": "string",
+                    }
+                ],
+                "evidence": [
+                    {
+                        "fact": "string",
+                        "inference": "string",
+                        "uncertainty": "string",
+                        "missing_evidence": "string",
+                    }
+                ],
+                "recommendations": [
+                    {
+                        "recommended_action": "string",
+                        "target": "string",
+                        "reason": "string",
+                        "priority": "string",
+                    }
+                ],
+            },
         },
     }
 
@@ -1163,7 +1222,7 @@ def _ensure_sections(
     merged: dict[str, Any] = {}
     for key in BRIEFING_SECTIONS:
         value = sections.get(key, base[key])
-        merged[key] = _normalize_section_items(value if isinstance(value, list) else base[key], fallback=base[key])
+        merged[key] = _normalize_section_items(key, value if isinstance(value, list) else base[key], fallback=base[key])
     return redact_sensitive_values(merged)
 
 
@@ -1210,9 +1269,10 @@ def _activity_overview(selected: list[InvestigationCandidate], source_ips: list[
         entity_counts[candidate.entity_type] = entity_counts.get(candidate.entity_type, 0) + 1
     families = sorted({_friendly_label(candidate.label) for candidate in selected if candidate.label})
     family_text = families[0] if len(families) == 1 else ", ".join(families[:3])
+    activity_text = _plural_activity(family_text or "security alert", len(selected))
     if source_ips:
-        return f"{_count_word(len(selected)).capitalize()} {family_text or 'security'} item(s) involved source IP {', '.join(source_ips[:3])} during the briefing window."
-    return f"{_count_word(len(selected)).capitalize()} {family_text or 'security'} item(s) appeared during the briefing window, but the available context did not include a source IP to correlate."
+        return f"{_count_word(len(selected)).capitalize()} {activity_text} involved source IP {', '.join(source_ips[:3])} during the briefing window."
+    return f"{_count_word(len(selected)).capitalize()} {activity_text} appeared during the briefing window, but the available context did not include a source IP to correlate."
 
 
 def _security_judgment(selected: list[InvestigationCandidate], evidence_refs: list[dict[str, Any]]) -> str:
@@ -1248,35 +1308,306 @@ def _next_action_sentence(selected: list[InvestigationCandidate], evidence_refs:
     return "Next action: collect alert detail, related events, endpoint telemetry, and authentication outcomes before escalating."
 
 
-def _normalize_section_items(value: list[Any], *, fallback: list[Any]) -> list[str]:
+def _normalize_section_items(section_key: str, value: list[Any], *, fallback: list[Any]) -> list[str]:
     items = value or fallback
-    normalized = [_readable_item_text(item) for item in items]
+    normalized = [_readable_item_text(item, section_key) for item in items]
     normalized = [item for item in normalized if item]
-    normalized = [item for item in normalized if not _has_internal_analyst_term(item)]
+    normalized = [_sanitize_analyst_text(item) for item in normalized]
+    normalized = [item for item in normalized if item and not _has_internal_analyst_term(item)]
     if normalized:
         return normalized
-    fallback_items = [_readable_item_text(item) for item in fallback]
-    return [item for item in fallback_items if item and not _has_internal_analyst_term(item)]
+    fallback_items = [_sanitize_analyst_text(_readable_item_text(item, section_key)) for item in fallback]
+    fallback_items = [item for item in fallback_items if item and not _has_internal_analyst_term(item)]
+    return fallback_items or [_empty_section_judgment(section_key)]
 
 
-def _readable_item_text(item: Any) -> str:
+def _readable_item_text(item: Any, section_key: str) -> str:
     if isinstance(item, str):
-        return item.strip()
+        return _sanitize_analyst_text(item)
     if isinstance(item, dict):
-        parts = []
-        for field in ("title", "summary", "detail", "what_happened", "supporting_evidence", "why_it_matters", "confidence", "recommended_action", "reason"):
-            value = item.get(field)
-            if value not in (None, "", [], {}):
-                parts.append(f"{field.replace('_', ' ').title()}: {value}")
-        if parts:
-            return ". ".join(str(part).strip().rstrip(".") for part in parts) + "."
-        if item.get("source_ip"):
-            return f"Observed activity involving source IP {_display_ip(item.get('source_ip'))} for {item.get('label') or item.get('entity_type') or 'a briefing candidate'}."
-        if item.get("source_path"):
-            return _evidence_source_path_text(str(item.get("source_path") or ""))
-        if item.get("entity_type") or item.get("entity_id"):
-            return f"Reviewed {item.get('entity_type') or 'entity'} {item.get('entity_id') or 'unknown'}: {item.get('label') or 'no label available'}."
-    return str(item).strip()
+        return _readable_dict_item(item, section_key)
+    if isinstance(item, (list, tuple)):
+        values = [_sanitize_analyst_text(value) for value in _extract_scalar_values(item)]
+        values = [value for value in values if value and not _has_internal_analyst_term(value)]
+        if values:
+            return f"{_section_prefix(section_key)} {'; '.join(values[:4])}."
+        return _empty_section_judgment(section_key)
+    return _sanitize_analyst_text(item)
+
+
+def _readable_dict_item(item: dict[str, Any], section_key: str) -> str:
+    values = _semantic_values(item)
+    if section_key == "evidence":
+        return _evidence_dict_text(item, values)
+    if section_key == "recommendations":
+        return _recommendation_dict_text(item, values)
+    if section_key == "critical_findings":
+        return _finding_dict_text(item, values, critical=True)
+    if section_key == "escalations":
+        return _finding_dict_text(item, values, critical=False, escalation=True)
+    if section_key == "dismissed_low_priority_findings":
+        return _low_priority_dict_text(item, values)
+    if section_key == "alerts_reviewed":
+        return _alert_review_dict_text(item, values)
+    return _unknown_dict_text(section_key, values)
+
+
+def _semantic_values(item: dict[str, Any]) -> dict[str, str]:
+    keys = (
+        "fact",
+        "inference",
+        "uncertainty",
+        "missing_evidence",
+        "type",
+        "description",
+        "step",
+        "action",
+        "target",
+        "title",
+        "summary",
+        "detail",
+        "what_happened",
+        "supporting_evidence",
+        "why_it_matters",
+        "confidence",
+        "recommended_action",
+        "reason",
+        "urgency",
+        "priority",
+        "source_ip",
+        "alert_type",
+        "status",
+        "severity",
+        "label",
+        "analyst_judgment",
+    )
+    values: dict[str, str] = {}
+    for key in keys:
+        if key in item:
+            value = _sanitize_analyst_text(item.get(key), field_name=key)
+            if value:
+                values[key] = value
+    return values
+
+
+def _evidence_dict_text(item: dict[str, Any], values: dict[str, str]) -> str:
+    if values.get("fact") and values.get("inference"):
+        text = f"Evidence showed: {values['fact']}. Analyst judgment: {values['inference']}."
+        if values.get("uncertainty"):
+            text += f" Uncertainty: {values['uncertainty']}."
+        if values.get("missing_evidence"):
+            text += f" Missing evidence: {values['missing_evidence']}."
+        return text
+    if values.get("fact"):
+        text = f"Evidence showed: {values['fact']}."
+        if values.get("uncertainty"):
+            text += f" Uncertainty: {values['uncertainty']}."
+        return text
+    if values.get("type") and values.get("description"):
+        return f"{_friendly_observation_type(values['type'])}: {values['description']}."
+    if values.get("type"):
+        return f"Evidence reviewed: {_friendly_observation_type(values['type'])}."
+    if values.get("description"):
+        return f"Evidence showed: {values['description']}."
+    if item.get("source_path"):
+        return _evidence_source_path_text(str(item.get("source_path") or ""))
+    return _unknown_dict_text("evidence", values or _unknown_scalar_values(item))
+
+
+def _recommendation_dict_text(item: dict[str, Any], values: dict[str, str]) -> str:
+    target = _target_phrase(values.get("target"))
+    if values.get("action") and values.get("target"):
+        action = _recommendation_action(values["action"])
+        reason = f" Reason: {values['reason']}." if values.get("reason") else ""
+        return f"{action}{target} to determine whether the activity had successful follow-up or touched additional internal hosts.{reason}"
+    if values.get("step") and values.get("description"):
+        return f"Priority {values['step']}: {_recommendation_action(values['description'])}."
+    if values.get("recommended_action"):
+        reason = f" Reason: {values['reason']}." if values.get("reason") else ""
+        return f"{_recommendation_action(values['recommended_action'])}{target}.{reason}"
+    if values.get("description"):
+        return f"{_recommendation_action(values['description'])}."
+    return _unknown_dict_text("recommendations", values or _unknown_scalar_values(item))
+
+
+def _finding_dict_text(
+    item: dict[str, Any],
+    values: dict[str, str],
+    *,
+    critical: bool,
+    escalation: bool = False,
+) -> str:
+    happened = values.get("what_happened") or values.get("fact") or values.get("title") or values.get("summary") or values.get("description")
+    evidence = values.get("supporting_evidence") or values.get("detail") or values.get("reason")
+    matters = values.get("why_it_matters") or values.get("inference")
+    confidence = values.get("confidence") or ("medium" if critical else "")
+    action = values.get("recommended_action") or values.get("action")
+    parts = []
+    if happened:
+        parts.append(f"What happened: {happened}")
+    if evidence:
+        parts.append(f"Supporting evidence: {evidence}")
+    if matters:
+        parts.append(f"Why it matters: {matters}")
+    if escalation and values.get("urgency"):
+        parts.append(f"Urgency: {values['urgency']}")
+    if confidence:
+        parts.append(f"Confidence: {confidence}")
+    if action:
+        parts.append(f"Recommended action: {_recommendation_action(action)}")
+    if parts:
+        return ". ".join(part.strip().rstrip(".") for part in parts) + "."
+    return _unknown_dict_text("critical_findings" if critical else "escalations", values or _unknown_scalar_values(item))
+
+
+def _low_priority_dict_text(item: dict[str, Any], values: dict[str, str]) -> str:
+    happened = values.get("what_happened") or values.get("fact") or values.get("title") or values.get("summary") or values.get("description")
+    reason = values.get("reason") or values.get("inference") or values.get("uncertainty")
+    action = values.get("recommended_action") or values.get("action")
+    if happened and reason:
+        text = f"Downgraded: {happened}. Reason: {reason}."
+        if action:
+            text += f" Watch condition: {_recommendation_action(action)}."
+        return text
+    return _unknown_dict_text("dismissed_low_priority_findings", values or _unknown_scalar_values(item))
+
+
+def _alert_review_dict_text(item: dict[str, Any], values: dict[str, str]) -> str:
+    happened = values.get("what_happened") or values.get("fact") or values.get("title") or values.get("summary") or values.get("description")
+    judgment = values.get("analyst_judgment") or values.get("inference")
+    if happened and judgment:
+        return f"Reviewed activity: {happened}. Analyst judgment: {judgment}."
+    if happened:
+        return f"Reviewed activity: {happened}."
+    return _unknown_dict_text("alerts_reviewed", values or _unknown_scalar_values(item))
+
+
+def _unknown_dict_text(section_key: str, values: dict[str, str]) -> str:
+    scalar_values = []
+    for value in values.values():
+        cleaned = _sanitize_analyst_text(value)
+        if cleaned and not _has_internal_analyst_term(cleaned):
+            scalar_values.append(cleaned)
+    if scalar_values:
+        return f"{_section_prefix(section_key)} {'; '.join(scalar_values[:4])}."
+    return _empty_section_judgment(section_key)
+
+
+def _unknown_scalar_values(value: Any) -> dict[str, str]:
+    scalars = _extract_scalar_values(value)
+    return {str(index): scalar for index, scalar in enumerate(scalars)}
+
+
+def _extract_scalar_values(value: Any, *, depth: int = 0) -> list[str]:
+    if depth > 4:
+        return []
+    if isinstance(value, dict):
+        results: list[str] = []
+        for key, nested in value.items():
+            if _internal_field_name(str(key)):
+                continue
+            results.extend(_extract_scalar_values(nested, depth=depth + 1))
+        return results
+    if isinstance(value, (list, tuple, set)):
+        results: list[str] = []
+        for nested in value:
+            results.extend(_extract_scalar_values(nested, depth=depth + 1))
+        return results
+    cleaned = _sanitize_analyst_text(value)
+    return [cleaned] if cleaned and not _has_internal_analyst_term(cleaned) else []
+
+
+def _internal_field_name(key: str) -> bool:
+    normalized = str(key or "").lower()
+    return any(
+        term in normalized
+        for term in (
+            "dedup_key",
+            "idempotency_key",
+            "source_path",
+            "tool_name",
+            "record_ids",
+            "fingerprint",
+            "storage",
+            "lifecycle",
+            "content_status",
+            "run_id",
+            "window_id",
+            "schedule_id",
+        )
+    )
+
+
+def _sanitize_analyst_text(value: Any, *, field_name: str | None = None) -> str:
+    if value in (None, "", [], {}):
+        return ""
+    if isinstance(value, (dict, list, tuple, set)):
+        scalars = _extract_scalar_values(value)
+        return "; ".join(scalars[:4])
+    text = str(value).strip()
+    if not text:
+        return ""
+    if field_name == "type":
+        text = _friendly_observation_type(text)
+    text = text.replace("_", " ")
+    text = re.sub(r"/(?:alerts|incidents|events|recon|response-registry)/\d+(?:/[\w.-]+)?", "", text)
+    text = re.sub(r"\b(?:get_alert_detail|get_related_events|get_incident_timeline|get_response_registry_context)\b", "", text)
+    text = re.sub(r"\b(?:dedup key|source path|tool name|record ids|record count|idempotency key)\b\s*[:=]?\s*\S*", "", text, flags=re.IGNORECASE)
+    text = text.replace("{", "").replace("}", "").replace("[", "").replace("]", "")
+    text = text.replace("'", "").replace('"', "")
+    text = " ".join(text.split())
+    return text.strip(" ,:;")
+
+
+def _section_prefix(section_key: str) -> str:
+    return {
+        "alerts_reviewed": "Reviewed activity:",
+        "dismissed_low_priority_findings": "Downgraded finding:",
+        "escalations": "Escalation note:",
+        "critical_findings": "Finding:",
+        "evidence": "Evidence showed:",
+        "recommendations": "Recommended action:",
+    }.get(section_key, "Briefing note:")
+
+
+def _empty_section_judgment(section_key: str) -> str:
+    return {
+        "alerts_reviewed": "No alerts or related security activity stood out during this briefing window.",
+        "dismissed_low_priority_findings": "No low-priority findings were separated out; there was not enough benign or duplicate context to downgrade a specific item.",
+        "escalations": "No escalation is warranted from the reviewed evidence because there is no confirmed impact or urgent analyst-attention signal.",
+        "critical_findings": "No critical findings. The reviewed activity lacked exploitation, successful authentication, or evidence of impact.",
+        "evidence": "No detailed evidence was available for this briefing window. Treat the judgment as limited until alert details, related events, endpoint telemetry, or authentication outcomes are reviewed.",
+        "recommendations": "Next action: collect alert detail, related events, endpoint telemetry, and authentication outcomes before escalating.",
+    }.get(section_key, "No analyst-facing detail was available for this section.")
+
+
+def _friendly_observation_type(value: Any) -> str:
+    text = str(value or "").replace("_", " ").strip()
+    text = re.sub(r"\b(pfsense)\b", "pfSense", text, flags=re.IGNORECASE)
+    return " ".join(text.split()) or "Security evidence"
+
+
+def _recommendation_action(value: Any) -> str:
+    text = _sanitize_analyst_text(value)
+    if not text:
+        return "Review related security evidence"
+    lowered = text.lower()
+    if "inspect network logs" in lowered or lowered == "inspect logs":
+        return "Review firewall and authentication logs"
+    if lowered.startswith("inspect "):
+        return "Review " + text[8:]
+    if lowered.startswith("investigate "):
+        return "Review " + text[12:]
+    return text[0].upper() + text[1:]
+
+
+def _target_phrase(target: str | None) -> str:
+    if not target:
+        return ""
+    target = _sanitize_analyst_text(target)
+    if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", target):
+        return f" for follow-up activity from {target}"
+    return f" for {target}"
 
 
 def _alerts_reviewed_texts(selected: list[InvestigationCandidate]) -> list[str]:
@@ -1380,6 +1711,17 @@ def _friendly_label(label: str) -> str:
     return text or "security"
 
 
+def _plural_activity(label: str, count: int) -> str:
+    text = str(label or "security alert").strip()
+    if count == 1:
+        return text
+    if text.endswith("y"):
+        return text[:-1] + "ies"
+    if text.endswith("s"):
+        return text
+    return text + "s"
+
+
 def _count_word(value: int) -> str:
     words = {
         0: "no",
@@ -1463,9 +1805,14 @@ def _attempt_structured_briefing_repair(
         "The response must be read-only advisory content and must not claim anything was saved, applied, approved, executed, "
         "blocked, deployed, committed, or changed.\n"
         f"Required section keys: {json.dumps(list(BRIEFING_SECTIONS), sort_keys=True)}\n"
-        "Required schema: {\"summary\":\"string\",\"sections\":{\"alerts_reviewed\":[],"
-        "\"dismissed_low_priority_findings\":[],\"escalations\":[],\"critical_findings\":[],"
-        "\"evidence\":[],\"recommendations\":[]}}\n"
+        "Required schema: {\"summary\":\"string\",\"sections\":{"
+        "\"alerts_reviewed\":[{\"what_happened\":\"string\",\"supporting_evidence\":\"string\",\"analyst_judgment\":\"string\"}],"
+        "\"dismissed_low_priority_findings\":[{\"what_happened\":\"string\",\"supporting_evidence\":\"string\",\"reason\":\"string\",\"recommended_action\":\"string\"}],"
+        "\"escalations\":[{\"what_happened\":\"string\",\"supporting_evidence\":\"string\",\"why_it_matters\":\"string\",\"urgency\":\"string\",\"recommended_action\":\"string\"}],"
+        "\"critical_findings\":[{\"what_happened\":\"string\",\"supporting_evidence\":\"string\",\"why_it_matters\":\"string\",\"confidence\":\"string\",\"recommended_action\":\"string\"}],"
+        "\"evidence\":[{\"fact\":\"string\",\"inference\":\"string\",\"uncertainty\":\"string\",\"missing_evidence\":\"string\"}],"
+        "\"recommendations\":[{\"recommended_action\":\"string\",\"target\":\"string\",\"reason\":\"string\",\"priority\":\"string\"}]}}\n"
+        "Do not include raw dictionaries, source paths, tool names, record counts, dedup keys, or implementation metadata in section prose.\n"
         f"Validation errors: {json.dumps(bounded_errors, sort_keys=True)}\n"
         f"Original response:\n{bounded_original}\n"
     )

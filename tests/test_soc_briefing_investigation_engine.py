@@ -58,6 +58,13 @@ FORBIDDEN_ANALYST_TERMS = (
     "tool metadata",
     "investigation engine",
     "candidate planning",
+    "dedup_key",
+    "dedup key",
+    "idempotency_key",
+    "source_path",
+    "lifecycle_status",
+    "content_status",
+    "bounded evidence",
 )
 
 
@@ -209,6 +216,71 @@ def _placeholder_content():
     )
 
 
+def _production_shape_content():
+    return json.dumps(
+        {
+            "summary": "Two port-scan alerts came from the same source IP during the briefing window.",
+            "sections": {
+                "alerts_reviewed": [
+                    {
+                        "what_happened": "Two port-scan alerts came from source IP 8.231.67.182.",
+                        "supporting_evidence": "Repeated connection attempts were visible.",
+                        "analyst_judgment": "This looks like reconnaissance or routine scanning rather than confirmed compromise.",
+                    }
+                ],
+                "dismissed_low_priority_findings": [
+                    {
+                        "fact": "One related alert had no successful follow-up activity.",
+                        "reason": "Insufficient evidence of impact.",
+                    }
+                ],
+                "escalations": [
+                    {
+                        "type": "pfSense firewall activity",
+                        "description": "Repeated attempts targeted the perimeter from 8.231.67.182.",
+                        "urgency": "same-shift",
+                    }
+                ],
+                "critical_findings": [
+                    {
+                        "what_happened": "Critical port-scan alert from 8.231.67.182.",
+                        "supporting_evidence": "The alert pattern showed repeated connection attempts.",
+                        "why_it_matters": "A repeated scan can precede exploitation if it touches exposed services.",
+                        "confidence": "medium",
+                        "recommended_action": "Verify whether 8.231.67.182 is an approved scanner.",
+                    }
+                ],
+                "evidence": [
+                    {"fact": "Alert 1 showed repeated connection attempts from 8.231.67.182."},
+                    {
+                        "fact": "No successful authentication appeared after the scan.",
+                        "inference": "This is reconnaissance or routine scanning rather than confirmed compromise.",
+                        "uncertainty": "Endpoint telemetry was not available.",
+                    },
+                    {"type": "alert_details", "description": "Alert 1 showed repeated connection attempts from 8.231.67.182."},
+                    {"type": "pfSense firewall activity"},
+                    {
+                        "unexpected": {
+                            "dedup_key": "scheduled-soc-investigation-alert-1",
+                            "notes": [
+                                "source_path /alerts/1",
+                                {"value": "Repeated deny activity was visible with no confirmed impact."},
+                            ],
+                        }
+                    },
+                    {"nested": [{"record_ids": [1, 2]}, {"detail": "Related attempts remained blocked."}]},
+                ],
+                "recommendations": [
+                    {"step": 1, "description": "inspect firewall logs for source IP 8.231.67.182"},
+                    {"action": "Inspect network logs", "target": "8.231.67.182"},
+                    {"recommended_action": "Verify whether 8.231.67.182 is an approved scanner", "reason": "The activity resembles scanning but source ownership is unknown."},
+                    {"dedup_key": "scheduled-soc-investigation-alert-1", "storage_state": "content_ready"},
+                ],
+            },
+        }
+    )
+
+
 def _success_content_with_evidence():
     return json.dumps(
         {
@@ -263,6 +335,10 @@ def _assert_no_internal_analyst_terms(summary, sections):
         assert term not in rendered
     assert "/alerts/" not in rendered
     assert "/incidents/" not in rendered
+    assert "{" not in rendered
+    assert "}" not in rendered
+    assert "':" not in rendered
+    assert '":' not in rendered
 
 
 def test_planning_is_deterministic_and_bounded(postgres_db):
@@ -799,6 +875,57 @@ def test_empty_sections_explain_why_without_no_entries_recorded(postgres_db):
     assert "No escalation is warranted" in rendered
     assert "No detailed evidence was available" in rendered
     _assert_no_internal_analyst_terms(outcome.summary, outcome.sections)
+
+
+def test_production_observed_dict_shapes_are_normalized_without_raw_python_repr(postgres_db):
+    conn, _cur = postgres_db
+    _insert_alert(conn, severity="critical", source_ip="8.231.67.182")
+    _schedule, _window, job, run = _schedule_window_job_run(conn)
+
+    outcome = run_scheduled_investigation(
+        conn,
+        job=job,
+        run=run,
+        gateway_config=AiGatewayConfig(
+            mode=AI_MODE_LOCAL_ONLY,
+            configured_mode=AI_MODE_LOCAL_ONLY,
+            local_base_url="http://127.0.0.1:11434",
+            local_model="llama",
+        ),
+        gateway=FakeGateway(content=_production_shape_content()),
+        tool_executor=lambda _planned, _context: _tool_summary(),
+    )
+    conn.commit()
+
+    assert outcome.run_status == "success"
+    with conn.cursor() as cur:
+        cur.execute("SELECT summary, sections, evidence_refs FROM soc_briefings WHERE run_id = %s", (run["id"],))
+        summary, sections, evidence_refs = cur.fetchone()
+
+    evidence = " ".join(sections["evidence"])
+    recommendations = " ".join(sections["recommendations"])
+    critical = " ".join(sections["critical_findings"])
+    escalations = " ".join(sections["escalations"])
+    low_priority = " ".join(sections["dismissed_low_priority_findings"])
+
+    assert "Evidence showed: Alert 1 showed repeated connection attempts from 8.231.67.182." in evidence
+    assert "Analyst judgment: This is reconnaissance or routine scanning rather than confirmed compromise." in evidence
+    assert "alert details: Alert 1 showed repeated connection attempts from 8.231.67.182." in evidence
+    assert "Evidence reviewed: pfSense firewall activity." in evidence
+    assert "Repeated deny activity was visible with no confirmed impact." in evidence
+    assert "Related attempts remained blocked." in evidence
+    assert "Priority 1: Review firewall logs for source IP 8.231.67.182." in recommendations
+    assert "Review firewall and authentication logs for follow-up activity from 8.231.67.182" in recommendations
+    assert "Verify whether 8.231.67.182 is an approved scanner. Reason: The activity resembles scanning but source ownership is unknown." in recommendations
+    assert "What happened: Critical port-scan alert from 8.231.67.182." in critical
+    assert "Supporting evidence: The alert pattern showed repeated connection attempts." in critical
+    assert "Why it matters: A repeated scan can precede exploitation if it touches exposed services." in critical
+    assert "Confidence: medium." in critical
+    assert "Escalation note:" in escalations or "Repeated attempts targeted the perimeter from 8.231.67.182." in escalations
+    assert "Downgraded:" in low_priority
+    assert evidence_refs[0]["source_path"] == "/alerts/1"
+    assert evidence_refs[0]["tool_name"] == "get_alert_detail"
+    _assert_no_internal_analyst_terms(summary, sections)
 
 
 def test_paid_fallback_modes_are_blocked_for_scheduled_work(postgres_db):
