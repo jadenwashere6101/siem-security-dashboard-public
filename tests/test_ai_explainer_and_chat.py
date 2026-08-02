@@ -10,7 +10,7 @@ from core.ai.config import AI_MODE_LOCAL_ONLY, AiGatewayConfig
 from core.ai.context_builder import AiContextPayload, AiContextSource, build_ai_context
 from core.ai.explainer_service import _build_prompt, chat_about_siem, explain_context
 from core.ai.models import AI_STATUS_SUCCESS, AiGatewayRequest, AiGatewayResponse, AiRequestMetadata
-from core.ai.profile_registry import AI_PROFILE_GUIDED_ANALYSIS
+from core.ai.profile_registry import AI_PROFILE_FAST_TRIAGE, AI_PROFILE_GUIDED_ANALYSIS
 
 ADMIN_USER = "testadmin"
 ADMIN_PASS = "testpassword123!"
@@ -112,6 +112,78 @@ def _context_payload(context_type: str = "alert", *, insufficient: bool = False)
     )
 
 
+def _production_like_quick_context(context_type: str = "alert") -> AiContextPayload:
+    if context_type == "source_ip":
+        data = {
+            "source_ip": "203.0.113.77",
+            "summary": {"total_alerts": 86, "successful_logins": 0, "primary_activity": "firewall denies"},
+            "related_alerts": [
+                {"id": index, "alert_type": "pfsense_firewall_repeated_deny", "severity": "high", "source_ip": "203.0.113.77", "status": "open"}
+                for index in range(90)
+            ],
+            "events": [
+                {"event_id": index, "source_ip": "203.0.113.77", "destination_ip": f"10.0.{index % 8}.{index % 250}", "destination_port": 443 + index % 80, "action": "deny"}
+                for index in range(160)
+            ],
+            "_evidence": {"included": {"related_alerts": 90, "events": 160}, "omitted": 340, "truncated": True},
+        }
+        source_path = "/source-ip/203.0.113.77"
+        record_ids = ["203.0.113.77"]
+    elif context_type == "dashboard":
+        data = {
+            "visible_filters": {"severity": "high", "window": "24h"},
+            "dashboard_summary": {"total_alerts": 4200, "critical": 17, "high": 231},
+            "timeline": [{"bucket": index, "count": 100 + index, "dominant_source": "203.0.113.77"} for index in range(96)],
+            "top_source_ips": [{"source_ip": f"203.0.113.{index}", "count": 50 + index} for index in range(50)],
+            "recent_alerts": [{"id": index, "source_ip": "203.0.113.77", "severity": "high", "message": "Repeated deny"} for index in range(80)],
+            "_evidence": {"included": {"timeline": 96, "top_source_ips": 50, "recent_alerts": 80}, "omitted": 420, "truncated": True},
+        }
+        source_path = "/alerts/summary"
+        record_ids = ["dashboard"]
+    else:
+        data = {
+            "alert": {
+                "id": 8605,
+                "severity": "HIGH",
+                "alert_type": "pfsense_firewall_repeated_deny",
+                "description": "Repeated firewall deny events against exposed service",
+                "source_ip": "203.0.113.77",
+                "destination_ip": "10.0.0.15",
+                "destination_port": 443,
+                "status": "open",
+                "created_at": "2026-08-01T12:39:52Z",
+            },
+            "related_alerts": [
+                {"id": index, "source_ip": "203.0.113.77", "severity": "high", "type": "firewall_deny", "destination_port": 443 + index % 5, "status": "open"}
+                for index in range(80)
+            ],
+            "events": [
+                {"id": index, "source_ip": "203.0.113.77", "destination_ip": f"10.0.{index % 8}.{index % 250}", "destination_port": 443 + index % 80, "action": "deny", "timestamp": f"2026-08-01T12:{index % 60:02d}:00Z"}
+                for index in range(220)
+            ],
+            "_evidence": {"included": {"alert": 1, "events": 220, "related_alerts": 80}, "omitted": 480, "truncated": True},
+        }
+        source_path = "/alerts/8605"
+        record_ids = [8605]
+    return AiContextPayload(
+        context_type=context_type,
+        data=data,
+        sources=[
+            AiContextSource(
+                context_type,
+                source_path,
+                record_ids,
+                "2026-08-01T12:39:52+00:00",
+                truncated=True,
+                omitted_count=480,
+                truncation_reason="production_like_quick_explain_fixture",
+            )
+        ],
+        truncated=True,
+        omitted_count=480,
+    )
+
+
 def _login_super_admin(client):
     resp = client.post("/login", json={"username": ADMIN_USER, "password": ADMIN_PASS})
     assert resp.status_code == 200
@@ -172,6 +244,7 @@ def test_explain_context_uses_gateway_read_only_metadata_and_redacts_secrets(mon
         "context_type": "alert",
         "action": "explain_alert",
         "read_only": True,
+        "tone": "professional",
     }
     assert "sk-secret-value" not in gateway.requests[0].prompt
     assert "sk-secret-value" not in str(result.payload)
@@ -417,6 +490,59 @@ def test_interactive_prompt_requires_useful_non_repetitive_analysis():
     assert "contradicting or benign evidence" in prompt
     assert "missing evidence" in prompt
     assert "concrete read-only next steps" in prompt
+
+
+def test_production_like_alert_quick_explain_prompt_fits_fast_profile_with_identity_and_metadata():
+    config = _config()
+    limit = config.profile(AI_PROFILE_FAST_TRIAGE).max_prompt_chars
+    question = "hey, what's up with this alert, anything I should actually worry about or is it just noise?"
+    prompt = _build_prompt(
+        _production_like_quick_context("alert"),
+        action="explain_alert",
+        question=question,
+        config=config,
+        profile_max_prompt_chars=limit,
+        tone="casual",
+    )
+
+    assert len(prompt) <= limit
+    assert limit - len(prompt) >= 500
+    assert question in prompt
+    assert "/alerts/8605" in prompt
+    assert "8605" in prompt
+    assert "_prompt_compaction" in prompt
+    assert "original_chars" in prompt
+    assert "omitted_count" in prompt
+    assert "203.0.113.77" in prompt
+    assert "Tone classification: casual" in prompt
+
+
+def test_quick_explain_tone_and_surface_prompts_fit_fast_profile():
+    config = _config()
+    limit = config.profile(AI_PROFILE_FAST_TRIAGE).max_prompt_chars
+    scenarios = (
+        ("alert", "casual", "bro is this IP actually bad or is this just bullshit?"),
+        ("alert", "professional", "Please explain what matters about this alert."),
+        ("alert", "technical", "Explain the auth and firewall signal in this alert."),
+        ("source_ip", "casual", "what's going on with this IP?"),
+        ("dashboard", "professional", "Summarize what matters on this dashboard."),
+    )
+
+    for context_type, tone, question in scenarios:
+        prompt = _build_prompt(
+            _production_like_quick_context(context_type),
+            action="explain",
+            question=question,
+            config=config,
+            profile_max_prompt_chars=limit,
+            tone=tone,
+        )
+        assert len(prompt) <= limit, (context_type, tone, len(prompt), limit)
+        assert limit - len(prompt) >= 350, (context_type, tone, len(prompt), limit)
+        assert question in prompt
+        assert f"Tone classification: {tone}" in prompt
+        assert "Tiny style example" in prompt
+        assert "This alert indicates suspicious activity" in prompt
 
 
 def test_context_builder_uses_visible_dashboard_state():

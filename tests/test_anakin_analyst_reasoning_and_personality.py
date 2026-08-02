@@ -60,18 +60,16 @@ def test_quick_explain_prompt_uses_persona_and_stays_concise_tool_free():
     ).lower()
 
     assert "experienced detection engineer" in prompt
-    assert "already-loaded bounded context only" in prompt
-    assert "usually 2-6 concise sentences" in prompt
-    assert "do not ask for or imply tool use" in prompt
-    assert "what happened" in prompt
-    assert "one concrete next check" in prompt
+    assert "quick explain style" in prompt
+    assert "2-6 concise sentences" in prompt
+    assert "use only already-loaded bounded context" in prompt
+    assert "at most one concrete next check" in prompt
     assert "do not repeat the alert description" in prompt
-    assert "continue monitoring" in prompt
-    assert "do not roleplay" in prompt
-    assert "generic assistant phrasing" in prompt
-    assert "style examples for interactive answers" in prompt
-    assert "bad: this alert indicates potentially malicious activity" in prompt
-    assert "good: honestly, this looks more like noisy recon" in prompt
+    assert "generic monitoring advice" in prompt
+    assert "tiny style example" in prompt
+    assert "bad: this alert indicates suspicious activity" in prompt
+    assert "good: this looks more like noisy recon" in prompt
+    assert "style examples for interactive answers" not in prompt
     assert "you are a read-only siem analyst assistant" not in prompt
 
 
@@ -92,13 +90,19 @@ def test_shared_persona_has_tone_adaptation_without_false_personality():
 
 
 def test_interactive_policies_include_natural_conversation_rules_and_examples():
-    for policy in (quick_explain_policy("casual"), deep_investigate_policy("professional"), decision_support_policy("technical"), repo_assistant_policy("technical")):
+    for policy in (deep_investigate_policy("professional"), decision_support_policy("technical"), repo_assistant_policy("technical")):
         lower = policy.lower()
         assert "answer immediately" in lower
         assert "every paragraph must add reasoning, evidence, uncertainty, or a concrete next step" in lower
         assert "never a generic disclaimer" in lower
         assert "style examples for interactive answers" in lower
         assert "do not copy conclusions" in lower
+
+    quick = quick_explain_policy("casual").lower()
+    assert "answer immediately" in quick
+    assert "tiny style example" in quick
+    assert "style examples for interactive answers" not in quick
+    assert len(quick_explain_policy("casual")) <= 3400
 
     artifact = artifact_policy("casual").lower()
     assert "style examples for interactive answers" not in artifact
@@ -182,8 +186,8 @@ def test_quick_explain_and_repo_assistant_are_short_by_default():
     quick = quick_explain_policy().lower()
     repo = repo_assistant_policy().lower()
 
-    assert "short by default" in quick
-    assert "usually 2-6 concise sentences" in quick
+    assert "quick explain style" in quick
+    assert "2-6 concise sentences" in quick
     assert "concise by default" in repo
     assert "do not answer live siem-data questions from repository context" in repo
 
