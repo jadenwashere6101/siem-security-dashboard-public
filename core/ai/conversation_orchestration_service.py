@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
@@ -59,6 +60,40 @@ class ConversationActorUnavailableError(ConversationOrchestrationError):
     error_code = "conversation_actor_unavailable"
 
 
+@dataclass(frozen=True)
+class ResolvedExecutionContext:
+    active_entity: dict[str, Any]
+    entities: tuple[dict[str, Any], ...]
+    comparison_entities: tuple[dict[str, Any], ...]
+    context_type: str
+    context: dict[str, Any]
+    entity_snapshot: dict[str, Any]
+    resolution: dict[str, Any]
+    source: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "active_entity": dict(self.active_entity),
+            "entities": [dict(item) for item in self.entities],
+            "comparison_entities": [dict(item) for item in self.comparison_entities],
+            "context_type": self.context_type,
+            "context": dict(self.context),
+            "entity_snapshot": dict(self.entity_snapshot),
+            "resolution": dict(self.resolution),
+            "source": self.source,
+        }
+
+
+@dataclass(frozen=True)
+class AssistantTerminalContent:
+    content: str
+    category: str
+    result_status: str
+    missing_sections: tuple[str, ...] = ()
+    provider_status: str | None = None
+    error: str | None = None
+
+
 def has_conversation_envelope(payload: Any) -> bool:
     return isinstance(payload, dict) and payload.get("conversation") is not None
 
@@ -95,7 +130,8 @@ def run_conversational_workflow(
         return WorkflowResult(prepared["duplicate_result"], 200)
     if prepared.get("deterministic_result") is not None:
         return WorkflowResult(prepared["deterministic_result"], 200)
-    execution_payload = _with_context(payload, prepared["selection"].packet)
+    execution_payload = _with_context(prepared["execution_payload"], prepared["selection"].packet)
+    _assert_execution_alignment(execution_payload, prepared["resolved_context"], prepared["selection"].packet)
     try:
         result = run_workflow(execution_payload, gateway=gateway, config=resolved_config)
         return _complete_sync(prepared, result)
@@ -159,6 +195,8 @@ def prepare_worker_conversation(conn, job: dict[str, Any]) -> tuple[dict[str, An
     turn = get_turn_by_id(conn, thread_id=thread_id, owner_username=job["actor_username"], turn_id=int(turn_id))
     if turn is None or turn.get("lifecycle_status") not in {"queued", "running"}:
         raise ConversationBoundaryError("Linked conversation turn is not available for execution.")
+    stored_context = _resolved_context_from_turn(turn)
+    _validate_resolved_entities(conn, owner_username=job["actor_username"], resolved=stored_context)
     profile = load_ai_gateway_config().profile(WORKFLOW_PROFILES[workflow])
     selection = select_conversation_context(
         conn,
@@ -167,14 +205,19 @@ def prepare_worker_conversation(conn, job: dict[str, Any]) -> tuple[dict[str, An
         question=_question(payload),
         workflow=workflow,
         max_chars=conversation_budget(profile_max_prompt_chars=profile.max_prompt_chars, workflow=workflow),
+        resolution_override=stored_context.resolution,
+        resolved_entity_override=stored_context.active_entity,
     )
+    resolved_payload = _apply_resolved_context(payload, stored_context)
+    _assert_execution_alignment(resolved_payload, stored_context, selection.packet)
     execution = {
         "thread_id": thread_id,
         "turn_id": int(turn_id),
         "expected_thread_version": turn["thread_version_after_append"],
         "selection": selection,
+        "resolved_context": stored_context.as_dict(),
     }
-    return _with_context(payload, selection.packet, execution=execution), current_role
+    return _with_context(resolved_payload, selection.packet, execution=execution), current_role
 
 
 def complete_worker_conversation(conn, job: dict[str, Any], result: WorkflowResult) -> WorkflowResult:
@@ -204,17 +247,25 @@ def complete_worker_conversation(conn, job: dict[str, Any], result: WorkflowResu
             "user_turn": failed_user,
             "assistant_turn": None,
             "reference_resolution": execution_payload.get("selection", {}).get("resolution"),
+            "active_entity": execution_payload.get("selection", {}).get("active_entity"),
             "context_bounds": execution_payload.get("selection", {}).get("bounds", {}),
             "authoritative_history": "postgresql",
         }
         return WorkflowResult(enriched, result.status_code)
-    content = _assistant_content(result.payload, workflow=job["workflow"])
-    if not content:
+    terminal = _normalize_assistant_content(result.payload, workflow=job["workflow"])
+    if not terminal.content:
+        fail_execution_turn(
+            conn,
+            thread_id=job["thread_id"],
+            owner_username=job["actor_username"],
+            turn_id=int(job["turn_id"]),
+        )
         raise ConversationOrchestrationError("Workflow completed without analyst-facing assistant content.")
     structured = _assistant_structured_payload(
         result.payload,
         workflow=job["workflow"],
         request_id=job.get("request_id"),
+        terminal=terminal,
     )
     completed_user, assistant_turn, thread = finalize_execution_turn(
         conn,
@@ -223,7 +274,7 @@ def complete_worker_conversation(conn, job: dict[str, Any], result: WorkflowResu
         user_turn_id=int(job["turn_id"]),
         expected_thread_version=int(user_turn["thread_version_after_append"]),
         workflow=job["workflow"],
-        content=content,
+        content=terminal.content,
         client_request_id=f"{user_turn['client_request_id']}:assistant",
         structured_payload=structured,
         entity_snapshot=user_turn.get("entity_snapshot") or {},
@@ -309,6 +360,14 @@ def _prepare_submission(
             conn.commit()
             return {"duplicate_result": duplicate}
         profile = resolved_config.profile(WORKFLOW_PROFILES[workflow])
+        explicit_entity = _explicit_entity(payload)
+        if explicit_entity:
+            validate_conversation_entity(
+                conn,
+                owner_username=owner_username,
+                entity_type=explicit_entity["type"],
+                entity_id=explicit_entity["id"],
+            )
         selection = select_conversation_context(
             conn,
             thread=thread,
@@ -316,6 +375,7 @@ def _prepare_submission(
             question=_question(payload),
             workflow=workflow,
             max_chars=conversation_budget(profile_max_prompt_chars=profile.max_prompt_chars, workflow=workflow),
+            explicit_entity=explicit_entity,
         )
         resolution = selection.resolution
         if resolution.get("intent") == "correction":
@@ -328,14 +388,17 @@ def _prepare_submission(
         if assertion_type == "correction":
             referent = resolution.get("referent") if isinstance(resolution.get("referent"), dict) else {}
             parent_turn_id = referent.get("database_id")
-        entity_snapshot = _entity_snapshot(payload, thread, resolution)
-        for entity in entity_snapshot.get("entities", []):
-            validate_conversation_entity(
-                conn,
-                owner_username=owner_username,
-                entity_type=entity.get("type"),
-                entity_id=entity.get("id"),
-            )
+        resolved_context = _resolve_execution_context(
+            conn,
+            payload=payload,
+            thread=thread,
+            owner_username=owner_username,
+            selection=selection,
+            explicit_entity=explicit_entity,
+        )
+        entity_snapshot = resolved_context.entity_snapshot
+        execution_payload = _apply_resolved_context(payload, resolved_context)
+        _assert_execution_alignment(execution_payload, resolved_context, selection.packet)
         user_turn, updated_thread, _created = append_turn(
             conn,
             thread_id=thread_id,
@@ -346,7 +409,10 @@ def _prepare_submission(
             workflow=workflow,
             content=_question(payload),
             assertion_type=assertion_type,
-            structured_payload={"reference_resolution": resolution},
+            structured_payload={
+                "reference_resolution": resolution,
+                "resolved_execution_context": resolved_context.as_dict(),
+            },
             parent_turn_id=parent_turn_id,
             entity_snapshot=entity_snapshot,
             lifecycle_status="queued",
@@ -357,6 +423,8 @@ def _prepare_submission(
             "selection": selection,
             "owner_username": owner_username,
             "workflow": workflow,
+            "resolved_context": resolved_context,
+            "execution_payload": execution_payload,
         }
         if resolution.get("status") in {"clarification_required", "unresolved", "command_required"}:
             message = str(resolution.get("message") or "Clarify the referenced investigation context before continuing.")
@@ -390,18 +458,19 @@ def _prepare_submission(
             return prepared
         if create_async_request:
             server_payload = {
-                **payload,
+                **execution_payload,
                 "client_request_id": client_request_id,
                 "_conversation_execution": {
                     "thread_id": thread_id,
                     "turn_id": user_turn["id"],
                     "expected_thread_version": user_turn["thread_version_after_append"],
+                    "resolved_context": resolved_context.as_dict(),
                 },
             }
             request_row, request_created = create_or_get_request(
                 conn,
                 workflow=workflow,
-                context_type=payload.get("context_type"),
+                context_type=resolved_context.context_type,
                 payload=server_payload,
                 classification=classification.as_dict(),
                 actor_username=owner_username,
@@ -435,8 +504,8 @@ def _complete_sync(prepared: dict[str, Any], result: WorkflowResult) -> Workflow
             selection=prepared["selection"],
         )
         return WorkflowResult(enriched, result.status_code)
-    content = _assistant_content(result.payload, workflow=prepared["workflow"])
-    if not content:
+    terminal = _normalize_assistant_content(result.payload, workflow=prepared["workflow"])
+    if not terminal.content:
         _fail_prepared_turn(prepared)
         raise ConversationOrchestrationError("Workflow completed without analyst-facing assistant content.")
     conn = get_db_connection()
@@ -448,9 +517,13 @@ def _complete_sync(prepared: dict[str, Any], result: WorkflowResult) -> Workflow
             user_turn_id=prepared["user_turn"]["id"],
             expected_thread_version=prepared["user_turn"]["thread_version_after_append"],
             workflow=prepared["workflow"],
-            content=content,
+            content=terminal.content,
             client_request_id=f"{prepared['user_turn']['client_request_id']}:assistant",
-            structured_payload=_assistant_structured_payload(result.payload, workflow=prepared["workflow"]),
+            structured_payload=_assistant_structured_payload(
+                result.payload,
+                workflow=prepared["workflow"],
+                terminal=terminal,
+            ),
             entity_snapshot=prepared["user_turn"].get("entity_snapshot") or {},
         )
         _persist_result_evidence(
@@ -550,18 +623,22 @@ def _with_context(payload: dict[str, Any], packet: dict[str, Any], *, execution:
             "selection": {
                 "resolution": execution["selection"].resolution,
                 "bounds": execution["selection"].packet.get("bounds", {}),
+                "active_entity": execution["resolved_context"].get("active_entity"),
             },
         }
     return result
 
 
 def _assistant_content(payload: dict[str, Any], *, workflow: str) -> str:
+    return _normalize_assistant_content(payload, workflow=workflow).content
+
+
+def _normalize_assistant_content(payload: dict[str, Any], *, workflow: str) -> AssistantTerminalContent:
     result = payload.get("result") if isinstance(payload.get("result"), dict) else payload
     if workflow in {"quick_explain", "decision_support"}:
         value = result.get("answer")
     elif workflow == "deep_investigate":
-        investigation = result.get("investigation") if isinstance(result.get("investigation"), dict) else {}
-        value = investigation.get("summary") or result.get("summary") or result.get("answer")
+        return _normalize_deep_investigation_content(payload, result)
     elif workflow == "generate_artifact":
         value = result.get("draft") or result.get("artifact")
     else:
@@ -570,12 +647,182 @@ def _assistant_content(payload: dict[str, Any], *, workflow: str) -> str:
         text = json.dumps(value, default=str, sort_keys=True)
     else:
         text = str(value or "").strip()
-    return text if len(text) <= 8000 else f"{text[:7950]}... [compacted for conversation storage]"
+    text = text if len(text) <= 8000 else f"{text[:7950]}... [compacted for conversation storage]"
+    status = str(result.get("status") or payload.get("status") or "unknown").strip().lower()
+    return AssistantTerminalContent(content=text, category="full" if text else "malformed", result_status=status)
+
+
+def _normalize_deep_investigation_content(
+    payload: dict[str, Any], result: dict[str, Any]
+) -> AssistantTerminalContent:
+    investigation = result.get("investigation") if isinstance(result.get("investigation"), dict) else {}
+    status = str(investigation.get("status") or result.get("status") or payload.get("status") or "unknown").strip().lower()
+    provider_status = _deep_provider_status(investigation)
+    error = _clean_scalar(investigation.get("error") or result.get("error") or payload.get("error"), 500)
+    failure_statuses = {"failed", "error", "provider_error", "provider_unavailable", "timed_out", "timeout", "cancelled"}
+    if status in failure_statuses:
+        return AssistantTerminalContent(
+            content="",
+            category="failed",
+            result_status=status,
+            provider_status=provider_status,
+            error=error,
+        )
+
+    summary = _first_scalar(investigation, result, keys=("summary", "answer"), max_chars=7000)
+    if summary:
+        category = "partial" if status in {"partial", "degraded", "insufficient_context"} else "full"
+        return AssistantTerminalContent(
+            content=summary,
+            category=category,
+            result_status=status,
+            provider_status=provider_status,
+            error=error,
+        )
+
+    sections: list[tuple[str, list[str]]] = []
+    assessment = _semantic_values(investigation, result, keys=("assessment",), limit=2)
+    findings = _semantic_values(
+        investigation,
+        result,
+        keys=("findings", "correlated_evidence", "correlations"),
+        limit=3,
+        allow_source_evidence=True,
+    )
+    hypotheses = _semantic_values(investigation, result, keys=("competing_hypotheses", "hypotheses"), limit=2)
+    contradictions = _semantic_values(investigation, result, keys=("contradictions",), limit=2)
+    gaps = _semantic_values(investigation, result, keys=("evidence_gaps", "missing_evidence"), limit=2)
+    next_steps = _semantic_values(
+        investigation,
+        result,
+        keys=("prioritized_next_step", "next_step", "recommendations"),
+        limit=2,
+        recommendation=True,
+    )
+    confidence = _first_scalar(investigation, result, keys=("confidence",), max_chars=160)
+    for label, values in (
+        ("Assessment", assessment),
+        ("Validated findings", findings),
+        ("Working hypotheses", hypotheses),
+        ("Contradictions", contradictions),
+        ("Evidence gaps", gaps),
+        ("Next step", next_steps),
+    ):
+        if values:
+            sections.append((label, values))
+    lines = [f"{label}: {' '.join(values)}" for label, values in sections]
+    if confidence:
+        lines.append(f"Confidence: {confidence}")
+    content = "\n".join(lines)
+    if content and status in {"partial", "degraded", "insufficient_context"}:
+        content = f"Partial investigation result ({status.replace('_', ' ')}).\n{content}"
+    missing = tuple(
+        name
+        for name, values in (
+            ("summary", [summary] if summary else []),
+            ("assessment", assessment),
+            ("findings", findings),
+            ("evidence_gaps", gaps),
+            ("next_step", next_steps),
+        )
+        if not values
+    )
+    category = "malformed" if not content else (
+        "partial" if status in {"partial", "degraded", "insufficient_context"} else "structured"
+    )
+    return AssistantTerminalContent(
+        content=content[:8000],
+        category=category,
+        result_status=status,
+        missing_sections=missing,
+        provider_status=provider_status,
+        error=error,
+    )
+
+
+def _semantic_values(
+    investigation: dict[str, Any],
+    result: dict[str, Any],
+    *,
+    keys: tuple[str, ...],
+    limit: int,
+    recommendation: bool = False,
+    allow_source_evidence: bool = False,
+) -> list[str]:
+    values: list[str] = []
+    for container in (investigation, result):
+        for key in keys:
+            raw = container.get(key)
+            items = raw if isinstance(raw, list) else ([raw] if raw not in (None, "", {}, []) else [])
+            for item in items:
+                text = _semantic_item_text(item, recommendation=recommendation, allow_source_evidence=allow_source_evidence)
+                if text and text not in values:
+                    values.append(text)
+                    if len(values) >= limit:
+                        return values
+    return values
+
+
+def _semantic_item_text(value: Any, *, recommendation: bool, allow_source_evidence: bool) -> str:
+    scalar = _clean_scalar(value, 900)
+    if scalar:
+        return scalar
+    if not isinstance(value, dict):
+        return ""
+    keys = (
+        ("recommendation", "recommended_action", "next_step", "action", "description", "reason", "title")
+        if recommendation
+        else ("finding", "summary", "assessment", "description", "detail", "fact", "inference", "hypothesis", "contradiction", "gap")
+    )
+    parts = []
+    for key in keys:
+        text = _clean_scalar(value.get(key), 700)
+        if text and text not in parts:
+            parts.append(text)
+    if parts:
+        return " ".join(parts[:2])
+    if allow_source_evidence:
+        source_type = _clean_scalar(value.get("source_type") or value.get("type"), 80)
+        if source_type:
+            return f"Validated {source_type.replace('_', ' ')} evidence was available."
+    return ""
+
+
+def _first_scalar(*containers: dict[str, Any], keys: tuple[str, ...], max_chars: int) -> str:
+    for container in containers:
+        for key in keys:
+            text = _clean_scalar(container.get(key), max_chars)
+            if text:
+                return text
+    return ""
+
+
+def _clean_scalar(value: Any, max_chars: int) -> str:
+    if not isinstance(value, (str, int, float)) or isinstance(value, bool):
+        return ""
+    text = " ".join(str(value).split()).strip()
+    return text if len(text) <= max_chars else f"{text[: max_chars - 16]}... [compacted]"
+
+
+def _deep_provider_status(investigation: dict[str, Any]) -> str | None:
+    observability = investigation.get("observability") if isinstance(investigation.get("observability"), dict) else {}
+    responses = observability.get("provider_responses") if isinstance(observability.get("provider_responses"), list) else []
+    for response in reversed(responses):
+        if isinstance(response, dict):
+            status = _clean_scalar(response.get("status"), 80)
+            if status:
+                return status
+    return None
 
 
 def _generation_failed(payload: dict[str, Any], status_code: int) -> bool:
     result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
-    statuses = {str(payload.get("status") or "").lower(), str(result.get("status") or "").lower()}
+    investigation = result.get("investigation") if isinstance(result.get("investigation"), dict) else {}
+    statuses = {
+        str(payload.get("status") or "").lower(),
+        str(result.get("status") or "").lower(),
+        str(investigation.get("status") or "").lower(),
+    }
     failure_statuses = {
         "failed",
         "error",
@@ -589,14 +836,28 @@ def _generation_failed(payload: dict[str, Any], status_code: int) -> bool:
     return status_code >= 500 or bool(statuses & failure_statuses)
 
 
-def _assistant_structured_payload(payload: dict[str, Any], *, workflow: str, request_id: str | None = None) -> dict[str, Any]:
+def _assistant_structured_payload(
+    payload: dict[str, Any],
+    *,
+    workflow: str,
+    request_id: str | None = None,
+    terminal: AssistantTerminalContent | None = None,
+) -> dict[str, Any]:
     result = payload.get("result") if isinstance(payload.get("result"), dict) else payload
-    status = str(result.get("status") or payload.get("status") or "unknown")
+    normalized = terminal or _normalize_assistant_content(payload, workflow=workflow)
+    status = normalized.result_status
     structured = {
         "confidence": "low" if status in {"partial", "degraded", "insufficient_context"} else "medium",
         "provenance": {"type": "model_inference", "workflow": workflow, "request_id": request_id},
         "result_status": status,
+        "terminal_category": normalized.category,
     }
+    if normalized.missing_sections:
+        structured["missing_sections"] = list(normalized.missing_sections)
+    if normalized.provider_status:
+        structured["provider_status"] = normalized.provider_status
+    if normalized.error:
+        structured["terminal_error"] = normalized.error
     if workflow == "generate_artifact":
         structured.pop("confidence", None)
         structured["artifact"] = _bounded_artifact(result.get("draft") or result.get("artifact"))
@@ -690,24 +951,247 @@ def _entity_fingerprint_from_sources(sources: list[Any]) -> str | None:
     return None
 
 
-def _entity_snapshot(payload: dict[str, Any], thread: dict[str, Any], resolution: dict[str, Any]) -> dict[str, Any]:
-    entities = []
+_IDENTITY_CONTEXT_FIELDS = frozenset(
+    {
+        "alert_id",
+        "incident_id",
+        "source_ip",
+        "activity_id",
+        "recon_activity_id",
+        "registry_id",
+        "investigation_id",
+    }
+)
+
+
+def _explicit_entity(payload: dict[str, Any]) -> dict[str, str] | None:
     supplied = payload.get("entity") if isinstance(payload.get("entity"), dict) else {}
-    supplied_type = supplied.get("type") or payload.get("context_type")
-    supplied_id = supplied.get("id") or supplied.get("alert_id") or supplied.get("incident_id") or supplied.get("source_ip")
-    if supplied_type and supplied_id not in (None, ""):
-        entities.append({"type": str(supplied_type).lower().replace("-", "_"), "id": str(supplied_id)})
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    entity_type = str(supplied.get("type") or payload.get("context_type") or "").strip().lower().replace("-", "_")
+    aliases = {"analyst_workspace": "general", "soc_command_center": "general", "recon_history": "general"}
+    entity_type = aliases.get(entity_type, entity_type)
+    field_by_type = {
+        "alert": ("alert_id", "id"),
+        "detection": ("alert_id", "id"),
+        "incident": ("incident_id", "id"),
+        "source_ip": ("source_ip", "id"),
+        "recon_activity": ("activity_id", "recon_activity_id", "id"),
+        "response_registry": ("registry_id", "id"),
+        "investigation": ("investigation_id", "id"),
+    }
+    value = supplied.get("id")
+    for field in field_by_type.get(entity_type, ()):
+        if value not in (None, ""):
+            break
+        value = supplied.get(field) if supplied.get(field) not in (None, "") else context.get(field)
+    if value in (None, "") and entity_type in {"dashboard", "general"}:
+        value = supplied.get("id") or entity_type
+    if not entity_type or value in (None, ""):
+        return None
+    return {"type": entity_type, "id": str(value), "display_alias": supplied.get("display_alias")}
+
+
+def _resolve_execution_context(
+    conn,
+    *,
+    payload: dict[str, Any],
+    thread: dict[str, Any],
+    owner_username: str,
+    selection,
+    explicit_entity: dict[str, Any] | None,
+) -> ResolvedExecutionContext:
+    active = _normalized_entity(selection.resolved_entity)
+    if not active:
+        active = _normalized_entity(thread.get("primary_entity"))
+    if not active:
+        raise ConversationBoundaryError("Conversation entity could not be resolved.")
+
+    resolution = selection.resolution
+    referent = resolution.get("referent") if isinstance(resolution.get("referent"), dict) else {}
+    comparison = referent.get("entities") if isinstance(referent.get("entities"), list) else []
     candidates = resolution.get("candidates") if isinstance(resolution.get("candidates"), list) else []
-    entities.extend(item for item in candidates if isinstance(item, dict))
-    if not entities and isinstance(thread.get("primary_entity"), dict):
-        entities.append(thread["primary_entity"])
-    active = None
-    referent = resolution.get("referent") if isinstance(resolution.get("referent"), dict) else None
-    if referent and referent.get("type") not in {"assistant_turn", "unresolved_question"} and referent.get("id"):
-        active = referent
-    elif entities:
-        active = entities[0]
-    return {"active_entity": active, "entities": entities[:20]}
+    source = "explicit" if explicit_entity and _entity_identity(explicit_entity) == _entity_identity(active) else "conversation"
+    context_type, context = _execution_context_fields(
+        conn,
+        owner_username=owner_username,
+        active=active,
+        payload=payload,
+    )
+    derived = [{"type": "source_ip", "id": context["source_ip"]}] if context.get("source_ip") else []
+    entities = _distinct_entities([active, *comparison, *candidates, *derived])
+    resolved = ResolvedExecutionContext(
+        active_entity=active,
+        entities=tuple(entities),
+        comparison_entities=tuple(_distinct_entities(comparison)),
+        context_type=context_type,
+        context=context,
+        entity_snapshot={"active_entity": active, "entities": entities[:20]},
+        resolution=resolution,
+        source=source,
+    )
+    _validate_resolved_entities(conn, owner_username=owner_username, resolved=resolved)
+    return resolved
+
+
+def _execution_context_fields(
+    conn,
+    *,
+    owner_username: str,
+    active: dict[str, Any],
+    payload: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    original = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    context = {key: value for key, value in original.items() if key not in _IDENTITY_CONTEXT_FIELDS and key != "id"}
+    entity_type, entity_id = _entity_identity(active)
+    requested_type = str(payload.get("context_type") or "").strip().lower().replace("-", "_")
+
+    if entity_type in {"alert", "detection"}:
+        context_type = "detection" if entity_type == "detection" or requested_type == "detection" else "alert"
+        context["alert_id"] = _entity_int(entity_id, entity_type)
+        with conn.cursor() as cur:
+            cur.execute("SELECT host(source_ip) FROM alerts WHERE id = %s", (context["alert_id"],))
+            row = cur.fetchone()
+        if row and row[0]:
+            context["source_ip"] = str(row[0])
+    elif entity_type == "incident":
+        context_type = "incident"
+        context["incident_id"] = _entity_int(entity_id, entity_type)
+        with conn.cursor() as cur:
+            cur.execute("SELECT host(source_ip) FROM incidents WHERE id = %s", (context["incident_id"],))
+            row = cur.fetchone()
+        if row and row[0]:
+            context["source_ip"] = str(row[0])
+    elif entity_type == "source_ip":
+        context_type = "source_ip"
+        context["source_ip"] = entity_id
+    elif entity_type == "recon_activity":
+        context_type = "recon_activity"
+        context["activity_id"] = _entity_int(entity_id, entity_type)
+    elif entity_type == "response_registry":
+        context_type = "response_registry"
+        context["registry_id"] = _entity_int(entity_id, entity_type)
+    elif entity_type == "investigation":
+        investigation_id = _entity_int(entity_id, entity_type)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT linked_alert_id, linked_incident_id, host(linked_source_ip)
+                FROM investigations
+                WHERE id = %s AND owner_username = %s AND visibility = 'private'
+                """,
+                (investigation_id, owner_username),
+            )
+            row = cur.fetchone()
+        if row is None:
+            raise ConversationBoundaryError("Resolved investigation is no longer available.")
+        context["investigation_id"] = investigation_id
+        if row[0] is not None:
+            context_type, context["alert_id"] = "alert", int(row[0])
+        elif row[1] is not None:
+            context_type, context["incident_id"] = "incident", int(row[1])
+        elif row[2]:
+            context_type, context["source_ip"] = "source_ip", str(row[2])
+        else:
+            context_type = "general"
+    elif entity_type in {"dashboard", "general"}:
+        context_type = entity_type
+    else:
+        raise ConversationBoundaryError("Resolved entity type cannot be mapped to a workflow context.")
+    return context_type, context
+
+
+def _apply_resolved_context(payload: dict[str, Any], resolved: ResolvedExecutionContext) -> dict[str, Any]:
+    result = {
+        **payload,
+        "context_type": resolved.context_type,
+        "context": dict(resolved.context),
+        "entity": dict(resolved.active_entity),
+    }
+    if resolved.comparison_entities:
+        result["context"]["comparison_entities"] = [dict(item) for item in resolved.comparison_entities]
+    return result
+
+
+def _resolved_context_from_turn(turn: dict[str, Any]) -> ResolvedExecutionContext:
+    structured = turn.get("structured_payload") if isinstance(turn.get("structured_payload"), dict) else {}
+    value = structured.get("resolved_execution_context")
+    if not isinstance(value, dict):
+        raise ConversationBoundaryError("Queued conversation turn is missing its resolved execution context.")
+    active = _normalized_entity(value.get("active_entity"))
+    entities = _distinct_entities(value.get("entities") if isinstance(value.get("entities"), list) else [])
+    comparison = _distinct_entities(
+        value.get("comparison_entities") if isinstance(value.get("comparison_entities"), list) else []
+    )
+    context = value.get("context") if isinstance(value.get("context"), dict) else None
+    resolution = value.get("resolution") if isinstance(value.get("resolution"), dict) else None
+    if not active or context is None or resolution is None:
+        raise ConversationBoundaryError("Queued conversation resolved context is malformed.")
+    if not any(_entity_identity(item) == _entity_identity(active) for item in entities):
+        raise ConversationBoundaryError("Queued conversation active entity is absent from its entity snapshot.")
+    return ResolvedExecutionContext(
+        active_entity=active,
+        entities=tuple(entities),
+        comparison_entities=tuple(comparison),
+        context_type=_required_text(value.get("context_type"), "resolved context type", 64),
+        context=context,
+        entity_snapshot={"active_entity": active, "entities": entities[:20]},
+        resolution=resolution,
+        source=str(value.get("source") or "conversation"),
+    )
+
+
+def _validate_resolved_entities(conn, *, owner_username: str, resolved: ResolvedExecutionContext) -> None:
+    for entity in resolved.entities:
+        validate_conversation_entity(
+            conn,
+            owner_username=owner_username,
+            entity_type=entity["type"],
+            entity_id=entity["id"],
+        )
+
+
+def _assert_execution_alignment(
+    payload: dict[str, Any], resolved: ResolvedExecutionContext, packet: dict[str, Any]
+) -> None:
+    payload_entity = _normalized_entity(payload.get("entity"))
+    packet_thread = packet.get("thread") if isinstance(packet.get("thread"), dict) else {}
+    packet_entity = _normalized_entity(packet_thread.get("resolved_entity"))
+    expected = _entity_identity(resolved.active_entity)
+    if not payload_entity or not packet_entity or _entity_identity(payload_entity) != expected or _entity_identity(packet_entity) != expected:
+        raise ConversationBoundaryError("Resolved thread entity and workflow execution entity do not match.")
+
+
+def _normalized_entity(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    entity_type = str(value.get("type") or value.get("entity_type") or "").strip().lower().replace("-", "_")
+    entity_id = str(value.get("id") or value.get("entity_id") or "").strip()
+    if not entity_type or not entity_id:
+        return None
+    return {"type": entity_type, "id": entity_id, "display_alias": value.get("display_alias")}
+
+
+def _distinct_entities(values: list[Any]) -> list[dict[str, Any]]:
+    result = []
+    for value in values:
+        entity = _normalized_entity(value)
+        if entity and not any(_entity_identity(item) == _entity_identity(entity) for item in result):
+            result.append(entity)
+    return result
+
+
+def _entity_identity(entity: dict[str, Any]) -> tuple[str, str]:
+    return str(entity.get("type") or ""), str(entity.get("id") or "")
+
+
+def _entity_int(value: str, entity_type: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as error:
+        raise ConversationBoundaryError(f"Resolved {entity_type} identity must be an integer.") from error
+    if parsed <= 0:
+        raise ConversationBoundaryError(f"Resolved {entity_type} identity must be positive.")
+    return parsed
 
 
 def _deterministic_envelope(
@@ -737,17 +1221,20 @@ def _conversation_metadata(thread, user_turn, *, assistant_turn, selection) -> d
     if hasattr(selection, "packet"):
         bounds = selection.packet.get("bounds", {})
         resolution = selection.resolution
+        active_entity = selection.resolved_entity
     elif isinstance(selection, dict):
         bounds = selection.get("bounds", {})
         resolution = selection.get("resolution")
+        active_entity = selection.get("active_entity")
     else:
-        bounds, resolution = {}, None
+        bounds, resolution, active_entity = {}, None, None
     return {
         "thread_id": thread.get("thread_id"),
         "thread_version": thread.get("version"),
         "user_turn": user_turn,
         "assistant_turn": assistant_turn,
         "reference_resolution": resolution,
+        "active_entity": active_entity,
         "context_bounds": bounds,
         "authoritative_history": "postgresql",
     }

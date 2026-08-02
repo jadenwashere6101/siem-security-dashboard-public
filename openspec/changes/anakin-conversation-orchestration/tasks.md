@@ -34,10 +34,20 @@
 
 ## 6. Verification And Handoff
 
-- [ ] 6.1 Run Python compilation and the full PostgreSQL-backed test suite without required skips.
+- [x] 6.1 Run Python compilation and the full PostgreSQL-backed test suite without required skips.
 - [x] 6.2 Run focused frontend tests and production build if frontend files changed.
 - [x] 6.3 Run the AI acceptance harness, schema snapshot/migration validation, `git diff --check`, and strict OpenSpec validation.
 - [x] 6.4 Review every failure class for general invariant enforcement and record files, status, risks, and deployment handoff.
 - [x] 6.5 Apply the Anakin production completion gate from `docs/anakin-production-acceptance-policy.md`; because no VM/browser-path work is authorized, report exactly `Implementation complete; production behavior unverified.` and do not claim production readiness.
 
-Full-suite note: the unrestricted PostgreSQL run executed without required skips but remains red at 2435 passed / 14 failed in unrelated alert, cleanup, incident/workspace, detection, and SOAR tests. The affected PostgreSQL-backed Anakin set is green at 166 passed.
+Full-suite correction note: the unrestricted PostgreSQL run executed without required skips at 2451 passed / 14 failed. The 14 failures exactly match baseline commit `266fb35`; there are zero new failures. The affected PostgreSQL-backed set is green at 182 passed, including 35 conversation-orchestration tests.
+
+## 7. Production-Defect Correction
+
+- [x] 7.1 Refactor packet construction to measure mandatory overhead, reserve final bookkeeping, compact optional categories progressively, and prove the final serialized packet fits every participating workflow budget.
+- [x] 7.2 Implement explicit-entity precedence and one validated resolved execution-context object shared by turn state, workflow payload, model/tool inputs, and response metadata.
+- [x] 7.3 Wire why, evidence, unique/multiple IP, go back, continue, compare, and clarification behavior through the canonical resolved context without model/request creation on ambiguity.
+- [x] 7.4 Normalize full, structured-only, partial/degraded, provider/tool-failure, and malformed Deep Investigate terminal results without arbitrary object stringification or false success state.
+- [x] 7.5 Add production-derived PostgreSQL, prompt-budget measurement, ownership, reset, workflow-boundary, and terminal-result regression coverage.
+- [x] 7.6 Run focused compilation/tests/harness and strict validation, then run the full PostgreSQL suite once and compare failures with baseline `266fb35`.
+- [x] 7.7 Complete the failure-class review and production-unverified handoff without commit, push, VM access, deployment, model/config changes, or production mutation.

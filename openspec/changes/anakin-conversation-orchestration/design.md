@@ -51,6 +51,33 @@ If content does not fit, deterministic compaction drops lowest-priority items an
 
 Stored content is wrapped as untrusted analyst/assistant data and prompt policy states it cannot override system, safety, tool, workflow, or artifact instructions.
 
+### Production correction: packet construction is fit-by-construction
+
+The packet builder first serializes a mandatory skeleton containing the resolved primary entity, compact reference status, provenance markers, and final bounds fields. That measured fixed size includes the bookkeeping that will be returned. Optional categories are then admitted in this order: corrections, one current unresolved question, compact conclusions, fresh evidence, recommendations, recent relevant turns, analyst statements, and secondary entities. Every category has deterministic item, text, and category limits.
+
+When an optional item does not fit, the builder retries its compact representation and otherwise omits the whole item while incrementing the reserved omission counter. Lower-priority categories are never allowed to displace the current resolved entity. The final packet is serialized again after all measurements are populated. A mandatory skeleton overflow is an internal configuration defect with measured required and available sizes; ordinary thread content is compacted and cannot cause that error. Conversation or workflow profile budgets are not increased.
+
+### Production correction: one resolved execution context owns entity identity
+
+The orchestration service constructs one normalized resolved execution context after validating the current request and thread. Entity precedence is: explicit validated request entity, deterministically resolved reference, existing active focus, then clarification. This object owns the active entity, comparison entities, bound conclusion/unresolved item, normalized context type, workflow identifiers (`alert_id`, `incident_id`, `source_ip`, host/entity identity, and investigation identity), and entity snapshot.
+
+The same object is used to append the user turn, update focus, build conversation metadata, and rewrite the server-side workflow payload before model or tool execution. A final invariant check rejects execution when thread entity, workflow payload entity, and response metadata entity disagree. Inferred references may enrich an explicit entity but cannot replace it.
+
+### Production correction: Deep Investigate terminal output is schema-tolerant
+
+Deep Investigate completion classifies the canonical result as full success, usable partial/degraded output, terminal provider/tool failure, or malformed/no-content output. Assistant prose is composed only from validated scalar/list fields already present in the investigation contract: summary or assessment, correlated evidence/findings, hypotheses and contradictions, evidence gaps, confidence, and prioritized next steps. Arbitrary objects are never stringified.
+
+Usable partial output produces a completed assistant turn whose structured payload records `partial` or `degraded`, missing sections, and available provider/error status. It does not claim full success. A terminal failure or malformed result creates no assistant inference and does not update prior thread conclusions.
+
+## Production Correction Failure Matrix
+
+| Failure class | Invariant | Enforcement location | General variants tested |
+|---|---|---|---|
+| Packet overflow after selection | Final bookkeeping is reserved and every returned packet is reserialized at or below its assigned budget | `conversation_context._build_packet` | Empty, first, second, eight-turn, multi-entity, correction/evidence, and all workflow budgets |
+| Explicit entity displaced by pronoun | Valid current-request identity always outranks inferred references | `conversation_orchestration_service._resolve_execution_context` | Explicit alert switch with generic pronoun; explicit source/incident identity |
+| Resolved focus differs from execution | One resolved context rewrites turn snapshot, workflow payload, and response metadata; mismatch fails closed | Submission and worker preparation in `conversation_orchestration_service` | Go back, why/evidence, one/many IPs, continue, compare |
+| Usable degraded result rejected | Semantic terminal normalizer accepts supported useful fields without fabricating or stringifying | `conversation_orchestration_service` completion normalization | Full, structured-only, partial/degraded, provider failure, malformed output |
+
 ### Existing prompt builders accept a separately bounded conversation block
 
 The orchestrator injects a server-built `conversation_context` packet. Explain, investigation, and drafting builders render it in a labeled untrusted-data section and include its serialized size in their current budget calculations. They never discover or query thread data independently.

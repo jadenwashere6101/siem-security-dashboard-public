@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import ipaddress
@@ -19,6 +20,8 @@ MIN_CONVERSATION_BUDGET = 900
 MAX_CONVERSATION_BUDGET = 4200
 
 _WHY = re.compile(r"^\s*(?:but\s+)?why\s*[?.!]*\s*$", re.IGNORECASE)
+_EVIDENCE_FOLLOW_UP = re.compile(r"\b(?:show|review|explain|what(?:'s| is))\b.*\bevidence\b|^\s*evidence\s*[?.!]*\s*$", re.IGNORECASE)
+_WHICH_IP = re.compile(r"\bwhich\b[^?.!]{0,32}\bips?\b", re.IGNORECASE)
 _CONTINUE = re.compile(r"\b(?:continue|keep going|what next|next step)\b", re.IGNORECASE)
 _COMPARE = re.compile(r"\b(?:compare|contrast)\b", re.IGNORECASE)
 _GO_BACK = re.compile(r"\b(?:go back|previous (?:alert|entity|one)|return to)\b", re.IGNORECASE)
@@ -40,10 +43,16 @@ class ConversationContextTooLargeError(ConversationContextError):
     error_code = "conversation_context_too_large"
 
 
+class ConversationContextConfigurationError(ConversationContextError):
+    status_code = 500
+    error_code = "conversation_context_configuration_error"
+
+
 @dataclass(frozen=True)
 class ConversationSelection:
     packet: dict[str, Any]
     resolution: dict[str, Any]
+    resolved_entity: dict[str, Any] | None = None
 
 
 def conversation_budget(*, profile_max_prompt_chars: int, workflow: str) -> int:
@@ -77,6 +86,9 @@ def select_conversation_context(
     workflow: str,
     max_chars: int,
     now: datetime | None = None,
+    explicit_entity: dict[str, Any] | None = None,
+    resolution_override: dict[str, Any] | None = None,
+    resolved_entity_override: dict[str, Any] | None = None,
 ) -> ConversationSelection:
     if max_chars < MIN_CONVERSATION_BUDGET:
         raise ConversationContextTooLargeError("Conversation context budget is below the safe minimum.")
@@ -88,12 +100,22 @@ def select_conversation_context(
     )
     state = thread.get("state") if isinstance(thread.get("state"), dict) else {}
     state_rebuilt = bool(state.get("rebuild_required"))
-    resolution = resolve_reference(
-        question,
-        thread=thread,
-        entities=records["entities"],
-        turns=records["turns"],
-        unresolved_questions=state.get("unresolved_questions") if not state_rebuilt else [],
+    resolution = (
+        sanitize_structured_value(resolution_override, field_name="reference resolution")
+        if isinstance(resolution_override, dict)
+        else resolve_reference(
+            question,
+            thread=thread,
+            entities=records["entities"],
+            turns=records["turns"],
+            unresolved_questions=state.get("unresolved_questions") if not state_rebuilt else [],
+            explicit_entity=explicit_entity,
+        )
+    )
+    resolved_entity = (
+        _public_entity(resolved_entity_override)
+        if isinstance(resolved_entity_override, dict)
+        else _resolved_primary_entity(thread, records["entities"], explicit_entity, resolution)
     )
     packet = _build_packet(
         thread=thread,
@@ -103,8 +125,9 @@ def select_conversation_context(
         workflow=workflow,
         max_chars=max_chars,
         state_rebuilt=state_rebuilt,
+        resolved_entity=resolved_entity,
     )
-    return ConversationSelection(packet=packet, resolution=resolution)
+    return ConversationSelection(packet=packet, resolution=resolution, resolved_entity=resolved_entity)
 
 
 def resolve_reference(
@@ -114,10 +137,22 @@ def resolve_reference(
     entities: list[dict[str, Any]],
     turns: list[dict[str, Any]],
     unresolved_questions: list[dict[str, Any]] | None = None,
+    explicit_entity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     text = str(question or "").strip()
     ordered_entities = _ordered_distinct_entities(thread, entities, turns)
     latest_assistant = next((turn for turn in reversed(turns) if turn.get("role") == "assistant"), None)
+    explicit = _public_entity(explicit_entity) if isinstance(explicit_entity, dict) else None
+    active = _safe_focus(thread.get("focus_state")).get("active")
+    explicit_switch = bool(
+        explicit
+        and explicit.get("type")
+        and explicit.get("id")
+        and isinstance(active, dict)
+        and active.get("type")
+        and active.get("id")
+        and _entity_key(explicit) != _entity_key(active)
+    )
 
     if _RESET.search(text):
         return {
@@ -126,6 +161,9 @@ def resolve_reference(
             "message": "Reset this thread before starting over so prior context is excluded.",
             "candidates": [],
         }
+
+    if explicit_switch and not _CORRECTION.search(text):
+        return _resolved("explicit_entity", [explicit], referent=explicit)
 
     explicit_ips = _valid_ip_tokens(text)
     if explicit_ips:
@@ -145,9 +183,25 @@ def resolve_reference(
                     "id": latest_assistant.get("turn_id"),
                     "sequence": latest_assistant.get("sequence"),
                     "content": _short_text(latest_assistant.get("content"), 700),
+                    "entity": _turn_active_entity(latest_assistant),
                 },
             )
         return _unresolved("why", "There is no prior assistant conclusion in this thread to explain.")
+
+    if _EVIDENCE_FOLLOW_UP.search(text):
+        if latest_assistant:
+            return _resolved(
+                "evidence",
+                [],
+                referent={
+                    "type": "assistant_turn",
+                    "id": latest_assistant.get("turn_id"),
+                    "sequence": latest_assistant.get("sequence"),
+                    "content": _short_text(latest_assistant.get("content"), 700),
+                    "entity": _turn_active_entity(latest_assistant),
+                },
+            )
+        return _unresolved("evidence", "There is no prior assistant conclusion in this thread whose evidence can be reviewed.")
 
     if _GO_BACK.search(text):
         prior = _previous_focus(thread, ordered_entities)
@@ -156,14 +210,27 @@ def resolve_reference(
         return _unresolved("go_back", "This thread does not have a previous distinct entity focus.")
 
     if _COMPARE.search(text):
-        if len(ordered_entities) >= 2:
-            return _resolved("compare", ordered_entities[:2], referent={"entities": ordered_entities[:2]})
+        if len(ordered_entities) == 2:
+            return _resolved("compare", ordered_entities, referent={"entities": ordered_entities})
+        if len(ordered_entities) > 2:
+            return _clarification("compare", "More than two thread entities are available. Specify the two entities to compare.", ordered_entities)
         return _unresolved("compare", "At least two validated entities are required for comparison.")
 
     if _CONTINUE.search(text):
-        unresolved = _last_state_item(unresolved_questions or [])
-        if unresolved:
-            return _resolved("continue", [], referent={"type": "unresolved_question", "value": unresolved})
+        unresolved_items = [item for item in (unresolved_questions or []) if isinstance(item, dict)]
+        if len(unresolved_items) == 1:
+            unresolved = unresolved_items[0]
+            return _resolved(
+                "continue",
+                [],
+                referent={"type": "unresolved_question", "value": unresolved, "entity": _item_entity(unresolved)},
+            )
+        if len(unresolved_items) > 1:
+            return _clarification(
+                "continue",
+                "More than one unresolved question is available. Specify which one to continue.",
+                [_item_entity(item) for item in unresolved_items if _item_entity(item)],
+            )
         if latest_assistant:
             return _resolved(
                 "continue",
@@ -173,6 +240,7 @@ def resolve_reference(
                     "id": latest_assistant.get("turn_id"),
                     "sequence": latest_assistant.get("sequence"),
                     "content": _short_text(latest_assistant.get("content"), 700),
+                    "entity": _turn_active_entity(latest_assistant),
                 },
             )
         return _unresolved("continue", "There is no prior conclusion or unresolved question to continue.")
@@ -191,8 +259,18 @@ def resolve_reference(
             )
         return _unresolved("correction", "There is no prior assistant inference to correct.")
 
+    if _WHICH_IP.search(text):
+        candidates = [item for item in ordered_entities if item.get("type") == "source_ip"]
+        if len(candidates) == 1:
+            return _resolved("which_ip", candidates, referent=candidates[0])
+        if len(candidates) > 1:
+            return _clarification("which_ip", "More than one source IP is available. Specify which IP you mean.", candidates)
+        return _unresolved("which_ip", "No validated source IP is available in this thread.")
+
     generic = _GENERIC_REFERENCE.search(text)
     if generic:
+        if explicit and explicit.get("type") and explicit.get("id"):
+            return _resolved("entity_reference", [explicit], referent=explicit)
         token = generic.group(0).lower()
         if re.search(r"\bips?\b", text, re.IGNORECASE):
             token = "the ip"
@@ -296,22 +374,53 @@ def _build_packet(
     workflow: str,
     max_chars: int,
     state_rebuilt: bool,
+    resolved_entity: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    candidates = _packet_candidates(state, records, workflow)
+    category_order = (
+        "corrections",
+        "unresolved_questions",
+        "conclusions",
+        "verified_evidence",
+        "recommendations",
+        "recent_turns",
+        "analyst_statements",
+    )
+    if workflow == "generate_artifact":
+        category_order = tuple(category for category in category_order if category not in {"recent_turns", "analyst_statements"})
+    category_limits = {
+        "corrections": 2,
+        "unresolved_questions": 1,
+        "conclusions": 2,
+        "recommendations": 2,
+        "verified_evidence": 3,
+        "recent_turns": 4,
+        "analyst_statements": 2,
+    }
+    all_categories = tuple(category_limits)
+    primary = _packet_entity(resolved_entity) if resolved_entity else None
+    secondary_entities = [
+        _packet_entity(item)
+        for item in records["entities"]
+        if _entity_key(item) != _entity_key(primary)
+    ][:4]
+    candidate_counts = {category: len(candidates.get(category, [])) for category in all_categories}
+    candidate_counts["secondary_entities"] = len(secondary_entities)
+    candidate_counts["thread_summary"] = 1 if not state_rebuilt and state.get("compact_summary") else 0
     base = {
         "thread": {
             "thread_id": thread.get("thread_id"),
-            "primary_entity": thread.get("primary_entity"),
-            "focus": _safe_focus(thread.get("focus_state")),
+            "resolved_entity": primary,
         },
-        "reference_resolution": resolution,
+        "reference_resolution": _compact_resolution(resolution),
         "provenance_policy": {
-            "verified_evidence": "authoritative bounded SIEM evidence",
-            "analyst_statement": "unverified analyst-provided context",
-            "model_inference": "prior model conclusion, not fact",
-            "correction": "analyst correction that supersedes an inference but not evidence",
+            "evidence": "verified",
+            "statements": "unverified",
+            "inferences": "not_fact",
+            "corrections": "inference_only",
         },
-        "active_entities": [_public_entity(item) for item in records["entities"][:6]],
-        "thread_summary": None if state_rebuilt else _short_text(state.get("compact_summary"), 1200),
+        "active_entities": [primary] if primary else [],
+        "thread_summary": None,
         "corrections": [],
         "verified_evidence": [],
         "unresolved_questions": [],
@@ -321,57 +430,231 @@ def _build_packet(
         "recent_turns": [],
         "bounds": {
             "max_chars": max_chars,
+            "mandatory_chars": max_chars,
+            "serialized_chars": max_chars,
             "included": {},
-            "omitted": {},
-            "compacted": False,
+            "omitted": {key: count for key, count in candidate_counts.items() if count},
+            "representation": {},
+            "compacted": bool(any(candidate_counts.values())),
             "state_rebuilt": state_rebuilt,
             "stale_evidence_excluded": len(records["stale_evidence"]),
         },
     }
-    if workflow == "generate_artifact":
-        category_order = ("corrections", "verified_evidence", "unresolved_questions", "conclusions", "recommendations")
-    else:
-        category_order = (
-            "corrections",
-            "verified_evidence",
-            "unresolved_questions",
-            "conclusions",
-            "recommendations",
-            "analyst_statements",
-            "recent_turns",
+    mandatory_size = _encoded_size(base)
+    if mandatory_size > max_chars:
+        raise ConversationContextConfigurationError(
+            f"Mandatory conversation packet requires {mandatory_size} characters but only {max_chars} are assigned."
         )
-    candidates = {
+    base["bounds"]["mandatory_chars"] = mandatory_size
+
+    summary = None if state_rebuilt else _short_text(state.get("compact_summary"), 420)
+    if summary:
+        _try_scalar(base, "thread_summary", summary, max_chars=max_chars)
+    for category in category_order:
+        ordered = list(reversed(candidates[category])) if category in {"analyst_statements", "recent_turns"} else candidates[category]
+        for item in ordered[: category_limits[category]]:
+            _try_optional_item(base, category, item, max_chars=max_chars)
+    for entity in secondary_entities:
+        _try_optional_item(base, "active_entities", entity, max_chars=max_chars, bounds_key="secondary_entities")
+    _finalize_bounds(base, candidates=candidates, category_limits=category_limits, secondary_count=len(secondary_entities))
+    for _ in range(4):
+        final_size = _encoded_size(base)
+        if base["bounds"]["serialized_chars"] == final_size:
+            break
+        base["bounds"]["serialized_chars"] = final_size
+    final_size = _encoded_size(base)
+    if final_size > max_chars:
+        raise ConversationContextConfigurationError(
+            f"Final conversation packet requires {final_size} characters but only {max_chars} are assigned."
+        )
+    return base
+
+
+def _packet_candidates(state: dict[str, Any], records: dict[str, list[dict[str, Any]]], workflow: str) -> dict[str, list[dict[str, Any]]]:
+    del workflow
+    return {
         "corrections": _state_items(state, "corrections", "correction"),
-        "verified_evidence": [_evidence_item(item) for item in records["fresh_evidence"]],
         "unresolved_questions": _state_items(state, "unresolved_questions", "unresolved_question"),
         "conclusions": _active_conclusions(state, records["hypotheses"]),
         "recommendations": _state_items(state, "recommendations", "model_inference"),
-        "analyst_statements": [_turn_item(turn) for turn in records["turns"] if turn.get("assertion_type") == "analyst_statement"],
+        "verified_evidence": [_evidence_item(item) for item in records["fresh_evidence"]],
         "recent_turns": [_turn_item(turn) for turn in records["turns"] if turn.get("role") in {"user", "assistant"}],
+        "analyst_statements": [_turn_item(turn) for turn in records["turns"] if turn.get("assertion_type") == "analyst_statement"],
     }
-    for category in category_order:
-        items = candidates[category]
-        included = 0
-        for item in reversed(items) if category in {"analyst_statements", "recent_turns"} else items:
-            clean = sanitize_structured_value(item, field_name=f"conversation {category}")
-            tentative = {**base, category: [*base[category], clean]}
-            if _encoded_size(tentative) > max_chars:
-                continue
-            base[category].append(clean)
-            included += 1
-        base["bounds"]["included"][category] = included
-        omitted = max(0, len(items) - included)
+
+
+def _compact_resolution(resolution: dict[str, Any]) -> dict[str, Any]:
+    referent = resolution.get("referent") if isinstance(resolution.get("referent"), dict) else None
+    compact_referent = None
+    if referent:
+        compact_referent = {
+            key: value
+            for key, value in {
+                "type": referent.get("type"),
+                "id": referent.get("id"),
+                "sequence": referent.get("sequence"),
+                "entity": _packet_entity(referent.get("entity")) if isinstance(referent.get("entity"), dict) else None,
+            }.items()
+            if value not in (None, "", {})
+        }
+    return {
+        "status": str(resolution.get("status") or "not_needed")[:32],
+        "intent": str(resolution.get("intent") or "new_question")[:32],
+        "referent": compact_referent,
+    }
+
+
+def _try_scalar(base: dict[str, Any], key: str, value: Any, *, max_chars: int) -> None:
+    for level, candidate in (("full", value), ("compact", _short_text(value, 180))):
+        tentative = deepcopy(base)
+        tentative[key] = candidate
+        tentative["bounds"]["included"][key] = 1
+        tentative["bounds"]["omitted"].pop(key, None)
+        tentative["bounds"]["representation"][key] = level
+        if _encoded_size(tentative) <= max_chars:
+            base.clear()
+            base.update(tentative)
+            return
+
+
+def _try_optional_item(
+    base: dict[str, Any],
+    category: str,
+    item: dict[str, Any],
+    *,
+    max_chars: int,
+    bounds_key: str | None = None,
+) -> None:
+    marker = bounds_key or category
+    for level in ("full", "compact"):
+        candidate = _compact_optional_item(category, item, compact=level == "compact")
+        tentative = deepcopy(base)
+        tentative[category].append(candidate)
+        tentative["bounds"]["included"][marker] = len(tentative[category]) - (1 if category == "active_entities" else 0)
+        if tentative["bounds"]["omitted"].get(marker):
+            tentative["bounds"]["omitted"][marker] -= 1
+            if tentative["bounds"]["omitted"][marker] <= 0:
+                tentative["bounds"]["omitted"].pop(marker, None)
+        tentative["bounds"]["representation"][marker] = level
+        if _encoded_size(tentative) <= max_chars:
+            base.clear()
+            base.update(tentative)
+            return
+
+
+def _compact_optional_item(category: str, item: dict[str, Any], *, compact: bool) -> dict[str, Any]:
+    clean = sanitize_structured_value(item, field_name=f"conversation {category}")
+    if category == "active_entities":
+        return _packet_entity(clean)
+    if category in {"recent_turns", "analyst_statements"}:
+        snapshot = clean.get("entity_snapshot") if isinstance(clean.get("entity_snapshot"), dict) else {}
+        return {
+            "sequence": clean.get("sequence"),
+            "role": clean.get("role"),
+            "workflow": clean.get("workflow"),
+            "assertion_type": clean.get("assertion_type"),
+            "content": _short_text(clean.get("content"), 120 if compact else 260),
+            "entity": _packet_entity(snapshot.get("active_entity")) if isinstance(snapshot.get("active_entity"), dict) else None,
+        }
+    if category == "verified_evidence":
+        return {
+            "assertion_type": "verified_evidence",
+            "source_type": _short_text(clean.get("source_type"), 64),
+            "source_ref": _short_text(clean.get("source_ref"), 80 if compact else 140),
+            "snapshot": _compact_bounded_value(clean.get("snapshot"), 100 if compact else 220),
+            "observed_at": clean.get("observed_at"),
+            "fresh_until": clean.get("fresh_until"),
+            "relationship_type": clean.get("relationship_type"),
+        }
+    result = {}
+    for key in (
+        "assertion_type",
+        "content",
+        "correction",
+        "question",
+        "recommendation",
+        "recommended_action",
+        "reason",
+        "confidence",
+        "status",
+        "supersedes_turn_id",
+    ):
+        if key in clean and clean[key] not in (None, "", [], {}):
+            result[key] = _short_text(clean[key], 120 if compact else 260)
+    return result or {"assertion_type": clean.get("assertion_type") or category}
+
+
+def _compact_bounded_value(value: Any, max_chars: int) -> Any:
+    if isinstance(value, dict):
+        result = {}
+        for key, child in list(value.items())[:4]:
+            result[str(key)[:48]] = _compact_bounded_value(child, max(40, max_chars // 2))
+        return result
+    if isinstance(value, list):
+        return [_compact_bounded_value(item, max(40, max_chars // 2)) for item in value[:3]]
+    return _short_text(value, max_chars)
+
+
+def _finalize_bounds(
+    base: dict[str, Any],
+    *,
+    candidates: dict[str, list[dict[str, Any]]],
+    category_limits: dict[str, int],
+    secondary_count: int,
+) -> None:
+    bounds = base["bounds"]
+    for category in category_limits:
+        included = len(base.get(category) or [])
+        omitted = max(0, len(candidates.get(category, [])) - included)
+        if included:
+            bounds["included"][category] = included
         if omitted:
-            base["bounds"]["omitted"][category] = omitted
-            base["bounds"]["compacted"] = True
-    if _encoded_size(base) > max_chars:
-        base["active_entities"] = base["active_entities"][:2]
-        base["thread_summary"] = _short_text(base.get("thread_summary"), 320)
-        base["bounds"]["compacted"] = True
-    if _encoded_size(base) > max_chars:
-        raise ConversationContextTooLargeError("The minimum safe conversation context exceeds the workflow allocation.")
-    base["bounds"]["serialized_chars"] = _encoded_size(base)
-    return base
+            bounds["omitted"][category] = omitted
+        else:
+            bounds["omitted"].pop(category, None)
+    primary_count = 1 if base.get("thread", {}).get("resolved_entity") else 0
+    included_secondary = max(0, len(base.get("active_entities") or []) - primary_count)
+    if included_secondary:
+        bounds["included"]["secondary_entities"] = included_secondary
+    omitted_secondary = max(0, secondary_count - included_secondary)
+    if omitted_secondary:
+        bounds["omitted"]["secondary_entities"] = omitted_secondary
+    else:
+        bounds["omitted"].pop("secondary_entities", None)
+    if base.get("thread_summary"):
+        bounds["included"]["thread_summary"] = 1
+        bounds["omitted"].pop("thread_summary", None)
+    bounds["compacted"] = any(bounds["omitted"].values()) or any(
+        value == "compact" for value in bounds["representation"].values()
+    )
+
+
+def _resolved_primary_entity(
+    thread: dict[str, Any],
+    entities: list[dict[str, Any]],
+    explicit_entity: dict[str, Any] | None,
+    resolution: dict[str, Any],
+) -> dict[str, Any] | None:
+    explicit = _public_entity(explicit_entity) if isinstance(explicit_entity, dict) else None
+    referent = resolution.get("referent") if isinstance(resolution.get("referent"), dict) else {}
+    intent = str(resolution.get("intent") or "")
+    if intent == "go_back" and referent.get("id"):
+        return _public_entity(referent)
+    if explicit and explicit.get("type") and explicit.get("id"):
+        return explicit
+    if intent in {"explicit_entity", "entity_reference", "which_ip"} and referent.get("id"):
+        return _public_entity(referent)
+    if intent in {"why", "evidence", "continue"} and isinstance(referent.get("entity"), dict):
+        entity = _public_entity(referent["entity"])
+        if entity.get("type") and entity.get("id"):
+            return entity
+    focus = _safe_focus(thread.get("focus_state")).get("active")
+    if focus and focus.get("type") and focus.get("id"):
+        return focus
+    primary = thread.get("primary_entity")
+    if isinstance(primary, dict):
+        return _public_entity(primary)
+    return _public_entity(entities[0]) if entities else None
 
 
 def _ordered_distinct_entities(
@@ -504,6 +787,41 @@ def _unresolved(intent: str, message: str) -> dict[str, Any]:
     return {"status": "unresolved", "intent": intent, "message": message, "referent": None, "candidates": []}
 
 
+def _clarification(intent: str, message: str, candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "status": "clarification_required",
+        "intent": intent,
+        "message": message,
+        "referent": None,
+        "candidates": [_public_entity(item) for item in candidates[:6]],
+    }
+
+
+def _turn_active_entity(turn: dict[str, Any]) -> dict[str, Any] | None:
+    snapshot = turn.get("entity_snapshot") if isinstance(turn.get("entity_snapshot"), dict) else {}
+    active = snapshot.get("active_entity")
+    if isinstance(active, dict) and active.get("type") and active.get("id"):
+        return _public_entity(active)
+    entities = snapshot.get("entities") if isinstance(snapshot.get("entities"), list) else []
+    first = next((item for item in entities if isinstance(item, dict) and item.get("type") and item.get("id")), None)
+    return _public_entity(first) if first else None
+
+
+def _item_entity(item: dict[str, Any]) -> dict[str, Any] | None:
+    for key in ("entity", "active_entity"):
+        value = item.get(key)
+        if isinstance(value, dict) and value.get("type") and value.get("id"):
+            return _public_entity(value)
+    snapshot = item.get("entity_snapshot")
+    if isinstance(snapshot, dict):
+        return _turn_active_entity({"entity_snapshot": snapshot})
+    entity_type = item.get("entity_type")
+    entity_id = item.get("entity_id")
+    if entity_type and entity_id not in (None, ""):
+        return _public_entity({"type": entity_type, "id": entity_id})
+    return None
+
+
 def _public_entity(value: dict[str, Any] | None) -> dict[str, Any]:
     item = value or {}
     return {
@@ -511,6 +829,14 @@ def _public_entity(value: dict[str, Any] | None) -> dict[str, Any]:
         "id": str(item.get("id") or item.get("entity_id") or "").strip(),
         "display_alias": item.get("display_alias"),
     }
+
+
+def _packet_entity(value: dict[str, Any] | None) -> dict[str, Any]:
+    entity = _public_entity(value)
+    result = {"type": entity["type"], "id": entity["id"]}
+    if entity.get("display_alias"):
+        result["display_alias"] = _short_text(entity["display_alias"], 80)
+    return result
 
 
 def _append_entity(items: list[dict[str, Any]], candidate: dict[str, Any]) -> None:
@@ -558,6 +884,7 @@ def _iso(value: Any) -> str | None:
 
 
 __all__ = [
+    "ConversationContextConfigurationError",
     "ConversationContextError",
     "ConversationContextTooLargeError",
     "ConversationSelection",

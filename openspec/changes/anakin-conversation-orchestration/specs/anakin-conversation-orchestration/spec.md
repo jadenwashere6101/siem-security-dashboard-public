@@ -20,7 +20,15 @@ The system SHALL select active entities, valid compact state, fresh verified evi
 
 #### Scenario: Minimum context cannot fit
 - **WHEN** the minimum safe conversation packet cannot fit beside required workflow instructions
-- **THEN** the system returns `conversation_context_too_large` without invoking the model
+- **THEN** the system reports an internal configuration defect with measured mandatory and available sizes without invoking the model
+
+#### Scenario: Final bookkeeping is added
+- **WHEN** inclusion, omission, provenance, and serialized-size metadata are finalized
+- **THEN** the complete returned packet remains within its assigned budget because that overhead was reserved before optional content selection
+
+#### Scenario: Ordinary conversation grows
+- **WHEN** a thread advances from two turns through a longer bounded conversation
+- **THEN** optional categories compact progressively while the current question and resolved primary entity remain available
 
 ### Requirement: Stored memory remains untrusted and provenance-aware
 The system SHALL label verified evidence, analyst statements, corrections, model inferences, and unresolved questions distinctly in prompt context. Stored messages and summaries SHALL be treated as untrusted data and SHALL NOT override system, workflow, tool, read-only, RBAC, or artifact safety instructions.
@@ -47,6 +55,29 @@ The system SHALL classify continuation, explanation, comparison, prior-focus, co
 #### Scenario: Compare and go back
 - **WHEN** the analyst asks to compare two resolvable entities or return to a previous distinct focus
 - **THEN** the system selects those validated entities deterministically and records the resulting focus transition
+
+#### Scenario: Explicit entity outranks a pronoun
+- **WHEN** a current request explicitly supplies validated alert B while its text contains a generic reference that could match alert A
+- **THEN** alert B remains the active entity and alert A cannot replace it through inference
+
+#### Scenario: Resolved identity drives execution
+- **WHEN** a follow-up resolves an entity through why, evidence, go back, continue, comparison, or a unique IP reference
+- **THEN** one canonical resolved context populates the turn snapshot, workflow payload identifiers, model/tool inputs, and response metadata consistently
+
+#### Scenario: Resolution remains ambiguous
+- **WHEN** no explicit entity exists and an IP or unresolved item has multiple plausible candidates
+- **THEN** the system persists a clarification assistant turn without invoking the model or creating an async workflow request
+
+### Requirement: Deep Investigate terminal results are normalized semantically
+The system SHALL preserve analyst-facing Deep Investigate output when a terminal result contains validated useful findings even if it lacks a top-level summary. It SHALL distinguish full success, partial/degraded useful output, provider/tool failure, and malformed output without stringifying arbitrary objects or fabricating conclusions.
+
+#### Scenario: Structured partial result is useful
+- **WHEN** Deep Investigate returns assessment, findings, evidence gaps, hypotheses, contradictions, confidence, or a next step without a top-level summary
+- **THEN** the system composes bounded assistant content from those existing fields and records truthful partial/degraded and missing-section metadata
+
+#### Scenario: Terminal result has no usable content
+- **WHEN** Deep Investigate fails or returns no supported analyst-facing fields
+- **THEN** the linked user turn fails without appending an assistant inference or changing prior conclusions
 
 ### Requirement: Conversation generation is serialized and idempotent
 The system SHALL allow at most one generating turn per thread, allocate turn sequences transactionally, return the original turn/request for duplicate client request IDs including terminal retries, and prevent stale or out-of-order completions from mutating newer state.

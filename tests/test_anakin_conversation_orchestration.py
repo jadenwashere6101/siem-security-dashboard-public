@@ -755,3 +755,408 @@ def test_participating_prompt_builders_remain_within_profile_budgets():
         conversation_context=packet,
     )
     assert len(artifact) <= guided_limit
+
+
+@pytest.mark.parametrize(
+    "workflow",
+    ["quick_explain", "deep_investigate", "decision_support", "generate_artifact"],
+)
+def test_context_packet_final_bookkeeping_always_fits_assigned_budget(postgres_db, workflow):
+    conn, _cur = postgres_db
+    thread, alert_id = _seed(conn)
+    current = thread
+    for index in range(8):
+        _turn, current, _ = append_turn(
+            conn,
+            thread_id=thread["thread_id"],
+            owner_username="conversation_analyst",
+            expected_version=current["version"],
+            client_request_id=f"budget-turn-{index}",
+            role="user" if index % 2 == 0 else "assistant",
+            workflow="quick_explain",
+            content=f"Turn {index}: " + ("bounded conversation evidence " * 30),
+            assertion_type="analyst_statement" if index % 2 == 0 else "model_inference",
+            structured_payload=(
+                {} if index % 2 == 0 else {"confidence": "medium", "provenance": {"workflow": "quick_explain"}}
+            ),
+            entity_snapshot={"active_entity": {"type": "alert", "id": str(alert_id)}},
+        )
+    create_evidence(
+        conn,
+        thread_id=thread["thread_id"],
+        owner_username="conversation_analyst",
+        source_type="alert",
+        source_ref=f"alert:{alert_id}",
+        snapshot={"finding": "blocked scan attempts " * 40},
+        observed_at=utc_now(),
+    )
+    conn.commit()
+
+    selected = select_conversation_context(
+        conn,
+        thread=get_thread(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst"),
+        owner_username="conversation_analyst",
+        question="Continue with the current evidence.",
+        workflow=workflow,
+        max_chars=900,
+        explicit_entity={"type": "alert", "id": str(alert_id)},
+    )
+    rendered = json.dumps(selected.packet, default=str, sort_keys=True, separators=(",", ":"))
+    assert len(rendered) <= 900
+    assert selected.packet["bounds"]["serialized_chars"] == len(rendered)
+    assert selected.packet["thread"]["resolved_entity"]["id"] == str(alert_id)
+    assert selected.packet["bounds"]["compacted"] is True
+
+
+def test_ordinary_second_turn_quick_explain_fits_and_uses_current_entity(postgres_db, monkeypatch):
+    conn, _cur = postgres_db
+    thread, alert_id = _seed(conn)
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
+    )
+    seen = []
+
+    def fake_run(payload, **_kwargs):
+        seen.append(payload)
+        return _quick_result("The blocked scan has no confirmed follow-up activity.")
+
+    monkeypatch.setattr("core.ai.conversation_orchestration_service.run_workflow", fake_run)
+    first = run_conversational_workflow(
+        _payload(thread, alert_id, request_id="turn-one"),
+        owner_username="conversation_analyst",
+        actor_role="analyst",
+    )
+    current = get_thread(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")
+    second = run_conversational_workflow(
+        _payload(current, alert_id, request_id="turn-two", prompt="Why?"),
+        owner_username="conversation_analyst",
+        actor_role="analyst",
+    )
+    assert first.status_code == second.status_code == 200
+    assert len(seen) == 2
+    assert seen[1]["context"]["alert_id"] == alert_id
+    assert seen[1]["conversation_context"]["bounds"]["serialized_chars"] <= seen[1]["conversation_context"]["bounds"]["max_chars"]
+
+
+def test_ordinary_second_turn_decision_support_fits_budget(postgres_db, monkeypatch):
+    conn, _cur = postgres_db
+    thread, alert_id = _seed(conn)
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
+    )
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.run_workflow",
+        lambda *_args, **_kwargs: _quick_result("The alert is blocked and has no confirmed follow-up."),
+    )
+    run_conversational_workflow(
+        _payload(thread, alert_id, request_id="decision-seed"),
+        owner_username="conversation_analyst",
+        actor_role="analyst",
+    )
+    current = get_thread(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")
+    payload = _payload(
+        current,
+        alert_id,
+        request_id="decision-turn-two",
+        prompt="Should I escalate it?",
+        workflow="decision_support",
+    )
+    queue_conversational_request(
+        payload,
+        classification=classify_workflow(payload),
+        actor_username="conversation_analyst",
+        actor_role="analyst",
+    )
+    seen = []
+    monkeypatch.setattr(
+        "core.ai.workflow_request_worker._run_with_user_context",
+        lambda execution_payload, workflow, **_kwargs: seen.append(execution_payload) or _async_result(workflow),
+    )
+    stats = run_anakin_workflow_worker(
+        config=AnakinWorkflowWorkerConfig(batch_size=1, max_runtime_seconds=30),
+        worker_id="decision-turn-two-worker",
+        connect=lambda: NoCloseConnection(conn),
+    )
+    assert stats["success"] == 1
+    assert seen[0]["context"]["alert_id"] == alert_id
+    bounds = seen[0]["conversation_context"]["bounds"]
+    assert bounds["serialized_chars"] <= bounds["max_chars"]
+
+
+@pytest.mark.parametrize("follow_up", ["Why?", "Show me the evidence."])
+def test_follow_up_binds_latest_conclusion_without_repeated_entity(postgres_db, monkeypatch, follow_up):
+    conn, _cur = postgres_db
+    thread, alert_id = _seed(conn)
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
+    )
+    seen = []
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.run_workflow",
+        lambda payload, **_kwargs: seen.append(payload) or _quick_result("Blocked scanning was observed."),
+    )
+    run_conversational_workflow(
+        _payload(thread, alert_id, request_id=f"follow-seed-{follow_up}"),
+        owner_username="conversation_analyst",
+        actor_role="analyst",
+    )
+    current = get_thread(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")
+    follow_payload = {
+        "workflow": "quick_explain",
+        "prompt": follow_up,
+        "client_request_id": f"follow-up-{follow_up}",
+        "conversation": {
+            "thread_id": thread["thread_id"],
+            "expected_version": current["version"],
+            "client_request_id": f"follow-up-{follow_up}",
+        },
+    }
+    result = run_conversational_workflow(
+        follow_payload,
+        owner_username="conversation_analyst",
+        actor_role="analyst",
+    )
+    assert seen[-1]["context_type"] == "alert"
+    assert seen[-1]["context"]["alert_id"] == alert_id
+    assert result.payload["conversation"]["active_entity"]["id"] == str(alert_id)
+
+
+def test_explicit_alert_switch_wins_over_generic_pronoun_in_execution(postgres_db, monkeypatch):
+    conn, cur = postgres_db
+    thread, alert_a = _seed(conn)
+    cur.execute(
+        """
+        INSERT INTO alerts (alert_type, severity, source_ip, source, message, status)
+        VALUES ('port_scan', 'HIGH', '203.0.113.82'::inet, 'pfsense', 'second alert', 'open')
+        RETURNING id
+        """
+    )
+    alert_b = cur.fetchone()[0]
+    conn.commit()
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
+    )
+    seen = []
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.run_workflow",
+        lambda payload, **_kwargs: seen.append(payload) or _quick_result(f"Analyzed alert {payload['context']['alert_id']}"),
+    )
+    run_conversational_workflow(
+        _payload(thread, alert_a, request_id="focus-a"),
+        owner_username="conversation_analyst",
+        actor_role="analyst",
+    )
+    current = get_thread(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")
+    result = run_conversational_workflow(
+        _payload(current, alert_b, request_id="focus-b", prompt="Investigate this other alert."),
+        owner_username="conversation_analyst",
+        actor_role="analyst",
+    )
+    assert seen[-1]["context"]["alert_id"] == alert_b
+    assert seen[-1]["entity"]["id"] == str(alert_b)
+    assert result.payload["conversation"]["active_entity"]["id"] == str(alert_b)
+    assert result.payload["result"]["answer"] == f"Analyzed alert {alert_b}"
+
+
+def test_go_back_rewrites_thread_payload_metadata_and_answer_to_prior_alert(postgres_db, monkeypatch):
+    conn, cur = postgres_db
+    thread, alert_a = _seed(conn)
+    cur.execute(
+        """
+        INSERT INTO alerts (alert_type, severity, source_ip, source, message, status)
+        VALUES ('port_scan', 'HIGH', '203.0.113.83'::inet, 'pfsense', 'second alert', 'open')
+        RETURNING id
+        """
+    )
+    alert_b = cur.fetchone()[0]
+    conn.commit()
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
+    )
+    seen = []
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.run_workflow",
+        lambda payload, **_kwargs: seen.append(payload) or _quick_result(f"Analyzed alert {payload['context']['alert_id']}"),
+    )
+    for request_id, alert_id, prompt in (
+        ("go-a", alert_a, "Explain alert A."),
+        ("go-b", alert_b, "Investigate this other alert."),
+    ):
+        current = get_thread(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")
+        run_conversational_workflow(
+            _payload(current, alert_id, request_id=request_id, prompt=prompt),
+            owner_username="conversation_analyst",
+            actor_role="analyst",
+        )
+    current = get_thread(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")
+    result = run_conversational_workflow(
+        _payload(current, alert_b, request_id="go-back-a", prompt="Go back."),
+        owner_username="conversation_analyst",
+        actor_role="analyst",
+    )
+    refreshed = get_thread(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")
+    assert seen[-1]["context"]["alert_id"] == alert_a
+    assert seen[-1]["conversation_context"]["thread"]["resolved_entity"]["id"] == str(alert_a)
+    assert result.payload["conversation"]["active_entity"]["id"] == str(alert_a)
+    assert refreshed["focus_state"]["active"]["id"] == str(alert_a)
+    assert result.payload["result"]["answer"] == f"Analyzed alert {alert_a}"
+
+
+def test_async_ip_clarification_persists_without_workflow_request(postgres_db, monkeypatch):
+    conn, cur = postgres_db
+    thread, alert_id = _seed(conn)
+    cur.execute(
+        """
+        INSERT INTO alerts (alert_type, severity, source_ip, source, message, status)
+        VALUES ('port_scan', 'LOW', '203.0.113.20'::inet, 'pfsense', 'first candidate', 'open'),
+               ('port_scan', 'LOW', '203.0.113.21'::inet, 'pfsense', 'second candidate', 'open')
+        """
+    )
+    cur.execute(
+        """
+        INSERT INTO anakin_thread_entities (
+            thread_id, owner_username, entity_type, entity_id, ordinal, salience,
+            first_referenced_sequence, last_referenced_sequence
+        ) VALUES (%s, 'conversation_analyst', 'source_ip', '203.0.113.20', 1, 0.8, 1, 1),
+                 (%s, 'conversation_analyst', 'source_ip', '203.0.113.21', 2, 0.8, 1, 1)
+        """,
+        (thread["thread_id"], thread["thread_id"]),
+    )
+    conn.commit()
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
+    )
+    payload = _payload(
+        thread,
+        alert_id,
+        request_id="async-ip-clarification",
+        prompt="Which IP should I prioritize?",
+        workflow="decision_support",
+    )
+    result, status = queue_conversational_request(
+        payload,
+        classification=classify_workflow(payload),
+        actor_username="conversation_analyst",
+        actor_role="analyst",
+    )
+    assert status == 200
+    assert result["metadata"]["model_invoked"] is False
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM ai_workflow_requests WHERE thread_id = %s", (thread["thread_id"],))
+        assert cur.fetchone()[0] == 0
+    assert [turn["role"] for turn in list_turns(
+        conn, thread_id=thread["thread_id"], owner_username="conversation_analyst"
+    )["turns"]] == ["user", "assistant"]
+
+
+def test_deep_investigate_partial_result_persists_truthful_assistant_content(postgres_db, monkeypatch):
+    conn, _cur = postgres_db
+    thread, alert_id = _seed(conn)
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
+    )
+    payload = _payload(
+        thread,
+        alert_id,
+        request_id="deep-partial",
+        prompt="Deep investigate this alert.",
+        workflow="deep_investigate",
+    )
+    queued, _ = queue_conversational_request(
+        payload,
+        classification=classify_workflow(payload),
+        actor_username="conversation_analyst",
+        actor_role="analyst",
+    )
+    partial = WorkflowResult(
+        {
+            "status": "partial",
+            "workflow": "deep_investigate",
+            "result": {
+                "status": "partial",
+                "investigation": {
+                    "status": "partial",
+                    "summary": None,
+                    "correlations": [{"source_type": "alert"}],
+                    "recommendations": [{"recommendation": "Review authentication activity for the affected host."}],
+                    "observability": {"provider_responses": [{"status": "fallback_blocked"}]},
+                    "error": "Provider did not return a completed assessment.",
+                },
+            },
+            "error": None,
+        }
+    )
+    monkeypatch.setattr("core.ai.workflow_request_worker._run_with_user_context", lambda *_args, **_kwargs: partial)
+    stats = run_anakin_workflow_worker(
+        config=AnakinWorkflowWorkerConfig(batch_size=1, max_runtime_seconds=30),
+        worker_id="deep-partial-worker",
+        connect=lambda: NoCloseConnection(conn),
+    )
+    assert stats["partial"] == 1
+    request = get_request(conn, queued["request_id"], actor_username="conversation_analyst")
+    assert request["status"] == "partial"
+    assistant = list_turns(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")["turns"][-1]
+    assert "Partial investigation result" in assistant["content"]
+    assert "Validated alert evidence was available" in assistant["content"]
+    assert "Review authentication activity for the affected host" in assistant["content"]
+    assert assistant["structured_payload"]["terminal_category"] == "partial"
+    assert assistant["structured_payload"]["provider_status"] == "fallback_blocked"
+    assert "{" not in assistant["content"]
+
+
+def test_deep_investigate_true_failure_preserves_prior_conclusion(postgres_db, monkeypatch):
+    conn, _cur = postgres_db
+    thread, alert_id = _seed(conn)
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
+    )
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.run_workflow",
+        lambda *_args, **_kwargs: _quick_result("Prior conclusion remains bounded to the blocked alert."),
+    )
+    run_conversational_workflow(
+        _payload(thread, alert_id, request_id="deep-failure-seed"),
+        owner_username="conversation_analyst",
+        actor_role="analyst",
+    )
+    before = get_thread(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")
+    prior_conclusions = list(before["state"]["conclusions"])
+    payload = _payload(
+        before,
+        alert_id,
+        request_id="deep-true-failure",
+        prompt="Continue with a deep investigation.",
+        workflow="deep_investigate",
+    )
+    queued, _ = queue_conversational_request(
+        payload,
+        classification=classify_workflow(payload),
+        actor_username="conversation_analyst",
+        actor_role="analyst",
+    )
+    failure = WorkflowResult(
+        {
+            "status": "failed",
+            "workflow": "deep_investigate",
+            "result": {
+                "status": "failed",
+                "investigation": {"status": "failed", "summary": None, "error": "Provider unavailable."},
+            },
+            "error": "Provider unavailable.",
+        },
+        503,
+    )
+    monkeypatch.setattr("core.ai.workflow_request_worker._run_with_user_context", lambda *_args, **_kwargs: failure)
+    stats = run_anakin_workflow_worker(
+        config=AnakinWorkflowWorkerConfig(batch_size=1, max_runtime_seconds=30),
+        worker_id="deep-true-failure-worker",
+        connect=lambda: NoCloseConnection(conn),
+    )
+    assert stats["failed"] == 1
+    assert get_request(conn, queued["request_id"], actor_username="conversation_analyst")["status"] == "failed"
+    after = get_thread(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")
+    assert after["state"]["conclusions"] == prior_conclusions
+    assert all(
+        turn["content"] != "Provider unavailable."
+        for turn in list_turns(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")["turns"]
+    )
