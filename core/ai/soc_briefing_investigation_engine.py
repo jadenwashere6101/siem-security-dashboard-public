@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+import ipaddress
 import json
 import re
 import time
@@ -1501,16 +1502,18 @@ def _evidence_dict_text(item: dict[str, Any], values: dict[str, str]) -> str:
 
 
 def _recommendation_dict_text(item: dict[str, Any], values: dict[str, str]) -> str:
-    target = _target_phrase(values.get("target"))
     if values.get("action") and values.get("target"):
         action = _recommendation_action(values["action"])
+        target = _target_phrase(values.get("target"), action=action)
         reason = f" Reason: {values['reason']}." if values.get("reason") else ""
         return f"{action}{target} to determine whether additional reconnaissance or follow-up connections occurred.{reason}"
     if values.get("step") and values.get("description"):
         return f"Priority {values['step']}: {_recommendation_action(values['description'])}."
     if values.get("recommended_action"):
+        action = _recommendation_action(values["recommended_action"])
+        target = _target_phrase(values.get("target"), action=action)
         reason = f" Reason: {values['reason']}." if values.get("reason") else ""
-        return f"{_recommendation_action(values['recommended_action'])}{target}.{reason}"
+        return f"{action}{target}.{reason}"
     if values.get("description"):
         return f"{_recommendation_action(values['description'])}."
     return _unknown_dict_text("recommendations", values or _unknown_scalar_values(item))
@@ -1692,9 +1695,9 @@ def _recommendation_action(value: Any) -> str:
     lowered = text.lower()
     if "inspect network logs" in lowered or lowered == "inspect logs":
         return "Review firewall and authentication logs"
-    if lowered.startswith("review the source ip") or lowered.startswith("review source ip"):
+    if re.fullmatch(r"review (?:the )?source ip", lowered):
         return "Review firewall activity"
-    if lowered.startswith("review the destination host") or lowered.startswith("review destination host"):
+    if re.fullmatch(r"review (?:the )?destination host", lowered):
         return "Review destination-host activity"
     if lowered.startswith("inspect "):
         return "Review " + text[8:]
@@ -1703,15 +1706,33 @@ def _recommendation_action(value: Any) -> str:
     return text[0].upper() + text[1:]
 
 
-def _target_phrase(target: str | None) -> str:
+def _target_phrase(target: str | None, *, action: str = "") -> str:
     if not target:
         return ""
     target = _sanitize_analyst_text(target)
-    if target.lower() in {"source ip", "the source ip", "destination host", "the destination host", "target", "host"}:
+    if not target:
         return ""
-    if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", target):
+    normalized_target = " ".join(re.findall(r"[a-z0-9]+", target.lower()))
+    normalized_action = " ".join(re.findall(r"[a-z0-9]+", action.lower()))
+    if normalized_target and normalized_target in normalized_action:
+        return ""
+    try:
+        address = ipaddress.ip_address(target)
+    except ValueError:
+        address = None
+    if address is not None:
         return f" associated with source IP {target}"
-    return f" associated with {target}"
+    try:
+        network = ipaddress.ip_network(target, strict=False)
+    except ValueError:
+        network = None
+    if network is not None:
+        return f" associated with subnet {target}"
+    if re.fullmatch(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9][a-z0-9-]{0,62}", target, flags=re.IGNORECASE):
+        return f" associated with host {target}"
+    if re.fullmatch(r"(?:user(?:name)?|account)\s+[a-z0-9._@\\/-]+", target, flags=re.IGNORECASE):
+        return f" for {target}"
+    return ""
 
 
 def _confidence_text(confidence: str, *, evidence: str | None, matters: str | None) -> str:

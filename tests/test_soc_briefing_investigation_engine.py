@@ -342,6 +342,12 @@ def _polish_shape_content():
                     {"action": "Inspect network logs", "target": "4.155.252.113"},
                     {"action": "Review the source IP", "target": "Source IP"},
                     {"recommended_action": "Review destination host activity", "target": "Destination Host", "reason": "The destination may have received follow-up attempts."},
+                    {"recommended_action": "Review destination hosts being scanned", "target": "Network administrators"},
+                    {"recommended_action": "Review scan context before escalation", "target": "Security analysts"},
+                    {"recommended_action": "Review the target system for signs of compromise", "target": "Target system"},
+                    {"recommended_action": "Review related events for follow-up activity", "target": "Related events and alerts"},
+                    {"recommended_action": "Review related authentication logs", "target": "user jsmith"},
+                    {"recommended_action": "Review authentication activity", "target": "web01.example.com"},
                 ],
             },
         }
@@ -1130,6 +1136,15 @@ def test_polish_distinguishes_findings_escalations_and_natural_recommendations(p
     assert "Review firewall and authentication logs associated with source IP 4.155.252.113 to determine whether additional reconnaissance or follow-up connections occurred." in recommendations
     assert "for Source IP" not in recommendations
     assert "for Destination Host" not in recommendations
+    assert "Review destination hosts being scanned." in recommendations
+    assert "Review the target system for signs of compromise." in recommendations
+    assert "Review related events for follow-up activity." in recommendations
+    assert "associated with Network administrators" not in recommendations
+    assert "associated with Security analysts" not in recommendations
+    assert "associated with Target system" not in recommendations
+    assert "associated with Related events and alerts" not in recommendations
+    assert "Review related authentication logs for user jsmith." in recommendations
+    assert "Review authentication activity associated with host web01.example.com." in recommendations
     assert "consistent with reconnaissance, but exploitation is not confirmed" in evidence
     assert "likely malicious" not in _analyst_text(outcome.summary, outcome.sections).lower()
     _assert_no_internal_analyst_terms(outcome.summary, outcome.sections)
