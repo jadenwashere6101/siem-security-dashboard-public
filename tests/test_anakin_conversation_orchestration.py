@@ -11,13 +11,11 @@ from core.ai.conversation_context import (
     ConversationContextTooLargeError,
     conversation_budget,
     prompt_block,
-    resolve_reference,
     select_conversation_context,
 )
 from core.ai.conversation_orchestration_service import (
     ConversationBoundaryError,
     _planner_tool_request,
-    _resolved_draft_type,
     plan_conversational_submission,
     queue_conversational_request,
     run_conversational_workflow,
@@ -191,25 +189,6 @@ def test_planner_response_registry_requirements_outrank_prior_context():
     }
 
 
-@pytest.mark.parametrize(
-    "question,expected",
-    [
-        ("Draft an investigation checklist for this alert.", "investigation_checklist"),
-        ("Create an incident note for the handoff.", "incident_note"),
-        ("Prepare an escalation summary.", "escalation_summary"),
-        ("Draft a response recommendation.", "response_recommendation"),
-        ("Write a playbook draft.", "playbook_draft"),
-        ("Propose a detection rule change.", "detection_rule_change"),
-    ],
-)
-def test_artifact_intent_derives_only_bounded_registry_types(question, expected):
-    assert _resolved_draft_type({"prompt": question}, "Draft the requested analyst artifact.") == expected
-
-
-def test_ambiguous_artifact_intent_does_not_invent_a_draft_type():
-    assert _resolved_draft_type({"prompt": "Draft something useful for this investigation."}, "Create an artifact.") is None
-
-
 class PlannerThenAnswerGateway:
     def __init__(self, plan, answer):
         self.responses = [json.dumps(plan), answer]
@@ -264,14 +243,42 @@ def _controlled_planner_config():
     )
 
 
-def _semantic_plan(action, strategy, *, sufficiency="sufficient", tools=None, requirements=None):
+def _semantic_plan(
+    action,
+    strategy,
+    *,
+    sufficiency="sufficient",
+    tools=None,
+    requirements=None,
+    relationship="continuation",
+    entities=None,
+    artifact_type=None,
+    referenced_turn_sequence=None,
+    clarification=None,
+):
+    capability = {
+        "direct_answer": "quick_explain",
+        "quick_evidence_lookup": "quick_explain",
+        "bounded_investigation": "deep_investigate",
+        "decision_support": "decision_support",
+        "artifact_draft": "generate_artifact",
+        "compare_entities": "deep_investigate",
+        "clarification_required": None,
+        "unsupported_or_boundary": None,
+    }[strategy]
     return {
         "current_turn_intent": action,
+        "relationship_to_prior_turn": relationship,
+        "resolved_entities": entities or [],
         "evidence_sufficiency": sufficiency,
         "required_evidence": ["fresh bounded SIEM evidence"] if sufficiency == "insufficient" else [],
         "proposed_strategy": strategy,
+        "proposed_capability": capability,
         "proposed_tool_categories": tools or [],
         "evidence_requirements": requirements or {},
+        "artifact_type": artifact_type,
+        "referenced_turn_sequence": referenced_turn_sequence,
+        "clarification_question": clarification,
         "reasoning_summary": "The selected action and strategy answer the current analyst turn.",
     }
 
@@ -400,7 +407,7 @@ def test_failed_sync_generation_records_no_assistant_inference(postgres_db, monk
     assert get_thread(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")["state"]["conclusions"] == []
 
 
-def test_ambiguous_reference_returns_clarification_without_model(postgres_db, monkeypatch):
+def test_ambiguous_reference_is_clarified_by_planner_without_workflow(postgres_db, monkeypatch):
     conn, cur = postgres_db
     thread, alert_id = _seed(conn)
     cur.execute(
@@ -426,183 +433,39 @@ def test_ambiguous_reference_returns_clarification_without_model(postgres_db, mo
     )
     monkeypatch.setattr(
         "core.ai.conversation_orchestration_service.run_workflow",
-        lambda *_args, **_kwargs: pytest.fail("ambiguous references must not invoke the model"),
+        lambda *_args, **_kwargs: pytest.fail("planner clarification must not invoke a capability"),
+    )
+    gateway = PlannerThenAnswerGateway(
+        _semantic_plan(
+            "clarification",
+            "clarification_required",
+            sufficiency="ambiguous",
+            clarification="Did you mean 203.0.113.10 or 203.0.113.11?",
+        ),
+        "unused",
     )
 
     result = run_conversational_workflow(
         _payload(thread, alert_id, prompt="Which of the IPs is it?"),
         owner_username="conversation_analyst",
         actor_role="analyst",
+        gateway=gateway,
+        config=_controlled_planner_config(),
     )
 
     assert result.payload["status"] == "clarification_required"
-    assert len(result.payload["result"]["reference_resolution"]["candidates"]) == 2
+    assert result.payload["result"]["reference_resolution"]["candidates"] == []
+    assert "203.0.113.10 or 203.0.113.11" in result.payload["result"]["answer"]
     page = list_turns(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")
     assert page["turns"][0]["assertion_type"] == "unresolved_question"
 
 
-@pytest.mark.parametrize(
-    ("question", "expected_intent"),
-    [
-        ("why?", "why"),
-        ("continue", "continue"),
-        ("compare them", "compare"),
-        ("go back", "go_back"),
-        ("Actually, that conclusion is wrong.", "correction"),
-    ],
-)
-def test_reference_intent_classes(question, expected_intent):
-    thread = {
-        "primary_entity": {"type": "alert", "id": "2"},
-        "focus_state": {
-            "active": {"type": "alert", "id": "2"},
-            "history": [{"type": "alert", "id": "1"}],
-        },
-    }
-    entities = [
-        {"entity_type": "alert", "entity_id": "2", "salience": 1.0},
-        {"entity_type": "alert", "entity_id": "1", "salience": 0.8},
-    ]
-    turns = [
-        {
-            "id": 7,
-            "turn_id": "assistant-7",
-            "sequence": 7,
-            "role": "assistant",
-            "content": "The activity is consistent with scanning.",
-        }
-    ]
-    result = resolve_reference(
-        question,
-        thread=thread,
-        entities=entities,
-        turns=turns,
-        unresolved_questions=[{"content": "Confirm scanner ownership"}],
-    )
-    assert result["status"] == "resolved"
-    assert result["intent"] == expected_intent
+def test_context_builder_has_no_natural_language_resolution_api():
+    import inspect
+    import core.ai.conversation_context as conversation_context
 
-
-def test_unique_pronoun_and_explicit_entity_switch_resolve_without_guessing():
-    thread = {
-        "primary_entity": {"type": "alert", "id": "2"},
-        "focus_state": {"active": {"type": "alert", "id": "2"}, "history": []},
-    }
-    single = resolve_reference(
-        "What changed with that alert?",
-        thread=thread,
-        entities=[{"entity_type": "alert", "entity_id": "2", "salience": 1.0}],
-        turns=[],
-    )
-    switched = resolve_reference(
-        "Switch to 203.0.113.81.",
-        thread=thread,
-        entities=[
-            {"entity_type": "alert", "entity_id": "2", "salience": 1.0},
-            {"entity_type": "source_ip", "entity_id": "203.0.113.81", "salience": 0.8},
-        ],
-        turns=[],
-    )
-    assert single["status"] == "resolved"
-    assert single["referent"] == {"type": "alert", "id": "2", "display_alias": None}
-    assert switched["status"] == "resolved"
-    assert switched["referent"]["id"] == "203.0.113.81"
-
-
-@pytest.mark.parametrize("question", ["Compare them.", "Which is worse?", "Which should be prioritized?"])
-def test_comparison_phrasings_resolve_exactly_two_authoritative_entities(question):
-    result = resolve_reference(
-        question,
-        thread={
-            "primary_entity": {"type": "alert", "id": "2"},
-            "focus_state": {"active": {"type": "alert", "id": "2"}, "history": [{"type": "alert", "id": "1"}]},
-        },
-        entities=[
-            {"entity_type": "alert", "entity_id": "2", "salience": 1.0},
-            {"entity_type": "alert", "entity_id": "1", "salience": 0.9},
-        ],
-        turns=[],
-    )
-
-    assert result["status"] == "resolved"
-    assert result["intent"] == "compare"
-    assert {item["id"] for item in result["referent"]["entities"]} == {"1", "2"}
-
-
-def test_literal_valid_ip_becomes_current_entity_even_when_not_already_tracked():
-    result = resolve_reference(
-        "Show me alerts from 203.0.113.99.",
-        thread={
-            "primary_entity": {"type": "dashboard", "id": "dashboard"},
-            "focus_state": {"active": {"type": "dashboard", "id": "dashboard"}, "history": []},
-        },
-        entities=[],
-        turns=[],
-        explicit_entity={"type": "dashboard", "id": "dashboard"},
-    )
-
-    assert result["status"] == "resolved"
-    assert result["intent"] == "explicit_entity"
-    assert result["referent"] == {
-        "type": "source_ip",
-        "id": "203.0.113.99",
-        "display_alias": "Source IP 203.0.113.99",
-    }
-
-
-def test_typed_reference_uses_static_primary_entity_without_entity_rows():
-    result = resolve_reference(
-        "Draft a checklist for this alert.",
-        thread={
-            "primary_entity": {"type": "alert", "id": "42"},
-            "focus_state": {"active": None, "history": []},
-        },
-        entities=[],
-        turns=[],
-    )
-
-    assert result["status"] == "resolved"
-    assert result["referent"]["type"] == "alert"
-    assert result["referent"]["id"] == "42"
-
-
-@pytest.mark.parametrize(
-    "question",
-    ["Show me alerts from this IP.", "Search this source again.", "Check for any newer activity from it."],
-)
-def test_typed_ip_reference_uses_structured_verified_evidence_not_assistant_prose(question):
-    result = resolve_reference(
-        question,
-        thread={
-            "primary_entity": {"type": "alert", "id": "42"},
-            "focus_state": {"active": {"type": "alert", "id": "42"}, "history": []},
-        },
-        entities=[],
-        turns=[
-            {
-                "turn_id": "assistant-2",
-                "sequence": 2,
-                "role": "assistant",
-                "content": "Arbitrary prose names 198.51.100.200 but is not authoritative identity.",
-                "entity_snapshot": {"active_entity": {"type": "alert", "id": "42"}, "entities": []},
-                "lifecycle_status": "completed",
-            }
-        ],
-        evidence=[
-            {
-                "entity_fingerprint": "alerts:42",
-                "snapshot": {
-                    "finding": {
-                        "items": [{"id": 42, "alert_type": "port_scan", "source_ip": "18.232.121.80"}]
-                    }
-                },
-            }
-        ],
-        explicit_entity={"type": "alert", "id": "42"},
-    )
-
-    assert result["status"] == "resolved"
-    assert result["referent"] == {"type": "source_ip", "id": "18.232.121.80", "display_alias": None}
+    assert "question" not in inspect.signature(select_conversation_context).parameters
+    assert not hasattr(conversation_context, "resolve_reference")
 
 
 def test_stale_evidence_is_reported_missing_from_selected_context(postgres_db):
@@ -623,15 +486,14 @@ def test_stale_evidence_is_reported_missing_from_selected_context(postgres_db):
         conn,
         thread=get_thread(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst"),
         owner_username="conversation_analyst",
-        question="What does the current evidence show?",
         workflow="quick_explain",
         max_chars=1800,
     )
-    assert selected.packet["verified_evidence"] == []
+    assert selected.packet["recent_tool_results"] == []
     assert selected.packet["bounds"]["stale_evidence_excluded"] == 1
 
 
-def test_deleted_active_entity_rejects_follow_up_before_model(postgres_db, monkeypatch):
+def test_deleted_planner_selected_entity_rejects_after_planning_before_execution(postgres_db, monkeypatch):
     conn, cur = postgres_db
     thread, alert_id = _seed(conn)
     cur.execute("DELETE FROM alerts WHERE id = %s", (alert_id,))
@@ -641,14 +503,28 @@ def test_deleted_active_entity_rejects_follow_up_before_model(postgres_db, monke
     )
     monkeypatch.setattr(
         "core.ai.conversation_orchestration_service.run_workflow",
-        lambda *_args, **_kwargs: pytest.fail("deleted targets must fail before model invocation"),
+        lambda *_args, **_kwargs: pytest.fail("deleted targets must fail before capability execution"),
+    )
+    gateway = PlannerThenAnswerGateway(
+        _semantic_plan(
+            "fresh_evidence_lookup",
+            "quick_evidence_lookup",
+            sufficiency="insufficient",
+            entities=[{"type": "alert", "id": str(alert_id)}],
+            tools=["alerts"],
+            requirements={"limit": 1},
+        ),
+        "unused",
     )
     with pytest.raises(ThreadTargetUnavailableError):
         run_conversational_workflow(
             _payload(thread, alert_id, request_id="deleted-alert-follow-up"),
             owner_username="conversation_analyst",
             actor_role="analyst",
+            gateway=gateway,
+            config=_controlled_planner_config(),
         )
+    assert len(gateway.requests) == 1
 
 
 def test_correction_supersedes_inference_not_evidence(postgres_db, monkeypatch):
@@ -685,7 +561,22 @@ def test_correction_supersedes_inference_not_evidence(postgres_db, monkeypatch):
         request_id="correction-1",
         prompt="Actually, this was our approved scanner, not confirmed malicious activity.",
     )
-    result = run_conversational_workflow(payload, owner_username="conversation_analyst", actor_role="analyst")
+    gateway = PlannerThenAnswerGateway(
+        _semantic_plan(
+            "analyst_correction",
+            "direct_answer",
+            entities=[{"type": "alert", "id": str(alert_id)}],
+            referenced_turn_sequence=assistant["sequence"],
+        ),
+        "unused",
+    )
+    result = run_conversational_workflow(
+        payload,
+        owner_username="conversation_analyst",
+        actor_role="analyst",
+        gateway=gateway,
+        config=_controlled_planner_config(),
+    )
     assert result.payload["conversation"]["user_turn"]["assertion_type"] == "correction"
     refreshed = get_thread(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")
     assert refreshed["state"]["corrections"][-1]["supersedes_turn_id"] == assistant["id"]
@@ -888,10 +779,28 @@ def test_generate_artifact_derives_checklist_type_before_async_drafting(postgres
         workflow="generate_artifact",
     )
 
-    queued, status = queue_workflow_request(
+    gateway = PlannerThenAnswerGateway(
+        _semantic_plan(
+            "artifact_draft",
+            "artifact_draft",
+            sufficiency="insufficient",
+            entities=[{"type": "alert", "id": str(alert_id)}],
+            artifact_type="investigation_checklist",
+        ),
+        "unused",
+    )
+    planned = plan_conversational_submission(
         payload,
+        owner_username="conversation_analyst",
+        gateway=gateway,
+        config=_controlled_planner_config(),
+    )
+    queued, status = queue_conversational_request(
+        payload,
+        classification=planned["classification"],
         actor_username="conversation_analyst",
         actor_role="analyst",
+        planned=planned,
     )
 
     assert status == 202
@@ -921,16 +830,33 @@ def test_ambiguous_artifact_request_returns_persisted_category_clarification(pos
         workflow="generate_artifact",
     )
 
-    response, status = queue_workflow_request(
+    gateway = PlannerThenAnswerGateway(
+        _semantic_plan(
+            "clarification",
+            "clarification_required",
+            sufficiency="ambiguous",
+            clarification="Which artifact should I draft: checklist, incident note, or escalation summary?",
+        ),
+        "unused",
+    )
+    planned = plan_conversational_submission(
         payload,
+        owner_username="conversation_analyst",
+        gateway=gateway,
+        config=_controlled_planner_config(),
+    )
+    response, status = queue_conversational_request(
+        payload,
+        classification=planned["classification"],
         actor_username="conversation_analyst",
         actor_role="analyst",
+        planned=planned,
     )
 
     assert status == 200
     assert response["status"] == "clarification_required"
-    assert "Which artifact should I draft?" in response["result"]["answer"]
-    assert "investigation_checklist" in response["result"]["answer"]
+    assert "Which artifact should I draft" in response["result"]["answer"]
+    assert "checklist" in response["result"]["answer"]
     assert "DraftValidationError" not in response["result"]["answer"]
     turns = list_turns(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")["turns"]
     assert [turn["role"] for turn in turns] == ["user", "assistant"]
@@ -1015,12 +941,11 @@ def test_context_selector_compacts_whole_items_and_rebuilds_invalid_state(postgr
         conn,
         thread=refreshed,
         owner_username="conversation_analyst",
-        question="What happened?",
         workflow="quick_explain",
         max_chars=1200,
     )
     rendered = prompt_block(selected.packet)
-    assert selected.packet["thread_summary"] is None
+    assert selected.packet["conversation_summary"] is None
     assert selected.packet["bounds"]["state_rebuilt"] is True
     assert selected.packet["bounds"]["compacted"] is True
     assert len(rendered) < 1500
@@ -1132,7 +1057,8 @@ def test_participating_prompt_builders_remain_within_profile_budgets():
     config = load_ai_gateway_config()
     context = AiContextPayload(context_type="alert", data={"alert": {"id": 7, "severity": "high"}}, sources=[])
     packet = {
-        "thread": {"thread_id": "ath_budget", "primary_entity": {"type": "alert", "id": "7"}},
+        "thread": {"thread_id": "ath_budget"},
+        "entities": [{"type": "alert", "id": "7", "source_type": "thread_record"}],
         "analyst_statements": [{"assertion_type": "analyst_statement", "content": "x" * 500}],
         "bounds": {"max_chars": 1400, "included": {"analyst_statements": 1}, "omitted": {}},
     }
@@ -1140,7 +1066,7 @@ def test_participating_prompt_builders_remain_within_profile_budgets():
     quick = _build_prompt(
         context,
         action="explain_alert",
-        question="Why does this matter?",
+        question="Explain this alert.",
         profile_max_prompt_chars=quick_limit,
         conversation_context=packet,
     )
@@ -1157,11 +1083,11 @@ def test_participating_prompt_builders_remain_within_profile_budgets():
     )
     deep = _build_correlation_prompt(
         plan=plan,
-        question="Continue the investigation.",
         ai_context=context,
         tools=SocToolExecutionSummary(used=False),
         routing=SimpleNamespace(profile="guided_analysis"),
         config=config,
+        question="Investigate this alert.",
         profile_max_prompt_chars=guided_limit,
         conversation_context=packet,
     )
@@ -1225,15 +1151,31 @@ def test_context_packet_final_bookkeeping_always_fits_assigned_budget(postgres_d
         conn,
         thread=get_thread(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst"),
         owner_username="conversation_analyst",
-        question="Continue with the current evidence.",
         workflow=workflow,
         max_chars=900,
-        explicit_entity={"type": "alert", "id": str(alert_id)},
+        request_entity={"type": "alert", "id": str(alert_id)},
     )
     rendered = json.dumps(selected.packet, default=str, sort_keys=True, separators=(",", ":"))
     assert len(rendered) <= 900
     assert selected.packet["bounds"]["serialized_chars"] == len(rendered)
-    assert selected.packet["thread"]["resolved_entity"]["id"] == str(alert_id)
+    assert any(
+        item["id"] == str(alert_id) and item["source_type"] == "request_context"
+        for item in selected.packet["entities"]
+    )
+    assert not {
+        "active_focus",
+        "primary_entity",
+        "focus_history",
+        "preferred_reference",
+        "correction_target",
+        "intent",
+        "relationship",
+        "priority",
+    }.intersection(selected.packet)
+    assert all(
+        set(item).issubset({"type", "id", "display_alias", "source_type", "sequence", "observed_at"})
+        for item in selected.packet["entities"]
+    )
     assert selected.packet["bounds"]["compacted"] is True
 
 
@@ -1340,10 +1282,20 @@ def test_follow_up_binds_latest_conclusion_without_repeated_entity(postgres_db, 
             "client_request_id": f"follow-up-{follow_up}",
         },
     }
+    gateway = PlannerThenAnswerGateway(
+        _semantic_plan(
+            "evidence_explanation",
+            "direct_answer",
+            entities=[{"type": "alert", "id": str(alert_id)}],
+        ),
+        "unused",
+    )
     result = run_conversational_workflow(
         follow_payload,
         owner_username="conversation_analyst",
         actor_role="analyst",
+        gateway=gateway,
+        config=_controlled_planner_config(),
     )
     assert seen[-1]["context_type"] == "alert"
     assert seen[-1]["context"]["alert_id"] == alert_id
@@ -1418,14 +1370,25 @@ def test_go_back_rewrites_thread_payload_metadata_and_answer_to_prior_alert(post
             actor_role="analyst",
         )
     current = get_thread(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")
+    gateway = PlannerThenAnswerGateway(
+        _semantic_plan(
+            "evidence_explanation",
+            "direct_answer",
+            relationship="entity_switch",
+            entities=[{"type": "alert", "id": str(alert_a)}],
+        ),
+        "unused",
+    )
     result = run_conversational_workflow(
         _payload(current, alert_b, request_id="go-back-a", prompt="Go back."),
         owner_username="conversation_analyst",
         actor_role="analyst",
+        gateway=gateway,
+        config=_controlled_planner_config(),
     )
     refreshed = get_thread(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")
     assert seen[-1]["context"]["alert_id"] == alert_a
-    assert seen[-1]["conversation_context"]["thread"]["resolved_entity"]["id"] == str(alert_a)
+    assert gateway.requests
     assert result.payload["conversation"]["active_entity"]["id"] == str(alert_a)
     assert refreshed["focus_state"]["active"]["id"] == str(alert_a)
     assert result.payload["result"]["answer"] == f"Analyzed alert {alert_a}"
@@ -1462,14 +1425,31 @@ def test_async_ip_clarification_persists_without_workflow_request(postgres_db, m
         prompt="Which IP should I prioritize?",
         workflow="decision_support",
     )
+    gateway = PlannerThenAnswerGateway(
+        _semantic_plan(
+            "clarification",
+            "clarification_required",
+            sufficiency="ambiguous",
+            clarification="Which source IP should I prioritize: 203.0.113.20 or 203.0.113.21?",
+        ),
+        "unused",
+    )
+    planned = plan_conversational_submission(
+        payload,
+        owner_username="conversation_analyst",
+        gateway=gateway,
+        config=_controlled_planner_config(),
+    )
     result, status = queue_conversational_request(
         payload,
-        classification=classify_workflow(payload),
+        classification=planned["classification"],
         actor_username="conversation_analyst",
         actor_role="analyst",
+        planned=planned,
     )
     assert status == 200
     assert result["metadata"]["model_invoked"] is False
+    assert len(gateway.requests) == 1
     with conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM ai_workflow_requests WHERE thread_id = %s", (thread["thread_id"],))
         assert cur.fetchone()[0] == 0
@@ -1642,6 +1622,15 @@ def test_natural_auto_turn_reaches_semantic_capability(
 ):
     conn, _cur = postgres_db
     thread, alert_id = _seed(conn)
+    plan = {
+        **plan,
+        "resolved_entities": [
+            {"type": "source_ip", "id": "203.0.113.81"}
+            if expected_entity_type == "source_ip"
+            else {"type": "alert", "id": str(alert_id)}
+        ],
+        "artifact_type": "investigation_checklist" if expected_workflow == "generate_artifact" else None,
+    }
     save_thread_state(
         conn,
         thread_id=thread["thread_id"],
@@ -1751,7 +1740,16 @@ def test_natural_comparison_auto_turn_reaches_compare_capability(postgres_db, mo
     monkeypatch.setattr(
         "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
     )
-    plan = _semantic_plan("comparison", "compare_entities", sufficiency="insufficient")
+    plan = _semantic_plan(
+        "comparison",
+        "compare_entities",
+        sufficiency="insufficient",
+        relationship="comparison",
+        entities=[
+            {"type": "alert", "id": str(alert_id)},
+            {"type": "alert", "id": str(second_alert_id)},
+        ],
+    )
     gateway = PlannerThenAnswerGateway(plan, "unused")
 
     planned = plan_conversational_submission(
@@ -1819,13 +1817,14 @@ def test_production_shaped_auto_turn_plans_dispatches_and_persists(postgres_db, 
     monkeypatch.setattr("core.ai.context_builder.get_db_connection", lambda: NoCloseConnection(conn))
     monkeypatch.setattr("core.ai.soc_tool_executor.get_db_connection", lambda: NoCloseConnection(conn))
     monkeypatch.setattr("core.ai.explainer_service.current_user", SimpleNamespace(role="analyst"))
-    plan = {
-        "current_turn_intent": "fresh_evidence_lookup",
-        "evidence_sufficiency": "insufficient",
-        "required_evidence": ["current alert detail"],
-        "proposed_strategy": "quick_evidence_lookup",
-        "proposed_tool_categories": ["alerts"],
-        "evidence_requirements": {
+    plan = _semantic_plan(
+        "fresh_evidence_lookup",
+        "quick_evidence_lookup",
+        sufficiency="insufficient",
+        relationship="entity_switch",
+        entities=[{"type": "alert", "id": str(alert_id)}],
+        tools=["alerts"],
+        requirements={
             "severity": "high",
             "alert_type": "failed_login",
             "source_ip": "203.0.113.81",
@@ -1833,10 +1832,7 @@ def test_production_shaped_auto_turn_plans_dispatches_and_persists(postgres_db, 
             "sort": "newest",
             "limit": 3,
         },
-        "clarification_question": None,
-        "reasoning_summary": "The current question is a new lookup and requires fresh alert-list evidence.",
-        "confidence": "high",
-    }
+    )
     gateway = PlannerThenAnswerGateway(
         plan,
         "Bad IP: This alert indicates suspicious activity. Check whether it touched sensitive hosts.",
@@ -1902,12 +1898,12 @@ def test_production_shaped_auto_turn_plans_dispatches_and_persists(postgres_db, 
         "limit": 3,
     }
     assert stored_plan["evidence_filter_provenance"] == {
-        "severity": "explicit_current_turn",
-        "alert_type": "explicit_current_turn",
-        "source_ip": "explicit_current_turn",
-        "time_window_minutes": "explicit_current_turn",
-        "sort": "explicit_current_turn",
-        "limit": "planner_proposed",
+        "severity": "planner_interpreted",
+        "alert_type": "planner_interpreted",
+        "source_ip": "planner_interpreted",
+        "time_window_minutes": "planner_interpreted",
+        "sort": "planner_interpreted",
+        "limit": "planner_interpreted",
     }
     assert turns[0]["entity_snapshot"]["active_entity"]["type"] == "alert"
     assert turns[0]["entity_snapshot"]["active_entity"]["id"] == str(alert_id)
@@ -1933,17 +1929,14 @@ def test_production_time_window_no_match_does_not_reuse_older_alert(postgres_db,
     monkeypatch.setattr("core.ai.context_builder.get_db_connection", lambda: NoCloseConnection(conn))
     monkeypatch.setattr("core.ai.soc_tool_executor.get_db_connection", lambda: NoCloseConnection(conn))
     monkeypatch.setattr("core.ai.explainer_service.current_user", SimpleNamespace(role="analyst"))
-    plan = {
-        "current_turn_intent": "fresh_evidence_lookup",
-        "evidence_sufficiency": "insufficient",
-        "required_evidence": ["alerts observed in the requested time window"],
-        "proposed_strategy": "quick_evidence_lookup",
-        "proposed_tool_categories": ["alerts"],
-        "evidence_requirements": {"limit": 10},
-        "clarification_question": None,
-        "reasoning_summary": "The current question requires a bounded time-filtered lookup.",
-        "confidence": "high",
-    }
+    plan = _semantic_plan(
+        "fresh_evidence_lookup",
+        "quick_evidence_lookup",
+        sufficiency="insufficient",
+        entities=[{"type": "alert", "id": str(alert_id)}],
+        tools=["alerts"],
+        requirements={"time_window_minutes": 60, "limit": 10},
+    )
     gateway = PlannerThenAnswerGateway(plan, "A HIGH alert occurred recently.")
     payload = _payload(
         thread,
@@ -1992,17 +1985,11 @@ def test_conversation_state_question_uses_thread_state_without_tool_lookup(postg
     current = get_thread(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")
     monkeypatch.setattr("core.ai.conversation_orchestration_service.run_workflow", original_run_workflow)
     monkeypatch.setattr("core.ai.context_builder.get_db_connection", lambda: NoCloseConnection(conn))
-    plan = {
-        "current_turn_intent": "state_summary",
-        "evidence_sufficiency": "sufficient",
-        "required_evidence": [],
-        "proposed_strategy": "direct_answer",
-        "proposed_tool_categories": [],
-        "evidence_requirements": {},
-        "clarification_question": None,
-        "reasoning_summary": "The authoritative thread state identifies the active alert and current conclusion.",
-        "confidence": "high",
-    }
+    plan = _semantic_plan(
+        "state_summary",
+        "direct_answer",
+        entities=[{"type": "alert", "id": str(alert_id)}],
+    )
     gateway = PlannerThenAnswerGateway(plan, "This alert indicates suspicious activity from a bad IP.")
 
     result = run_conversational_workflow(
@@ -2043,17 +2030,15 @@ def test_typed_source_ip_switch_reaches_tool_and_grounded_answer(postgres_db, mo
     monkeypatch.setattr("core.ai.context_builder.get_db_connection", lambda: NoCloseConnection(conn))
     monkeypatch.setattr("core.ai.soc_tool_executor.get_db_connection", lambda: NoCloseConnection(conn))
     monkeypatch.setattr("core.ai.explainer_service.current_user", SimpleNamespace(role="analyst"))
-    plan = {
-        "current_turn_intent": "fresh_evidence_lookup",
-        "evidence_sufficiency": "insufficient",
-        "required_evidence": ["alerts matching the source IP"],
-        "proposed_strategy": "quick_evidence_lookup",
-        "proposed_tool_categories": ["alerts"],
-        "evidence_requirements": {"source_ip": "203.0.113.99", "limit": 10},
-        "clarification_question": None,
-        "reasoning_summary": "The literal IP is a valid accessible SIEM entity requiring a bounded alert lookup.",
-        "confidence": "high",
-    }
+    plan = _semantic_plan(
+        "fresh_evidence_lookup",
+        "quick_evidence_lookup",
+        sufficiency="insufficient",
+        relationship="entity_switch",
+        entities=[{"type": "source_ip", "id": "203.0.113.99"}],
+        tools=["alerts"],
+        requirements={"source_ip": "203.0.113.99", "limit": 10},
+    )
     gateway = PlannerThenAnswerGateway(plan, "This IP appears suspicious.")
     payload = _payload(
         thread,
@@ -2119,7 +2104,7 @@ def test_unhinted_auto_planner_failure_does_not_dispatch_quick_explain(postgres_
         ),
     )
 
-    assert result.payload["metadata"]["model_invoked"] is False
+    assert len(gateway.requests) == 1
     assert "could not safely plan" in result.payload["result"]["answer"].lower()
     assert len(gateway.requests) == 1
     assert gateway.requests[0].capability == "agentic_analyst_planning"
@@ -2161,7 +2146,7 @@ def test_explicit_quick_explain_keeps_documented_planner_unavailable_fallback(po
     "prompt,expected_fragment,expected_planner_calls",
     [
         ("Inspect the Repo Assistant code for this issue.", "outside this read-only SIEM conversation", 1),
-        ("Continue the SOC Briefing from this morning.", "no prior conclusion", 0),
+        ("Continue the SOC Briefing from this morning.", "outside this read-only SIEM conversation", 1),
     ],
 )
 def test_working_planner_cannot_reclassify_textual_boundary_into_siem_execution(
@@ -2176,17 +2161,7 @@ def test_working_planner_cannot_reclassify_textual_boundary_into_siem_execution(
         "core.ai.conversation_orchestration_service.run_workflow",
         lambda *_args, **_kwargs: pytest.fail("boundary plan reached SIEM workflow execution"),
     )
-    plan = {
-        "current_turn_intent": "unsupported",
-        "evidence_sufficiency": "sufficient",
-        "required_evidence": [],
-        "proposed_strategy": "unsupported_or_boundary",
-        "proposed_tool_categories": [],
-        "evidence_requirements": {},
-        "clarification_question": None,
-        "reasoning_summary": "The request belongs to an isolated product namespace.",
-        "confidence": "high",
-    }
+    plan = _semantic_plan("unsupported", "unsupported_or_boundary")
     gateway = PlannerThenAnswerGateway(plan, "unused")
 
     result = run_conversational_workflow(

@@ -8,7 +8,7 @@ Session memory already separates analyst statements, corrections, model inferenc
 
 **Goals:**
 
-- Reinterpret every eligible current turn after server-owned context/entity resolution and before capability selection.
+- Reinterpret every eligible current turn from bounded server-owned context before capability selection, with all natural-language reference and entity selection performed by the planner.
 - Produce a strict, bounded, validated, read-only plan and dispatch it through existing capabilities.
 - Distinguish direct answers, one bounded evidence lookup, bounded investigation, decision support, artifact preview, comparison, clarification, and boundary responses.
 - Prevent prior workflow labels, unsupported claims, stale evidence, or model-proposed entities/tools from becoming authoritative.
@@ -20,17 +20,17 @@ Session memory already separates analyst statements, corrections, model inferenc
 
 ## Decisions
 
-### Planning occurs after authoritative resolution and before persistence/dispatch
+### Planning occurs after authoritative context construction and before resolution, persistence, or dispatch
 
-`conversation_orchestration_service` exposes a read-only planning preparation step that validates owner/thread/version/entity and selects compact thread context without appending a turn. The planner call occurs outside a database transaction. Submission then reopens the authoritative thread, requires the original expected version, persists the turn using the validated plan, and dispatches the selected capability. This prevents a slow model call from holding row locks and makes concurrent state changes fail with the existing optimistic conflict.
+`conversation_orchestration_service` exposes a read-only planning preparation step that validates owner/thread/version and selects compact thread context without appending a turn. It does not resolve references, rank candidate entities, or reject ambiguity. The planner call occurs outside a database transaction. Submission then reopens the authoritative thread, requires the original expected version, validates the planner-selected entities for existence and access, persists the turn using the validated plan, and dispatches the selected capability. This prevents a slow model call from holding row locks and makes concurrent state changes fail with the existing optimistic conflict.
 
-The current request's explicit validated entity remains authoritative. A proposed entity must match the server-resolved entity set; a model cannot switch focus or invent an entity. Alternative: plan before entity resolution. Rejected because model-selected identity could conflict with ownership and execution payloads.
+The context builder emits uniform entity facts with source provenance from the structured request, thread record, stored state, turn snapshots, evidence, and entity index without exposing the source table's conversational labels. The planner selects zero, one, or two entities and may clarify. Every selected entity is validated after planning against supported types, PostgreSQL existence, ownership, and RBAC before execution context is constructed.
 
 ### One strict plan proposal, one bounded repair, deterministic authority
 
-The model produces a strict proposal containing only: `current_turn_intent`, `evidence_sufficiency`, `required_evidence`, `proposed_strategy`, `proposed_tool_categories`, `evidence_requirements`, `clarification_question`, `reasoning_summary`, `stopping_condition`, and `confidence`. `evidence_requirements` expresses bounded semantic constraints, not a query: severity, alert type, source or destination IP, hostname, username, time window, sort, and limit. The server compiles that validated reasoning proposal into the full `AgenticAnalystPlan` by attaching authoritative entities, derived prior-turn relationship, strategy-mapped capability, and immutable read-only safety. Text is parsed as one JSON object; arbitrary objects are never executed or stringified into analyst output.
+The model produces a strict proposal containing only: `current_turn_intent`, `relationship_to_prior_turn`, `resolved_entities`, `evidence_sufficiency`, `required_evidence`, `proposed_strategy`, `proposed_capability`, `proposed_tool_categories`, `evidence_requirements`, `artifact_type`, `clarification_question`, `reasoning_summary`, and `confidence`. `evidence_requirements` expresses bounded semantic constraints, not a query: severity, alert type, source or destination IP, hostname, username, time window, sort, and limit. The server validates schema, cross-field compatibility, entity existence/access, tool compatibility, and immutable read-only safety. Text is parsed as one JSON object; arbitrary objects are never executed or stringified into analyst output.
 
-Validation requires exactly the model-owned fields and rejects model-supplied server-owned fields as unknown rather than ignoring or rewriting them. It enforces enumerated strategies, strategy/tool/evidence relationships, one approved read-tool category at most, authoritative entity requirements, owner/namespace boundaries, evidence/provenance rules, size limits, stopping conditions, and preview-only artifact safety. An invalid first result receives one repair request containing only bounded validation errors and the original compact packet. A second invalid result, timeout, or provider failure returns a concise planner-unavailable or clarification response and preserves prior state. It never invokes the prior workflow as fallback.
+Validation enforces enumerated actions, relationships, strategies, capabilities, strategy/tool/evidence relationships, one approved read-tool category at most, entity shape and count, owner/namespace boundaries, filter value bounds, size limits, and preview-only artifact safety. It never parses the analyst's sentence to decide whether the model selected the right entity, action, or filter. An invalid first result receives one repair request containing only bounded validation errors and the original compact packet. A second invalid result, timeout, or provider failure returns a concise planner-unavailable response and preserves prior state. It never invokes the prior workflow as fallback.
 
 ### Planner contract ownership
 
@@ -42,13 +42,15 @@ Validation requires exactly the model-owned fields and rejects model-supplied se
 | `proposed_strategy` | Model | Selecting the bounded analytical approach is the planner's central responsibility. |
 | `proposed_tool_categories` | Model | Choosing one approved evidence category, when lookup is needed, follows from the evidence gap. |
 | `evidence_requirements` | Model proposes; server validates and translates | Identifying semantic evidence constraints requires reasoning, while accepted keys, scalar types, bounds, category compatibility, and tool arguments are server policy. The model never supplies SQL or backend query syntax. |
-| `clarification_question` | Model | A concise semantic clarification may be needed when ambiguity reaches the planner; deterministic resolver clarifications still bypass model generation. |
+| `clarification_question` | Model | A concise semantic clarification is selected by the planner when bounded authoritative context does not support one safe interpretation. |
 | `reasoning_summary` | Model | Records why the strategy and evidence decision fit the current turn. |
-| `stopping_condition` | Model | Defines when the bounded analytical task has answered the current question. |
+| `stopping_condition` | Server-derived from validated strategy | The bounded strategy contract already determines its terminal condition; asking the model to restate it adds no reasoning value. |
 | `confidence` | Model | Expresses confidence in the reasoning proposal, not confidence in authoritative identity. |
-| `resolved_entities` | Server | Entity identity and comparison membership are already validated by ownership-aware resolution. |
-| `relationship_to_prior_turn` | Derived by server | Existing reference-resolution intent deterministically maps to continuation, new question, entity switch, comparison, or clarification response. |
-| `proposed_capability` | Derived by server | `STRATEGY_CAPABILITY` is the authoritative one-to-one bounded dispatch mapping. |
+| `resolved_entities` | Model selects; server validates | Reference resolution and comparison membership require interpreting the current turn; the server verifies shape, existence, ownership, and access after selection. |
+| `relationship_to_prior_turn` | Model | Continuation, topic switch, comparison, and return-to-prior-focus are natural-language interpretations. |
+| `proposed_capability` | Model selects; server validates | Capability choice follows interpreted intent; the server enforces the strategy/capability allowlist. |
+| `artifact_type` | Model selects; server validates | Natural artifact wording is interpreted by the planner; the server accepts only registry-backed draft types. |
+| `referenced_turn_sequence` | Model selects for corrections; server validates | Selecting which prior inference is corrected is reference interpretation; the server verifies the sequence identifies an owned assistant inference and matches the selected entity. |
 | `read_only` / `mutation_allowed` | Server | Safety policy is immutable application authority, never a model choice. |
 | Profile, model, provider, lifecycle, workflow request, and execution metadata | Server | These are observed application/runtime facts and are not part of planner reasoning. |
 
@@ -58,9 +60,9 @@ Current explicit shortcut intent is a non-authoritative hint. When the planner p
 
 ### Planner packet is fit by construction
 
-The packet uses the current message, server-resolved primary/comparison entities, compact conclusions, one unresolved question, corrections, fresh verified-evidence summaries with timestamps, selected recent turns, available capabilities/read-tool categories, safety boundaries, and latency/budget class. Stored text is labeled untrusted data and cannot supply instructions.
+The packet uses the current message plus bounded facts: uniformly represented entities with source provenance, recent turn records, recent evidence/tool results, the stored conversation summary, conclusions, unresolved questions, corrections, capabilities/read-tool categories, safety boundaries, and latency/budget class. It does not label a current entity, active focus, primary entity, focus history, preferred reference, correction target, intent, priority, or relationship. Stored text is labeled untrusted data and cannot supply instructions.
 
-Fixed schema/safety/provenance overhead is measured first. Optional categories have deterministic item/text limits and are admitted in priority order: resolved entity, corrections, unresolved question, conclusions, fresh evidence, recent turns, secondary entities. Stale evidence is represented only by identity/freshness metadata and cannot satisfy evidence requirements. The final serialized packet and full prompt are checked before generation; a mandatory-skeleton overflow is a configuration error, not ordinary user overflow. The entire thread and raw tool results are never sent.
+Fixed schema/safety/provenance overhead is measured first. Optional fact categories have deterministic item/text limits and are admitted in a documented transport order solely to fit the packet; that order is not semantic ranking. Stale evidence is represented only by identity/freshness metadata and cannot satisfy evidence requirements. The final serialized packet and full prompt are checked before generation; a mandatory-skeleton overflow is a configuration error, not ordinary user overflow. The entire thread and raw tool results are never sent.
 
 ### Existing capabilities remain execution authorities
 
@@ -92,17 +94,17 @@ The active workflow profile's `max_prompt_chars` applies to the fully serialized
 
 The builder measures the final joined prompt after every admission and before gateway generation. If mandatory synthesis cannot fit, a successful lookup bypasses model generation and returns the existing task-aware deterministic answer from the full server-owned evidence envelope, with explicit degraded-synthesis metadata. Empty successful results retain their validated filters. Verified evidence therefore cannot be replaced by a generic context-too-large error. Requests without successful evidence retain the existing fail-closed insufficient-context behavior.
 
-### Current-turn action is model-classified and server-constrained
+### Current-turn language interpretation is exclusively planner-owned
 
-The planner classifies the current turn into one bounded semantic action: `state_summary`, `fresh_evidence_lookup`, `evidence_explanation`, `decision_support`, `artifact_draft`, `comparison`, `bounded_investigation`, `clarification`, or `unsupported`. The server validates the compatible strategy set for that action before capability derivation. Thread state may establish sufficiency for `state_summary` or `evidence_explanation`, but cannot make `direct_answer` valid for a fresh lookup, recommendation, artifact, comparison, or investigation request.
+The planner classifies the current turn into one bounded semantic action: `state_summary`, `fresh_evidence_lookup`, `evidence_explanation`, `decision_support`, `artifact_draft`, `comparison`, `bounded_investigation`, `clarification`, or `unsupported`. It also chooses the prior-turn relationship, resolved entities, capability, evidence requirements, artifact type, or clarification. The server validates their enumerated and cross-field compatibility without independently interpreting the current message.
 
 The first syntactically valid action classification is preserved across the single repair attempt. Repair may correct schema and cross-field defects but cannot change the requested action. `clarification_question` is conditionally model-owned only for `clarification_required`; it may be omitted otherwise. `reasoning_summary` remains required audit reasoning. `stopping_condition` is derived from the validated strategy because the bounded capability already defines its execution stop. Planner confidence is optional descriptive metadata; when absent the server records `unknown`, never an invented positive confidence.
 
-### Filter provenance and authoritative referents are server-owned
+### Entity and filter interpretation is planner-owned; authority remains server-owned
 
-Reference resolution orders explicit current-turn identity, active focus, static primary entity, latest completed turn entity snapshots, fresh verified-evidence entities, comparison order, and focus history. Evidence entities are extracted only from structured snapshots and fingerprints, never arbitrary assistant prose. Ambiguous typed references still clarify.
+The context builder exposes uniform entity facts from structured request identity, thread records, stored state, completed turn snapshots, fresh verified evidence, and the entity index. It preserves source provenance but does not expose focus, primary, preferred, comparison, or reference-selection labels and does not rank or select entities. Evidence entities are extracted only from structured snapshots and fingerprints, never arbitrary assistant prose. The planner resolves references or returns clarification.
 
-Every accepted evidence requirement receives server-owned provenance: `explicit_current_turn`, `inherited_authoritative_context`, or `planner_proposed`. Explicit IPs, severity values, clear durations, canonical type identifiers, and semantic sort values are parsed deterministically. Entity filters may inherit only from the resolved authoritative entity/context. A model-proposed time window, severity, alert type, source/destination identity, hostname, or username that lacks either current-turn support or matching authoritative context is rejected. Fresh lookups do not inherit prior query filters merely because those filters exist in thread history.
+Every accepted evidence requirement records `planner_interpreted` provenance. The server validates only key allowlists, scalar types, IP/hostname/username syntax, bounds, selected-entity access, tool compatibility, and read-only policy. It does not parse the user's sentence to confirm a severity, duration, sort, entity, or alert family. The planner prompt requires fresh lookups not to inherit unrelated prior constraints; semantic correctness is evaluated through paraphrase and production acceptance rather than duplicated backend language rules.
 
 ### Provider capabilities and original workflow boundaries are pre-dispatch contracts
 
@@ -116,6 +118,35 @@ The planner requests the approved `agentic_planning` profile through the profile
 
 `fast_triage` remains assigned to Quick Explain and other existing short-triage paths with `llama3.2:3b`; Guided Analysis, Deep Briefing, and Developer Assistant retain their existing assignments. Planner prompt instructions make strategy/capability/tool relationships explicit, but deterministic validation remains authoritative and performs no intent-changing correction. At most one model repair remains permitted.
 
+### Language-understanding boundary cleanup
+
+The pre-planner reference resolver, pronoun/continuation/comparison regexes, candidate ranking, deterministic ambiguity responses, sentence-derived filter extraction, and natural-language artifact-type matching are removed. The context builder may normalize structured identifiers and preserve chronological/provenance labels, but it cannot inspect the current sentence to select an entity, intent, relationship, filter, capability, or clarification.
+
+#### Architectural principle: unrestricted language over facts
+
+The planner is not expected to recognize a predefined set of analyst phrases. It is expected to understand unrestricted natural language using a bounded packet of authoritative facts. Production scenarios and paraphrase matrices verify this boundary; they are never implementation targets, routing inputs, or a source for phrase-specific server behavior.
+
+The context packet is a pure fact packet. It contains recorded entities with provenance, recent tool/evidence results, the stored conversation summary, recorded conclusions, unresolved questions, corrections, recommendations, statements, and recent turns. It does not label any entity as active, primary, preferred, historical focus, or correction target, and it does not encode intent, priority, meaning, or conversational relationships. Ordering and omission exist only for deterministic transport bounds and provenance/recency retention, never as a statement of semantic importance.
+
+#### Permanent future regression rule
+
+If a future natural phrasing fails and a proposed fix adds deterministic conversational logic, the implementation is presumed architecturally incorrect until proven otherwise. Fix the planner boundary, planner contract, or model capability; do not patch the phrasing with regexes, phrase lists, synonym maps, ranking rules, routing rules, or special cases.
+
+#### Model-agnostic server invariant
+
+The server contract is independent of any particular LLM's reasoning style, wording, reference strategy, or language interpretation. Replacing the planner model may change model configuration and measured capability, but it must require no conversational server-code changes. The server accepts only the stable structured plan contract and validates authoritative facts and safety policy.
+
+| Failure class | Invariant | Enforcement location | Planner responsibility | Variants tested |
+|---|---|---|---|---|
+| Natural turn blocked before planning | Every eligible, owner-valid SIEM turn reaches planner generation | Conversation planning entry point | Interpret or clarify | Pronoun, ellipsis, comparison, topic switch |
+| Server chooses a referent | No pre-planner selected entity or ambiguity status exists | Context builder contract | Return resolved entities | Active, primary, prior turn, evidence, history |
+| New phrasing requires backend rules | No phrase list, language regex, synonym map, or ranking heuristic participates in planning | Source regression tests | Generalize semantically | Three materially different phrasings per scenario |
+| Planner invents or accesses an entity | Selected entities are validated after planning for type, existence, ownership, and RBAC | Conversation orchestration submission transaction | Select only contextual or explicit entities | Missing, deleted, cross-owner, literal IP |
+| Planner cannot resolve ambiguity | Clarification is a valid planner action with no execution | Plan validator and non-executing turn persistence | Ask a concise question | Two alerts, two IPs, unclear ellipsis |
+| Capability disagrees with intent | Model-selected action, strategy, and capability must satisfy an enumerated compatibility contract | Plan validator | Choose all three consistently | Advice, artifact, lookup, compare, investigate |
+| Filter language is reinterpreted by server | Server validates filter syntax/bounds/tool compatibility only | Evidence requirement validator | Translate the current request into semantic filters | Severity, time, sort, literal entity, no constraint |
+| Artifact wording is parsed by server | Planner selects a registry-backed artifact type or clarifies | Plan validator and artifact dispatch | Interpret draft intent | Checklist, escalation, incident note, ambiguous artifact |
+
 ## Failure-Class Table
 
 | Failure class | General invariant | Deterministic enforcement location | Model responsibility | Variants tested |
@@ -125,8 +156,8 @@ The planner requests the approved `agentic_planning` profile through the profile
 | No tool despite missing evidence | Insufficient evidence requires one approved lookup, investigation, or clarification | Plan validator | Identify required evidence | No/partial/stale evidence |
 | Tool despite sufficient evidence | Direct answer forbids tool categories | Plan validator | Assess sufficiency | Existing current evidence, prior conclusion |
 | Forbidden tool/capability | Only mapped capabilities and approved read categories pass | Plan validator/dispatch | Propose within boundary | Mutation, Repo, SOC, unknown tool |
-| Wrong or switched entity | Model cannot propose identity; compiled entities come from server-resolved accessible context and are rechecked before dispatch | Plan compiler and execution alignment validator | Reason about only the packet entities | Explicit switch, stale focus, attempted model override |
-| Ambiguity answered | Ambiguous resolution requires clarification and no execution | Resolver/validator | Ask concise clarification | Multiple IPs/alerts, missing referent |
+| Wrong or switched entity | Planner-selected entities must exist, be accessible, and match the execution payload; semantic selection remains model-owned | Post-plan entity/RBAC validator and execution alignment validator | Select the intended context entity or clarify | Explicit switch, stale focus, return to prior entity, invented identity |
+| Ambiguity answered | Only a planner clarification plan may stop for semantic ambiguity; the server never chooses among candidates | Plan schema/cross-field validator | Ask concise clarification | Multiple IPs/alerts, missing referent, ellipsis |
 | Stale evidence treated as current | Stale evidence cannot satisfy evidence sufficiency | Packet builder/validator | Request refresh or qualify | Expired and mixed-freshness evidence |
 | User claim or inference promoted to fact | Assertion provenance is immutable in packet and plan | Context builder/validator | Treat claims as statements/inferences | Scanner, owned IP, service account |
 | Invalid or repaired-invalid schema | Exactly one repair; then fail closed without sticky fallback | Parser/validator/planner service | Produce/repair strict JSON | Missing fields, bad enum, malformed JSON |
@@ -138,8 +169,8 @@ The planner requests the approved `agentic_planning` profile through the profile
 | State summary over-triggers on a fresh lookup | `fresh_evidence_lookup` is compatible only with `quick_evidence_lookup`; thread state cannot authorize `direct_answer` | Plan action/strategy validator | Classify the current requested action | Known IP lookup, repeat search, newer activity |
 | State summary under-triggers on an actual state question | `state_summary` uses `direct_answer` when authoritative state is answerable and never requests a SOC tool | Plan validator and dispatch | Recognize a state-summary action | Current investigation, current position, state recap |
 | Decision Support or artifact is swallowed by direct answer | Recommendation and artifact actions map only to their dedicated strategy/capability | Plan action/strategy validator | Distinguish advice and drafting requests | Block/monitor, escalation, checklist, note, summary |
-| Active, primary, or prior evidence entity is unavailable to a typed pronoun | Typed references consult all server-owned entity snapshots and structured evidence identities in precedence order | Conversation reference resolver | Use the resolved entity, not infer identity from prose | `this IP`, `this alert`, primary alert, latest evidence IP |
-| Spurious or stale filter narrows a fresh lookup | Material filters require explicit current-turn support or matching authoritative entity context and carry provenance | Plan requirement/provenance validator | Propose only task-supported constraints | Invented 30-minute window, stale severity/type, literal IP |
+| Active, primary, or prior evidence entity is unavailable to a typed pronoun | All authoritative entity sources are labeled in the bounded packet without server selection | Context builder and post-plan entity validator | Resolve the intended entity or clarify | `this IP`, `this alert`, primary alert, latest evidence IP |
+| Spurious or stale filter narrows a fresh lookup | Filters remain model-interpreted but must pass strict type, bound, entity-access, and tool-compatibility validation | Plan requirement validator | Propose only constraints supported by the current turn and context | Invented window, stale severity/type, literal IP |
 | Planner omits nonessential metadata | Conditional clarification, strategy-derived stopping, and server-owned unknown confidence do not invalidate safe reasoning | Proposal parser and plan compiler | Supply action, strategy, sufficiency, evidence need, and reasoning | Missing confidence, clarification, stopping field |
 | Repair changes action or drops valid semantics | The first valid action enum is pinned for repair; repaired output must match it | Planner repair prompt and validator | Correct only reported defects | Missing field, contradictory strategy, unsupported filter |
 | Capability and persisted execution metadata disagree | Strategy-capability mapping, execution payload, turn metadata, and entity alignment are checked from one compiled plan | Plan compiler, dispatch alignment, turn serializer | Choose a valid action/strategy | Quick lookup, decision, artifact, comparison, investigation |
@@ -165,13 +196,13 @@ The planner requests the approved `agentic_planning` profile through the profile
 | Intermediate fit passes but final prompt exceeds profile | Only the final joined prompt measurement authorizes gateway generation | Explainer service immediately before gateway call | None | Fixed persona/task overhead and optional section combinations |
 | Contradictory repair output executes | Repair feedback names exact schema and cross-field violations; the one repaired proposal still passes the unchanged validator | Planner repair prompt and plan validator | Correct all reported violations in one repair | Object `required_evidence`, direct answer plus insufficient evidence, missing clarification, invalid sort |
 | State-summary question invokes an unnecessary read | Fresh authoritative thread state supports `direct_answer` with no tool category | Planner prompt and unchanged strategy validator | Recognize state-summary intent and sufficiency | Active focus, current conclusion, unresolved questions |
-| Artifact dispatch lacks a bounded draft type | An explicit allowed type is preserved; otherwise one safe type is derived from explicit artifact intent or a clarification is returned before drafting | Conversation dispatch and artifact registry | Select artifact strategy, not arbitrary registry values | Shortcut type, unambiguous note/checklist/escalation/playbook/response request, ambiguous draft |
+| Artifact dispatch lacks a bounded draft type | A structured shortcut type is preserved; otherwise the planner selects one registry-backed type or clarifies | Conversation dispatch and artifact registry | Interpret artifact wording and select a bounded type | Shortcut type, unambiguous note/checklist/escalation request, ambiguous draft |
 
 ## Transaction and Concurrency Boundaries
 
-1. Planning snapshot: owner-scoped read validates thread, expected version, entity access, and context; no mutation and no open lock during model generation.
+1. Planning snapshot: owner-scoped read validates thread and expected version and constructs bounded authoritative context; it does not resolve or validate a model-selected entity before generation.
 2. Planner generation: local-only gateway call and optional one repair; no database transaction.
-3. Submission: existing owner thread lock revalidates version/entity, persists the validated plan with the queued turn, and atomically creates/links async work.
+3. Submission: existing owner thread lock revalidates version, validates every planner-selected entity for existence/access, persists the validated plan with the queued turn, and atomically creates/links async work.
 4. Execution/completion: existing worker role revalidation, version guards, response normalization, and turn/state transactions remain authoritative.
 
 ## Risks / Trade-offs

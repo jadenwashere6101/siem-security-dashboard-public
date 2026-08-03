@@ -32,7 +32,7 @@ class ProductionShapePlannerGateway:
 
     def generate(self, request):
         packet = json.loads(request.prompt.split("SERVER_PACKET=", 1)[1])
-        hint = packet.get("preferred_capability_hint")
+        hint = packet.get("requested_shortcut")
         capability = hint or "quick_explain"
         strategy = {
             "quick_explain": "quick_evidence_lookup",
@@ -46,17 +46,27 @@ class ProductionShapePlannerGateway:
             "decision_support": "decision_support",
             "generate_artifact": "artifact_draft",
         }[capability]
+        request_entity = next(
+            item for item in packet["facts"]["entities"] if item.get("source_type") == "request_context"
+        )
         plan = {
             "current_turn_intent": action,
+            "relationship_to_prior_turn": "continuation",
+            "resolved_entities": [
+                {key: request_entity[key] for key in ("type", "id", "display_alias") if request_entity.get(key)}
+            ],
             "evidence_sufficiency": "insufficient",
             "required_evidence": ["current bounded SIEM evidence"],
             "proposed_strategy": strategy,
+            "proposed_capability": capability,
             "proposed_tool_categories": ["alerts"] if strategy == "quick_evidence_lookup" else [],
             "evidence_requirements": (
                 {"limit": 1}
                 if strategy == "quick_evidence_lookup"
                 else {}
             ),
+            "artifact_type": "investigation_checklist" if strategy == "artifact_draft" else None,
+            "referenced_turn_sequence": None,
             "clarification_question": None,
             "reasoning_summary": "The current request requires the selected bounded SIEM capability.",
             "confidence": "high",
@@ -330,7 +340,10 @@ def test_production_frontend_payloads_cross_real_conversation_routes(client, pos
         assert dashboard_candidates, [payload.get("entity") for payload in captured_execution]
         dashboard_execution = dashboard_candidates[0]
         assert dashboard_execution["context"]["command_context"]["data"]["threatBrief"]["sections"]
-        assert dashboard_execution["conversation_context"]["thread"]["resolved_entity"]["type"] == "dashboard"
+        assert any(
+            item["type"] == "dashboard" and item["source_type"] == "request_context"
+            for item in dashboard_execution["conversation_context"]["entities"]
+        )
 
         alert_item = next(item for item in generated if item["label"] == "Alert Details")
         alert_thread_id = alert_item["payload"]["conversation"]["thread_id"]

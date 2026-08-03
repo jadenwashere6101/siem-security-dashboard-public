@@ -5,13 +5,13 @@ Anakin currently fixes a conversational request to a workflow before interpretin
 ## What Changes
 
 - Add one policy-bounded planner for eligible SIEM conversation turns before Quick Explain, Deep Investigate, Decision Support, or Generate Artifact is selected.
-- Build a compact, measured planner packet from the current question, resolved focus, relevant thread state, verified evidence and freshness, corrections, capability/tool boundaries, and latency class.
-- Define and validate a strict structured plan covering current intent, prior-turn relationship, entities, evidence sufficiency, bounded strategy/capability/tool categories, clarification, stopping condition, confidence, and read-only safety.
+- Build a compact, measured planner fact packet from the current question, uniformly represented entity records with provenance, recorded thread state, verified evidence and freshness, corrections, capability/tool boundaries, and latency class without server-authored conversational interpretation.
+- Define and validate a strict structured plan covering current intent, prior-turn relationship, planner-resolved entities and correction target, evidence sufficiency, bounded strategy/capability/tool categories, clarification, and confidence; derive stopping behavior and read-only safety on the server.
 - Permit at most one bounded structured-plan repair; invalid, unavailable, oversized, or boundary-violating plans fail safely without reverting to sticky workflow routing.
 - Dispatch validated plans through existing capability and approved SOC read-tool paths, with no unrestricted iterative tool loop.
 - Add production-shaped behavioral, PostgreSQL, prompt-budget, boundary, failure, and repeated-run planner evaluations.
 - Route planner generation through a dedicated local-only `agentic_planning` profile using `llama3.1:8b`, without changing Quick Explain or other workflow profiles.
-- Limit model output to reasoning-bearing fields; populate authoritative entities, prior-turn relationship, capability, safety, and execution metadata deterministically on the server.
+- Keep natural-language intent, relationship, reference resolution, entity selection, clarification, and capability choice model-owned; populate safety and execution metadata deterministically on the server and validate every selected entity after planning.
 - Preserve the planner's bounded evidence intent as validated scalar requirements and translate those requirements into existing read-tool arguments without model-authored queries.
 - Ground final Quick Explain synthesis in a compact server-authored evidence envelope and reject or deterministically replace generic, unsupported, or evidence-free model prose.
 

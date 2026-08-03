@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from core.ai.config import AiGatewayConfig, load_ai_gateway_config
+from core.ai.draft_schemas import SUPPORTED_DRAFT_TYPES
 from core.ai.gateway import AiGateway
 from core.ai.models import AI_STATUS_SUCCESS, AiGatewayRequest
 from core.ai.profile_registry import profile_for_agentic_planning
@@ -41,6 +42,22 @@ APPROVED_TOOL_CATEGORIES = frozenset(
     }
 )
 CONFIDENCE_LEVELS = frozenset({"unknown", "low", "medium", "high"})
+PRIOR_TURN_RELATIONSHIPS = frozenset(
+    {"continuation", "new_question", "entity_switch", "comparison", "clarification_response"}
+)
+PLANNER_ENTITY_TYPES = frozenset(
+    {
+        "investigation",
+        "alert",
+        "incident",
+        "source_ip",
+        "recon_activity",
+        "response_registry",
+        "detection",
+        "dashboard",
+        "general",
+    }
+)
 CURRENT_TURN_ACTIONS = frozenset(
     {
         "state_summary",
@@ -134,6 +151,8 @@ class AgenticAnalystPlan:
     proposed_tool_categories: tuple[str, ...]
     evidence_requirements: dict[str, Any]
     evidence_filter_provenance: dict[str, str]
+    artifact_type: str | None
+    referenced_turn_sequence: int | None
     clarification_question: str | None
     reasoning_summary: str
     stopping_condition: str
@@ -185,7 +204,7 @@ class PlannerOutcome:
 def build_planner_packet(
     *,
     question: str,
-    resolved_context: dict[str, Any],
+    request_context: dict[str, Any],
     conversation_packet: dict[str, Any],
     preferred_capability: str | None,
     latency_class: dict[str, Any] | None,
@@ -194,24 +213,14 @@ def build_planner_packet(
     current_question = _bounded_text(question, 1200)
     if not current_question:
         raise PlannerValidationError(["current user message is required"])
-    active = _entity(resolved_context.get("active_entity"))
-    comparisons = [_entity(item) for item in resolved_context.get("comparison_entities") or []]
-    comparisons = [item for item in comparisons if item]
-    resolution = resolved_context.get("resolution") if isinstance(resolved_context.get("resolution"), dict) else {}
-    execution_context = resolved_context.get("context") if isinstance(resolved_context.get("context"), dict) else {}
     source = conversation_packet if isinstance(conversation_packet, dict) else {}
     source_bounds = source.get("bounds") if isinstance(source.get("bounds"), dict) else {}
     mandatory = {
         "schema_version": 1,
         "current_user_message": current_question,
-        "resolved_focus": active,
-        "comparison_entities": comparisons[:2],
-        "authoritative_constraints": _authoritative_constraints(active, execution_context),
-        "reference_resolution": {
-            "status": _bounded_text(resolution.get("status"), 40),
-            "intent": _bounded_text(resolution.get("intent"), 60),
-        },
-        "preferred_capability_hint": preferred_capability if preferred_capability in set(STRATEGY_CAPABILITY.values()) else None,
+        "facts": {"entities": []},
+        "request_context": _compact_mapping(request_context, max_fields=8, text_limit=160),
+        "requested_shortcut": preferred_capability if preferred_capability in set(STRATEGY_CAPABILITY.values()) else None,
         "available_capabilities": ["quick_explain", "deep_investigate", "decision_support", "generate_artifact"],
         "approved_read_tool_categories": sorted(APPROVED_TOOL_CATEGORIES),
         "safety": {
@@ -227,39 +236,53 @@ def build_planner_packet(
             "stale_evidence_excluded": int(source_bounds.get("stale_evidence_excluded") or 0),
             "stale_evidence_cannot_satisfy_requirements": True,
         },
-        "context": {},
         "bounds": {"max_chars": max_chars, "omitted": {}},
     }
     categories = (
-        ("corrections", 3, 360),
+        ("analyst_corrections", 3, 360),
         ("unresolved_questions", 1, 360),
-        ("conclusions", 3, 420),
-        ("verified_evidence", 3, 440),
-        ("recommendations", 2, 320),
+        ("recent_conclusions", 3, 420),
+        ("recent_tool_results", 3, 440),
+        ("prior_recommendations", 2, 320),
         ("recent_turns", 4, 380),
         ("analyst_statements", 3, 300),
-        ("active_entities", 4, 160),
     )
     omitted: dict[str, int] = {
         category: len(source.get(category) or [])
         for category, _item_limit, _text_limit in categories
         if isinstance(source.get(category), list) and source.get(category)
     }
-    summary = _bounded_text(source.get("thread_summary"), 420)
+    entities = source.get("entities") if isinstance(source.get("entities"), list) else []
+    if entities:
+        omitted["entities"] = len(entities)
+    summary = _bounded_text(source.get("conversation_summary"), 420)
     if summary:
-        omitted["thread_summary"] = 1
+        omitted["conversation_summary"] = 1
     mandatory["bounds"]["omitted"] = dict(omitted)
     mandatory_size = _json_size(mandatory)
     if mandatory_size > max_chars:
         raise PlannerConfigurationError(
             f"Mandatory planner packet requires {mandatory_size} characters but only {max_chars} are assigned."
         )
-    if summary:
-        candidate = {**mandatory, "context": {"thread_summary": summary}}
-        candidate["bounds"] = {"max_chars": max_chars, "omitted": {**omitted, "thread_summary": 0}}
+    accepted_entities: list[Any] = []
+    for value in entities[:8]:
+        compact = _compact_value(value, text_limit=180)
+        candidate = {**mandatory, "facts": {**mandatory["facts"], "entities": [*accepted_entities, compact]}}
+        candidate_omitted = {**omitted, "entities": max(0, omitted.get("entities", 0) - 1)}
+        candidate["bounds"] = {
+            "max_chars": max_chars,
+            "omitted": {key: count for key, count in candidate_omitted.items() if count},
+        }
         if _json_size(candidate) <= max_chars:
-            mandatory["context"]["thread_summary"] = summary
-            omitted.pop("thread_summary", None)
+            accepted_entities.append(compact)
+            omitted = candidate_omitted
+    mandatory["facts"]["entities"] = accepted_entities
+    if summary:
+        candidate = {**mandatory, "facts": {**mandatory["facts"], "conversation_summary": summary}}
+        candidate["bounds"] = {"max_chars": max_chars, "omitted": {**omitted, "conversation_summary": 0}}
+        if _json_size(candidate) <= max_chars:
+            mandatory["facts"]["conversation_summary"] = summary
+            omitted.pop("conversation_summary", None)
     for category, item_limit, text_limit in categories:
         values = source.get(category)
         if not isinstance(values, list):
@@ -269,7 +292,7 @@ def build_planner_packet(
             compact = _compact_value(value, text_limit=text_limit)
             if compact in (None, "", [], {}):
                 continue
-            candidate = {**mandatory, "context": {**mandatory["context"], category: [*accepted, compact]}}
+            candidate = {**mandatory, "facts": {**mandatory["facts"], category: [*accepted, compact]}}
             candidate_omitted = dict(omitted)
             candidate_omitted[category] = max(0, candidate_omitted.get(category, 0) - 1)
             candidate["bounds"] = {
@@ -280,7 +303,7 @@ def build_planner_packet(
                 accepted.append(compact)
                 omitted = candidate_omitted
         if accepted:
-            mandatory["context"][category] = accepted
+            mandatory["facts"][category] = accepted
     mandatory["bounds"] = {"max_chars": max_chars, "omitted": {k: v for k, v in omitted.items() if v}}
     safe = sanitize_structured_value(mandatory, field_name="agentic planner packet")
     size = _json_size(safe)
@@ -390,9 +413,12 @@ def parse_and_validate_plan(
     errors: list[str] = []
     required = {
         "current_turn_intent",
+        "relationship_to_prior_turn",
+        "resolved_entities",
         "evidence_sufficiency",
         "required_evidence",
         "proposed_strategy",
+        "proposed_capability",
         "proposed_tool_categories",
         "evidence_requirements",
         "reasoning_summary",
@@ -400,11 +426,13 @@ def parse_and_validate_plan(
     missing = sorted(required - set(payload))
     if missing:
         errors.append(f"missing required fields: {', '.join(missing)}")
-    optional = {"clarification_question", "confidence"}
+    optional = {"artifact_type", "referenced_turn_sequence", "clarification_question", "confidence"}
     unknown = sorted(set(payload) - required - optional)
     if unknown:
         errors.append(f"unknown plan fields: {', '.join(unknown)}")
-    relationship = _relationship_from_packet(planner_packet)
+    relationship = str(payload.get("relationship_to_prior_turn") or "")
+    if relationship not in PRIOR_TURN_RELATIONSHIPS:
+        errors.append("relationship_to_prior_turn is invalid")
     action = str(payload.get("current_turn_intent") or "")
     if action not in CURRENT_TURN_ACTIONS:
         errors.append("current_turn_intent is invalid")
@@ -418,7 +446,11 @@ def parse_and_validate_plan(
         errors.append("proposed_strategy is invalid")
     elif action in ACTION_STRATEGIES and strategy not in ACTION_STRATEGIES[action]:
         errors.append(f"current_turn_intent {action} is incompatible with {strategy}")
-    capability = STRATEGY_CAPABILITY.get(strategy)
+    capability_value = payload.get("proposed_capability")
+    capability = str(capability_value).strip() if capability_value not in (None, "") else None
+    expected_capability = STRATEGY_CAPABILITY.get(strategy)
+    if strategy in STRATEGY_CAPABILITY and capability != expected_capability:
+        errors.append("proposed_capability is incompatible with proposed_strategy")
     tools = _string_list(payload.get("proposed_tool_categories"), max_items=2)
     if not isinstance(payload.get("proposed_tool_categories"), list):
         errors.append("proposed_tool_categories must be a list")
@@ -437,16 +469,7 @@ def parse_and_validate_plan(
         tool_category=tools[0] if len(tools) == 1 else None,
     )
     errors.extend(requirement_errors)
-    explicit_window = _explicit_time_window_minutes(planner_packet.get("current_user_message"))
-    if explicit_window is not None and strategy == "quick_evidence_lookup" and tools == ["alerts"]:
-        if explicit_window > MAX_PLANNER_TIME_WINDOW_MINUTES:
-            errors.append("explicit time window exceeds the bounded maximum")
-        else:
-            evidence_requirements["time_window_minutes"] = explicit_window
-    if strategy == "quick_evidence_lookup":
-        evidence_requirements = _apply_explicit_requirements(evidence_requirements, planner_packet)
-    filter_provenance, provenance_errors = _validated_filter_provenance(evidence_requirements, planner_packet)
-    errors.extend(provenance_errors)
+    filter_provenance = {key: "planner_interpreted" for key in evidence_requirements}
     if strategy == "quick_evidence_lookup" and not evidence_requirements:
         errors.append("quick_evidence_lookup requires structured evidence_requirements")
     if strategy != "quick_evidence_lookup" and evidence_requirements:
@@ -466,6 +489,23 @@ def parse_and_validate_plan(
         errors.append("clarification_required needs clarification_question")
     if strategy not in {"clarification_required", "unsupported_or_boundary"} and clarification:
         errors.append("executable strategies cannot include clarification_question")
+    artifact_type = _optional_text(payload.get("artifact_type"), 80)
+    if strategy == "artifact_draft" and artifact_type not in SUPPORTED_DRAFT_TYPES:
+        errors.append("artifact_draft requires one supported artifact_type")
+    if strategy != "artifact_draft" and artifact_type:
+        errors.append(f"{strategy} cannot include artifact_type")
+    referenced_turn_sequence = payload.get("referenced_turn_sequence")
+    if referenced_turn_sequence is not None and (
+        isinstance(referenced_turn_sequence, bool)
+        or not isinstance(referenced_turn_sequence, int)
+        or referenced_turn_sequence < 1
+    ):
+        errors.append("referenced_turn_sequence must be a positive integer")
+        referenced_turn_sequence = None
+    if action == "analyst_correction" and referenced_turn_sequence is None:
+        errors.append("analyst_correction requires referenced_turn_sequence")
+    if action != "analyst_correction" and referenced_turn_sequence is not None:
+        errors.append("referenced_turn_sequence is only valid for analyst_correction")
     required_evidence = _string_list(payload.get("required_evidence"), max_items=6)
     if not isinstance(payload.get("required_evidence"), list):
         errors.append("required_evidence must be a list")
@@ -475,9 +515,12 @@ def parse_and_validate_plan(
     confidence = str(payload.get("confidence") or "unknown")
     if confidence not in CONFIDENCE_LEVELS:
         errors.append("confidence is invalid")
-    authoritative = _authoritative_entities(planner_packet)
-    if strategy == "compare_entities" and len(authoritative) != 2:
-        errors.append("compare_entities requires exactly two authoritative entities")
+    resolved_entities, entity_errors = _validated_planner_entities(payload.get("resolved_entities"))
+    errors.extend(entity_errors)
+    if strategy == "compare_entities" and len(resolved_entities) != 2:
+        errors.append("compare_entities requires exactly two resolved entities")
+    if strategy not in {"clarification_required", "unsupported_or_boundary"} and strategy != "compare_entities" and len(resolved_entities) != 1:
+        errors.append(f"{strategy} requires exactly one resolved entity")
 
     reasoning = _bounded_text(payload.get("reasoning_summary"), 500)
     if not reasoning:
@@ -487,7 +530,7 @@ def parse_and_validate_plan(
     return AgenticAnalystPlan(
         current_turn_intent=action,
         relationship_to_prior_turn=relationship,
-        resolved_entities=tuple(authoritative),
+        resolved_entities=tuple(resolved_entities),
         evidence_sufficiency=sufficiency,
         required_evidence=tuple(required_evidence),
         proposed_strategy=strategy,
@@ -495,6 +538,8 @@ def parse_and_validate_plan(
         proposed_tool_categories=tuple(tools),
         evidence_requirements=evidence_requirements,
         evidence_filter_provenance=filter_provenance,
+        artifact_type=artifact_type,
+        referenced_turn_sequence=referenced_turn_sequence,
         clarification_question=clarification,
         reasoning_summary=reasoning,
         stopping_condition=stopping,
@@ -513,6 +558,37 @@ def deterministic_shortcut_plan(packet: PlannerPacket, capability: str) -> Plann
     }.get(capability)
     if strategy is None:
         return PlannerOutcome("unavailable", None, packet, False, error_code="unsupported_shortcut")
+    facts = packet.payload.get("facts") if isinstance(packet.payload.get("facts"), dict) else {}
+    current_entity = next(
+        (
+            entity
+            for item in facts.get("entities") or []
+            if isinstance(item, dict)
+            and item.get("source_type") == "request_context"
+            and (entity := _entity(item)) is not None
+        ),
+        None,
+    )
+    if current_entity is None:
+        return PlannerOutcome(
+            "unavailable",
+            None,
+            packet,
+            False,
+            error_code="planner_unavailable_reference_unresolved",
+            message="I could not safely resolve the entity without the planner. Please identify it explicitly and retry.",
+        )
+    request_context = packet.payload.get("request_context") if isinstance(packet.payload.get("request_context"), dict) else {}
+    artifact_type = _optional_text(request_context.get("artifact_type"), 80) if capability == "generate_artifact" else None
+    if capability == "generate_artifact" and artifact_type not in SUPPORTED_DRAFT_TYPES:
+        return PlannerOutcome(
+            "unavailable",
+            None,
+            packet,
+            False,
+            error_code="planner_unavailable_artifact_type_unresolved",
+            message="I could not safely determine the artifact type without the planner. Please choose an artifact category and retry.",
+        )
     plan = AgenticAnalystPlan(
         current_turn_intent={
             "quick_explain": "evidence_explanation",
@@ -521,7 +597,7 @@ def deterministic_shortcut_plan(packet: PlannerPacket, capability: str) -> Plann
             "generate_artifact": "artifact_draft",
         }[capability],
         relationship_to_prior_turn="new_question",
-        resolved_entities=tuple(_authoritative_entities(packet.payload)),
+        resolved_entities=(current_entity,),
         evidence_sufficiency="insufficient" if capability == "deep_investigate" else "sufficient",
         required_evidence=("bounded investigation evidence",) if capability == "deep_investigate" else (),
         proposed_strategy=strategy,
@@ -529,6 +605,8 @@ def deterministic_shortcut_plan(packet: PlannerPacket, capability: str) -> Plann
         proposed_tool_categories=(),
         evidence_requirements={},
         evidence_filter_provenance={},
+        artifact_type=artifact_type,
+        referenced_turn_sequence=None,
         clarification_question=None,
         reasoning_summary="The local planner was unavailable; the explicit current-turn shortcut remains within its existing safety boundary.",
         stopping_condition="Return the selected capability result without mutation.",
@@ -551,9 +629,11 @@ def _planner_prompt(packet: dict[str, Any]) -> str:
         "artifact_draft, comparison, bounded_investigation, clarification, analyst_correction, unsupported. Interpret the action requested "
         "in the current message before considering whether thread state is sufficient. State availability never changes a fresh lookup, "
         "recommendation, artifact, comparison, or investigation request into state_summary. "
-        "A prior or preferred workflow is context, never authority over the current question. Stale evidence is insufficient. "
-        "Never select mutation, Repo Assistant, or SOC Briefing continuation. The server owns entity identity, prior-turn relationship, "
-        "capability mapping, safety, and execution metadata; do not output those fields. Keep reasoning fields internally consistent: "
+        "A requested shortcut is a structured request fact, never authority over the current question. Stale evidence is insufficient. "
+        "You alone interpret pronouns, anaphora, ellipsis, continuation, comparison, topic switches, return-to-prior focus, and ambiguity. "
+        "Choose resolved_entities only from authoritative structured context or a literal entity stated in the current message; if the intended "
+        "entity is not uniquely resolvable, choose clarification_required and ask one concise question. Never select mutation, Repo Assistant, "
+        "or SOC Briefing continuation. The server owns safety, authorization, and execution metadata. Keep fields internally consistent: "
         "direct_answer uses no tool category; quick_evidence_lookup requires insufficient evidence, one non-empty required_evidence item, "
         "exactly one approved tool category, and a non-empty evidence_requirements object; every other strategy uses no planner-selected "
         "tool category and an empty evidence_requirements object. For alerts, evidence_requirements may contain only severity, alert_type, "
@@ -564,13 +644,19 @@ def _planner_prompt(packet: dict[str, Any]) -> str:
         "Use concrete scalar values, never SQL, operators, or backend query syntax. "
         "required_evidence and proposed_tool_categories MUST each be JSON arrays of strings, never objects or scalar strings. "
         "evidence_requirements MUST be a JSON object. clarification_question is required only for clarification_required and must be omitted or null otherwise. "
-        "Do not add a time window, severity, alert type, entity, or sort that the current message or authoritative resolved context does not support. "
-        "When authoritative thread state already identifies the active focus, conclusions, or unresolved questions and the analyst asks to summarize that state, "
+        "Do not add a time window, severity, alert type, entity, or sort that the current message or authoritative context does not support. "
+        "When recorded summaries, conclusions, or unresolved questions contain enough facts and the analyst asks to summarize them, "
         "use direct_answer with sufficient evidence, empty required_evidence, no tool categories, and empty evidence_requirements. "
-        "reasoning_summary must be non-empty and explain why the action, strategy, and evidence need match the current message. Required keys: current_turn_intent, "
-        "evidence_sufficiency, required_evidence, proposed_strategy, proposed_tool_categories, evidence_requirements, reasoning_summary. "
-        "Optional keys: clarification_question and confidence. evidence_sufficiency must be sufficient, insufficient, or ambiguous. "
-        "If supplied, confidence must be low, medium, or high. The server derives capability, stopping behavior, entity identity, filter provenance, and safety.\n"
+        "reasoning_summary must be non-empty and explain why the action, relationship, resolved entities, capability, strategy, and evidence need match the current message. "
+        "Required keys: current_turn_intent, relationship_to_prior_turn, resolved_entities, evidence_sufficiency, required_evidence, proposed_strategy, "
+        "proposed_capability, proposed_tool_categories, evidence_requirements, reasoning_summary. relationship_to_prior_turn must be continuation, new_question, "
+        "entity_switch, comparison, or clarification_response. resolved_entities must be an array of zero to two objects with type and id. proposed_capability "
+        "must match the strategy: quick_explain for direct_answer/quick_evidence_lookup, deep_investigate for bounded_investigation/compare_entities, "
+        "decision_support for decision_support, generate_artifact for artifact_draft, and null for clarification/boundary. artifact_draft requires artifact_type "
+        f"from this allowlist: {', '.join(sorted(SUPPORTED_DRAFT_TYPES))}. For analyst_correction, referenced_turn_sequence must identify the prior assistant "
+        "inference being corrected; for every other intent it must be null or omitted. Optional keys: artifact_type, referenced_turn_sequence, clarification_question, confidence. "
+        "evidence_sufficiency must be sufficient, insufficient, or ambiguous. If supplied, confidence must be low, medium, or high. "
+        "The server validates selected entities, capability compatibility, filter values, stopping behavior, and safety after planning.\n"
         f"SERVER_PACKET={rendered}"
     )
 
@@ -587,6 +673,9 @@ def _repair_prompt(packet: dict[str, Any], errors: list[str], *, preserved_actio
                     "current_turn_intent": (
                         f"must remain {preserved_action}" if preserved_action else "one allowed semantic action enum"
                     ),
+                    "relationship_to_prior_turn": "one allowed relationship enum",
+                    "resolved_entities": "array of zero to two objects containing only type, id, and optional display_alias",
+                    "proposed_capability": "must exactly match the selected strategy",
                     "required_evidence": "array of strings",
                     "proposed_tool_categories": "array of zero or one approved category strings",
                     "evidence_requirements": "object",
@@ -595,6 +684,8 @@ def _repair_prompt(packet: dict[str, Any], errors: list[str], *, preserved_actio
                     "quick_evidence_lookup": "requires insufficient evidence, one tool category, required evidence, and evidence requirements",
                     "sort": "newest, oldest, or severity only",
                     "confidence": "optional; low, medium, or high when supplied",
+                    "artifact_type": "required only for artifact_draft and must be registry-backed",
+                    "referenced_turn_sequence": "required only for analyst_correction and must identify the prior assistant inference",
                     "stopping_condition": "server-owned; do not output",
                 },
             },
@@ -622,32 +713,6 @@ def _candidate_action(content: str) -> str | None:
     payload = _parse_json_object(content)
     action = str(payload.get("current_turn_intent") or "") if payload else ""
     return action if action in CURRENT_TURN_ACTIONS else None
-
-
-def _authoritative_entities(packet: dict[str, Any]) -> list[dict[str, str]]:
-    values = []
-    focus = _entity(packet.get("resolved_focus"))
-    if focus:
-        values.append(focus)
-    for item in packet.get("comparison_entities") or []:
-        entity = _entity(item)
-        if entity and _entity_key(entity) not in {_entity_key(value) for value in values}:
-            values.append(entity)
-    return values
-
-
-def _relationship_from_packet(packet: dict[str, Any]) -> str:
-    resolution = packet.get("reference_resolution")
-    intent = str(resolution.get("intent") or "new_question") if isinstance(resolution, dict) else "new_question"
-    if intent == "compare":
-        return "comparison"
-    if intent in {"explicit_entity", "go_back"}:
-        return "entity_switch"
-    if intent == "clarification_response":
-        return "clarification_response"
-    if intent in {"why", "evidence", "continue", "correction", "which_ip", "entity_reference"}:
-        return "continuation"
-    return "new_question"
 
 
 def _validated_evidence_requirements(
@@ -723,152 +788,47 @@ def _validated_evidence_requirements(
     return normalized, errors
 
 
-def _authoritative_constraints(
-    active_entity: dict[str, str] | None,
-    execution_context: dict[str, Any],
-) -> dict[str, str]:
-    constraints: dict[str, str] = {}
-    entity = active_entity or {}
-    entity_type = str(entity.get("type") or "")
-    entity_id = str(entity.get("id") or "")
-    entity_key = {
-        "source_ip": "source_ip",
-        "host": "hostname",
-        "endpoint": "hostname",
-        "destination_host": "hostname",
-        "user": "username",
-        "user_account": "username",
-    }.get(entity_type)
-    if entity_key and entity_id:
-        constraints[entity_key] = entity_id
-    for key in ("source_ip", "destination_ip", "hostname", "username"):
-        value = execution_context.get(key)
-        if value not in (None, ""):
-            constraints[key] = _bounded_text(value, 253)
-    return constraints
-
-
-def _apply_explicit_requirements(
-    requirements: dict[str, Any],
-    packet: dict[str, Any],
-) -> dict[str, Any]:
-    normalized = dict(requirements)
-    message = str(packet.get("current_user_message") or "")
-    ips = _explicit_ip_values(message)
-    if len(ips) == 1 and not normalized.get("source_ip") and not normalized.get("destination_ip"):
-        normalized["source_ip"] = next(iter(ips))
-    severity = _explicit_severity(message)
-    if severity and not normalized.get("severity"):
-        normalized["severity"] = severity
-    window = _explicit_time_window_minutes(message)
-    if window and not normalized.get("time_window_minutes"):
-        normalized["time_window_minutes"] = window
-    sort = _explicit_sort(message)
-    if sort and not normalized.get("sort"):
-        normalized["sort"] = sort
-    return normalized
-
-
-def _validated_filter_provenance(
-    requirements: dict[str, Any],
-    packet: dict[str, Any],
-) -> tuple[dict[str, str], list[str]]:
-    if not requirements:
-        return {}, []
-    message = str(packet.get("current_user_message") or "")
-    authoritative = packet.get("authoritative_constraints")
-    authoritative = authoritative if isinstance(authoritative, dict) else {}
-    explicit_ips = _explicit_ip_values(message)
-    explicit_severity = _explicit_severity(message)
-    explicit_window = _explicit_time_window_minutes(message)
-    explicit_sort = _explicit_sort(message)
-    normalized_message = _semantic_token(message)
-    provenance: dict[str, str] = {}
+def _validated_planner_entities(value: Any) -> tuple[list[dict[str, str]], list[str]]:
+    if not isinstance(value, list):
+        return [], ["resolved_entities must be a list"]
+    if len(value) > 2:
+        return [], ["resolved_entities may contain at most two entities"]
+    entities: list[dict[str, str]] = []
     errors: list[str] = []
-    for key, value in requirements.items():
-        supported_explicitly = False
-        if key in {"source_ip", "destination_ip"}:
-            supported_explicitly = str(value) in explicit_ips
-        elif key == "severity":
-            supported_explicitly = value == explicit_severity
-        elif key == "time_window_minutes":
-            supported_explicitly = value == explicit_window
-        elif key == "sort":
-            supported_explicitly = value == explicit_sort
-        elif key in {"alert_type", "hostname", "username"}:
-            supported_explicitly = _semantic_token(value) in normalized_message
-        elif key == "limit":
-            provenance[key] = "planner_proposed"
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            errors.append(f"resolved_entities[{index}] must be an object")
             continue
-        if supported_explicitly:
-            provenance[key] = "explicit_current_turn"
-        elif key in {"source_ip", "destination_ip", "hostname", "username"} and str(
-            authoritative.get(key) or ""
-        ).lower() == str(value).lower():
-            provenance[key] = "inherited_authoritative_context"
-        else:
-            errors.append(f"evidence_requirements {key} is unsupported by the current turn or authoritative context")
-    return provenance, errors
-
-
-def _explicit_ip_values(value: Any) -> set[str]:
-    result: set[str] = set()
-    for token in re.findall(r"(?<![0-9A-Fa-f:.])(?:\d{1,3}\.){3}\d{1,3}(?![0-9A-Fa-f:])", str(value or "")):
-        try:
-            result.add(str(ipaddress.ip_address(token)))
-        except ValueError:
+        unknown = sorted(set(item) - {"type", "id", "display_alias"})
+        if unknown:
+            errors.append(f"resolved_entities[{index}] contains unknown fields: {', '.join(unknown)}")
+        entity = _entity(item)
+        if entity is None:
+            errors.append(f"resolved_entities[{index}] requires type and id")
             continue
-    return result
-
-
-def _explicit_severity(value: Any) -> str | None:
-    match = re.search(r"\b(low|medium|high|critical)(?:[ -]severity)?\b", str(value or ""), re.I)
-    return match.group(1).lower() if match else None
-
-
-def _explicit_sort(value: Any) -> str | None:
-    text = str(value or "")
-    if re.search(r"\b(?:newest|latest|most recent)\b", text, re.I):
-        return "newest"
-    if re.search(r"\b(?:oldest|earliest)\b", text, re.I):
-        return "oldest"
-    if re.search(r"\b(?:highest|most severe)\b", text, re.I):
-        return "severity"
-    return None
-
-
-def _semantic_token(value: Any) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
-
-
-def _explicit_time_window_minutes(value: Any) -> int | None:
-    text = str(value or "").strip().lower()
-    match = re.search(
-        r"\b(?:last|past|previous)\s+(?:(\d+)\s+)?(minute|minutes|hour|hours|day|days)\b",
-        text,
-    )
-    if not match:
-        return None
-    amount = int(match.group(1) or 1)
-    multiplier = {"minute": 1, "minutes": 1, "hour": 60, "hours": 60, "day": 1440, "days": 1440}[
-        match.group(2)
-    ]
-    return amount * multiplier
+        if entity["type"] not in PLANNER_ENTITY_TYPES:
+            errors.append(f"resolved_entities[{index}] type is unsupported")
+            continue
+        if _entity_key(entity) in {_entity_key(existing) for existing in entities}:
+            errors.append("resolved_entities cannot contain duplicates")
+            continue
+        entities.append(entity)
+    return entities, errors
 
 
 def _packet_has_answerable_context(packet: dict[str, Any]) -> bool:
-    context = packet.get("context") if isinstance(packet.get("context"), dict) else {}
+    context = packet.get("facts") if isinstance(packet.get("facts"), dict) else {}
     recent_assistant = any(
         isinstance(item, dict) and item.get("role") == "assistant"
         for item in (context.get("recent_turns") or [])
     )
     return bool(
         recent_assistant
-        or context.get("verified_evidence")
-        or context.get("conclusions")
-        or context.get("corrections")
+        or context.get("recent_tool_results")
+        or context.get("recent_conclusions")
+        or context.get("analyst_corrections")
         or context.get("unresolved_questions")
-        or context.get("thread_summary")
+        or context.get("conversation_summary")
     )
 
 
@@ -905,6 +865,7 @@ def _compact_mapping(value: dict[str, Any], *, max_fields: int, text_limit: int)
         "type", "id", "entity_type", "entity_id", "display_alias", "content", "summary", "conclusion",
         "question", "recommendation", "confidence", "provenance", "source_type", "observed_at", "fresh_until",
         "fresh", "supports", "refutes", "sequence", "role", "status", "intent", "value", "reason",
+        "context_source", "context_type", "artifact_type",
     )
     result: dict[str, Any] = {}
     for key in safe_keys:

@@ -543,10 +543,10 @@ def _prompt_evidence_envelope(value: dict[str, Any], *, record_limit: int) -> di
 def _conversation_prompt_sections(value: dict[str, Any] | None) -> list[tuple[str, str]]:
     packet = value if isinstance(value, dict) else {}
     candidates = (
-        ("analyst_correction", (packet.get("corrections") or [])[:1]),
-        ("latest_conclusion", (packet.get("conclusions") or [])[:1]),
+        ("analyst_correction", (packet.get("analyst_corrections") or [])[:1]),
+        ("latest_conclusion", (packet.get("recent_conclusions") or [])[:1]),
         ("unresolved_question", (packet.get("unresolved_questions") or [])[:1]),
-        ("thread_summary", packet.get("thread_summary")),
+        ("thread_summary", packet.get("conversation_summary")),
         ("recent_turns", (packet.get("recent_turns") or [])[-2:]),
     )
     sections: list[tuple[str, str]] = []
@@ -804,23 +804,38 @@ def _active_context(
     conversation_context: dict[str, Any] | None,
 ) -> dict[str, Any]:
     memory = conversation_context if isinstance(conversation_context, dict) else {}
-    thread = memory.get("thread") if isinstance(memory.get("thread"), dict) else {}
-    entity = thread.get("resolved_entity") if isinstance(thread.get("resolved_entity"), dict) else None
-    active_entity = None
-    if entity:
-        active_entity = {
-            "type": _safe_evidence_text(entity.get("type"), max_chars=80),
-            "id": _safe_evidence_text(entity.get("id"), max_chars=128),
-            "display_alias": _safe_evidence_text(entity.get("display_alias"), max_chars=160),
-        }
-        active_entity = {key: value for key, value in active_entity.items() if value not in (None, "")}
+    active_entity = _execution_context_entity(ai_context)
     return {
         "context_type": ai_context.context_type,
         "active_entity": active_entity,
-        "thread_summary": _safe_evidence_text(memory.get("thread_summary"), max_chars=420),
-        "conclusions": _compact_state_text(memory.get("conclusions"), max_items=2),
+        "thread_summary": _safe_evidence_text(memory.get("conversation_summary"), max_chars=420),
+        "conclusions": _compact_state_text(memory.get("recent_conclusions"), max_items=2),
         "unresolved_questions": _compact_state_text(memory.get("unresolved_questions"), max_items=2),
     }
+
+
+def _execution_context_entity(ai_context: AiContextPayload) -> dict[str, str] | None:
+    """Read the already-resolved workflow entity from authoritative execution facts."""
+    data = ai_context.data if isinstance(ai_context.data, dict) else {}
+    context_type = str(ai_context.context_type or "").strip()
+    if context_type in {"alert", "detection"}:
+        record = data.get("alert") if isinstance(data.get("alert"), dict) else {}
+        entity_id = record.get("id") or record.get("alert_id")
+    elif context_type == "incident":
+        record = data.get("incident") if isinstance(data.get("incident"), dict) else {}
+        entity_id = record.get("id") or record.get("incident_id")
+    elif context_type == "source_ip":
+        entity_id = data.get("source_ip")
+    elif context_type == "recon_activity":
+        record = data.get("activity") if isinstance(data.get("activity"), dict) else data
+        entity_id = record.get("id") or record.get("activity_id")
+    elif context_type == "response_registry":
+        record = data.get("entry") if isinstance(data.get("entry"), dict) else data
+        entity_id = record.get("id") or record.get("registry_id")
+    else:
+        entity_id = None
+    rendered = _safe_evidence_text(entity_id, max_chars=128)
+    return {"type": context_type, "id": rendered} if rendered else None
 
 
 def _compact_state_text(value: Any, *, max_items: int) -> list[str]:

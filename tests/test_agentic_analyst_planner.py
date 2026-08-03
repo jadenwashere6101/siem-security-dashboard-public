@@ -79,17 +79,19 @@ def _config():
 def _packet(question="What's the newest HIGH alert?", *, evidence=None, corrections=None):
     return build_planner_packet(
         question=question,
-        resolved_context={
-            "active_entity": {"type": "alert", "id": "9078", "display_alias": "Alert 9078"},
-            "comparison_entities": [],
-            "resolution": {"status": "not_needed", "intent": "new_question"},
-        },
+        request_context={"context_type": "alert"},
         conversation_packet={
-            "corrections": corrections or [],
+            "thread": {"thread_id": "ath_planner"},
+            "entities": [
+                {"type": "alert", "id": "9078", "display_alias": "Alert 9078", "source_type": "request_context"},
+                {"type": "alert", "id": "9078", "display_alias": "Alert 9078", "source_type": "thread_record"},
+                {"type": "alert", "id": "9011", "source_type": "thread_state"},
+            ],
+            "analyst_corrections": corrections or [],
             "unresolved_questions": [],
-            "conclusions": [{"summary": "Earlier scan explanation", "confidence": "medium"}],
-            "verified_evidence": evidence or [],
-            "recommendations": [],
+            "recent_conclusions": [{"summary": "Earlier scan explanation", "confidence": "medium"}],
+            "recent_tool_results": evidence or [],
+            "prior_recommendations": [],
             "recent_turns": [{"role": "assistant", "content": "Earlier explanation", "sequence": 2}],
             "analyst_statements": [],
         },
@@ -106,12 +108,39 @@ def _plan(
     tools=None,
     requirements=None,
     clarification=None,
+    relationship="new_question",
+    entities=None,
+    artifact_type=None,
+    referenced_turn_sequence=None,
 ):
+    capability = {
+        "direct_answer": "quick_explain",
+        "quick_evidence_lookup": "quick_explain",
+        "bounded_investigation": "deep_investigate",
+        "decision_support": "decision_support",
+        "artifact_draft": "generate_artifact",
+        "compare_entities": "deep_investigate",
+        "clarification_required": None,
+        "unsupported_or_boundary": None,
+    }[strategy]
+    if entities is None:
+        entities = (
+            [{"type": "alert", "id": "9078"}, {"type": "alert", "id": "9011"}]
+            if strategy == "compare_entities"
+            else []
+            if strategy in {"clarification_required", "unsupported_or_boundary"}
+            else [{"type": "alert", "id": "9078", "display_alias": "Alert 9078"}]
+        )
+    if strategy == "artifact_draft" and artifact_type is None:
+        artifact_type = "investigation_checklist"
     return {
         "current_turn_intent": intent,
+        "relationship_to_prior_turn": relationship,
+        "resolved_entities": entities,
         "evidence_sufficiency": sufficiency,
         "required_evidence": ["current high-severity alerts"] if sufficiency == "insufficient" else [],
         "proposed_strategy": strategy,
+        "proposed_capability": capability,
         "proposed_tool_categories": tools if tools is not None else (["alerts"] if strategy == "quick_evidence_lookup" else []),
         "evidence_requirements": requirements if requirements is not None else (
             {"severity": "high", "limit": 1}
@@ -119,6 +148,8 @@ def _plan(
             else {}
         ),
         "clarification_question": clarification,
+        "artifact_type": artifact_type,
+        "referenced_turn_sequence": referenced_turn_sequence,
         "reasoning_summary": "The current question changes task and requires current alert evidence.",
         "confidence": "high",
     }
@@ -128,28 +159,60 @@ def test_packet_is_fit_by_construction_with_production_sized_state():
     long = "blocked firewall observation " * 80
     packet = build_planner_packet(
         question="Compare the current alert with the earlier scan and explain what changed.",
-        resolved_context={
-            "active_entity": {"type": "alert", "id": "9078"},
-            "comparison_entities": [{"type": "alert", "id": "9011"}, {"type": "alert", "id": "9078"}],
-            "resolution": {"status": "resolved", "intent": "compare"},
-        },
+        request_context={"context_type": "alert"},
         conversation_packet={
-            category: [{"content": long, "summary": long, "confidence": "medium"} for _ in range(12)]
-            for category in (
-                "corrections", "unresolved_questions", "conclusions", "verified_evidence",
-                "recommendations", "recent_turns", "analyst_statements", "entities",
-            )
+            "thread": {"thread_id": "ath_planner"},
+            "entities": [
+                {"type": "alert", "id": "9078", "source_type": "request_context"},
+                {"type": "alert", "id": "9078", "source_type": "thread_record"},
+                {"type": "alert", "id": "9011", "source_type": "thread_state"},
+            ],
+            **{
+                category: [{"content": long, "summary": long, "confidence": "medium"} for _ in range(12)]
+                for category in (
+                    "analyst_corrections", "unresolved_questions", "recent_conclusions", "recent_tool_results",
+                    "prior_recommendations", "recent_turns", "analyst_statements",
+                )
+            },
         },
         preferred_capability="deep_investigate",
         latency_class={"mode": "polling", "completion_seconds": [45, 90]},
     )
     assert packet.serialized_chars <= PLANNER_PACKET_MAX_CHARS
     assert packet.payload["current_user_message"].startswith("Compare")
-    assert packet.payload["resolved_focus"] == {"type": "alert", "id": "9078"}
+    assert {item["id"] for item in packet.payload["facts"]["entities"]} >= {"9078", "9011"}
     assert packet.omitted
 
 
-def test_server_populates_deterministic_plan_fields_and_rejects_model_override():
+def test_server_authored_planner_context_is_a_model_agnostic_fact_packet():
+    packet = _packet().payload
+    banned = {
+        "active_focus",
+        "primary_entity",
+        "focus_history",
+        "preferred_reference",
+        "correction_target",
+        "entity_context",
+        "current_request_entity",
+        "preferred_capability_hint",
+        "intent",
+        "relationship",
+        "priority",
+    }
+
+    def keys(value):
+        if isinstance(value, dict):
+            return set(value).union(*(keys(child) for child in value.values()))
+        if isinstance(value, list):
+            return set().union(*(keys(child) for child in value)) if value else set()
+        return set()
+
+    assert not (keys(packet["facts"]) & banned)
+    assert packet["facts"]["entities"]
+    assert all(item.get("source_type") for item in packet["facts"]["entities"])
+
+
+def test_planner_owns_reference_fields_while_server_owns_safety():
     packet = _packet()
     valid, errors = parse_and_validate_plan(json.dumps(_plan()), packet.payload)
     assert errors == []
@@ -161,37 +224,36 @@ def test_server_populates_deterministic_plan_fields_and_rejects_model_override()
     assert valid.mutation_allowed is False
 
     override = _plan()
-    override["resolved_entities"] = [{"type": "alert", "id": "9999"}]
+    override["safety"] = {"read_only": False}
     invalid, errors = parse_and_validate_plan(json.dumps(override), packet.payload)
     assert invalid is None
-    assert any("unknown plan fields: resolved_entities" in error for error in errors)
+    assert any("unknown plan fields: safety" in error for error in errors)
 
 
 @pytest.mark.parametrize(
-    "resolution_intent,expected",
+    "relationship",
     [
-        ("why", "continuation"),
-        ("compare", "comparison"),
-        ("explicit_entity", "entity_switch"),
-        ("go_back", "entity_switch"),
-        ("new_question", "new_question"),
+        "continuation",
+        "comparison",
+        "entity_switch",
+        "clarification_response",
+        "new_question",
     ],
 )
-def test_server_derives_relationship_from_authoritative_resolution(resolution_intent, expected):
+def test_planner_relationship_is_model_owned_and_validated(relationship):
     packet = _packet()
-    packet.payload["reference_resolution"]["intent"] = resolution_intent
 
-    plan, errors = parse_and_validate_plan(json.dumps(_plan()), packet.payload)
+    plan, errors = parse_and_validate_plan(json.dumps(_plan(relationship=relationship)), packet.payload)
 
     assert errors == []
-    assert plan.relationship_to_prior_turn == expected
+    assert plan.relationship_to_prior_turn == relationship
 
 
 @pytest.mark.parametrize(
     "mutator,expected",
     [
-        (lambda value: value.update(proposed_capability="generate_artifact"), "unknown plan fields"),
-        (lambda value: value.update(relationship_to_prior_turn="continuation"), "unknown plan fields"),
+        (lambda value: value.update(proposed_capability="generate_artifact"), "incompatible"),
+        (lambda value: value.update(relationship_to_prior_turn="not_a_relationship"), "relationship_to_prior_turn is invalid"),
         (lambda value: value.update(proposed_tool_categories=["delete_alert"]), "unapproved"),
         (lambda value: value.update(proposed_tool_categories=["alerts", "events"]), "at most one"),
         (lambda value: value.update(safety={"read_only": False, "mutation_allowed": True}), "unknown plan fields"),
@@ -320,82 +382,74 @@ def test_current_turn_action_rejects_incompatible_strategy(action, strategy):
     assert any("incompatible" in error for error in errors)
 
 
-def test_plain_literal_ip_lookup_gets_explicit_provenance_without_spurious_filters():
+def test_literal_ip_lookup_is_interpreted_by_planner_without_server_injection():
     packet = _packet("Show me alerts from 18.232.121.80.")
-    value = _plan(requirements={"limit": 10})
+    value = _plan(
+        requirements={"source_ip": "18.232.121.80", "limit": 10},
+        entities=[{"type": "source_ip", "id": "18.232.121.80"}],
+    )
 
     plan, errors = parse_and_validate_plan(json.dumps(value), packet.payload)
 
     assert errors == []
     assert plan.evidence_requirements == {"source_ip": "18.232.121.80", "limit": 10}
     assert plan.evidence_filter_provenance == {
-        "source_ip": "explicit_current_turn",
-        "limit": "planner_proposed",
+        "source_ip": "planner_interpreted",
+        "limit": "planner_interpreted",
     }
 
 
-def test_planner_cannot_invent_time_window_for_plain_source_ip_lookup():
-    packet = _packet("Show me alerts from 18.232.121.80.")
-    value = _plan(requirements={"source_ip": "18.232.121.80", "time_window_minutes": 30, "limit": 10})
-
-    plan, errors = parse_and_validate_plan(json.dumps(value), packet.payload)
-
-    assert plan is None
-    assert any("time_window_minutes is unsupported" in error for error in errors)
-
-
-def test_authoritative_resolved_ip_can_scope_pronoun_lookup():
-    packet = build_planner_packet(
-        question="Show me alerts from this IP.",
-        resolved_context={
-            "active_entity": {"type": "source_ip", "id": "18.232.121.80"},
-            "comparison_entities": [],
-            "resolution": {"status": "resolved", "intent": "entity_reference"},
-            "context": {"source_ip": "18.232.121.80"},
-        },
-        conversation_packet={"conclusions": [{"summary": "Current source remains under review."}]},
-        preferred_capability=None,
-        latency_class={"mode": "sync"},
-    )
-    value = _plan(requirements={"source_ip": "18.232.121.80", "limit": 10})
+def test_server_does_not_parse_sentence_to_add_or_remove_filters():
+    packet = _packet("Look into the source again.")
+    value = _plan(requirements={"source_ip": "18.232.121.80", "limit": 10}, entities=[{"type": "source_ip", "id": "18.232.121.80"}])
 
     plan, errors = parse_and_validate_plan(json.dumps(value), packet.payload)
 
     assert errors == []
-    assert plan.evidence_filter_provenance["source_ip"] == "inherited_authoritative_context"
+    assert plan.evidence_requirements == {"source_ip": "18.232.121.80", "limit": 10}
+
+
+def test_authoritative_context_is_available_without_preplanner_resolution():
+    packet = build_planner_packet(
+        question="Show me alerts from this IP.",
+        request_context={"context_type": "source_ip"},
+        conversation_packet={
+            "entities": [
+                {"type": "source_ip", "id": "18.232.121.80", "source_type": "thread_state"},
+                {"type": "alert", "id": "9078", "source_type": "thread_record"},
+            ],
+            "recent_conclusions": [{"summary": "Current source remains under review."}],
+        },
+        preferred_capability=None,
+        latency_class={"mode": "sync"},
+    )
+    value = _plan(requirements={"source_ip": "18.232.121.80", "limit": 10}, entities=[{"type": "source_ip", "id": "18.232.121.80"}], relationship="continuation")
+
+    plan, errors = parse_and_validate_plan(json.dumps(value), packet.payload)
+
+    assert errors == []
+    assert any(item["id"] == "18.232.121.80" for item in packet.payload["facts"]["entities"])
+    assert plan.resolved_entities[0]["id"] == "18.232.121.80"
 
 
 def test_fresh_lookup_does_not_inherit_prior_time_or_severity_filters():
     packet = build_planner_packet(
         question="Show me alerts from this IP.",
-        resolved_context={
-            "active_entity": {"type": "source_ip", "id": "18.232.121.80"},
-            "comparison_entities": [],
-            "resolution": {"status": "resolved", "intent": "entity_reference"},
-            "context": {
-                "source_ip": "18.232.121.80",
-                "time_window_minutes": 30,
-                "severity": "high",
-            },
+        request_context={"context_type": "source_ip"},
+        conversation_packet={
+            "entities": [{"type": "source_ip", "id": "18.232.121.80", "source_type": "thread_record"}],
+            "conversation_summary": "A prior lookup used a 30-minute HIGH filter.",
         },
-        conversation_packet={"thread_summary": "A prior lookup used a 30-minute HIGH filter."},
         preferred_capability=None,
         latency_class={"mode": "sync"},
     )
-    value = _plan(
-        requirements={
-            "source_ip": "18.232.121.80",
-            "time_window_minutes": 30,
-            "severity": "high",
-            "limit": 10,
-        }
-    )
+    value = _plan(requirements={"source_ip": "18.232.121.80", "limit": 10}, entities=[{"type": "source_ip", "id": "18.232.121.80"}])
 
     plan, errors = parse_and_validate_plan(json.dumps(value), packet.payload)
 
-    assert plan is None
-    assert any("time_window_minutes is unsupported" in error for error in errors)
-    assert any("severity is unsupported" in error for error in errors)
+    assert errors == []
+    assert "time_window_minutes" not in plan.evidence_requirements
+    assert "severity" not in plan.evidence_requirements
 
 
 def test_quick_evidence_lookup_requires_named_evidence():
@@ -452,8 +506,7 @@ def test_alert_evidence_requirements_are_normalized_without_query_generation():
 
     assert errors == []
     assert plan.evidence_requirements == {**requirements, "severity": "high"}
-    assert plan.evidence_filter_provenance["source_ip"] == "explicit_current_turn"
-    assert plan.evidence_filter_provenance["time_window_minutes"] == "explicit_current_turn"
+    assert set(plan.evidence_filter_provenance.values()) == {"planner_interpreted"}
 
 
 @pytest.mark.parametrize(
@@ -464,9 +517,9 @@ def test_alert_evidence_requirements_are_normalized_without_query_generation():
         ("Review activity over the previous 2 days.", 2880),
     ],
 )
-def test_explicit_duration_is_deterministically_owned_by_server(question, expected_minutes):
+def test_duration_is_interpreted_by_planner_and_bounded_by_server(question, expected_minutes):
     plan, errors = parse_and_validate_plan(
-        json.dumps(_plan(requirements={"limit": 10})),
+        json.dumps(_plan(requirements={"time_window_minutes": expected_minutes, "limit": 10})),
         _packet(question).payload,
     )
 
@@ -540,14 +593,14 @@ def test_contradictory_repaired_direct_answer_still_fails_closed():
     assert len(gateway.requests) == 2
 
 
-def test_planner_prompt_prefers_authoritative_state_for_state_summary_intent():
+def test_planner_prompt_describes_state_summary_contract_without_server_routing():
     gateway = SequenceGateway([json.dumps(_plan(intent="state_summary", strategy="direct_answer", sufficiency="sufficient", tools=[], requirements={}))])
     packet = _packet("Summarize our current investigation.")
 
     outcome = plan_turn(packet, gateway=gateway, config=_config())
 
     assert outcome.status == "planned"
-    assert "asks to summarize that state" in gateway.requests[0].prompt
+    assert "asks to summarize them" in gateway.requests[0].prompt
     assert "use direct_answer with sufficient evidence" in gateway.requests[0].prompt
 
 
@@ -572,12 +625,12 @@ def test_provider_timeout_returns_unavailable_without_repair_or_sticky_plan():
 def test_stale_or_missing_evidence_cannot_validate_as_sufficient():
     packet = build_planner_packet(
         question="What is the newest HIGH alert?",
-        resolved_context={
-            "active_entity": {"type": "alert", "id": "9078"},
-            "comparison_entities": [],
-            "resolution": {"status": "not_needed", "intent": "new_question"},
+        request_context={"context_type": "alert"},
+        conversation_packet={
+            "entities": [{"type": "alert", "id": "9078", "source_type": "request_context"}],
+            "bounds": {"stale_evidence_excluded": 4},
+            "recent_tool_results": [],
         },
-        conversation_packet={"bounds": {"stale_evidence_excluded": 4}, "verified_evidence": []},
         preferred_capability=None,
         latency_class={"mode": "sync"},
     )
@@ -592,14 +645,11 @@ def test_stale_or_missing_evidence_cannot_validate_as_sufficient():
 def test_planner_packet_and_prompt_fit_each_participating_capability(capability):
     packet = build_planner_packet(
         question="Assess the current alert and tell me what matters now.",
-        resolved_context={
-            "active_entity": {"type": "alert", "id": "9078"},
-            "comparison_entities": [],
-            "resolution": {"status": "not_needed", "intent": "new_question"},
-        },
+        request_context={"context_type": "alert"},
         conversation_packet={
-            "thread_summary": "Blocked scan activity remains under review.",
-            "verified_evidence": [{"summary": "Three blocked attempts", "fresh": True}],
+            "entities": [{"type": "alert", "id": "9078", "source_type": "request_context"}],
+            "conversation_summary": "Blocked scan activity remains under review.",
+            "recent_tool_results": [{"summary": "Three blocked attempts", "fresh": True}],
         },
         preferred_capability=capability,
         latency_class={"mode": "sync" if capability == "quick_explain" else "polling"},
@@ -670,16 +720,18 @@ def test_boundary_paraphrases_remain_outside_siem_capabilities(question):
     ],
 )
 def test_behavioral_paraphrases_validate_consistently(question, intent, strategy, capability, sufficiency, tools):
-    entities = [{"type": "alert", "id": "9078"}]
-    resolved = {
-        "active_entity": entities[0],
-        "comparison_entities": ([{"type": "alert", "id": "9011"}, entities[0]] if strategy == "compare_entities" else []),
-        "resolution": {"status": "resolved", "intent": "compare" if strategy == "compare_entities" else "new_question"},
-    }
     packet = build_planner_packet(
         question=question,
-        resolved_context=resolved,
-        conversation_packet={"conclusions": [{"summary": "Current conclusion"}], "verified_evidence": []},
+        request_context={"context_type": "alert"},
+        conversation_packet={
+            "entities": [
+                {"type": "alert", "id": "9078", "source_type": "request_context"},
+                {"type": "alert", "id": "9078", "source_type": "thread_record"},
+                {"type": "alert", "id": "9011", "source_type": "thread_state"},
+            ],
+            "recent_conclusions": [{"summary": "Current conclusion"}],
+            "recent_tool_results": [],
+        },
         preferred_capability="quick_explain",
         latency_class={"mode": "sync"},
     )
@@ -688,6 +740,7 @@ def test_behavioral_paraphrases_validate_consistently(question, intent, strategy
         strategy=strategy,
         sufficiency=sufficiency,
         tools=tools,
+        referenced_turn_sequence=2 if intent == "analyst_correction" else None,
         requirements=(
             {"severity": "high", "limit": 1}
             if strategy == "quick_evidence_lookup" and "high" in question.lower()
@@ -733,6 +786,72 @@ def test_artifact_and_investigation_paraphrases_reach_dedicated_capabilities(
 
     assert errors == []
     assert plan.proposed_capability == capability
+
+
+PLANNER_BOUNDARY_SCENARIOS = {
+    "state_summary": (
+        ("What are we investigating?", "Where are we right now?", "Summarize the current investigation."),
+        _plan(intent="state_summary", strategy="direct_answer", sufficiency="sufficient", tools=[]),
+    ),
+    "fresh_lookup_previous_entity": (
+        ("Show me alerts from this IP.", "Check that source again.", "Find newer activity from it."),
+        _plan(intent="fresh_evidence_lookup", strategy="quick_evidence_lookup", sufficiency="insufficient", tools=["alerts"], requirements={"source_ip": "203.0.113.81", "limit": 10}, entities=[{"type": "source_ip", "id": "203.0.113.81"}]),
+    ),
+    "literal_entity_lookup": (
+        ("Show alerts from 203.0.113.81.", "Search 203.0.113.81 for alerts.", "Any activity tied to 203.0.113.81?"),
+        _plan(intent="fresh_evidence_lookup", strategy="quick_evidence_lookup", sufficiency="insufficient", tools=["alerts"], requirements={"source_ip": "203.0.113.81", "limit": 10}, entities=[{"type": "source_ip", "id": "203.0.113.81"}]),
+    ),
+    "decision_support": (
+        ("Should I block or monitor this IP?", "What response would you recommend?", "Is escalation justified?"),
+        _plan(intent="decision_support", strategy="decision_support", sufficiency="insufficient", tools=[]),
+    ),
+    "artifact_draft": (
+        ("Draft a checklist for this alert.", "Create an escalation summary preview.", "Write an incident-note draft."),
+        _plan(intent="artifact_draft", strategy="artifact_draft", sufficiency="insufficient", tools=[]),
+    ),
+    "investigation_continuation": (
+        ("Continue the investigation.", "Keep digging into this alert.", "Take the analysis one step further."),
+        _plan(intent="bounded_investigation", strategy="bounded_investigation", sufficiency="insufficient", tools=[]),
+    ),
+    "comparison": (
+        ("Compare those alerts.", "Which of the two is worse?", "Is this more serious than the earlier scan?"),
+        _plan(intent="comparison", strategy="compare_entities", sufficiency="insufficient", tools=[], relationship="comparison"),
+    ),
+    "clarification": (
+        ("Which one?", "Check that.", "Is it worse?"),
+        _plan(intent="clarification", strategy="clarification_required", sufficiency="ambiguous", tools=[], clarification="Which alert or IP do you mean?"),
+    ),
+    "topic_switch": (
+        ("Switch to the earlier alert.", "Forget this and inspect Alert 9011.", "Now look at the prior scan."),
+        _plan(intent="evidence_explanation", strategy="direct_answer", sufficiency="sufficient", tools=[], relationship="entity_switch", entities=[{"type": "alert", "id": "9011"}]),
+    ),
+    "return_previous": (
+        ("Go back to the first alert.", "Return to the earlier investigation.", "Pick up where we left off on Alert 9011."),
+        _plan(intent="evidence_explanation", strategy="direct_answer", sufficiency="sufficient", tools=[], relationship="entity_switch", entities=[{"type": "alert", "id": "9011"}]),
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    "scenario,question",
+    [
+        (scenario, question)
+        for scenario, (questions, _plan_value) in PLANNER_BOUNDARY_SCENARIOS.items()
+        for question in questions
+    ],
+)
+def test_three_phrasings_per_required_scenario_cross_the_same_planner_boundary(scenario, question):
+    expected = PLANNER_BOUNDARY_SCENARIOS[scenario][1]
+    gateway = SequenceGateway([json.dumps(expected)])
+
+    outcome = plan_turn(_packet(question), gateway=gateway, config=_config())
+
+    assert outcome.plan is not None
+    assert outcome.plan.current_turn_intent == expected["current_turn_intent"]
+    assert outcome.plan.proposed_strategy == expected["proposed_strategy"]
+    assert outcome.plan.proposed_capability == expected["proposed_capability"]
+    assert outcome.plan.resolved_entities == tuple(expected["resolved_entities"])
+    assert json.loads(gateway.requests[0].prompt.split("SERVER_PACKET=", 1)[1])["current_user_message"] == question
 
 
 def test_repeated_controlled_plans_remain_contract_consistent():

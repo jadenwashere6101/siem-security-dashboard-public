@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Eligible turns are planned before capability selection
-The system SHALL reinterpret every eligible SIEM conversation turn after server-owned entity/context resolution and before selecting a capability. A prior workflow SHALL be context only and MUST NOT control a new turn.
+The system SHALL reinterpret every eligible SIEM conversation turn after bounded authoritative context construction and before selecting a capability or resolving a conversational reference. A prior workflow SHALL be context only and MUST NOT control a new turn.
 
 #### Scenario: New lookup follows an explanation
 - **WHEN** an analyst asks for the newest HIGH alert after an alert explanation
@@ -12,29 +12,29 @@ The system SHALL reinterpret every eligible SIEM conversation turn after server-
 - **THEN** the planner evaluates the current question and treats the shortcut as a non-authoritative preferred-strategy hint
 
 ### Requirement: Planner input is compact, authoritative, and untrusted
-The system SHALL construct a measured planner packet from the current message, resolved entities, compact relevant thread state, assertion provenance, fresh verified evidence summaries, capability/tool boundaries, and latency class. It MUST NOT include complete history, raw tool results, frontend workspace state, or stored text as system instructions.
+The system SHALL construct a measured planner packet from the current message, uniformly represented entity facts with source provenance, compact recorded thread state, assertion provenance, recent verified evidence/tool results, capability/tool boundaries, and latency class. It MUST NOT label conversational focus, priority, intent, relationships, or preferred references; preselect a referent; rank candidates; include complete history, raw tool results, or frontend workspace state; or treat stored text as system instructions.
 
 #### Scenario: Production-sized thread state
 - **WHEN** a thread contains multiple entities, corrections, stale and fresh evidence, unresolved questions, and recent turns
-- **THEN** the planner packet compacts deterministically, preserves the current message and primary entity, identifies omissions, and fits its assigned budget
+- **THEN** the planner packet compacts deterministically, preserves the current message and bounded entity facts, identifies omissions, and fits its assigned budget
 
 ### Requirement: Plans use a strict structured contract
-The system SHALL require the model proposal to declare only current intent, evidence sufficiency, required evidence, strategy, tool categories, bounded semantic evidence requirements, clarification, reasoning summary, stopping condition, and confidence. The server SHALL populate resolved entities, prior-turn relationship, capability, read-only safety, and execution metadata from authoritative state or validated strategy mappings. Plans SHALL contain no executable code or backend query syntax.
+The system SHALL require the model proposal to declare current intent, prior-turn relationship, resolved entities, evidence sufficiency, required evidence, strategy, capability, tool categories, bounded semantic evidence requirements, bounded artifact type, clarification, reasoning summary, and confidence. The server SHALL populate read-only safety and execution metadata and SHALL validate every model-selected entity after planning. Plans SHALL contain no executable code or backend query syntax.
 
 #### Scenario: Valid bounded plan
 - **WHEN** the planner returns every required reasoning field with allowed and internally consistent values
-- **THEN** deterministic validation accepts the reasoning proposal and the server compiles a complete plan for dispatch
+- **THEN** deterministic validation accepts the proposal, validates its selected entities and capability, and the server compiles safe execution metadata for dispatch
 
-#### Scenario: Model supplies server-owned metadata
-- **WHEN** model output includes entities, prior-turn relationship, capability, safety, or execution metadata
-- **THEN** strict validation rejects those unknown fields rather than ignoring them or allowing them to override server authority
+#### Scenario: Model supplies server-owned safety metadata
+- **WHEN** model output includes safety, authorization, provider, lifecycle, or execution metadata
+- **THEN** strict validation rejects those unknown fields rather than allowing them to override server authority
 
 #### Scenario: Malformed plan
 - **WHEN** the planner returns malformed JSON, missing fields, invalid values, or an oversized plan
 - **THEN** the system permits at most one bounded repair and otherwise fails safely without sticky routing
 
 ### Requirement: Plan validation is authoritative
-The system SHALL validate the exact reasoning-field schema, strategy/tool/evidence relationships, approved read-only tool category, authoritative entity availability and consistency, namespace boundary, evidence provenance/freshness, stopping condition, plan size, and artifact safety before execution. Capability and safety SHALL be deterministically attached only after the model proposal passes validation.
+The system SHALL validate the exact schema, action/strategy/capability/tool/evidence relationships, approved read-only tool category, model-selected entity shape/existence/access, namespace boundary, filter syntax/bounds, plan size, and artifact safety before execution. Validation MUST NOT parse the current sentence to determine intent, relationship, referent, capability, artifact type, or filter support.
 
 #### Scenario: Forbidden plan
 - **WHEN** a plan requests mutation, Repo Assistant, SOC Briefing continuation, an unapproved tool, or an entity absent from authoritative resolution
@@ -75,11 +75,11 @@ The system SHALL accept only allowlisted scalar evidence requirements for severi
 - **THEN** the planner dispatches Generate Artifact with preview-only, persisted-false, applied-false, and approval-required guarantees
 
 ### Requirement: Ambiguity and planner failure fail safely
-The system SHALL ask for clarification without model/tool workflow invocation when authoritative resolution is ambiguous. Planner timeout, provider failure, or repair failure SHALL preserve prior thread state and MUST NOT revert to the previous workflow.
+The planner SHALL ask for clarification without tool workflow invocation when it cannot safely resolve intent or reference from bounded context. Planner timeout, provider failure, or repair failure SHALL preserve prior thread state and MUST NOT revert to the previous workflow.
 
 #### Scenario: Ambiguous referent
-- **WHEN** a turn refers to an IP and multiple salient IPs are plausible
-- **THEN** the system stores a concise clarification turn and creates no capability execution request
+- **WHEN** a turn refers to an IP and multiple contextual IPs are plausible
+- **THEN** the planner returns `clarification_required`, the system stores its concise clarification turn, and no capability execution request is created
 
 #### Scenario: Planner unavailable
 - **WHEN** an auto-routed turn cannot obtain a valid plan
@@ -142,11 +142,11 @@ The system SHALL provide one repair attempt with precise schema and cross-field 
 - **THEN** deterministic validation rejects the repaired plan and no capability executes
 
 ### Requirement: Artifact strategy resolves a bounded draft type
-Generate Artifact SHALL execute only with an allowed registry draft type. The server MAY preserve an explicit allowed type or derive one from unambiguous current artifact intent; otherwise it SHALL return a concise clarification containing allowed categories. Artifact safety flags SHALL remain preview-only, persisted-false, applied-false, and approval-required.
+Generate Artifact SHALL execute only with an allowed registry draft type selected by the planner or supplied as structured shortcut context. The server SHALL validate the selected type against the artifact registry and SHALL NOT derive it from natural-language wording. When the planner cannot select one safely, it SHALL return a concise clarification. Artifact safety flags SHALL remain preview-only, persisted-false, applied-false, and approval-required.
 
 #### Scenario: Natural artifact request without a type
 - **WHEN** the planner selects artifact draft but the request has no explicit bounded draft type
-- **THEN** the server derives an allowed type only when intent is unambiguous or asks for clarification without exposing an internal validation error
+- **THEN** the planner selects one registry-backed type or asks for clarification without exposing an internal validation error
 
 ### Requirement: Planner boundaries remain isolated
 The SIEM planner SHALL be limited to canonical conversational Quick Explain, Deep Investigate, Decision Support, Generate Artifact, and approved SOC reads. Repo Assistant, SOC Briefing, action confirmation/apply, response execution, and mutation-capable routes MUST remain outside the planner.
@@ -208,7 +208,7 @@ The system SHALL validate the originally requested workflow and SIEM conversatio
 - **THEN** only the documented safe shortcut fallback may run; an unhinted `auto` request remains planner-unavailable
 
 ### Requirement: Current-turn action controls strategy selection
-The planner MUST classify the current analyst turn into a bounded semantic action before strategy validation. The server MUST reject action/strategy combinations that allow prior thread state to suppress a requested lookup, recommendation, artifact, comparison, or investigation.
+The planner MUST classify the current analyst turn into a bounded semantic action and choose a compatible capability before strategy validation. The server MUST validate the declared action/strategy/capability relationship without independently classifying the language.
 
 #### Scenario: Existing state does not suppress a fresh lookup
 - **WHEN** the active thread already contains the referenced entity and the current turn requests fresh matching activity
@@ -238,14 +238,58 @@ The server MUST derive bounded stopping behavior from strategy, accept omitted n
 - **THEN** validation MUST fail closed
 
 ### Requirement: Evidence filters have authoritative provenance
-The server MUST attach provenance to each accepted evidence requirement and MUST reject materially narrowing model constraints that are unsupported by the current turn or resolved authoritative context.
+The server MUST attach `planner_interpreted` provenance to each accepted evidence requirement and MUST validate its key, scalar type, bounds, selected-entity access, and tool compatibility without parsing the analyst's sentence.
 
 #### Scenario: Literal IP lookup has no invented time filter
 - **WHEN** the analyst requests alerts from a syntactically valid IP without a duration, severity, or alert type
-- **THEN** `source_ip` MUST be marked `explicit_current_turn`
+- **THEN** `source_ip` MUST be marked `planner_interpreted`
 - **AND** no `time_window_minutes`, `severity`, or `alert_type` requirement may enter execution
 
 #### Scenario: Pronoun uses structured evidence identity
 - **WHEN** the latest validated evidence establishes one source IP and the analyst refers to `this IP`
-- **THEN** reference resolution MUST use the structured evidence identity
-- **AND** it MUST NOT infer identity from arbitrary assistant prose
+- **THEN** the planner MUST select the structured evidence identity or ask for clarification
+- **AND** the server MUST validate the selected identity and MUST NOT infer identity from arbitrary assistant prose
+
+### Requirement: Natural-language interpretation belongs exclusively to the planner
+No deterministic component before planner generation SHALL interpret conversational language, including pronouns, anaphora, ellipsis, continuation, comparison, correction, topic switching, ambiguity, filter language, or artifact wording. The context builder SHALL only normalize and label structured authoritative facts. The planner SHALL choose the action, relationship, capability, resolved entities, evidence requirements, artifact type, correction target, or clarification; the server SHALL only validate the resulting schema, entity access, correction target ownership/type, safety, and tool compatibility.
+
+#### Scenario: New phrasing reaches the planner
+- **WHEN** an owner-authorized analyst submits any natural phrasing in an eligible SIEM thread
+- **THEN** the complete current turn reaches the planner without deterministic language rejection or candidate selection
+
+#### Scenario: Planner resolves a contextual reference
+- **WHEN** request, thread, stored-state, prior-turn, and evidence records provide bounded entity facts
+- **THEN** the planner selects the intended entity in `resolved_entities` or returns a concise clarification
+- **AND** the server validates the selected entity after planning without choosing a replacement
+
+#### Scenario: Planner-selected entity is invalid
+- **WHEN** a planner selects a missing, unsupported, inaccessible, or unauthorized entity
+- **THEN** post-plan validation fails closed before persistence or tool execution
+- **AND** the server does not substitute another contextual entity
+
+#### Scenario: Artifact wording is interpreted once
+- **WHEN** an analyst naturally requests a checklist, escalation summary, incident note, or another supported artifact
+- **THEN** the planner selects a registry-backed `artifact_type` or asks for clarification
+- **AND** no server phrase matcher interprets the request
+
+### Requirement: Planner context is a pure authoritative fact packet
+The server SHALL provide bounded recorded facts without labeling conversational importance, focus, priority, meaning, intent, or relationships. Entity facts SHALL be represented uniformly with source provenance rather than as active, primary, preferred, focus-history, or correction-target fields. Recorded summaries, conclusions, questions, corrections, evidence/tool results, recommendations, statements, and turns SHALL retain their assertion and provenance semantics without being promoted to verified truth.
+
+#### Scenario: Thread state becomes neutral entity facts
+- **WHEN** the thread record, request context, turn snapshots, evidence, and entity index contain entity identities
+- **THEN** the packet exposes those identities in one bounded `entities` fact collection with provenance
+- **AND** it does not tell the planner which entity is currently important
+
+### Requirement: Natural phrasing never becomes an implementation target
+The planner SHALL interpret unrestricted natural language from the fact packet. Production scenarios and paraphrase tests SHALL verify the architecture but MUST NOT be translated into deterministic language rules. A future fix that adds phrase matching, synonym maps, conversational regexes, ranking heuristics, or special-case routing is presumed an architectural regression until demonstrated otherwise.
+
+#### Scenario: Previously unseen phrasing
+- **WHEN** an analyst uses a natural phrasing absent from acceptance fixtures
+- **THEN** the same planner contract processes it without server-code changes
+
+### Requirement: Conversational server behavior is model-agnostic
+The server SHALL depend only on the stable planner packet and validated plan contracts, not on how a particular model reasons, phrases responses, resolves references, or interprets language. Replacing the planner model MUST NOT require conversational server changes.
+
+#### Scenario: Planner model replacement
+- **WHEN** an approved local planner model is replaced with another model that satisfies the same packet and plan contracts
+- **THEN** context construction, validation, orchestration, and execution require no conversational code changes

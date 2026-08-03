@@ -7,7 +7,7 @@
 ## 2. Planner Integration
 
 - [x] 2.1 Build a fit-by-construction planner packet from authoritative thread/entity/evidence state with provenance, freshness, omission, and size measurements.
-- [x] 2.2 Integrate planning after server-owned resolution and before eligible conversation capability selection without holding a database lock during model generation.
+- [x] 2.2 Integrate planning after bounded authoritative fact construction and before eligible conversation capability selection without holding a database lock during model generation.
 - [x] 2.3 Dispatch validated direct, lookup, investigation, comparison, decision, artifact, clarification, and boundary plans through existing safe paths while preventing workflow reclassification.
 - [x] 2.4 Preserve Repo Assistant, SOC Briefing, mutation/action, read-only Decision Support, and preview-only Generate Artifact boundaries.
 
@@ -78,7 +78,22 @@
 ## 12. Current-Turn Intent and Capability Reachability Correction
 
 - [x] 12.1 Add the bounded current-turn action contract, action/strategy compatibility, conditional planner metadata ownership, and repair action pinning.
-- [x] 12.2 Expand authoritative reference resolution across active focus, primary entity, turn snapshots, structured evidence entities, comparison order, and focus history.
+- [x] 12.2 Expose uniformly represented entity, turn, evidence, and stored-state facts with provenance as bounded planner context without server-authored conversational labels.
 - [x] 12.3 Add server-owned evidence-filter provenance and reject unsupported narrowing constraints without inheriting stale query filters.
 - [x] 12.4 Add production-shaped natural-language capability reachability, repair stability, reference, persistence, and PostgreSQL integration coverage.
 - [x] 12.5 Run Python compilation, focused PostgreSQL and AI suites, the AI acceptance harness, `git diff --check`, and strict OpenSpec validation.
+
+## 13. Planner-Owned Natural-Language Boundary Correction
+
+- [x] 13.1 Replace the existing design/spec boundary with planner-owned intent, relationship, reference, entity, capability, filter, artifact-type, and clarification interpretation plus post-plan server validation.
+- [x] 13.2 Remove the pre-planner deterministic reference resolver, candidate ranking, phrase matching, ambiguity decisions, sentence-derived filter extraction, and artifact language matching.
+- [x] 13.3 Require planner-selected relationships, capabilities, resolved entities, correction targets, and bounded artifact types; validate selections against PostgreSQL ownership/RBAC before constructing one canonical execution context.
+- [x] 13.4 Add three materially different phrasings for state, lookup, literal entity, Decision Support, artifact, continuation, comparison, clarification, topic switch, and return-to-prior scenarios through the planner boundary.
+- [x] 13.5 Run Python compilation, focused unit and PostgreSQL suites, acceptance harness, `git diff --check`, strict OpenSpec validation, and the complete failure-class gate.
+
+## 14. Pure Fact-Packet Boundary Refinement
+
+- [x] 14.1 Document unrestricted-language planning, the permanent anti-phrasing-patch rule, and the model-agnostic server invariant.
+- [x] 14.2 Replace interpretive context labels with a provenance-bearing authoritative fact packet without changing stored thread state or workflow behavior.
+- [x] 14.3 Add regression assertions that planner packets contain no focus, priority, preferred-reference, intent, or relationship fields supplied by the server.
+- [x] 14.4 Run the existing focused unit, PostgreSQL, acceptance, compilation, diff, and strict OpenSpec gates.
