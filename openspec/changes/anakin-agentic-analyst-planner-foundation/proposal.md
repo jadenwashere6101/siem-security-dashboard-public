@@ -12,6 +12,7 @@ Anakin currently fixes a conversational request to a workflow before interpretin
 - Add production-shaped behavioral, PostgreSQL, prompt-budget, boundary, failure, and repeated-run planner evaluations.
 - Route planner generation through a dedicated local-only `agentic_planning` profile using `llama3.1:8b`, without changing Quick Explain or other workflow profiles.
 - Limit model output to reasoning-bearing fields; populate authoritative entities, prior-turn relationship, capability, safety, and execution metadata deterministically on the server.
+- Preserve the planner's bounded evidence intent as validated scalar requirements and translate those requirements into existing read-tool arguments without model-authored queries.
 
 ## Capabilities
 

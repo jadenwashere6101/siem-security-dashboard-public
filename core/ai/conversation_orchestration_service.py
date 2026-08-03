@@ -330,6 +330,7 @@ def plan_conversational_submission(
             "required_evidence": [],
             "proposed_strategy": "clarification_required",
             "proposed_tool_categories": [],
+            "evidence_requirements": {},
             "clarification_question": str(resolution.get("message") or "Which entity should I use?"),
             "reasoning_summary": "The server-owned reference resolver did not identify one safe referent.",
             "stopping_condition": "Continue only after the analyst supplies an unambiguous entity or instruction.",
@@ -1421,6 +1422,7 @@ def _compact_planner_turn(outcome: PlannerOutcome) -> dict[str, Any]:
         "intent": _compact_scalar(plan.current_turn_intent, 180) if plan else None,
         "relationship": plan.relationship_to_prior_turn if plan else None,
         "evidence_sufficiency": plan.evidence_sufficiency if plan else None,
+        "evidence_requirements": dict(plan.evidence_requirements) if plan else {},
         "confidence": plan.confidence if plan else None,
         "read_only": True,
         "repaired": outcome.repaired,
@@ -1444,7 +1446,11 @@ def _apply_planner_execution_hints(payload: dict[str, Any], plan: AgenticAnalyst
     payload["planner_strategy"] = plan.proposed_strategy
     payload["planner_evidence_sufficiency"] = plan.evidence_sufficiency
     if plan.proposed_strategy == "quick_evidence_lookup":
-        tool_request = _planner_tool_request(plan.proposed_tool_categories[0], payload)
+        tool_request = _planner_tool_request(
+            plan.proposed_tool_categories[0],
+            payload,
+            plan.evidence_requirements,
+        )
         if tool_request is None:
             raise ConversationBoundaryError("The validated evidence category cannot be translated into a bounded read request.")
         payload["use_tools"] = True
@@ -1454,30 +1460,73 @@ def _apply_planner_execution_hints(payload: dict[str, Any], plan: AgenticAnalyst
         }
 
 
-def _planner_tool_request(category: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+def _planner_tool_request(
+    category: str,
+    payload: dict[str, Any],
+    requirements: dict[str, Any],
+) -> dict[str, Any] | None:
     context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
     if category == "alerts":
-        return {"tool_name": "search_alerts", "arguments": {"sort": "newest", "limit": 10}}
+        arguments = {
+            "sort": requirements.get("sort") or "newest",
+            "limit": requirements.get("limit") or 10,
+        }
+        for key in (
+            "severity",
+            "alert_type",
+            "source_ip",
+            "destination_ip",
+            "hostname",
+            "username",
+            "time_window_minutes",
+        ):
+            if requirements.get(key) not in (None, ""):
+                arguments[key] = requirements[key]
+        return {"tool_name": "search_alerts", "arguments": arguments}
     if category == "incidents":
         incident_id = context.get("incident_id")
-        if incident_id:
+        if incident_id and not requirements:
             return {"tool_name": "get_incident_timeline", "arguments": {"incident_id": incident_id}}
-        return {"tool_name": "search_incidents", "arguments": {"limit": 10}}
-    if category == "source_ip_activity" and context.get("source_ip"):
-        return {"tool_name": "get_source_ip_context", "arguments": {"source_ip": context["source_ip"]}}
-    if category == "response_registry":
-        arguments = {
-            key: context[key]
-            for key in ("registry_id", "source_ip")
-            if context.get(key) not in (None, "")
+        return {
+            "tool_name": "search_incidents",
+            "arguments": {
+                "severity": requirements.get("severity"),
+                "limit": requirements.get("limit") or 10,
+            },
         }
+    if category == "source_ip_activity":
+        source_ip = requirements.get("source_ip") or context.get("source_ip")
+        return {"tool_name": "get_source_ip_context", "arguments": {"source_ip": source_ip}} if source_ip else None
+    if category == "response_registry":
+        if requirements.get("source_ip"):
+            arguments = {"source_ip": requirements["source_ip"]}
+        else:
+            arguments = {
+                key: context[key]
+                for key in ("registry_id", "source_ip")
+                if context.get(key) not in (None, "")
+            }
+        if requirements.get("limit"):
+            arguments["limit"] = requirements["limit"]
         return {"tool_name": "get_response_registry_context", "arguments": arguments} if arguments else None
     if category in {"events", "authentication_activity", "network_activity", "recon_activity"}:
-        arguments = {
-            key: context[key]
-            for key in ("alert_id", "source_ip", "activity_id")
-            if context.get(key) not in (None, "")
-        }
+        source_ip = requirements.get("source_ip") or context.get("source_ip")
+        if requirements.get("alert_type") and not source_ip:
+            return None
+        if requirements and source_ip:
+            arguments = {"source_ip": source_ip}
+            if requirements.get("alert_type"):
+                arguments["event_type"] = requirements["alert_type"]
+            if requirements.get("limit"):
+                arguments["limit"] = requirements["limit"]
+        else:
+            arguments = {
+                key: context[key]
+                for key in ("alert_id", "source_ip", "activity_id")
+                if context.get(key) not in (None, "")
+            }
+            if requirements.get("limit"):
+                arguments["limit"] = requirements["limit"]
         return {"tool_name": "get_related_events", "arguments": arguments} if arguments else None
     return None
 

@@ -19,7 +19,7 @@ The system SHALL construct a measured planner packet from the current message, r
 - **THEN** the planner packet compacts deterministically, preserves the current message and primary entity, identifies omissions, and fits its assigned budget
 
 ### Requirement: Plans use a strict structured contract
-The system SHALL require the model proposal to declare only current intent, evidence sufficiency, required evidence, strategy, tool categories, clarification, reasoning summary, stopping condition, and confidence. The server SHALL populate resolved entities, prior-turn relationship, capability, read-only safety, and execution metadata from authoritative state or validated strategy mappings. Plans SHALL contain no executable code.
+The system SHALL require the model proposal to declare only current intent, evidence sufficiency, required evidence, strategy, tool categories, bounded semantic evidence requirements, clarification, reasoning summary, stopping condition, and confidence. The server SHALL populate resolved entities, prior-turn relationship, capability, read-only safety, and execution metadata from authoritative state or validated strategy mappings. Plans SHALL contain no executable code or backend query syntax.
 
 #### Scenario: Valid bounded plan
 - **WHEN** the planner returns every required reasoning field with allowed and internally consistent values
@@ -53,7 +53,22 @@ The system SHALL support direct answer, one quick evidence lookup, bounded inves
 
 #### Scenario: Evidence is insufficient
 - **WHEN** one bounded approved lookup can answer the question
-- **THEN** the planner selects quick evidence lookup with exactly one relevant read-tool category and a stopping condition
+- **THEN** the planner selects quick evidence lookup with exactly one relevant read-tool category, non-empty bounded evidence requirements, and a stopping condition
+
+### Requirement: Evidence intent is preserved through tool execution
+The system SHALL accept only allowlisted scalar evidence requirements for severity, alert type, source IP, destination IP, hostname, username, time window, sort order, and bounded result limit. It SHALL validate category compatibility and values before deterministically translating requirements into an existing approved read-tool request. It MUST reject unknown, invalid, unrepresentable, mutation-capable, or query-language input and MUST NOT silently discard accepted requirements.
+
+#### Scenario: Most recent HIGH alert
+- **WHEN** a validated alert lookup requests HIGH severity, newest order, and one result
+- **THEN** the executed alert search contains severity `high`, sort `newest`, and limit `1`, and the response is grounded only in matching returned evidence
+
+#### Scenario: Alert-family lookup from one source
+- **WHEN** a validated lookup requests a specific alert type from a valid source IP within a bounded time window
+- **THEN** all four constraints reach the existing alert search and non-matching evidence is excluded
+
+#### Scenario: Unsupported filter cannot be represented
+- **WHEN** a plan supplies an unknown filter, invalid value, excessive bound, or a requirement unsupported by the selected tool category
+- **THEN** validation fails before tool execution and the system does not replace it with a generic unfiltered lookup
 
 #### Scenario: Artifact request
 - **WHEN** an analyst requests an artifact

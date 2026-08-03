@@ -51,3 +51,10 @@
 - [x] 8.2 Reduce model output to reasoning-bearing fields and compile entities, relationship, capability, safety, and execution metadata deterministically without weakening fail-closed validation or one-repair behavior.
 - [x] 8.3 Update focused planner, orchestration, production-payload, metadata, and boundary tests; run Python compilation, affected PostgreSQL suites, `git diff --check`, and strict OpenSpec validation.
 - [ ] 8.4 After separately authorized deployment, repeat the real-model planner matrix before Spec 2.
+
+## 9. Planner Evidence-Intent Preservation
+
+- [x] 9.1 Add a strict, schema-bounded `evidence_requirements` proposal field and document model reasoning versus server validation/translation ownership.
+- [x] 9.2 Translate validated requirements into one existing SOC read-tool request while preserving read-only, RBAC, category, IP, time-window, sort, and limit bounds and failing closed when a requirement cannot be represented.
+- [x] 9.3 Add focused planner, translation, read-tool, and PostgreSQL production-shaped coverage proving requested filters reach execution and exclude non-matching evidence.
+- [x] 9.4 Run Python compilation, focused tests, `git diff --check`, and strict OpenSpec validation.

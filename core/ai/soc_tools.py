@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import ipaddress
+import re
 from typing import Any
 
 TOOL_STATUS_SUCCESS = "success"
@@ -21,6 +22,7 @@ DEFAULT_TOOL_LIMIT = 25
 MAX_TOOL_LIMIT = 25
 DEFAULT_TIME_WINDOW_HOURS = 24
 MAX_TIME_WINDOW_HOURS = 168
+MAX_EVIDENCE_TIME_WINDOW_MINUTES = MAX_TIME_WINDOW_HOURS * 60
 
 SENSITIVE_KEY_FRAGMENTS = frozenset(
     {
@@ -147,7 +149,10 @@ TOOL_DEFINITIONS: dict[str, SocToolDefinition] = {
     "search_alerts": SocToolDefinition(
         name="search_alerts",
         description="Search alert list using canonical alert filters.",
-        optional_args=("search", "source_ip", "severity", "status", "source", "limit", "offset", "sort"),
+        optional_args=(
+            "search", "source_ip", "destination_ip", "severity", "alert_type", "hostname", "username",
+            "time_window_minutes", "status", "source", "limit", "offset", "sort",
+        ),
         source_path="/alerts",
         source_helper="routes.alerts_events_routes alert list helpers",
     ),
@@ -301,10 +306,32 @@ def validate_tool_args(tool_name: str, raw_args: Any) -> dict[str, Any]:
             raise SocToolValidationError(f"{required} is required")
 
     if tool_name == "search_alerts":
+        severity = normalize_text(args.get("severity"), field_name="severity", max_len=20)
+        if severity and severity.lower() not in {"low", "medium", "high", "critical"}:
+            raise SocToolValidationError("severity is unsupported")
+        alert_type = normalize_text(args.get("alert_type"), field_name="alert_type", max_len=100)
+        if alert_type and not alert_type.replace("_", "").replace("-", "").isalnum():
+            raise SocToolValidationError("alert_type is invalid")
+        hostname = normalize_text(args.get("hostname"), field_name="hostname", max_len=253)
+        username = normalize_text(args.get("username"), field_name="username", max_len=128)
+        if username and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.@\\-]{0,127}", username):
+            raise SocToolValidationError("username is invalid")
+        if hostname and username:
+            raise SocToolValidationError("hostname and username cannot be combined in one bounded alert search")
+        time_window_minutes = None
+        if args.get("time_window_minutes") not in (None, ""):
+            time_window_minutes = parse_positive_int(args.get("time_window_minutes"), "time_window_minutes")
+            if time_window_minutes > MAX_EVIDENCE_TIME_WINDOW_MINUTES:
+                raise SocToolValidationError("time_window_minutes exceeds the bounded maximum")
         return {
             "search": normalize_text(args.get("search"), field_name="search"),
             "source_ip": parse_source_ip(args.get("source_ip")) if args.get("source_ip") else None,
-            "severity": normalize_text(args.get("severity"), field_name="severity", max_len=20),
+            "destination_ip": parse_source_ip(args.get("destination_ip")) if args.get("destination_ip") else None,
+            "severity": severity.lower() if severity else None,
+            "alert_type": alert_type,
+            "hostname": hostname,
+            "username": username,
+            "time_window_minutes": time_window_minutes,
             "status": normalize_text(args.get("status"), field_name="status", max_len=40),
             "source": normalize_text(args.get("source"), field_name="source", max_len=80),
             "limit": parse_limit(args.get("limit")),

@@ -279,10 +279,11 @@ def _execute_search_alerts(args: dict[str, Any], *, started: float) -> SocToolRe
     if args.get("sort") not in _ALERT_SORT_OPTIONS:
         raise SocToolValidationError("sort is unsupported")
     filters = {
-        "search": args.get("search"),
+        "search": args.get("search") or args.get("hostname") or args.get("username"),
         "exact_source_ip": args.get("source_ip"),
-        "exact_target_ip": None,
+        "exact_target_ip": args.get("destination_ip"),
         "alert_id": None,
+        "rule_id": args.get("alert_type"),
         "severity": args.get("severity"),
         "status": args.get("status"),
         "source": args.get("source"),
@@ -295,6 +296,9 @@ def _execute_search_alerts(args: dict[str, Any], *, started: float) -> SocToolRe
         conn = get_db_connection()
         cur = conn.cursor()
         clauses, params = _build_alert_filter_sql(filters)
+        if args.get("time_window_minutes"):
+            clauses.append("created_at >= %s")
+            params.append(datetime.now(timezone.utc) - timedelta(minutes=args["time_window_minutes"]))
         where_clause = _build_alerts_where_clause(clauses)
         order_clause = _build_alert_order_clause(filters["sort"])
         total = _fetch_alert_total(cur, where_clause, params)

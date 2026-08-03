@@ -15,6 +15,7 @@ from core.ai.conversation_context import (
 )
 from core.ai.conversation_orchestration_service import (
     ConversationBoundaryError,
+    _planner_tool_request,
     queue_conversational_request,
     run_conversational_workflow,
 )
@@ -113,6 +114,77 @@ def _quick_result(answer="This alert shows repeated blocked scan attempts."):
             "error": None,
         }
     )
+
+
+@pytest.mark.parametrize(
+    "requirements,expected",
+    [
+        (
+            {"severity": "high", "sort": "newest", "limit": 1},
+            {"sort": "newest", "limit": 1, "severity": "high"},
+        ),
+        (
+            {"alert_type": "failed_login", "sort": "newest", "limit": 1},
+            {"sort": "newest", "limit": 1, "alert_type": "failed_login"},
+        ),
+        (
+            {"source_ip": "203.0.113.81", "limit": 5},
+            {"sort": "newest", "limit": 5, "source_ip": "203.0.113.81"},
+        ),
+        (
+            {"destination_ip": "10.0.0.8", "hostname": "auth-01.internal", "limit": 2},
+            {"sort": "newest", "limit": 2, "destination_ip": "10.0.0.8", "hostname": "auth-01.internal"},
+        ),
+        (
+            {"username": "jsmith", "limit": 2},
+            {"sort": "newest", "limit": 2, "username": "jsmith"},
+        ),
+        (
+            {"time_window_minutes": 60, "sort": "newest", "limit": 10},
+            {"sort": "newest", "limit": 10, "time_window_minutes": 60},
+        ),
+    ],
+)
+def test_planner_alert_requirements_translate_to_bounded_tool_arguments(requirements, expected):
+    request = _planner_tool_request("alerts", {"context": {}}, requirements)
+
+    assert request == {"tool_name": "search_alerts", "arguments": expected}
+
+
+def test_planner_event_requirements_replace_alert_scope_with_filterable_source_scope():
+    request = _planner_tool_request(
+        "authentication_activity",
+        {"context": {"alert_id": 17, "source_ip": "203.0.113.81"}},
+        {"alert_type": "failed_login", "limit": 3},
+    )
+
+    assert request == {
+        "tool_name": "get_related_events",
+        "arguments": {"source_ip": "203.0.113.81", "event_type": "failed_login", "limit": 3},
+    }
+
+
+def test_planner_event_requirement_fails_closed_when_no_filterable_scope_exists():
+    request = _planner_tool_request(
+        "authentication_activity",
+        {"context": {"alert_id": 17}},
+        {"alert_type": "failed_login"},
+    )
+
+    assert request is None
+
+
+def test_planner_response_registry_requirements_outrank_prior_context():
+    request = _planner_tool_request(
+        "response_registry",
+        {"context": {"registry_id": 17, "source_ip": "203.0.113.80"}},
+        {"source_ip": "203.0.113.81", "limit": 2},
+    )
+
+    assert request == {
+        "tool_name": "get_response_registry_context",
+        "arguments": {"source_ip": "203.0.113.81", "limit": 2},
+    }
 
 
 class PlannerThenAnswerGateway:
@@ -1319,6 +1391,28 @@ def test_deep_investigate_true_failure_preserves_prior_conclusion(postgres_db, m
 def test_production_shaped_auto_turn_plans_dispatches_and_persists(postgres_db, monkeypatch):
     conn, _cur = postgres_db
     thread, alert_id = _seed(conn)
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE alerts SET alert_type = 'failed_login', severity = 'high', message = 'target filtered evidence marker', created_at = NOW() - INTERVAL '10 minutes' WHERE id = %s",
+            (alert_id,),
+        )
+        cur.execute(
+            """
+            INSERT INTO alerts (alert_type, severity, source_ip, source, message, status, created_at)
+            VALUES ('normal_activity', 'low', '203.0.113.82'::inet, 'pfsense',
+                    'low excluded evidence marker', 'open', NOW())
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO alerts (alert_type, severity, source_ip, source, message, status, created_at)
+            VALUES
+                ('failed_login', 'high', '203.0.113.81'::inet, 'pfsense', 'old excluded evidence marker', 'open', NOW() - INTERVAL '2 hours'),
+                ('port_scan', 'high', '203.0.113.81'::inet, 'pfsense', 'type excluded evidence marker', 'open', NOW() - INTERVAL '5 minutes'),
+                ('failed_login', 'high', '203.0.113.83'::inet, 'pfsense', 'source excluded evidence marker', 'open', NOW() - INTERVAL '3 minutes')
+            """
+        )
+    conn.commit()
     monkeypatch.setattr(
         "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
     )
@@ -1330,6 +1424,14 @@ def test_production_shaped_auto_turn_plans_dispatches_and_persists(postgres_db, 
         "required_evidence": ["current alert detail"],
         "proposed_strategy": "quick_evidence_lookup",
         "proposed_tool_categories": ["alerts"],
+        "evidence_requirements": {
+            "severity": "high",
+            "alert_type": "failed_login",
+            "source_ip": "203.0.113.81",
+            "time_window_minutes": 60,
+            "sort": "newest",
+            "limit": 1,
+        },
         "clarification_question": None,
         "reasoning_summary": "The current question is a new lookup and requires fresh alert-list evidence.",
         "stopping_condition": "Stop after identifying the newest accessible high-severity alert.",
@@ -1337,7 +1439,7 @@ def test_production_shaped_auto_turn_plans_dispatches_and_persists(postgres_db, 
     }
     gateway = PlannerThenAnswerGateway(
         plan,
-        "The newest HIGH alert is Alert %s, a port-scan detection from 203.0.113.81." % alert_id,
+        "The newest matching HIGH alert is Alert %s, a failed-login detection from 203.0.113.81." % alert_id,
     )
     payload = _payload(
         thread,
@@ -1368,16 +1470,29 @@ def test_production_shaped_auto_turn_plans_dispatches_and_persists(postgres_db, 
     )
     assert result.status_code == 200
     assert result.payload["workflow"] == "quick_explain"
-    assert result.payload["result"]["answer"].startswith(f"The newest HIGH alert is Alert {alert_id}")
+    assert result.payload["result"]["answer"].startswith(f"The newest matching HIGH alert is Alert {alert_id}")
     assert len(gateway.requests) == 2
     assert gateway.requests[0].capability == "agentic_analyst_planning"
     assert '"tool_name": "search_alerts"' in gateway.requests[1].prompt
+    assert "target filtered evidence marker" in gateway.requests[1].prompt
+    assert "low excluded evidence marker" not in gateway.requests[1].prompt
+    assert "old excluded evidence marker" not in gateway.requests[1].prompt
+    assert "type excluded evidence marker" not in gateway.requests[1].prompt
+    assert "source excluded evidence marker" not in gateway.requests[1].prompt
     turns = list_turns(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")["turns"]
     stored_plan = turns[0]["structured_payload"]["agentic_plan"]
     assert stored_plan["strategy"] == "quick_evidence_lookup"
     assert stored_plan["capability"] == "quick_explain"
     assert stored_plan["relationship"] == "new_question"
     assert stored_plan["read_only"] is True
+    assert stored_plan["evidence_requirements"] == {
+        "severity": "high",
+        "alert_type": "failed_login",
+        "source_ip": "203.0.113.81",
+        "time_window_minutes": 60,
+        "sort": "newest",
+        "limit": 1,
+    }
     assert turns[0]["entity_snapshot"]["active_entity"]["type"] == "alert"
     assert turns[0]["entity_snapshot"]["active_entity"]["id"] == str(alert_id)
     assert turns[-1]["role"] == "assistant"
@@ -1478,6 +1593,7 @@ def test_working_planner_cannot_reclassify_textual_boundary_into_siem_execution(
         "required_evidence": [],
         "proposed_strategy": "unsupported_or_boundary",
         "proposed_tool_categories": [],
+        "evidence_requirements": {},
         "clarification_question": None,
         "reasoning_summary": "The request belongs to an isolated product namespace.",
         "stopping_condition": "Stop without invoking a SIEM capability.",

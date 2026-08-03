@@ -104,6 +104,7 @@ def _plan(
     sufficiency="insufficient",
     strategy="quick_evidence_lookup",
     tools=None,
+    requirements=None,
     clarification=None,
 ):
     return {
@@ -112,6 +113,11 @@ def _plan(
         "required_evidence": ["current high-severity alerts"] if sufficiency == "insufficient" else [],
         "proposed_strategy": strategy,
         "proposed_tool_categories": tools if tools is not None else (["alerts"] if strategy == "quick_evidence_lookup" else []),
+        "evidence_requirements": requirements if requirements is not None else (
+            {"severity": "high", "sort": "newest", "limit": 1}
+            if strategy == "quick_evidence_lookup"
+            else {}
+        ),
         "clarification_question": clarification,
         "reasoning_summary": "The current question changes task and requires current alert evidence.",
         "stopping_condition": "Stop after identifying the newest accessible high-severity alert.",
@@ -274,6 +280,50 @@ def test_quick_evidence_lookup_requires_named_evidence():
 
     assert plan is None
     assert any("requires at least one required_evidence item" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    "requirements,expected",
+    [
+        ({"unknown_filter": "value"}, "unknown filters"),
+        ({"severity": "urgent"}, "severity is invalid"),
+        ({"source_ip": "not-an-ip"}, "source_ip is invalid"),
+        ({"destination_ip": "999.1.1.1"}, "destination_ip is invalid"),
+        ({"username": "jsmith' OR 1=1"}, "username is invalid"),
+        ({"time_window_minutes": 0}, "time_window_minutes is invalid"),
+        ({"time_window_minutes": 10081}, "time_window_minutes is invalid"),
+        ({"sort": "random"}, "sort is invalid"),
+        ({"limit": 11}, "limit is invalid"),
+    ],
+)
+def test_evidence_requirements_reject_unknown_or_unbounded_filters(requirements, expected):
+    plan, errors = parse_and_validate_plan(
+        json.dumps(_plan(requirements=requirements)),
+        _packet().payload,
+    )
+
+    assert plan is None
+    assert any(expected in error for error in errors)
+
+
+def test_alert_evidence_requirements_are_normalized_without_query_generation():
+    requirements = {
+        "severity": "HIGH",
+        "alert_type": "failed_login",
+        "source_ip": "203.0.113.81",
+        "destination_ip": "10.0.0.8",
+        "time_window_minutes": 60,
+        "sort": "newest",
+        "limit": 1,
+    }
+
+    plan, errors = parse_and_validate_plan(
+        json.dumps(_plan(requirements=requirements)),
+        _packet().payload,
+    )
+
+    assert errors == []
+    assert plan.evidence_requirements == {**requirements, "severity": "high"}
 
 
 def test_second_invalid_plan_does_not_fall_back_to_prior_workflow():

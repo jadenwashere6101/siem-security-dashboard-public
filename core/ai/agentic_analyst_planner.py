@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import ipaddress
 import json
+import re
 from typing import Any
 
 from core.ai.config import AiGatewayConfig, load_ai_gateway_config
@@ -39,6 +41,33 @@ APPROVED_TOOL_CATEGORIES = frozenset(
     }
 )
 CONFIDENCE_LEVELS = frozenset({"low", "medium", "high"})
+EVIDENCE_REQUIREMENT_KEYS = frozenset(
+    {
+        "severity",
+        "alert_type",
+        "source_ip",
+        "destination_ip",
+        "hostname",
+        "username",
+        "time_window_minutes",
+        "sort",
+        "limit",
+    }
+)
+EVIDENCE_REQUIREMENT_KEYS_BY_CATEGORY = {
+    "alerts": EVIDENCE_REQUIREMENT_KEYS,
+    "incidents": frozenset({"severity", "limit"}),
+    "source_ip_activity": frozenset({"source_ip"}),
+    "events": frozenset({"source_ip", "alert_type", "limit"}),
+    "authentication_activity": frozenset({"source_ip", "alert_type", "limit"}),
+    "network_activity": frozenset({"source_ip", "alert_type", "limit"}),
+    "recon_activity": frozenset({"source_ip", "alert_type", "limit"}),
+    "response_registry": frozenset({"source_ip", "limit"}),
+}
+EVIDENCE_SORT_OPTIONS = frozenset({"newest", "oldest", "severity"})
+EVIDENCE_SEVERITIES = frozenset({"low", "medium", "high", "critical"})
+MAX_PLANNER_EVIDENCE_LIMIT = 10
+MAX_PLANNER_TIME_WINDOW_MINUTES = 7 * 24 * 60
 
 
 class PlannerError(ValueError):
@@ -67,6 +96,7 @@ class AgenticAnalystPlan:
     proposed_strategy: str
     proposed_capability: str | None
     proposed_tool_categories: tuple[str, ...]
+    evidence_requirements: dict[str, Any]
     clarification_question: str | None
     reasoning_summary: str
     stopping_condition: str
@@ -318,6 +348,7 @@ def parse_and_validate_plan(
         "required_evidence",
         "proposed_strategy",
         "proposed_tool_categories",
+        "evidence_requirements",
         "clarification_question",
         "reasoning_summary",
         "stopping_condition",
@@ -350,6 +381,15 @@ def parse_and_validate_plan(
         errors.append("quick_evidence_lookup requires insufficient evidence and exactly one tool category")
     if strategy in STRATEGY_CAPABILITY and strategy != "quick_evidence_lookup" and tools:
         errors.append(f"{strategy} cannot request a planner-selected tool category")
+    evidence_requirements, requirement_errors = _validated_evidence_requirements(
+        payload.get("evidence_requirements"),
+        tool_category=tools[0] if len(tools) == 1 else None,
+    )
+    errors.extend(requirement_errors)
+    if strategy == "quick_evidence_lookup" and not evidence_requirements:
+        errors.append("quick_evidence_lookup requires structured evidence_requirements")
+    if strategy != "quick_evidence_lookup" and evidence_requirements:
+        errors.append(f"{strategy} cannot include evidence_requirements")
     if sufficiency == "insufficient" and strategy == "direct_answer":
         errors.append("insufficient evidence cannot use direct_answer")
     if (
@@ -397,6 +437,7 @@ def parse_and_validate_plan(
         proposed_strategy=strategy,
         proposed_capability=capability,
         proposed_tool_categories=tuple(tools),
+        evidence_requirements=evidence_requirements,
         clarification_question=clarification,
         reasoning_summary=reasoning,
         stopping_condition=stopping,
@@ -424,6 +465,7 @@ def deterministic_shortcut_plan(packet: PlannerPacket, capability: str) -> Plann
         proposed_strategy=strategy,
         proposed_capability=capability,
         proposed_tool_categories=(),
+        evidence_requirements={},
         clarification_question=None,
         reasoning_summary="The local planner was unavailable; the explicit current-turn shortcut remains within its existing safety boundary.",
         stopping_condition="Return the selected capability result without mutation.",
@@ -446,9 +488,14 @@ def _planner_prompt(packet: dict[str, Any]) -> str:
         "Never select mutation, Repo Assistant, or SOC Briefing continuation. The server owns entity identity, prior-turn relationship, "
         "capability mapping, safety, and execution metadata; do not output those fields. Keep reasoning fields internally consistent: "
         "direct_answer uses no tool category; quick_evidence_lookup requires insufficient evidence, one non-empty required_evidence item, "
-        "and exactly one approved tool category; every other strategy uses no planner-selected tool category. reasoning_summary and "
+        "exactly one approved tool category, and a non-empty evidence_requirements object; every other strategy uses no planner-selected "
+        "tool category and an empty evidence_requirements object. For alerts, evidence_requirements may contain only severity, alert_type, "
+        "source_ip, destination_ip, hostname, username, time_window_minutes, sort, and limit. Category subsets are: incidents severity/limit; "
+        "source_ip_activity source_ip; events/authentication_activity/network_activity/recon_activity source_ip/alert_type/limit; "
+        "response_registry source_ip/limit. Use concrete scalar values, never SQL, operators, or backend query syntax. "
+        "reasoning_summary and "
         "stopping_condition must each be non-empty and operationally specific. Required keys only: current_turn_intent, "
-        "evidence_sufficiency, required_evidence, proposed_strategy, proposed_tool_categories, clarification_question, reasoning_summary, "
+        "evidence_sufficiency, required_evidence, proposed_strategy, proposed_tool_categories, evidence_requirements, clarification_question, reasoning_summary, "
         "stopping_condition, confidence. evidence_sufficiency must be sufficient, insufficient, or ambiguous. confidence must be low, "
         "medium, or high. Use null when no clarification is required.\n"
         f"SERVER_PACKET={rendered}"
@@ -503,6 +550,79 @@ def _relationship_from_packet(packet: dict[str, Any]) -> str:
     if intent in {"why", "evidence", "continue", "correction", "which_ip", "entity_reference"}:
         return "continuation"
     return "new_question"
+
+
+def _validated_evidence_requirements(
+    value: Any,
+    *,
+    tool_category: str | None,
+) -> tuple[dict[str, Any], list[str]]:
+    if not isinstance(value, dict):
+        return {}, ["evidence_requirements must be an object"]
+    errors: list[str] = []
+    unknown = sorted(set(value) - EVIDENCE_REQUIREMENT_KEYS)
+    if unknown:
+        errors.append(f"evidence_requirements contains unknown filters: {', '.join(unknown)}")
+    allowed = EVIDENCE_REQUIREMENT_KEYS_BY_CATEGORY.get(tool_category or "", frozenset())
+    unsupported = sorted(set(value) - allowed - set(unknown))
+    if unsupported:
+        errors.append(
+            f"evidence_requirements filters are unsupported for {tool_category or 'no tool category'}: "
+            + ", ".join(unsupported)
+        )
+    normalized: dict[str, Any] = {}
+    severity = _bounded_text(value.get("severity"), 20).lower()
+    if severity:
+        if severity not in EVIDENCE_SEVERITIES:
+            errors.append("evidence_requirements severity is invalid")
+        else:
+            normalized["severity"] = severity
+    alert_type = _bounded_text(value.get("alert_type"), 100)
+    if alert_type:
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", alert_type):
+            errors.append("evidence_requirements alert_type is invalid")
+        else:
+            normalized["alert_type"] = alert_type
+    for key in ("source_ip", "destination_ip"):
+        raw = _bounded_text(value.get(key), 80)
+        if not raw:
+            continue
+        try:
+            normalized[key] = str(ipaddress.ip_address(raw))
+        except ValueError:
+            errors.append(f"evidence_requirements {key} is invalid")
+    hostname = _bounded_text(value.get("hostname"), 253)
+    if hostname:
+        if not re.fullmatch(r"(?=.{1,253}\Z)[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?", hostname):
+            errors.append("evidence_requirements hostname is invalid")
+        else:
+            normalized["hostname"] = hostname
+    username = _bounded_text(value.get("username"), 128)
+    if username:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.@\\-]{0,127}", username):
+            errors.append("evidence_requirements username is invalid")
+        else:
+            normalized["username"] = username
+    if hostname and username:
+        errors.append("evidence_requirements cannot combine hostname and username in one bounded lookup")
+    for key, maximum in (
+        ("time_window_minutes", MAX_PLANNER_TIME_WINDOW_MINUTES),
+        ("limit", MAX_PLANNER_EVIDENCE_LIMIT),
+    ):
+        raw = value.get(key)
+        if raw in (None, ""):
+            continue
+        if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1 or raw > maximum:
+            errors.append(f"evidence_requirements {key} is invalid")
+        else:
+            normalized[key] = raw
+    sort = _bounded_text(value.get("sort"), 20).lower()
+    if sort:
+        if sort not in EVIDENCE_SORT_OPTIONS:
+            errors.append("evidence_requirements sort is invalid")
+        else:
+            normalized["sort"] = sort
+    return normalized, errors
 
 
 def _packet_has_answerable_context(packet: dict[str, Any]) -> bool:

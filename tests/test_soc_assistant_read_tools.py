@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from unittest.mock import patch
 
+import pytest
 from werkzeug.security import generate_password_hash
 
 from core.ai.config import AI_MODE_DISABLED, AI_MODE_LOCAL_ONLY, AiGatewayConfig
@@ -24,6 +25,7 @@ from core.ai.soc_tools import (
     SocToolResult,
     SocToolExecutionSummary,
     SocToolSource,
+    SocToolValidationError,
     validate_tool_args,
     validate_tool_name,
 )
@@ -138,6 +140,35 @@ def test_tool_validation_rejects_unsupported_mutation_and_bad_arguments():
     args = validate_tool_args("search_alerts", {"source_ip": "198.51.100.10", "limit": 1000})
     assert args["source_ip"] == "198.51.100.10"
     assert args["limit"] == 25
+
+    args = validate_tool_args(
+        "search_alerts",
+        {
+            "severity": "HIGH",
+            "alert_type": "failed_login",
+            "destination_ip": "10.0.0.8",
+            "hostname": "auth-01.internal",
+            "time_window_minutes": 60,
+            "sort": "newest",
+            "limit": 1,
+        },
+    )
+    assert args["severity"] == "high"
+    assert args["alert_type"] == "failed_login"
+    assert args["destination_ip"] == "10.0.0.8"
+    assert args["hostname"] == "auth-01.internal"
+    assert args["time_window_minutes"] == 60
+    assert args["sort"] == "newest"
+    assert args["limit"] == 1
+
+    for invalid in (
+        {"severity": "urgent"},
+        {"time_window_minutes": 10081},
+        {"hostname": "auth-01.internal", "username": "jsmith"},
+        {"username": "jsmith' OR 1=1"},
+    ):
+        with pytest.raises(SocToolValidationError):
+            validate_tool_args("search_alerts", invalid)
 
 
 def test_executor_dispatches_supported_tools_and_enforces_rbac(monkeypatch):

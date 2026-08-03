@@ -46,6 +46,11 @@ class ProductionShapePlannerGateway:
             "required_evidence": ["current bounded SIEM evidence"],
             "proposed_strategy": strategy,
             "proposed_tool_categories": ["alerts"] if strategy == "quick_evidence_lookup" else [],
+            "evidence_requirements": (
+                {"severity": "high", "sort": "newest", "limit": 1}
+                if strategy == "quick_evidence_lookup"
+                else {}
+            ),
             "clarification_question": None,
             "reasoning_summary": "The current request requires the selected bounded SIEM capability.",
             "stopping_condition": "Stop after the selected read-only capability returns a bounded result.",
