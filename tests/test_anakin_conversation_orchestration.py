@@ -1326,18 +1326,14 @@ def test_production_shaped_auto_turn_plans_dispatches_and_persists(postgres_db, 
     monkeypatch.setattr("core.ai.soc_tool_executor.get_db_connection", lambda: NoCloseConnection(conn))
     plan = {
         "current_turn_intent": "Find the newest high-severity alert.",
-        "relationship_to_prior_turn": "new_question",
-        "resolved_entities": [{"type": "alert", "id": str(alert_id)}],
         "evidence_sufficiency": "insufficient",
         "required_evidence": ["current alert detail"],
         "proposed_strategy": "quick_evidence_lookup",
-        "proposed_capability": "quick_explain",
         "proposed_tool_categories": ["alerts"],
         "clarification_question": None,
         "reasoning_summary": "The current question is a new lookup and requires fresh alert-list evidence.",
         "stopping_condition": "Stop after identifying the newest accessible high-severity alert.",
         "confidence": "high",
-        "safety": {"read_only": True, "mutation_allowed": False},
     }
     gateway = PlannerThenAnswerGateway(
         plan,
@@ -1377,7 +1373,11 @@ def test_production_shaped_auto_turn_plans_dispatches_and_persists(postgres_db, 
     assert gateway.requests[0].capability == "agentic_analyst_planning"
     assert '"tool_name": "search_alerts"' in gateway.requests[1].prompt
     turns = list_turns(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")["turns"]
-    assert turns[0]["structured_payload"]["agentic_plan"]["strategy"] == "quick_evidence_lookup"
+    stored_plan = turns[0]["structured_payload"]["agentic_plan"]
+    assert stored_plan["strategy"] == "quick_evidence_lookup"
+    assert stored_plan["capability"] == "quick_explain"
+    assert stored_plan["relationship"] == "new_question"
+    assert stored_plan["read_only"] is True
     assert turns[0]["entity_snapshot"]["active_entity"]["type"] == "alert"
     assert turns[0]["entity_snapshot"]["active_entity"]["id"] == str(alert_id)
     assert turns[-1]["role"] == "assistant"
@@ -1474,18 +1474,14 @@ def test_working_planner_cannot_reclassify_textual_boundary_into_siem_execution(
     )
     plan = {
         "current_turn_intent": "Identify a request outside the SIEM conversation boundary.",
-        "relationship_to_prior_turn": "new_question",
-        "resolved_entities": [{"type": "alert", "id": str(alert_id)}],
         "evidence_sufficiency": "sufficient",
         "required_evidence": [],
         "proposed_strategy": "unsupported_or_boundary",
-        "proposed_capability": None,
         "proposed_tool_categories": [],
         "clarification_question": None,
         "reasoning_summary": "The request belongs to an isolated product namespace.",
         "stopping_condition": "Stop without invoking a SIEM capability.",
         "confidence": "high",
-        "safety": {"read_only": True, "mutation_allowed": False},
     }
     gateway = PlannerThenAnswerGateway(plan, "unused")
 

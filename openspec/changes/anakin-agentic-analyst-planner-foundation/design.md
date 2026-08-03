@@ -28,9 +28,30 @@ The current request's explicit validated entity remains authoritative. A propose
 
 ### One strict plan proposal, one bounded repair, deterministic authority
 
-The planner produces JSON with: `current_turn_intent`, `relationship_to_prior_turn`, `resolved_entities`, `evidence_sufficiency`, `required_evidence`, `proposed_strategy`, `proposed_capability`, `proposed_tool_categories`, `clarification_question`, `reasoning_summary`, `stopping_condition`, `confidence`, and a read-only safety declaration. Text is parsed as one JSON object; arbitrary objects are never executed or stringified into analyst output.
+The model produces a strict proposal containing only: `current_turn_intent`, `evidence_sufficiency`, `required_evidence`, `proposed_strategy`, `proposed_tool_categories`, `clarification_question`, `reasoning_summary`, `stopping_condition`, and `confidence`. The server compiles that validated reasoning proposal into the full `AgenticAnalystPlan` by attaching authoritative entities, derived prior-turn relationship, strategy-mapped capability, and immutable read-only safety. Text is parsed as one JSON object; arbitrary objects are never executed or stringified into analyst output.
 
-Validation enforces enumerated strategy/capability mappings, one approved read-tool category at most, entity equality, owner/namespace boundaries, evidence/provenance rules, size limits, stopping conditions, and preview-only artifact safety. An invalid first result receives one repair request containing only bounded validation errors and the original compact packet. A second invalid result, timeout, or provider failure returns a concise planner-unavailable or clarification response and preserves prior state. It never invokes the prior workflow as fallback.
+Validation requires exactly the model-owned fields and rejects model-supplied server-owned fields as unknown rather than ignoring or rewriting them. It enforces enumerated strategies, strategy/tool/evidence relationships, one approved read-tool category at most, authoritative entity requirements, owner/namespace boundaries, evidence/provenance rules, size limits, stopping conditions, and preview-only artifact safety. An invalid first result receives one repair request containing only bounded validation errors and the original compact packet. A second invalid result, timeout, or provider failure returns a concise planner-unavailable or clarification response and preserves prior state. It never invokes the prior workflow as fallback.
+
+### Planner contract ownership
+
+| Field | Owner | Reason |
+|---|---|---|
+| `current_turn_intent` | Model | Interpreting the analyst's present objective requires semantic reasoning. |
+| `evidence_sufficiency` | Model | Assessing whether current evidence can answer the question is a reasoning decision constrained by freshness metadata. |
+| `required_evidence` | Model | Identifying the missing information is part of investigation planning. |
+| `proposed_strategy` | Model | Selecting the bounded analytical approach is the planner's central responsibility. |
+| `proposed_tool_categories` | Model | Choosing one approved evidence category, when lookup is needed, follows from the evidence gap. |
+| `clarification_question` | Model | A concise semantic clarification may be needed when ambiguity reaches the planner; deterministic resolver clarifications still bypass model generation. |
+| `reasoning_summary` | Model | Records why the strategy and evidence decision fit the current turn. |
+| `stopping_condition` | Model | Defines when the bounded analytical task has answered the current question. |
+| `confidence` | Model | Expresses confidence in the reasoning proposal, not confidence in authoritative identity. |
+| `resolved_entities` | Server | Entity identity and comparison membership are already validated by ownership-aware resolution. |
+| `relationship_to_prior_turn` | Derived by server | Existing reference-resolution intent deterministically maps to continuation, new question, entity switch, comparison, or clarification response. |
+| `proposed_capability` | Derived by server | `STRATEGY_CAPABILITY` is the authoritative one-to-one bounded dispatch mapping. |
+| `read_only` / `mutation_allowed` | Server | Safety policy is immutable application authority, never a model choice. |
+| Profile, model, provider, lifecycle, workflow request, and execution metadata | Server | These are observed application/runtime facts and are not part of planner reasoning. |
+
+The compiled plan remains the internal/downstream contract, so execution and audit metadata retain the complete shape without asking the model to reproduce known values. A later optimistic-concurrency alignment check still compares compiled entities with the current resolved execution context before dispatch.
 
 Current explicit shortcut intent is a non-authoritative hint. When the planner provider is unavailable, an explicit current-turn shortcut may continue through its existing safe capability because it is a user action on this turn, not inherited history; `workflow:auto` fails safely without keyword routing.
 
@@ -71,13 +92,14 @@ The planner requests the approved `agentic_planning` profile through the profile
 | No tool despite missing evidence | Insufficient evidence requires one approved lookup, investigation, or clarification | Plan validator | Identify required evidence | No/partial/stale evidence |
 | Tool despite sufficient evidence | Direct answer forbids tool categories | Plan validator | Assess sufficiency | Existing current evidence, prior conclusion |
 | Forbidden tool/capability | Only mapped capabilities and approved read categories pass | Plan validator/dispatch | Propose within boundary | Mutation, Repo, SOC, unknown tool |
-| Wrong or switched entity | Proposed entities exactly match server-resolved accessible entities | Plan validator | Refer only to packet entities | Explicit switch, stale focus, fabricated ID |
+| Wrong or switched entity | Model cannot propose identity; compiled entities come from server-resolved accessible context and are rechecked before dispatch | Plan compiler and execution alignment validator | Reason about only the packet entities | Explicit switch, stale focus, attempted model override |
 | Ambiguity answered | Ambiguous resolution requires clarification and no execution | Resolver/validator | Ask concise clarification | Multiple IPs/alerts, missing referent |
 | Stale evidence treated as current | Stale evidence cannot satisfy evidence sufficiency | Packet builder/validator | Request refresh or qualify | Expired and mixed-freshness evidence |
 | User claim or inference promoted to fact | Assertion provenance is immutable in packet and plan | Context builder/validator | Treat claims as statements/inferences | Scanner, owned IP, service account |
 | Invalid or repaired-invalid schema | Exactly one repair; then fail closed without sticky fallback | Parser/validator/planner service | Produce/repair strict JSON | Missing fields, bad enum, malformed JSON |
 | Plan/prompt over budget | Mandatory packet fits; optional content compacts; final sizes checked against the dedicated planner profile | Packet/prompt builder and `agentic_planning` profile | Stay within output contract | Production-sized thread/evidence/entity state, initial and repair prompts |
 | Planner assigned an undersized or shared workflow model | Planner always selects its dedicated local-only 8B profile; other workflow assignments remain unchanged | Profile registry, config, planner request, provider metadata tests | Satisfy the existing plan contract | Initial plan, repair, Quick Explain regression, all profile inventory defaults |
+| Deterministic metadata causes otherwise useful plan rejection | Model emits reasoning fields only; server-owned fields are compiled from authoritative state or strategy mapping | Strict proposal parser and plan compiler | Return exactly the reasoning proposal | Omitted deterministic fields, attempted overrides, full compiled metadata |
 | Timeout/provider failure | Preserve prior state and return planner unavailable; no old dispatch | Planner service/orchestration | None after failure | Timeout, disabled, provider error |
 | Repeated ineffective strategy/answer | Current intent and strategy are recorded; identical prior answer is not reused as current response | Planner validation/response metadata | Select current task | New lookup after explain; topic switch |
 | Workflow label used as content | Previous/current labels are typed hints, never analyst evidence or prompt instructions | Packet builder | Weigh current hint only | Auto after Quick Explain/Decision Support |

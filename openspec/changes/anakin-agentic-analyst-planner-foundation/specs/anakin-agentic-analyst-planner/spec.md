@@ -19,18 +19,22 @@ The system SHALL construct a measured planner packet from the current message, r
 - **THEN** the planner packet compacts deterministically, preserves the current message and primary entity, identifies omissions, and fits its assigned budget
 
 ### Requirement: Plans use a strict structured contract
-The system SHALL require plans to declare current intent, prior-turn relationship, resolved entities, evidence sufficiency, required evidence, strategy, capability, tool categories, clarification, reasoning summary, stopping condition, confidence, and read-only safety. Plans SHALL contain no executable code.
+The system SHALL require the model proposal to declare only current intent, evidence sufficiency, required evidence, strategy, tool categories, clarification, reasoning summary, stopping condition, and confidence. The server SHALL populate resolved entities, prior-turn relationship, capability, read-only safety, and execution metadata from authoritative state or validated strategy mappings. Plans SHALL contain no executable code.
 
 #### Scenario: Valid bounded plan
-- **WHEN** the planner returns every required field with allowed values and consistent entities
-- **THEN** deterministic validation accepts the plan for dispatch
+- **WHEN** the planner returns every required reasoning field with allowed and internally consistent values
+- **THEN** deterministic validation accepts the reasoning proposal and the server compiles a complete plan for dispatch
+
+#### Scenario: Model supplies server-owned metadata
+- **WHEN** model output includes entities, prior-turn relationship, capability, safety, or execution metadata
+- **THEN** strict validation rejects those unknown fields rather than ignoring them or allowing them to override server authority
 
 #### Scenario: Malformed plan
 - **WHEN** the planner returns malformed JSON, missing fields, invalid values, or an oversized plan
 - **THEN** the system permits at most one bounded repair and otherwise fails safely without sticky routing
 
 ### Requirement: Plan validation is authoritative
-The system SHALL validate strategy/capability mapping, approved read-only tool category, entity access and consistency, namespace boundary, evidence provenance/freshness, stopping condition, plan size, and artifact safety before execution.
+The system SHALL validate the exact reasoning-field schema, strategy/tool/evidence relationships, approved read-only tool category, authoritative entity availability and consistency, namespace boundary, evidence provenance/freshness, stopping condition, plan size, and artifact safety before execution. Capability and safety SHALL be deterministically attached only after the model proposal passes validation.
 
 #### Scenario: Forbidden plan
 - **WHEN** a plan requests mutation, Repo Assistant, SOC Briefing continuation, an unapproved tool, or an entity absent from authoritative resolution

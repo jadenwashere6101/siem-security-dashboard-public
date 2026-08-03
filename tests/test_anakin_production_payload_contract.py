@@ -32,12 +32,6 @@ class ProductionShapePlannerGateway:
 
     def generate(self, request):
         packet = json.loads(request.prompt.split("SERVER_PACKET=", 1)[1])
-        entities = []
-        for item in [packet.get("resolved_focus"), *(packet.get("comparison_entities") or [])]:
-            if isinstance(item, dict) and item.get("type") and item.get("id"):
-                identity = {"type": item["type"], "id": item["id"]}
-                if identity not in entities:
-                    entities.append(identity)
         hint = packet.get("preferred_capability_hint")
         capability = hint or "quick_explain"
         strategy = {
@@ -48,18 +42,14 @@ class ProductionShapePlannerGateway:
         }[capability]
         plan = {
             "current_turn_intent": "Handle the current production-shaped SIEM request.",
-            "relationship_to_prior_turn": "new_question",
-            "resolved_entities": entities,
             "evidence_sufficiency": "insufficient",
             "required_evidence": ["current bounded SIEM evidence"],
             "proposed_strategy": strategy,
-            "proposed_capability": capability,
             "proposed_tool_categories": ["alerts"] if strategy == "quick_evidence_lookup" else [],
             "clarification_question": None,
             "reasoning_summary": "The current request requires the selected bounded SIEM capability.",
             "stopping_condition": "Stop after the selected read-only capability returns a bounded result.",
             "confidence": "high",
-            "safety": {"read_only": True, "mutation_allowed": False},
         }
         return AiGatewayResponse(
             status=AI_STATUS_SUCCESS,

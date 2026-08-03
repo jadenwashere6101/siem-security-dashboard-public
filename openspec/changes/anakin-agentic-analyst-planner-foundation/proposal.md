@@ -11,6 +11,7 @@ Anakin currently fixes a conversational request to a workflow before interpretin
 - Dispatch validated plans through existing capability and approved SOC read-tool paths, with no unrestricted iterative tool loop.
 - Add production-shaped behavioral, PostgreSQL, prompt-budget, boundary, failure, and repeated-run planner evaluations.
 - Route planner generation through a dedicated local-only `agentic_planning` profile using `llama3.1:8b`, without changing Quick Explain or other workflow profiles.
+- Limit model output to reasoning-bearing fields; populate authoritative entities, prior-turn relationship, capability, safety, and execution metadata deterministically on the server.
 
 ## Capabilities
 

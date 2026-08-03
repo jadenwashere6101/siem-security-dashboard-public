@@ -326,18 +326,14 @@ def plan_conversational_submission(
     elif resolution.get("status") in {"clarification_required", "unresolved", "command_required"}:
         plan_payload = {
             "current_turn_intent": str(resolution.get("intent") or "clarification"),
-            "relationship_to_prior_turn": "continuation",
-            "resolved_entities": _planner_entities(resolved_context),
             "evidence_sufficiency": "ambiguous",
             "required_evidence": [],
             "proposed_strategy": "clarification_required",
-            "proposed_capability": None,
             "proposed_tool_categories": [],
             "clarification_question": str(resolution.get("message") or "Which entity should I use?"),
             "reasoning_summary": "The server-owned reference resolver did not identify one safe referent.",
             "stopping_condition": "Continue only after the analyst supplies an unambiguous entity or instruction.",
             "confidence": "high",
-            "safety": {"read_only": True, "mutation_allowed": False},
         }
         plan, errors = parse_and_validate_plan(json.dumps(plan_payload), packet.payload)
         if plan is None:
@@ -1432,15 +1428,6 @@ def _compact_planner_turn(outcome: PlannerOutcome) -> dict[str, Any]:
         "prompt_chars": outcome.packet.prompt_chars,
         "error_code": outcome.error_code,
     }
-
-
-def _planner_entities(resolved: ResolvedExecutionContext) -> list[dict[str, str]]:
-    entities = list(resolved.comparison_entities) if resolved.comparison_entities else [resolved.active_entity]
-    return [
-        {"type": str(item.get("type") or ""), "id": str(item.get("id") or "")}
-        for item in entities
-        if item.get("type") and item.get("id")
-    ]
 
 
 def _validate_plan_alignment(plan: AgenticAnalystPlan, resolved: ResolvedExecutionContext) -> None:

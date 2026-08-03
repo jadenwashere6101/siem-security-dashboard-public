@@ -101,28 +101,21 @@ def _packet(question="What's the newest HIGH alert?", *, evidence=None, correcti
 def _plan(
     *,
     intent="Find the newest high-severity alert.",
-    relationship="new_question",
     sufficiency="insufficient",
     strategy="quick_evidence_lookup",
-    capability="quick_explain",
     tools=None,
-    entities=None,
     clarification=None,
 ):
     return {
         "current_turn_intent": intent,
-        "relationship_to_prior_turn": relationship,
-        "resolved_entities": entities if entities is not None else [{"type": "alert", "id": "9078"}],
         "evidence_sufficiency": sufficiency,
         "required_evidence": ["current high-severity alerts"] if sufficiency == "insufficient" else [],
         "proposed_strategy": strategy,
-        "proposed_capability": capability,
         "proposed_tool_categories": tools if tools is not None else (["alerts"] if strategy == "quick_evidence_lookup" else []),
         "clarification_question": clarification,
         "reasoning_summary": "The current question changes task and requires current alert evidence.",
         "stopping_condition": "Stop after identifying the newest accessible high-severity alert.",
         "confidence": "high",
-        "safety": {"read_only": True, "mutation_allowed": False},
     }
 
 
@@ -151,26 +144,53 @@ def test_packet_is_fit_by_construction_with_production_sized_state():
     assert packet.omitted
 
 
-def test_valid_plan_is_accepted_and_wrong_entity_is_rejected():
+def test_server_populates_deterministic_plan_fields_and_rejects_model_override():
     packet = _packet()
     valid, errors = parse_and_validate_plan(json.dumps(_plan()), packet.payload)
     assert errors == []
     assert valid.proposed_strategy == "quick_evidence_lookup"
-    invalid, errors = parse_and_validate_plan(
-        json.dumps(_plan(entities=[{"type": "alert", "id": "9999"}])),
-        packet.payload,
-    )
+    assert valid.relationship_to_prior_turn == "new_question"
+    assert valid.resolved_entities == ({"type": "alert", "id": "9078", "display_alias": "Alert 9078"},)
+    assert valid.proposed_capability == "quick_explain"
+    assert valid.read_only is True
+    assert valid.mutation_allowed is False
+
+    override = _plan()
+    override["resolved_entities"] = [{"type": "alert", "id": "9999"}]
+    invalid, errors = parse_and_validate_plan(json.dumps(override), packet.payload)
     assert invalid is None
-    assert any("authoritative" in error for error in errors)
+    assert any("unknown plan fields: resolved_entities" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    "resolution_intent,expected",
+    [
+        ("why", "continuation"),
+        ("compare", "comparison"),
+        ("explicit_entity", "entity_switch"),
+        ("go_back", "entity_switch"),
+        ("new_question", "new_question"),
+    ],
+)
+def test_server_derives_relationship_from_authoritative_resolution(resolution_intent, expected):
+    packet = _packet()
+    packet.payload["reference_resolution"]["intent"] = resolution_intent
+
+    plan, errors = parse_and_validate_plan(json.dumps(_plan()), packet.payload)
+
+    assert errors == []
+    assert plan.relationship_to_prior_turn == expected
 
 
 @pytest.mark.parametrize(
     "mutator,expected",
     [
-        (lambda value: value.update(proposed_capability="generate_artifact"), "does not match"),
+        (lambda value: value.update(proposed_capability="generate_artifact"), "unknown plan fields"),
+        (lambda value: value.update(relationship_to_prior_turn="continuation"), "unknown plan fields"),
         (lambda value: value.update(proposed_tool_categories=["delete_alert"]), "unapproved"),
         (lambda value: value.update(proposed_tool_categories=["alerts", "events"]), "at most one"),
-        (lambda value: value.update(safety={"read_only": False, "mutation_allowed": True}), "read_only"),
+        (lambda value: value.update(safety={"read_only": False, "mutation_allowed": True}), "unknown plan fields"),
+        (lambda value: value.update(execution_metadata={"workflow_request_id": "invented"}), "unknown plan fields"),
         (lambda value: value.update(evidence_sufficiency="sufficient", proposed_strategy="quick_evidence_lookup"), "insufficient"),
     ],
 )
@@ -197,7 +217,6 @@ def test_planner_repairs_one_cross_field_contradiction_without_server_rewriting(
     contradictory = _plan(
         sufficiency="sufficient",
         strategy="direct_answer",
-        capability="quick_explain",
         tools=["alerts"],
     )
     gateway = SequenceGateway([json.dumps(contradictory), json.dumps(_plan())])
@@ -287,7 +306,7 @@ def test_stale_or_missing_evidence_cannot_validate_as_sufficient():
         preferred_capability=None,
         latency_class={"mode": "sync"},
     )
-    value = _plan(strategy="direct_answer", capability="quick_explain", sufficiency="sufficient", tools=[])
+    value = _plan(strategy="direct_answer", sufficiency="sufficient", tools=[])
     plan, errors = parse_and_validate_plan(json.dumps(value), packet.payload)
     assert plan is None
     assert any("verified evidence or relevant thread state" in error for error in errors)
@@ -320,7 +339,6 @@ def test_ambiguity_paraphrases_require_clarification(question):
     value = _plan(
         intent="Resolve an ambiguous referent.",
         strategy="clarification_required",
-        capability=None,
         sufficiency="ambiguous",
         tools=[],
         clarification="Which alert or IP do you mean?",
@@ -339,7 +357,6 @@ def test_boundary_paraphrases_remain_outside_siem_capabilities(question):
     value = _plan(
         intent="Identify a request outside the SIEM conversation planner boundary.",
         strategy="unsupported_or_boundary",
-        capability=None,
         sufficiency="sufficient",
         tools=[],
     )
@@ -391,18 +408,16 @@ def test_behavioral_paraphrases_validate_consistently(question, intent, strategy
         preferred_capability="quick_explain",
         latency_class={"mode": "sync"},
     )
-    plan_entities = packet.payload["comparison_entities"] or [packet.payload["resolved_focus"]]
     value = _plan(
         intent=intent,
         strategy=strategy,
-        capability=capability,
         sufficiency=sufficiency,
         tools=tools,
-        entities=plan_entities,
     )
     plan, errors = parse_and_validate_plan(json.dumps(value), packet.payload)
     assert errors == []
     assert plan.proposed_strategy == strategy
+    assert plan.proposed_capability == capability
 
 
 def test_repeated_controlled_plans_remain_contract_consistent():

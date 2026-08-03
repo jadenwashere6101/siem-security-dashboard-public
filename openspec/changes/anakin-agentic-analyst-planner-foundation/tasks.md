@@ -44,3 +44,10 @@
 - [x] 7.3 Keep deterministic cross-field validation authoritative, clarify semantic relationships in the planner prompt, and add focused valid, repair, and fail-closed tests.
 - [x] 7.4 Run Python compilation, profile/provider/gateway/planner/orchestration tests, affected PostgreSQL-backed suites, AI acceptance harness, `git diff --check`, and strict OpenSpec validation.
 - [ ] 7.5 After a separately authorized deployment, run the real-model planner capability matrix before declaring readiness for Spec 2.
+
+## 8. Planner Contract Ownership Correction
+
+- [x] 8.1 Audit every planner field and document one owner: model reasoning, authoritative server state, or deterministic derivation.
+- [x] 8.2 Reduce model output to reasoning-bearing fields and compile entities, relationship, capability, safety, and execution metadata deterministically without weakening fail-closed validation or one-repair behavior.
+- [x] 8.3 Update focused planner, orchestration, production-payload, metadata, and boundary tests; run Python compilation, affected PostgreSQL suites, `git diff --check`, and strict OpenSpec validation.
+- [ ] 8.4 After separately authorized deployment, repeat the real-model planner matrix before Spec 2.

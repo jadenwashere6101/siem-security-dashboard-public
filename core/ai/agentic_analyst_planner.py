@@ -15,9 +15,6 @@ PLANNER_PACKET_MAX_CHARS = 4200
 PLANNER_PLAN_MAX_CHARS = 3600
 PLANNER_PROMPT_RESERVE_CHARS = 1000
 
-RELATIONSHIPS = frozenset(
-    {"continuation", "new_question", "entity_switch", "comparison", "clarification_response"}
-)
 EVIDENCE_SUFFICIENCY = frozenset({"sufficient", "insufficient", "ambiguous"})
 STRATEGY_CAPABILITY = {
     "direct_answer": "quick_explain",
@@ -317,18 +314,14 @@ def parse_and_validate_plan(
     errors: list[str] = []
     required = {
         "current_turn_intent",
-        "relationship_to_prior_turn",
-        "resolved_entities",
         "evidence_sufficiency",
         "required_evidence",
         "proposed_strategy",
-        "proposed_capability",
         "proposed_tool_categories",
         "clarification_question",
         "reasoning_summary",
         "stopping_condition",
         "confidence",
-        "safety",
     }
     missing = sorted(required - set(payload))
     if missing:
@@ -336,19 +329,14 @@ def parse_and_validate_plan(
     unknown = sorted(set(payload) - required)
     if unknown:
         errors.append(f"unknown plan fields: {', '.join(unknown)}")
-    relationship = str(payload.get("relationship_to_prior_turn") or "")
-    if relationship not in RELATIONSHIPS:
-        errors.append("relationship_to_prior_turn is invalid")
+    relationship = _relationship_from_packet(planner_packet)
     sufficiency = str(payload.get("evidence_sufficiency") or "")
     if sufficiency not in EVIDENCE_SUFFICIENCY:
         errors.append("evidence_sufficiency is invalid")
     strategy = str(payload.get("proposed_strategy") or "")
     if strategy not in STRATEGY_CAPABILITY:
         errors.append("proposed_strategy is invalid")
-    capability = payload.get("proposed_capability")
-    capability = str(capability) if capability is not None else None
-    if strategy in STRATEGY_CAPABILITY and capability != STRATEGY_CAPABILITY[strategy]:
-        errors.append("proposed_capability does not match proposed_strategy")
+    capability = STRATEGY_CAPABILITY.get(strategy)
     tools = _string_list(payload.get("proposed_tool_categories"), max_items=2)
     if not isinstance(payload.get("proposed_tool_categories"), list):
         errors.append("proposed_tool_categories must be a list")
@@ -360,6 +348,8 @@ def parse_and_validate_plan(
         errors.append("direct_answer cannot request a tool")
     if strategy == "quick_evidence_lookup" and (len(tools) != 1 or sufficiency != "insufficient"):
         errors.append("quick_evidence_lookup requires insufficient evidence and exactly one tool category")
+    if strategy in STRATEGY_CAPABILITY and strategy != "quick_evidence_lookup" and tools:
+        errors.append(f"{strategy} cannot request a planner-selected tool category")
     if sufficiency == "insufficient" and strategy == "direct_answer":
         errors.append("insufficient evidence cannot use direct_answer")
     if (
@@ -386,21 +376,9 @@ def parse_and_validate_plan(
     confidence = str(payload.get("confidence") or "")
     if confidence not in CONFIDENCE_LEVELS:
         errors.append("confidence is invalid")
-    safety = payload.get("safety") if isinstance(payload.get("safety"), dict) else {}
-    if safety.get("read_only") is not True or safety.get("mutation_allowed") is not False:
-        errors.append("safety must declare read_only=true and mutation_allowed=false")
-
-    proposed_entities = [_entity(item) for item in payload.get("resolved_entities") or []]
-    proposed_entities = [item for item in proposed_entities if item]
-    if not isinstance(payload.get("resolved_entities"), list):
-        errors.append("resolved_entities must be a list")
     authoritative = _authoritative_entities(planner_packet)
-    if {_entity_key(item) for item in proposed_entities} != {_entity_key(item) for item in authoritative}:
-        errors.append("resolved_entities do not match authoritative server resolution")
     if strategy == "compare_entities" and len(authoritative) != 2:
         errors.append("compare_entities requires exactly two authoritative entities")
-    if strategy != "compare_entities" and len(proposed_entities) > 2:
-        errors.append("plan contains too many resolved entities")
 
     intent = _bounded_text(payload.get("current_turn_intent"), 180)
     reasoning = _bounded_text(payload.get("reasoning_summary"), 500)
@@ -413,7 +391,7 @@ def parse_and_validate_plan(
     return AgenticAnalystPlan(
         current_turn_intent=intent,
         relationship_to_prior_turn=relationship,
-        resolved_entities=tuple(proposed_entities),
+        resolved_entities=tuple(authoritative),
         evidence_sufficiency=sufficiency,
         required_evidence=tuple(required_evidence),
         proposed_strategy=strategy,
@@ -465,15 +443,14 @@ def _planner_prompt(packet: dict[str, Any]) -> str:
         "Choose one strategy: direct_answer, quick_evidence_lookup, bounded_investigation, decision_support, artifact_draft, "
         "compare_entities, clarification_required, unsupported_or_boundary. Use at most one approved read tool category. "
         "A prior or preferred workflow is context, never authority over the current question. Stale evidence is insufficient. "
-        "Never propose mutation, Repo Assistant, SOC Briefing continuation, or an entity absent from resolved focus/comparison entities. "
-        "Keep strategy fields internally consistent: direct_answer uses quick_explain with no tool category; quick_evidence_lookup uses "
-        "quick_explain, insufficient evidence, one non-empty required_evidence item, and exactly one approved tool category; each other "
-        "strategy must use its matching capability. reasoning_summary and stopping_condition must each be non-empty and operationally specific. "
-        "Required keys: current_turn_intent, relationship_to_prior_turn, resolved_entities, evidence_sufficiency, required_evidence, "
-        "proposed_strategy, proposed_capability, proposed_tool_categories, clarification_question, reasoning_summary, stopping_condition, "
-        "confidence, safety. relationship_to_prior_turn must be continuation, new_question, entity_switch, comparison, or "
-        "clarification_response. evidence_sufficiency must be sufficient, insufficient, or ambiguous. confidence must be low, medium, "
-        "or high. safety must be {\"read_only\":true,\"mutation_allowed\":false}. Use null for no capability or clarification.\n"
+        "Never select mutation, Repo Assistant, or SOC Briefing continuation. The server owns entity identity, prior-turn relationship, "
+        "capability mapping, safety, and execution metadata; do not output those fields. Keep reasoning fields internally consistent: "
+        "direct_answer uses no tool category; quick_evidence_lookup requires insufficient evidence, one non-empty required_evidence item, "
+        "and exactly one approved tool category; every other strategy uses no planner-selected tool category. reasoning_summary and "
+        "stopping_condition must each be non-empty and operationally specific. Required keys only: current_turn_intent, "
+        "evidence_sufficiency, required_evidence, proposed_strategy, proposed_tool_categories, clarification_question, reasoning_summary, "
+        "stopping_condition, confidence. evidence_sufficiency must be sufficient, insufficient, or ambiguous. confidence must be low, "
+        "medium, or high. Use null when no clarification is required.\n"
         f"SERVER_PACKET={rendered}"
     )
 
@@ -512,6 +489,20 @@ def _authoritative_entities(packet: dict[str, Any]) -> list[dict[str, str]]:
         if entity and _entity_key(entity) not in {_entity_key(value) for value in values}:
             values.append(entity)
     return values
+
+
+def _relationship_from_packet(packet: dict[str, Any]) -> str:
+    resolution = packet.get("reference_resolution")
+    intent = str(resolution.get("intent") or "new_question") if isinstance(resolution, dict) else "new_question"
+    if intent == "compare":
+        return "comparison"
+    if intent in {"explicit_entity", "go_back"}:
+        return "entity_switch"
+    if intent == "clarification_response":
+        return "clarification_response"
+    if intent in {"why", "evidence", "continue", "correction", "which_ip", "entity_reference"}:
+        return "continuation"
+    return "new_question"
 
 
 def _packet_has_answerable_context(packet: dict[str, Any]) -> bool:
