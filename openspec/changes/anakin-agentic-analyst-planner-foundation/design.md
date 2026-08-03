@@ -142,9 +142,13 @@ Every capability emitted by an application service must be registered explicitly
 
 The original workflow value from the SIEM conversation request is validated before context selection, planner generation, repair, classification, or degraded shortcut fallback. `auto` and the four SIEM conversation capabilities are allowed. Repo Assistant and SOC Briefing are rejected as isolated namespaces, and unknown workflow names are rejected as unsupported. The validated plan is checked again after planning, but no transformed workflow may erase an explicit original boundary violation.
 
-### Planner uses a dedicated local 8B profile
+### Planner uses a dedicated benchmark-selected Qwen profile
 
-The planner requests the approved `agentic_planning` profile through the profile registry and gateway for both its initial proposal and its single repair attempt. The profile defaults to `llama3.1:8b`, is local-only, disables paid fallback, and owns an 8,000-character prompt budget, 1,024-token output budget, 90-second timeout, and low deterministic temperature. Provider response metadata records the selected profile and model.
+The planner requests the approved `agentic_planning` profile through the profile registry and gateway for both its initial proposal and its single repair attempt. The profile defaults to `qwen3:14b`, is local-only, disables paid fallback, and owns an 8,000-character prompt budget, 1,024-token output budget, 90-second timeout, and `0.1` temperature. Provider response metadata records the selected profile and model.
+
+The model change is evidence-based and does not alter planner architecture or contracts. With identical prompts, facts, schema, validator, temperature, output limit, and prompt limit, `qwen3:14b` improved semantic action accuracy from `16.7%` to `70%`, complete valid-plan rate after repair from `0%` to `36.7%`, repair success from `0%` to `24%`, and reduced clarification collapse from `93%` to `17%` relative to `llama3.1:8b`. It reached eight action classes instead of effectively two. Median initial generation was approximately `44.9s` and maximum initial generation approximately `76.7s`.
+
+The Ollama provider applies `timeout_seconds` independently to each gateway generation. Initial planning and the one repair are separate calls, so the existing `90s` timeout covers the measured `76.7s` initial maximum without broadly increasing limits; combined initial-plus-repair latency may still approach `2.4` minutes and remains a production acceptance risk.
 
 `fast_triage` remains assigned to Quick Explain and other existing short-triage paths with `llama3.2:3b`; Guided Analysis, Deep Briefing, and Developer Assistant retain their existing assignments. Planner prompt instructions make strategy/capability/tool relationships explicit, but deterministic validation remains authoritative and performs no intent-changing correction. At most one model repair remains permitted.
 

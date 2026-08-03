@@ -1,4 +1,5 @@
 from dataclasses import replace
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from core.ai.config import (
@@ -146,14 +147,14 @@ def test_correlation_heavy_explain_actions_use_guided_profile():
         assert profile_for_explain_action(action) == AI_PROFILE_FAST_TRIAGE
 
 
-def test_agentic_planning_has_dedicated_local_8b_profile_without_changing_fast_triage():
+def test_agentic_planning_has_dedicated_local_qwen_profile_without_changing_other_profiles():
     config = _config()
 
     planner = config.profile(AI_PROFILE_AGENTIC_PLANNING)
     quick = config.profile(AI_PROFILE_FAST_TRIAGE)
 
     assert APPROVED_AI_PROFILES.issuperset({AI_PROFILE_AGENTIC_PLANNING, AI_PROFILE_FAST_TRIAGE})
-    assert planner.model == DEFAULT_AGENTIC_PLANNING_MODEL == "llama3.1:8b"
+    assert planner.model == DEFAULT_AGENTIC_PLANNING_MODEL == "qwen3:14b"
     assert planner.timeout_seconds == DEFAULT_AGENTIC_PLANNING_TIMEOUT_SECONDS == 90.0
     assert planner.max_prompt_chars == DEFAULT_AGENTIC_PLANNING_MAX_PROMPT_CHARS == 8000
     assert planner.max_output_tokens == DEFAULT_AGENTIC_PLANNING_MAX_OUTPUT_TOKENS == 1024
@@ -164,6 +165,43 @@ def test_agentic_planning_has_dedicated_local_8b_profile_without_changing_fast_t
     assert config.profile(AI_PROFILE_GUIDED_ANALYSIS).model == "llama3.1:8b"
     assert config.profile(AI_PROFILE_DEEP_BRIEFING).model == "llama3.1:8b"
     assert config.profile(AI_PROFILE_DEVELOPER_ASSISTANT).model == "llama3.1:8b"
+
+
+def test_ollama_provider_reports_qwen_planner_profile_metadata(monkeypatch):
+    captured = {}
+
+    def fake_http_json(method, url, *, payload=None, timeout):
+        captured.update(method=method, url=url, payload=payload, timeout=timeout)
+        return {"response": "{}"}
+
+    monkeypatch.setattr("core.ai.providers._http_json", fake_http_json)
+
+    response = OllamaProvider().generate(
+        AiGatewayRequest(prompt="Plan this turn", profile=AI_PROFILE_AGENTIC_PLANNING),
+        _config(),
+    )
+
+    assert response.status == AI_STATUS_SUCCESS
+    assert response.metadata.profile == AI_PROFILE_AGENTIC_PLANNING
+    assert response.metadata.model == "qwen3:14b"
+    assert response.metadata.timeout_seconds == 90.0
+    assert captured["payload"]["model"] == "qwen3:14b"
+    assert captured["payload"]["options"] == {"num_predict": 1024, "temperature": 0.1}
+    assert captured["timeout"] == 90.0
+
+
+def test_source_of_truth_policy_records_planner_model_and_machine_roles():
+    policy = (Path(__file__).parents[1] / "docs" / "mac-vm-source-of-truth-policy.md").read_text()
+
+    assert "/Users/jadengomez/Projects/siem-security-dashboard-public" in policy
+    assert "/home/jaden/siem-security-dashboard" in policy
+    assert "ANAKIN-MINI-PC" in policy
+    assert "Tailscale-private Ollama HTTP endpoint" in policy
+    assert "`qwen3:14b`" in policy
+    assert "`llama3.1:8b`" in policy
+    assert "no longer the configured `agentic_planning` model after deployment" in policy
+    assert "Never edit source code on the VM" in policy
+    assert "inference host only" in policy
 
 
 def test_legacy_local_timeout_does_not_override_profile_defaults(monkeypatch):

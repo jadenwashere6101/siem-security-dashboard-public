@@ -768,8 +768,35 @@ def test_real_planner_request_reaches_ollama_generation_contract(monkeypatch):
     assert len(calls) == 1
     assert calls[0]["method"] == "POST"
     assert calls[0]["url"].endswith("/api/generate")
-    assert calls[0]["payload"]["model"] == "llama3.1:8b"
+    assert calls[0]["payload"]["model"] == "qwen3:14b"
     assert calls[0]["payload"]["options"]["num_predict"] == 1024
+    assert calls[0]["timeout"] == 90.0
+
+
+def test_initial_and_repair_planner_generations_each_receive_full_profile_timeout(monkeypatch):
+    malformed = _plan()
+    malformed["required_evidence"] = {"alerts": "current high-severity alerts"}
+    responses = [json.dumps(malformed), json.dumps(_plan())]
+    calls = []
+
+    def fake_http(method, url, *, payload=None, timeout):
+        calls.append({"method": method, "url": url, "payload": payload, "timeout": timeout})
+        return {"response": responses.pop(0)}
+
+    monkeypatch.setattr("core.ai.providers._http_json", fake_http)
+    config = replace(_config(), local_provider="ollama")
+
+    outcome = plan_turn(
+        _packet(),
+        gateway=AiGateway(config=config, providers={"ollama": OllamaProvider()}),
+        config=config,
+    )
+
+    assert outcome.status == "planned"
+    assert outcome.repaired is True
+    assert len(calls) == 2
+    assert all(call["payload"]["model"] == "qwen3:14b" for call in calls)
+    assert all(call["timeout"] == 90.0 for call in calls)
 
 
 def test_planner_rejects_empty_required_reasoning_summary():

@@ -47,7 +47,8 @@ Azure VM backend or AI worker
   -> local-only AI Gateway
   -> AI_LOCAL_BASE_URL over Tailscale
   -> Mini PC Ollama HTTP API on TCP 11434
-     -> llama3.2:3b or llama3.1:8b inference
+     -> qwen3:14b planner inference
+     -> llama3.2:3b or llama3.1:8b for existing non-planner profiles
   -> result returns to the calling VM process
   -> backend/worker validates and persists the response
   -> frontend polls or receives and renders the result
@@ -58,7 +59,7 @@ Verified live facts:
 - the Azure VM's effective AI gateway is `local_only` with provider `ollama`;
 - the VM's effective `AI_LOCAL_BASE_URL` matches the Mini PC's Tailscale address;
 - VM-to-Mini-PC Tailscale ping and Ollama `/api/version` and `/api/tags` calls succeed;
-- the Mini PC runs Ollama `0.32.5` and has both `llama3.2:3b` and `llama3.1:8b` installed;
+- the Mini PC runs Ollama `0.32.5` and has `llama3.2:3b`, `llama3.1:8b`, and benchmarked `qwen3:14b` available;
 - a live `plan_turn` request from the VM reached the Mini PC and received a successful Ollama generation response;
 - no paid fallback is part of this verified path.
 
@@ -79,19 +80,17 @@ The Mini PC has approximately 32 GB installed RAM and stores the required Ollama
 
 | Model | Production use | Verified state |
 | --- | --- | --- |
-| `llama3.2:3b` | Current `fast_triage` default, including planner requests | Installed; generation works; planner contract validation fails reproducibly |
-| `llama3.1:8b` | Guided Analysis, Deep Briefing, and Developer Assistant through the effective profile/fallback configuration | Installed; generation works; materially better planner structure, but current planner plans still fail cross-field validation |
+| `qwen3:14b` | Source-controlled dedicated `agentic_planning` default after deployment | Installed and benchmarked; materially outperforms the previous planner model, with production acceptance still required |
+| `llama3.2:3b` | Existing `fast_triage` default, including Quick Explain | Installed; generation works; assignment unchanged |
+| `llama3.1:8b` | Guided Analysis, Deep Briefing, and Developer Assistant; previous planner model | Installed and retained; no longer the configured `agentic_planning` model after deployment |
 
 ## Planner Model Verification Status
 
-The real planner contract was evaluated through the Mini PC with identical prompts/settings for three trials per model:
+An apples-to-apples Mini PC benchmark changed only the planner model while preserving architecture, prompts, facts, schema, validator, temperature, token limit, and prompt limit. Compared with `llama3.1:8b`, `qwen3:14b` improved semantic action accuracy from `16.7%` to `70%`, complete valid-plan rate after repair from `0%` to `36.7%`, and repair success from `0%` to `24%`; clarification collapse fell from `93%` to `17%`, and meaningful action diversity increased from effectively two classes to eight.
 
-- `llama3.2:3b` repeatedly omitted 8 of 13 required fields and proposed invalid capability values. It is not sufficient for the current planner contract.
-- `llama3.1:8b` repeatedly returned all 13 required fields with valid JSON and mostly valid enums. Its remaining failures were cross-field logic errors, including requesting tools with `direct_answer` and leaving required reasoning/stopping fields empty.
-- The contract is not considered excessively strict based on this evidence: the 8B model satisfies its structural requirements, while the validator correctly rejects contradictory plans.
-- Production remains configured to use `llama3.2:3b` for `fast_triage` until a separate approved implementation/runtime change alters that selection. Verification evidence is not authorization to change the model.
+The source-controlled `agentic_planning` default is therefore `qwen3:14b`. The benchmark does not complete production acceptance: after an approved commit and deployment, the Azure VM must verify the effective profile/model and the real `/siem/` workflow path. Median initial planner generation was approximately `44.9s`, maximum initial generation approximately `76.7s`, and an initial-plus-repair path may approach `2.4` minutes.
 
-Do not report the planner as working based only on provider success. Distinguish `provider_status=success` from `plan validation accepted`; the verified live 3B planner response reached Ollama successfully but remained invalid after its bounded repair attempt.
+Do not report the planner as working based only on provider success or benchmark results. Distinguish `provider_status=success` from `plan validation accepted` and from a grounded analyst-facing result.
 
 ## Authoritative Locations
 
@@ -107,6 +106,8 @@ VM repository/runtime:
 jaden@4.204.25.149:/home/jaden/siem-security-dashboard
 ```
 
+The repository path `/home/jaden/siem-security-dashboard` is deployment/runtime only. Model and profile source changes originate in the Mac repository, are tested there, and require an explicitly authorized commit and push before the VM may sync and verify them. Never edit source code on the VM.
+
 Mini PC inference runtime:
 
 ```text
@@ -114,6 +115,8 @@ Host identity: ANAKIN-MINI-PC
 Transport: Tailscale-private Ollama HTTP endpoint on TCP 11434
 Exact address: protected Azure VM runtime configuration, not source control
 ```
+
+`ANAKIN-MINI-PC` is an inference host only. It is not a source-code repository; model installation or runtime changes require separate authorization and do not replace Mac implementation plus VM deployment verification.
 
 The old `/Users/jadengomez/Desktop/siem-security-dashboard-public` checkout is obsolete and absent. Agents must not use or recreate it.
 

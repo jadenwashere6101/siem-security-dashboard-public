@@ -39,7 +39,7 @@
 
 ## 7. Planner Model/Profile Correction
 
-- [x] 7.1 Add a dedicated local-only `agentic_planning` profile using `llama3.1:8b` with planner-specific prompt, output, timeout, and temperature limits and paid fallback disabled.
+- [x] 7.1 Add a dedicated local-only `agentic_planning` profile, initially using `llama3.1:8b`, with planner-specific prompt, output, timeout, and temperature limits and paid fallback disabled; section 18 records the later benchmark-selected model replacement.
 - [x] 7.2 Route initial and repair planner requests through the dedicated profile while preserving every existing workflow profile assignment.
 - [x] 7.3 Keep deterministic cross-field validation authoritative, clarify semantic relationships in the planner prompt, and add focused valid, repair, and fail-closed tests.
 - [x] 7.4 Run Python compilation, profile/provider/gateway/planner/orchestration tests, affected PostgreSQL-backed suites, AI acceptance harness, `git diff --check`, and strict OpenSpec validation.
@@ -120,3 +120,11 @@
 - [x] 17.2 Generate explicit initial and repair enum instructions from validator-owned constants and restore JSON-only response boundaries without parser relaxation.
 - [x] 17.3 Add strict-output, enum-equivalence, repair-preservation, capability-reachability, and twenty-turn budget regressions.
 - [x] 17.4 Run compilation, affected PostgreSQL-backed planner/orchestration suites, grounding regressions, acceptance harness, `git diff --check`, and strict OpenSpec validation.
+
+## 18. Benchmark-Selected Planner Model Upgrade
+
+- [x] 18.1 Record the apples-to-apples `qwen3:14b` benchmark, per-generation timeout semantics, latency tradeoff, and unchanged architecture in proposal, design, and specification.
+- [x] 18.2 Change only the source-controlled `agentic_planning` model default to `qwen3:14b` while preserving all profile limits, local-only policy, and unrelated profile assignments.
+- [x] 18.3 Align the canonical Mac/VM/Mini-PC source-of-truth policy with the planner model and deployment discipline.
+- [x] 18.4 Add focused profile/provider metadata and documentation-contract regressions.
+- [x] 18.5 Run compilation, profile/provider/planner/orchestration and PostgreSQL suites, acceptance harness, `git diff --check`, and strict OpenSpec validation.

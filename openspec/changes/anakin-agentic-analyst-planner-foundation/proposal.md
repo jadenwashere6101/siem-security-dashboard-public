@@ -10,7 +10,7 @@ Anakin currently fixes a conversational request to a workflow before interpretin
 - Permit at most one bounded structured-plan repair; invalid, unavailable, oversized, or boundary-violating plans fail safely without reverting to sticky workflow routing.
 - Dispatch validated plans through existing capability and approved SOC read-tool paths, with no unrestricted iterative tool loop.
 - Add production-shaped behavioral, PostgreSQL, prompt-budget, boundary, failure, and repeated-run planner evaluations.
-- Route planner generation through a dedicated local-only `agentic_planning` profile using `llama3.1:8b`, without changing Quick Explain or other workflow profiles.
+- Route planner generation through a dedicated local-only `agentic_planning` profile using the benchmark-selected `qwen3:14b`, without changing Quick Explain or other workflow profiles.
 - Keep natural-language intent, relationship, reference resolution, entity selection, clarification, and capability choice model-owned; populate safety and execution metadata deterministically on the server and validate every selected entity after planning.
 - Preserve the planner's bounded evidence intent as validated scalar requirements and translate those requirements into existing read-tool arguments without model-authored queries.
 - Ground final Quick Explain synthesis in a compact server-authored evidence envelope and reject or deterministically replace generic, unsupported, or evidence-free model prose.

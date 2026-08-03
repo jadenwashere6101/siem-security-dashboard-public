@@ -201,11 +201,16 @@ The system SHALL register `agentic_analyst_planning` through the normal provider
 - **THEN** it returns provider-incapable without invoking generation
 
 ### Requirement: Planner uses a dedicated local planning profile
-The system SHALL route initial and repair planner requests through the approved `agentic_planning` profile using the local `llama3.1:8b` model. The profile SHALL have planner-specific prompt, output, timeout, and temperature limits, SHALL remain local-only, and SHALL disable paid fallback. Existing Quick Explain and other workflow profile assignments MUST remain unchanged.
+The system SHALL route initial and repair planner requests through the approved `agentic_planning` profile using the benchmark-selected local `qwen3:14b` model. The profile SHALL retain an 8,000-character prompt limit, 1,024-token output limit, 90-second per-generation timeout, and `0.1` temperature, SHALL remain local-only, and SHALL disable paid fallback. Existing Quick Explain and other workflow profile assignments MUST remain unchanged.
 
 #### Scenario: Planner profile is observable
 - **WHEN** the planner submits a proposal or its one bounded repair
-- **THEN** the gateway and provider metadata identify profile `agentic_planning` and model `llama3.1:8b`
+- **THEN** the gateway and provider metadata identify profile `agentic_planning` and model `qwen3:14b`
+
+#### Scenario: Planner repair uses an independent timeout
+- **WHEN** an invalid initial result requires the one bounded repair
+- **THEN** the provider applies the 90-second planner timeout independently to the initial and repair generations
+- **AND** no unrelated workflow timeout changes
 
 #### Scenario: Quick Explain profile is unchanged
 - **WHEN** Quick Explain executes outside the planner generation stage
