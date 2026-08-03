@@ -327,7 +327,7 @@ def plan_conversational_submission(
         )
     elif resolution.get("status") in {"clarification_required", "unresolved", "command_required"}:
         plan_payload = {
-            "current_turn_intent": str(resolution.get("intent") or "clarification"),
+            "current_turn_intent": "clarification",
             "evidence_sufficiency": "ambiguous",
             "required_evidence": [],
             "proposed_strategy": "clarification_required",
@@ -335,7 +335,6 @@ def plan_conversational_submission(
             "evidence_requirements": {},
             "clarification_question": str(resolution.get("message") or "Which entity should I use?"),
             "reasoning_summary": "The server-owned reference resolver did not identify one safe referent.",
-            "stopping_condition": "Continue only after the analyst supplies an unambiguous entity or instruction.",
             "confidence": "high",
         }
         plan, errors = parse_and_validate_plan(json.dumps(plan_payload), packet.payload)
@@ -1450,6 +1449,7 @@ def _compact_planner_turn(outcome: PlannerOutcome) -> dict[str, Any]:
         "relationship": plan.relationship_to_prior_turn if plan else None,
         "evidence_sufficiency": plan.evidence_sufficiency if plan else None,
         "evidence_requirements": dict(plan.evidence_requirements) if plan else {},
+        "evidence_filter_provenance": dict(plan.evidence_filter_provenance) if plan else {},
         "confidence": plan.confidence if plan else None,
         "read_only": True,
         "repaired": outcome.repaired,
@@ -1473,6 +1473,7 @@ def _apply_planner_execution_hints(payload: dict[str, Any], plan: AgenticAnalyst
     payload["planner_strategy"] = plan.proposed_strategy
     payload["planner_evidence_sufficiency"] = plan.evidence_sufficiency
     payload["planner_evidence_requirements"] = dict(plan.evidence_requirements)
+    payload["planner_evidence_filter_provenance"] = dict(plan.evidence_filter_provenance)
     if plan.proposed_strategy == "quick_evidence_lookup":
         tool_request = _planner_tool_request(
             plan.proposed_tool_categories[0],
@@ -1530,7 +1531,7 @@ def _resolved_draft_type(payload: dict[str, Any], planner_intent: str) -> str | 
 def _artifact_type_clarification(packet) -> PlannerOutcome:
     labels = ", ".join(sorted(SUPPORTED_DRAFT_TYPES))
     payload = {
-        "current_turn_intent": "Clarify the requested analyst artifact category.",
+        "current_turn_intent": "clarification",
         "evidence_sufficiency": "ambiguous",
         "required_evidence": [],
         "proposed_strategy": "clarification_required",
@@ -1538,7 +1539,6 @@ def _artifact_type_clarification(packet) -> PlannerOutcome:
         "evidence_requirements": {},
         "clarification_question": f"Which artifact should I draft? Available categories: {labels}.",
         "reasoning_summary": "Generate Artifact requires one bounded server-approved draft category.",
-        "stopping_condition": "Continue after the analyst selects one listed artifact category.",
         "confidence": "high",
     }
     plan, errors = parse_and_validate_plan(json.dumps(payload), packet.payload)

@@ -40,20 +40,25 @@ class ProductionShapePlannerGateway:
             "decision_support": "decision_support",
             "generate_artifact": "artifact_draft",
         }[capability]
+        action = {
+            "quick_explain": "fresh_evidence_lookup",
+            "deep_investigate": "bounded_investigation",
+            "decision_support": "decision_support",
+            "generate_artifact": "artifact_draft",
+        }[capability]
         plan = {
-            "current_turn_intent": "Handle the current production-shaped SIEM request.",
+            "current_turn_intent": action,
             "evidence_sufficiency": "insufficient",
             "required_evidence": ["current bounded SIEM evidence"],
             "proposed_strategy": strategy,
             "proposed_tool_categories": ["alerts"] if strategy == "quick_evidence_lookup" else [],
             "evidence_requirements": (
-                {"severity": "high", "sort": "newest", "limit": 1}
+                {"limit": 1}
                 if strategy == "quick_evidence_lookup"
                 else {}
             ),
             "clarification_question": None,
             "reasoning_summary": "The current request requires the selected bounded SIEM capability.",
-            "stopping_condition": "Stop after the selected read-only capability returns a bounded result.",
             "confidence": "high",
         }
         return AiGatewayResponse(

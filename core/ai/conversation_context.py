@@ -23,12 +23,15 @@ _WHY = re.compile(r"^\s*(?:but\s+)?why\s*[?.!]*\s*$", re.IGNORECASE)
 _EVIDENCE_FOLLOW_UP = re.compile(r"\b(?:show|review|explain|what(?:'s| is))\b.*\bevidence\b|^\s*evidence\s*[?.!]*\s*$", re.IGNORECASE)
 _WHICH_IP = re.compile(r"\bwhich\b[^?.!]{0,32}\bips?\b", re.IGNORECASE)
 _CONTINUE = re.compile(r"\b(?:continue|keep going|what next|next step)\b", re.IGNORECASE)
-_COMPARE = re.compile(r"\b(?:compare|contrast)\b", re.IGNORECASE)
+_COMPARE = re.compile(
+    r"\b(?:compare|contrast)\b|\bwhich\b[^?.!]{0,80}\b(?:worse|more serious|higher priority|prioritized)\b|\bmore serious than\b",
+    re.IGNORECASE,
+)
 _GO_BACK = re.compile(r"\b(?:go back|previous (?:alert|entity|one)|return to)\b", re.IGNORECASE)
 _RESET = re.compile(r"\b(?:start over|reset (?:this|the) thread|clear (?:this|the) thread)\b", re.IGNORECASE)
 _CORRECTION = re.compile(r"\b(?:actually|correction|that is wrong|that's wrong|ignore that|not the)\b", re.IGNORECASE)
 _GENERIC_REFERENCE = re.compile(
-    r"\b(?:it|that|this|them|those|the ip|that ip|this ip|the alert|that alert|the host|that host|the incident|that incident)\b",
+    r"\b(?:it|that|this|them|those|the ip|that ip|this ip|the source|that source|this source|the alert|that alert|the host|that host|the incident|that incident)\b",
     re.IGNORECASE,
 )
 _IP_TOKEN = re.compile(r"(?<![0-9A-Fa-f:.])(?:\d{1,3}\.){3}\d{1,3}(?![0-9A-Fa-f:])")
@@ -108,6 +111,7 @@ def select_conversation_context(
             thread=thread,
             entities=records["entities"],
             turns=records["turns"],
+            evidence=records["fresh_evidence"],
             unresolved_questions=state.get("unresolved_questions") if not state_rebuilt else [],
             explicit_entity=explicit_entity,
         )
@@ -136,11 +140,12 @@ def resolve_reference(
     thread: dict[str, Any],
     entities: list[dict[str, Any]],
     turns: list[dict[str, Any]],
+    evidence: list[dict[str, Any]] | None = None,
     unresolved_questions: list[dict[str, Any]] | None = None,
     explicit_entity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     text = str(question or "").strip()
-    ordered_entities = _ordered_distinct_entities(thread, entities, turns)
+    ordered_entities = _ordered_distinct_entities(thread, entities, turns, evidence or [])
     latest_assistant = next((turn for turn in reversed(turns) if turn.get("role") == "assistant"), None)
     explicit = _public_entity(explicit_entity) if isinstance(explicit_entity, dict) else None
     active = _safe_focus(thread.get("focus_state")).get("active")
@@ -271,11 +276,17 @@ def resolve_reference(
 
     generic = _GENERIC_REFERENCE.search(text)
     if generic:
-        if explicit and explicit.get("type") and explicit.get("id"):
-            return _resolved("entity_reference", [explicit], referent=explicit)
         token = generic.group(0).lower()
         if re.search(r"\bips?\b", text, re.IGNORECASE):
             token = "the ip"
+        elif "source" in token or re.search(
+            r"\b(?:(?:this|that|the)\s+source|from\s+(?:it|that|this))\b",
+            text,
+            re.IGNORECASE,
+        ):
+            token = "the source"
+        if explicit and explicit.get("type") and explicit.get("id") and _entity_matches_token(explicit, token):
+            return _resolved("entity_reference", [explicit], referent=explicit)
         candidates = _entities_for_token(token, ordered_entities)
         if len(candidates) == 1:
             return _resolved("entity_reference", candidates, referent=candidates[0])
@@ -642,9 +653,11 @@ def _resolved_primary_entity(
     intent = str(resolution.get("intent") or "")
     if intent == "go_back" and referent.get("id"):
         return _public_entity(referent)
+    if intent in {"entity_reference", "which_ip"} and referent.get("id"):
+        return _public_entity(referent)
     if explicit and explicit.get("type") not in {"dashboard", "general"} and explicit.get("id"):
         return explicit
-    if intent in {"explicit_entity", "entity_reference", "which_ip"} and referent.get("id"):
+    if intent == "explicit_entity" and referent.get("id"):
         return _public_entity(referent)
     if explicit and explicit.get("type") and explicit.get("id"):
         return explicit
@@ -662,12 +675,25 @@ def _resolved_primary_entity(
 
 
 def _ordered_distinct_entities(
-    thread: dict[str, Any], entities: list[dict[str, Any]], turns: list[dict[str, Any]]
+    thread: dict[str, Any],
+    entities: list[dict[str, Any]],
+    turns: list[dict[str, Any]],
+    evidence: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     ordered: list[dict[str, Any]] = []
     focus = _safe_focus(thread.get("focus_state"))
-    for candidate in [focus.get("active"), *reversed(focus.get("history", []))]:
+    for candidate in [focus.get("active"), thread.get("primary_entity")]:
         if isinstance(candidate, dict):
+            _append_entity(ordered, candidate)
+    for turn in reversed(turns):
+        if turn.get("role") != "assistant" or turn.get("lifecycle_status") != "completed":
+            continue
+        snapshot = turn.get("entity_snapshot") if isinstance(turn.get("entity_snapshot"), dict) else {}
+        for candidate in [snapshot.get("active_entity"), *(snapshot.get("entities") or [])]:
+            if isinstance(candidate, dict):
+                _append_entity(ordered, candidate)
+    for row in evidence:
+        for candidate in _evidence_entities(row):
             _append_entity(ordered, candidate)
     for turn in reversed(turns):
         snapshot = turn.get("entity_snapshot") if isinstance(turn.get("entity_snapshot"), dict) else {}
@@ -679,14 +705,14 @@ def _ordered_distinct_entities(
             ordered,
             {"type": row.get("entity_type"), "id": row.get("entity_id"), "display_alias": row.get("display_alias")},
         )
-    primary = thread.get("primary_entity")
-    if isinstance(primary, dict):
-        _append_entity(ordered, primary)
+    for candidate in reversed(focus.get("history", [])):
+        if isinstance(candidate, dict):
+            _append_entity(ordered, candidate)
     return ordered
 
 
 def _entities_for_token(token: str, entities: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    if "ip" in token:
+    if "ip" in token or "source" in token:
         return [item for item in entities if item.get("type") == "source_ip"]
     if "alert" in token:
         return [item for item in entities if item.get("type") in {"alert", "detection"}]
@@ -695,6 +721,19 @@ def _entities_for_token(token: str, entities: list[dict[str, Any]]) -> list[dict
     if "host" in token:
         return [item for item in entities if item.get("type") in {"host", "endpoint", "destination_host"}]
     return entities[:1] if len(entities) == 1 else entities
+
+
+def _entity_matches_token(entity: dict[str, Any], token: str) -> bool:
+    entity_type = str(entity.get("type") or "")
+    if "ip" in token or "source" in token:
+        return entity_type == "source_ip"
+    if "alert" in token:
+        return entity_type in {"alert", "detection"}
+    if "incident" in token:
+        return entity_type == "incident"
+    if "host" in token:
+        return entity_type in {"host", "endpoint", "destination_host"}
+    return True
 
 
 def _previous_focus(thread: dict[str, Any], entities: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -758,6 +797,60 @@ def _evidence_item(row: dict[str, Any]) -> dict[str, Any]:
         "fresh_until": _iso(row.get("fresh_until")),
         "relationship_type": row.get("relationship_type"),
     }
+
+
+def _evidence_entities(row: dict[str, Any]) -> list[dict[str, Any]]:
+    entities: list[dict[str, Any]] = []
+    fingerprint = str(row.get("entity_fingerprint") or "")
+    fingerprint_type, separator, fingerprint_id = fingerprint.partition(":")
+    mapped_type = {
+        "source_ip": "source_ip",
+        "alert": "alert",
+        "alerts": "alert",
+        "incident": "incident",
+        "incidents": "incident",
+        "host": "host",
+    }.get(fingerprint_type)
+    if separator and mapped_type and fingerprint_id:
+        _append_entity(entities, {"type": mapped_type, "id": fingerprint_id})
+    _collect_structured_evidence_entities(row.get("snapshot"), entities, depth=0)
+    return entities
+
+
+def _collect_structured_evidence_entities(value: Any, entities: list[dict[str, Any]], *, depth: int) -> None:
+    if depth > 4:
+        return
+    if isinstance(value, list):
+        for item in value[:10]:
+            _collect_structured_evidence_entities(item, entities, depth=depth + 1)
+        return
+    if not isinstance(value, dict):
+        return
+    identity_fields = {
+        "source_ip": "source_ip",
+        "alert_id": "alert",
+        "incident_id": "incident",
+        "hostname": "host",
+        "host": "host",
+        "username": "user",
+    }
+    for key, entity_type in identity_fields.items():
+        candidate = value.get(key)
+        if candidate in (None, "") or isinstance(candidate, (dict, list, tuple, set)):
+            continue
+        if key == "source_ip":
+            try:
+                candidate = str(ipaddress.ip_address(str(candidate)))
+            except ValueError:
+                continue
+        _append_entity(entities, {"type": entity_type, "id": str(candidate)})
+    if value.get("id") not in (None, "") and any(
+        key in value for key in ("alert_type", "severity", "source_ip", "created_at")
+    ):
+        _append_entity(entities, {"type": "alert", "id": str(value["id"])})
+    for child in list(value.values())[:16]:
+        if isinstance(child, (dict, list)):
+            _collect_structured_evidence_entities(child, entities, depth=depth + 1)
 
 
 def _compact_value(value: Any, *, depth: int = 0) -> Any:

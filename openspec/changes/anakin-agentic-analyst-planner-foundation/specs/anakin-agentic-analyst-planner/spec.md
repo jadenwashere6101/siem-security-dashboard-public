@@ -206,3 +206,46 @@ The system SHALL validate the originally requested workflow and SIEM conversatio
 #### Scenario: Valid degraded shortcut
 - **WHEN** the current request explicitly selects an allowed SIEM shortcut and the planner is unavailable
 - **THEN** only the documented safe shortcut fallback may run; an unhinted `auto` request remains planner-unavailable
+
+### Requirement: Current-turn action controls strategy selection
+The planner MUST classify the current analyst turn into a bounded semantic action before strategy validation. The server MUST reject action/strategy combinations that allow prior thread state to suppress a requested lookup, recommendation, artifact, comparison, or investigation.
+
+#### Scenario: Existing state does not suppress a fresh lookup
+- **WHEN** the active thread already contains the referenced entity and the current turn requests fresh matching activity
+- **THEN** the validated plan MUST use `quick_evidence_lookup`
+- **AND** it MUST NOT use `direct_answer` solely because conclusions or a thread summary exist
+
+#### Scenario: State summary uses authoritative memory
+- **WHEN** the current turn requests the current investigation state and authoritative state is available
+- **THEN** the validated plan MUST use `direct_answer` without a SOC read tool
+
+#### Scenario: Dedicated capabilities remain naturally reachable
+- **WHEN** the current turn requests read-only response advice or an artifact preview
+- **THEN** the plan MUST select `decision_support` or `artifact_draft` respectively
+- **AND** prior conclusions MUST NOT transform the request into a direct answer
+
+### Requirement: Planner metadata ownership is conditional and repair-stable
+The server MUST derive bounded stopping behavior from strategy, accept omitted non-clarification text and omitted descriptive confidence without inventing positive confidence, require non-empty audit reasoning, and preserve the first valid action classification across the one allowed repair.
+
+#### Scenario: Nonessential fields are omitted
+- **WHEN** a semantically valid executable proposal omits `confidence`, `clarification_question`, or `stopping_condition`
+- **THEN** the server MUST compile safe deterministic values according to field ownership
+- **AND** it MUST continue to reject missing essential action, strategy, evidence, or reasoning fields
+
+#### Scenario: Repair attempts to change action
+- **WHEN** the initial proposal has a valid action classification but another defect requires repair
+- **AND** the repaired proposal changes that action
+- **THEN** validation MUST fail closed
+
+### Requirement: Evidence filters have authoritative provenance
+The server MUST attach provenance to each accepted evidence requirement and MUST reject materially narrowing model constraints that are unsupported by the current turn or resolved authoritative context.
+
+#### Scenario: Literal IP lookup has no invented time filter
+- **WHEN** the analyst requests alerts from a syntactically valid IP without a duration, severity, or alert type
+- **THEN** `source_ip` MUST be marked `explicit_current_turn`
+- **AND** no `time_window_minutes`, `severity`, or `alert_type` requirement may enter execution
+
+#### Scenario: Pronoun uses structured evidence identity
+- **WHEN** the latest validated evidence establishes one source IP and the analyst refers to `this IP`
+- **THEN** reference resolution MUST use the structured evidence identity
+- **AND** it MUST NOT infer identity from arbitrary assistant prose

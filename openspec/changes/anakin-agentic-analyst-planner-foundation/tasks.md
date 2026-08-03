@@ -74,3 +74,11 @@
 - [x] 11.3 Return task-aware deterministic evidence answers when successful evidence cannot be synthesized within the active profile limit.
 - [x] 11.4 Improve one-repair contract feedback, state-summary planning guidance, and bounded artifact draft-type handling without weakening validation.
 - [x] 11.5 Add production-derived prompt measurements and PostgreSQL workflow tests, then run compilation, focused suites, acceptance harness, `git diff --check`, and strict validation.
+
+## 12. Current-Turn Intent and Capability Reachability Correction
+
+- [x] 12.1 Add the bounded current-turn action contract, action/strategy compatibility, conditional planner metadata ownership, and repair action pinning.
+- [x] 12.2 Expand authoritative reference resolution across active focus, primary entity, turn snapshots, structured evidence entities, comparison order, and focus history.
+- [x] 12.3 Add server-owned evidence-filter provenance and reject unsupported narrowing constraints without inheriting stale query filters.
+- [x] 12.4 Add production-shaped natural-language capability reachability, repair stability, reference, persistence, and PostgreSQL integration coverage.
+- [x] 12.5 Run Python compilation, focused PostgreSQL and AI suites, the AI acceptance harness, `git diff --check`, and strict OpenSpec validation.

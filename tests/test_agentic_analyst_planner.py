@@ -100,7 +100,7 @@ def _packet(question="What's the newest HIGH alert?", *, evidence=None, correcti
 
 def _plan(
     *,
-    intent="Find the newest high-severity alert.",
+    intent="fresh_evidence_lookup",
     sufficiency="insufficient",
     strategy="quick_evidence_lookup",
     tools=None,
@@ -114,13 +114,12 @@ def _plan(
         "proposed_strategy": strategy,
         "proposed_tool_categories": tools if tools is not None else (["alerts"] if strategy == "quick_evidence_lookup" else []),
         "evidence_requirements": requirements if requirements is not None else (
-            {"severity": "high", "sort": "newest", "limit": 1}
+            {"severity": "high", "limit": 1}
             if strategy == "quick_evidence_lookup"
             else {}
         ),
         "clarification_question": clarification,
         "reasoning_summary": "The current question changes task and requires current alert evidence.",
-        "stopping_condition": "Stop after identifying the newest accessible high-severity alert.",
         "confidence": "high",
     }
 
@@ -258,18 +257,145 @@ def test_real_planner_request_reaches_ollama_generation_contract(monkeypatch):
     assert calls[0]["payload"]["options"]["num_predict"] == 1024
 
 
-@pytest.mark.parametrize(
-    "field",
-    ["reasoning_summary", "stopping_condition"],
-)
-def test_planner_rejects_empty_required_explanatory_fields(field):
+def test_planner_rejects_empty_required_reasoning_summary():
     value = _plan()
-    value[field] = ""
+    value["reasoning_summary"] = ""
 
     plan, errors = parse_and_validate_plan(json.dumps(value), _packet().payload)
 
     assert plan is None
-    assert any(f"{field} is required" in error for error in errors)
+    assert any("reasoning_summary is required" in error for error in errors)
+
+
+def test_planner_derives_nonessential_metadata_when_omitted():
+    value = _plan()
+    value.pop("confidence")
+    value.pop("clarification_question")
+
+    plan, errors = parse_and_validate_plan(json.dumps(value), _packet().payload)
+
+    assert errors == []
+    assert plan.confidence == "unknown"
+    assert plan.clarification_question is None
+    assert plan.stopping_condition.startswith("Stop after one bounded read")
+
+
+def test_clarification_question_is_required_only_for_clarification_strategy():
+    value = _plan(
+        intent="clarification",
+        strategy="clarification_required",
+        sufficiency="ambiguous",
+        tools=[],
+        requirements={},
+    )
+    value.pop("clarification_question")
+
+    plan, errors = parse_and_validate_plan(json.dumps(value), _packet("Which IP?").payload)
+
+    assert plan is None
+    assert any("needs clarification_question" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    "action,strategy",
+    [
+        ("fresh_evidence_lookup", "direct_answer"),
+        ("decision_support", "direct_answer"),
+        ("artifact_draft", "direct_answer"),
+        ("state_summary", "quick_evidence_lookup"),
+    ],
+)
+def test_current_turn_action_rejects_incompatible_strategy(action, strategy):
+    value = _plan(
+        intent=action,
+        strategy=strategy,
+        sufficiency="sufficient" if strategy == "direct_answer" else "insufficient",
+        tools=[] if strategy == "direct_answer" else ["alerts"],
+        requirements={} if strategy == "direct_answer" else {"limit": 1},
+    )
+
+    plan, errors = parse_and_validate_plan(json.dumps(value), _packet().payload)
+
+    assert plan is None
+    assert any("incompatible" in error for error in errors)
+
+
+def test_plain_literal_ip_lookup_gets_explicit_provenance_without_spurious_filters():
+    packet = _packet("Show me alerts from 18.232.121.80.")
+    value = _plan(requirements={"limit": 10})
+
+    plan, errors = parse_and_validate_plan(json.dumps(value), packet.payload)
+
+    assert errors == []
+    assert plan.evidence_requirements == {"source_ip": "18.232.121.80", "limit": 10}
+    assert plan.evidence_filter_provenance == {
+        "source_ip": "explicit_current_turn",
+        "limit": "planner_proposed",
+    }
+
+
+def test_planner_cannot_invent_time_window_for_plain_source_ip_lookup():
+    packet = _packet("Show me alerts from 18.232.121.80.")
+    value = _plan(requirements={"source_ip": "18.232.121.80", "time_window_minutes": 30, "limit": 10})
+
+    plan, errors = parse_and_validate_plan(json.dumps(value), packet.payload)
+
+    assert plan is None
+    assert any("time_window_minutes is unsupported" in error for error in errors)
+
+
+def test_authoritative_resolved_ip_can_scope_pronoun_lookup():
+    packet = build_planner_packet(
+        question="Show me alerts from this IP.",
+        resolved_context={
+            "active_entity": {"type": "source_ip", "id": "18.232.121.80"},
+            "comparison_entities": [],
+            "resolution": {"status": "resolved", "intent": "entity_reference"},
+            "context": {"source_ip": "18.232.121.80"},
+        },
+        conversation_packet={"conclusions": [{"summary": "Current source remains under review."}]},
+        preferred_capability=None,
+        latency_class={"mode": "sync"},
+    )
+    value = _plan(requirements={"source_ip": "18.232.121.80", "limit": 10})
+
+    plan, errors = parse_and_validate_plan(json.dumps(value), packet.payload)
+
+    assert errors == []
+    assert plan.evidence_filter_provenance["source_ip"] == "inherited_authoritative_context"
+
+
+def test_fresh_lookup_does_not_inherit_prior_time_or_severity_filters():
+    packet = build_planner_packet(
+        question="Show me alerts from this IP.",
+        resolved_context={
+            "active_entity": {"type": "source_ip", "id": "18.232.121.80"},
+            "comparison_entities": [],
+            "resolution": {"status": "resolved", "intent": "entity_reference"},
+            "context": {
+                "source_ip": "18.232.121.80",
+                "time_window_minutes": 30,
+                "severity": "high",
+            },
+        },
+        conversation_packet={"thread_summary": "A prior lookup used a 30-minute HIGH filter."},
+        preferred_capability=None,
+        latency_class={"mode": "sync"},
+    )
+    value = _plan(
+        requirements={
+            "source_ip": "18.232.121.80",
+            "time_window_minutes": 30,
+            "severity": "high",
+            "limit": 10,
+        }
+    )
+
+    plan, errors = parse_and_validate_plan(json.dumps(value), packet.payload)
+
+    assert plan is None
+    assert any("time_window_minutes is unsupported" in error for error in errors)
+    assert any("severity is unsupported" in error for error in errors)
 
 
 def test_quick_evidence_lookup_requires_named_evidence():
@@ -319,11 +445,15 @@ def test_alert_evidence_requirements_are_normalized_without_query_generation():
 
     plan, errors = parse_and_validate_plan(
         json.dumps(_plan(requirements=requirements)),
-        _packet().payload,
+        _packet(
+            "Show the newest HIGH failed_login alert from source 203.0.113.81 to destination 10.0.0.8 in the last hour."
+        ).payload,
     )
 
     assert errors == []
     assert plan.evidence_requirements == {**requirements, "severity": "high"}
+    assert plan.evidence_filter_provenance["source_ip"] == "explicit_current_turn"
+    assert plan.evidence_filter_provenance["time_window_minutes"] == "explicit_current_turn"
 
 
 @pytest.mark.parametrize(
@@ -336,7 +466,7 @@ def test_alert_evidence_requirements_are_normalized_without_query_generation():
 )
 def test_explicit_duration_is_deterministically_owned_by_server(question, expected_minutes):
     plan, errors = parse_and_validate_plan(
-        json.dumps(_plan(requirements={"sort": "newest", "limit": 10})),
+        json.dumps(_plan(requirements={"limit": 10})),
         _packet(question).payload,
     )
 
@@ -371,10 +501,35 @@ def test_planner_repair_reports_required_evidence_type_contract_precisely():
     assert "Correct every reported schema and cross-field violation" in repair_prompt
 
 
+def test_repair_cannot_change_the_initial_valid_action_classification():
+    malformed = _plan()
+    malformed["required_evidence"] = {"alerts": "current high-severity alerts"}
+    changed = _plan(
+        intent="state_summary",
+        strategy="direct_answer",
+        sufficiency="sufficient",
+        tools=[],
+        requirements={},
+    )
+    gateway = SequenceGateway([json.dumps(malformed), json.dumps(changed)])
+
+    outcome = plan_turn(_packet(), gateway=gateway, config=_config())
+
+    assert outcome.status == "invalid"
+    assert outcome.plan is None
+    assert '"current_turn_intent":"must remain fresh_evidence_lookup"' in gateway.requests[1].prompt
+
+
 def test_contradictory_repaired_direct_answer_still_fails_closed():
     malformed = _plan()
     malformed["required_evidence"] = {"alerts": "current high-severity alerts"}
-    contradictory = _plan(strategy="direct_answer", sufficiency="insufficient", tools=[], requirements={})
+    contradictory = _plan(
+        intent="state_summary",
+        strategy="direct_answer",
+        sufficiency="insufficient",
+        tools=[],
+        requirements={},
+    )
     gateway = SequenceGateway([json.dumps(malformed), json.dumps(contradictory)])
 
     outcome = plan_turn(_packet(), gateway=gateway, config=_config())
@@ -386,7 +541,7 @@ def test_contradictory_repaired_direct_answer_still_fails_closed():
 
 
 def test_planner_prompt_prefers_authoritative_state_for_state_summary_intent():
-    gateway = SequenceGateway([json.dumps(_plan(strategy="direct_answer", sufficiency="sufficient", tools=[], requirements={}))])
+    gateway = SequenceGateway([json.dumps(_plan(intent="state_summary", strategy="direct_answer", sufficiency="sufficient", tools=[], requirements={}))])
     packet = _packet("Summarize our current investigation.")
 
     outcome = plan_turn(packet, gateway=gateway, config=_config())
@@ -457,7 +612,7 @@ def test_planner_packet_and_prompt_fit_each_participating_capability(capability)
 def test_ambiguity_paraphrases_require_clarification(question):
     packet = _packet(question)
     value = _plan(
-        intent="Resolve an ambiguous referent.",
+        intent="clarification",
         strategy="clarification_required",
         sufficiency="ambiguous",
         tools=[],
@@ -475,7 +630,7 @@ def test_ambiguity_paraphrases_require_clarification(question):
 def test_boundary_paraphrases_remain_outside_siem_capabilities(question):
     packet = _packet(question)
     value = _plan(
-        intent="Identify a request outside the SIEM conversation planner boundary.",
+        intent="unsupported",
         strategy="unsupported_or_boundary",
         sufficiency="sufficient",
         tools=[],
@@ -488,28 +643,28 @@ def test_boundary_paraphrases_remain_outside_siem_capabilities(question):
 @pytest.mark.parametrize(
     "question,intent,strategy,capability,sufficiency,tools",
     [
-        *[(question, "Find the newest high-severity alert.", "quick_evidence_lookup", "quick_explain", "insufficient", ["alerts"]) for question in (
+        *[(question, "fresh_evidence_lookup", "quick_evidence_lookup", "quick_explain", "insufficient", ["alerts"]) for question in (
             "What's the newest HIGH alert?", "Show me the latest high-severity alert.", "Anything high priority just come in?"
         )],
-        *[(question, "Prioritize current alerts.", "decision_support", "decision_support", "insufficient", []) for question in (
+        *[(question, "decision_support", "decision_support", "decision_support", "insufficient", []) for question in (
             "Which alert matters most right now?", "What should I actually care about?", "Which one needs attention first?"
         )],
-        *[(question, "Explain the latest conclusion.", "direct_answer", "quick_explain", "sufficient", []) for question in (
+        *[(question, "evidence_explanation", "direct_answer", "quick_explain", "sufficient", []) for question in (
             "Why?", "What makes you say that?", "Walk me through your reasoning."
         )],
-        *[(question, "Show supporting evidence.", "direct_answer", "quick_explain", "sufficient", []) for question in (
+        *[(question, "evidence_explanation", "direct_answer", "quick_explain", "sufficient", []) for question in (
             "Show me the evidence.", "What supports that?", "What did you base that on?"
         )],
-        *[(question, "Switch to a new security topic.", "quick_evidence_lookup", "quick_explain", "insufficient", ["alerts"]) for question in (
+        *[(question, "fresh_evidence_lookup", "quick_evidence_lookup", "quick_explain", "insufficient", ["alerts"]) for question in (
             "Now show me the most recent brute-force alert.", "Forget that—what happened with authentication alerts?", "Switch gears. Anything unusual on the firewall?"
         )],
-        *[(question, "Compare two resolved alerts.", "compare_entities", "deep_investigate", "insufficient", []) for question in (
+        *[(question, "comparison", "compare_entities", "deep_investigate", "insufficient", []) for question in (
             "Compare those two.", "Which is worse?", "Is this more serious than the scan from earlier?"
         )],
-        *[(question, "Apply an analyst correction.", "direct_answer", "quick_explain", "sufficient", []) for question in (
+        *[(question, "analyst_correction", "direct_answer", "quick_explain", "sufficient", []) for question in (
             "That IP is our approved scanner.", "We own that address.", "That account is a service account."
         )],
-        *[(question, "Summarize thread state.", "direct_answer", "quick_explain", "sufficient", []) for question in (
+        *[(question, "state_summary", "direct_answer", "quick_explain", "sufficient", []) for question in (
             "What did we already rule out?", "Summarize our current conclusion.", "What are we still uncertain about?"
         )],
     ],
@@ -533,10 +688,50 @@ def test_behavioral_paraphrases_validate_consistently(question, intent, strategy
         strategy=strategy,
         sufficiency=sufficiency,
         tools=tools,
+        requirements=(
+            {"severity": "high", "limit": 1}
+            if strategy == "quick_evidence_lookup" and "high" in question.lower()
+            else ({"limit": 1} if strategy == "quick_evidence_lookup" else {})
+        ),
     )
     plan, errors = parse_and_validate_plan(json.dumps(value), packet.payload)
     assert errors == []
     assert plan.proposed_strategy == strategy
+    assert plan.proposed_capability == capability
+
+
+@pytest.mark.parametrize(
+    "question,action,strategy,capability,sufficiency",
+    [
+        ("Draft an investigation checklist for this alert.", "artifact_draft", "artifact_draft", "generate_artifact", "sufficient"),
+        ("Create an escalation-summary preview.", "artifact_draft", "artifact_draft", "generate_artifact", "sufficient"),
+        ("Write an incident-note draft.", "artifact_draft", "artifact_draft", "generate_artifact", "sufficient"),
+        ("Investigate this alert further.", "bounded_investigation", "bounded_investigation", "deep_investigate", "insufficient"),
+        ("Correlate the related activity.", "bounded_investigation", "bounded_investigation", "deep_investigate", "insufficient"),
+        ("Do a deeper investigation of this incident.", "bounded_investigation", "bounded_investigation", "deep_investigate", "insufficient"),
+    ],
+)
+def test_artifact_and_investigation_paraphrases_reach_dedicated_capabilities(
+    question,
+    action,
+    strategy,
+    capability,
+    sufficiency,
+):
+    plan, errors = parse_and_validate_plan(
+        json.dumps(
+            _plan(
+                intent=action,
+                strategy=strategy,
+                sufficiency=sufficiency,
+                tools=[],
+                requirements={},
+            )
+        ),
+        _packet(question).payload,
+    )
+
+    assert errors == []
     assert plan.proposed_capability == capability
 
 
