@@ -75,7 +75,7 @@ class ConversationActorUnavailableError(ConversationOrchestrationError):
 
 @dataclass(frozen=True)
 class ResolvedExecutionContext:
-    active_entity: dict[str, Any]
+    active_entity: dict[str, Any] | None
     entities: tuple[dict[str, Any], ...]
     comparison_entities: tuple[dict[str, Any], ...]
     context_type: str
@@ -86,7 +86,7 @@ class ResolvedExecutionContext:
 
     def as_dict(self) -> dict[str, Any]:
         return {
-            "active_entity": dict(self.active_entity),
+            "active_entity": dict(self.active_entity) if self.active_entity else None,
             "entities": [dict(item) for item in self.entities],
             "comparison_entities": [dict(item) for item in self.comparison_entities],
             "context_type": self.context_type,
@@ -537,6 +537,8 @@ def _prepare_submission(
         )
         plan = planner_outcome.plan if planner_outcome else None
         resolution = _planner_resolution(plan, planner_outcome)
+        if plan:
+            _validate_plan_selected_entities(conn, owner_username=owner_username, plan=plan)
         if plan and plan.current_turn_intent == "analyst_correction":
             assertion_type = "correction"
         elif plan and plan.proposed_strategy == "clarification_required":
@@ -1261,16 +1263,19 @@ def _execution_context_from_plan(
 ) -> ResolvedExecutionContext:
     planned_entities = _distinct_entities(list(plan.resolved_entities))
     if not planned_entities:
-        raise ConversationBoundaryError("Executable planner result requires a resolved entity.")
+        context_type, context = _entityless_execution_context(payload)
+        return ResolvedExecutionContext(
+            active_entity=None,
+            entities=(),
+            comparison_entities=(),
+            context_type=context_type,
+            context=context,
+            entity_snapshot={"active_entity": None, "entities": []},
+            resolution=resolution,
+            source="agentic_planner",
+        )
     active = planned_entities[0]
     comparison = planned_entities if plan.proposed_strategy == "compare_entities" else []
-    for entity in planned_entities:
-        validate_conversation_entity(
-            conn,
-            owner_username=owner_username,
-            entity_type=entity["type"],
-            entity_id=entity["id"],
-        )
     context_type, context = _execution_context_fields(
         conn,
         owner_username=owner_username,
@@ -1291,6 +1296,32 @@ def _execution_context_from_plan(
     )
     _validate_resolved_entities(conn, owner_username=owner_username, resolved=resolved)
     return resolved
+
+
+def _entityless_execution_context(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    requested_type = str(payload.get("context_type") or "general").strip().lower().replace("-", "_")
+    aliases = {"analyst_workspace": "general", "soc_command_center": "general", "recon_history": "general"}
+    context_type = aliases.get(requested_type, requested_type)
+    if context_type not in {"dashboard", "general"}:
+        context_type = "general"
+    original = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    context = {key: value for key, value in original.items() if key not in _IDENTITY_CONTEXT_FIELDS and key != "id"}
+    return context_type, context
+
+
+def _validate_plan_selected_entities(
+    conn,
+    *,
+    owner_username: str,
+    plan: AgenticAnalystPlan,
+) -> None:
+    for entity in plan.resolved_entities:
+        validate_conversation_entity(
+            conn,
+            owner_username=owner_username,
+            entity_type=entity["type"],
+            entity_id=entity["id"],
+        )
 
 
 def _validated_correction_parent_turn_id(
@@ -1395,8 +1426,11 @@ def _apply_resolved_context(payload: dict[str, Any], resolved: ResolvedExecution
         **payload,
         "context_type": resolved.context_type,
         "context": dict(resolved.context),
-        "entity": dict(resolved.active_entity),
     }
+    if resolved.active_entity:
+        result["entity"] = dict(resolved.active_entity)
+    else:
+        result.pop("entity", None)
     if resolved.comparison_entities:
         result["context"]["comparison_entities"] = [dict(item) for item in resolved.comparison_entities]
     return result
@@ -1420,9 +1454,9 @@ def _resolved_context_from_value(value: dict[str, Any]) -> ResolvedExecutionCont
     )
     context = value.get("context") if isinstance(value.get("context"), dict) else None
     resolution = value.get("resolution") if isinstance(value.get("resolution"), dict) else None
-    if not active or context is None or resolution is None:
+    if context is None or resolution is None or (entities and not active):
         raise ConversationBoundaryError("Queued conversation resolved context is malformed.")
-    if not any(_entity_identity(item) == _entity_identity(active) for item in entities):
+    if active and not any(_entity_identity(item) == _entity_identity(active) for item in entities):
         raise ConversationBoundaryError("Queued conversation active entity is absent from its entity snapshot.")
     return ResolvedExecutionContext(
         active_entity=active,
@@ -1707,6 +1741,10 @@ def _assert_execution_alignment(
 ) -> None:
     del packet
     payload_entity = _normalized_entity(payload.get("entity"))
+    if resolved.active_entity is None:
+        if payload_entity is not None:
+            raise ConversationBoundaryError("Entityless planner result cannot carry a workflow execution entity.")
+        return
     expected = _entity_identity(resolved.active_entity)
     if not payload_entity or _entity_identity(payload_entity) != expected:
         raise ConversationBoundaryError("Planner-selected entity and workflow execution entity do not match.")

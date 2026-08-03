@@ -440,6 +440,10 @@ def test_ambiguous_reference_is_clarified_by_planner_without_workflow(postgres_d
             "clarification",
             "clarification_required",
             sufficiency="ambiguous",
+            entities=[
+                {"type": "source_ip", "id": "203.0.113.10"},
+                {"type": "source_ip", "id": "203.0.113.11"},
+            ],
             clarification="Did you mean 203.0.113.10 or 203.0.113.11?",
         ),
         "unused",
@@ -454,7 +458,10 @@ def test_ambiguous_reference_is_clarified_by_planner_without_workflow(postgres_d
     )
 
     assert result.payload["status"] == "clarification_required"
-    assert result.payload["result"]["reference_resolution"]["candidates"] == []
+    assert {item["id"] for item in result.payload["result"]["reference_resolution"]["candidates"]} == {
+        "203.0.113.10",
+        "203.0.113.11",
+    }
     assert "203.0.113.10 or 203.0.113.11" in result.payload["result"]["answer"]
     page = list_turns(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")
     assert page["turns"][0]["assertion_type"] == "unresolved_question"
@@ -525,6 +532,51 @@ def test_deleted_planner_selected_entity_rejects_after_planning_before_execution
             config=_controlled_planner_config(),
         )
     assert len(gateway.requests) == 1
+
+
+def test_unauthorized_clarification_candidate_is_rejected_without_persistence(postgres_db, monkeypatch):
+    conn, cur = postgres_db
+    thread, alert_id = _seed(conn)
+    cur.execute(
+        """
+        INSERT INTO users (username, password_hash, role, is_active)
+        VALUES ('other_planner_owner', 'hash', 'analyst', TRUE)
+        """
+    )
+    cur.execute(
+        """
+        INSERT INTO investigations (owner_username, title, linked_alert_id)
+        VALUES ('other_planner_owner', 'Private other-user investigation', %s)
+        RETURNING id
+        """,
+        (alert_id,),
+    )
+    other_investigation_id = cur.fetchone()[0]
+    conn.commit()
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
+    )
+    gateway = PlannerThenAnswerGateway(
+        _semantic_plan(
+            "clarification",
+            "clarification_required",
+            sufficiency="ambiguous",
+            entities=[{"type": "investigation", "id": str(other_investigation_id)}],
+            clarification="Which investigation did you mean?",
+        ),
+        "unused",
+    )
+
+    with pytest.raises(ThreadTargetUnavailableError, match="unavailable or not owned"):
+        run_conversational_workflow(
+            _payload(thread, alert_id, request_id="unauthorized-clarification-candidate", prompt="Which investigation?"),
+            owner_username="conversation_analyst",
+            actor_role="analyst",
+            gateway=gateway,
+            config=_controlled_planner_config(),
+        )
+
+    assert list_turns(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")["turns"] == []
 
 
 def test_correction_supersedes_inference_not_evidence(postgres_db, monkeypatch):
@@ -1776,6 +1828,57 @@ def test_natural_comparison_auto_turn_reaches_compare_capability(postgres_db, mo
     assert queued["workflow"] == "deep_investigate"
 
 
+def test_open_newest_high_lookup_executes_with_zero_selected_entities(postgres_db, monkeypatch):
+    conn, cur = postgres_db
+    thread, alert_id = _seed(conn)
+    cur.execute("UPDATE alerts SET severity = 'high', created_at = NOW() WHERE id = %s", (alert_id,))
+    conn.commit()
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
+    )
+    monkeypatch.setattr("core.ai.context_builder.get_db_connection", lambda: NoCloseConnection(conn))
+    monkeypatch.setattr("core.ai.soc_tool_executor.get_db_connection", lambda: NoCloseConnection(conn))
+    monkeypatch.setattr("core.ai.explainer_service.current_user", SimpleNamespace(role="analyst"))
+    plan = _semantic_plan(
+        "fresh_evidence_lookup",
+        "quick_evidence_lookup",
+        sufficiency="insufficient",
+        relationship="new_question",
+        entities=[],
+        tools=["alerts"],
+        requirements={"severity": "high", "sort": "newest", "limit": 1},
+    )
+    gateway = PlannerThenAnswerGateway(plan, "A high alert was found.")
+    payload = _payload(
+        thread,
+        alert_id,
+        request_id="open-newest-high-zero-entity",
+        prompt="What's the newest HIGH alert?",
+        workflow="auto",
+    )
+
+    result = run_conversational_workflow(
+        payload,
+        owner_username="conversation_analyst",
+        actor_role="analyst",
+        gateway=gateway,
+        config=_controlled_planner_config(),
+    )
+
+    assert result.status_code == 200
+    assert result.payload["workflow"] == "quick_explain"
+    assert f"Alert {alert_id}" in result.payload["result"]["answer"]
+    assert result.payload["result"]["evidence_envelope"]["evidence_query_parameters"] == {
+        "limit": 1,
+        "severity": "high",
+        "sort": "newest",
+    }
+    assert result.payload["conversation"]["active_entity"] is None
+    turns = list_turns(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")["turns"]
+    assert turns[0]["structured_payload"]["agentic_plan"]["resolved_entities"] == []
+    assert turns[0]["entity_snapshot"] == {"active_entity": None, "entities": []}
+
+
 def test_production_shaped_auto_turn_plans_dispatches_and_persists(postgres_db, monkeypatch):
     conn, _cur = postgres_db
     thread, alert_id = _seed(conn)
@@ -1988,7 +2091,7 @@ def test_conversation_state_question_uses_thread_state_without_tool_lookup(postg
     plan = _semantic_plan(
         "state_summary",
         "direct_answer",
-        entities=[{"type": "alert", "id": str(alert_id)}],
+        entities=[],
     )
     gateway = PlannerThenAnswerGateway(plan, "This alert indicates suspicious activity from a bad IP.")
 

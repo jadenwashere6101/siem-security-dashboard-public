@@ -422,8 +422,8 @@ def test_conversation_state_prompt_has_no_generic_alert_template():
             "evidence_requirements": {},
         },
         conversation_context={
-            "thread": {"resolved_entity": {"type": "alert", "id": "8342"}},
-            "conclusions": [{"summary": "Reviewing failed-login activity for Alert 8342."}],
+            "entities": [{"type": "alert", "id": "8342", "source_type": "thread_record"}],
+            "recent_conclusions": [{"summary": "Reviewing failed-login activity for Alert 8342."}],
             "unresolved_questions": [{"summary": "Whether the source is approved."}],
         },
     )
@@ -515,11 +515,11 @@ def _three_alert_records(source_ip="18.232.121.80"):
 
 def _long_conversation_packet():
     return {
-        "thread": {"resolved_entity": {"type": "source_ip", "id": "18.232.121.80"}},
-        "corrections": [{"summary": "The analyst identified this as a possible approved scanner. " + ("c" * 500)}],
-        "conclusions": [{"summary": "The current evidence shows repeated alert activity. " + ("d" * 600)}],
+        "entities": [{"type": "source_ip", "id": "18.232.121.80", "source_type": "thread_record"}],
+        "analyst_corrections": [{"summary": "The analyst identified this as a possible approved scanner. " + ("c" * 500)}],
+        "recent_conclusions": [{"summary": "The current evidence shows repeated alert activity. " + ("d" * 600)}],
         "unresolved_questions": [{"summary": "Whether the source is authorized. " + ("u" * 500)}],
-        "thread_summary": "Active source-IP investigation. " + ("s" * 800),
+        "conversation_summary": "Source-IP investigation record. " + ("s" * 800),
         "recent_turns": [{"role": "assistant", "content": "older context " + ("t" * 1000)} for _ in range(8)],
     }
 

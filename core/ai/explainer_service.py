@@ -221,7 +221,8 @@ def _answer_from_context(
     )
 
     has_tool_evidence = any(call.status == "success" and call.data not in (None, {}, []) for call in tools.calls)
-    if ai_context.insufficient_context and not has_tool_evidence:
+    has_conversation_state = _has_authoritative_conversation_state(planner_task, conversation_context)
+    if ai_context.insufficient_context and not has_tool_evidence and not has_conversation_state:
         return AiServiceResult(
             {
                 "status": "insufficient_context",
@@ -797,6 +798,23 @@ def _response_mode(task: dict[str, Any], requests: list[dict[str, Any]]) -> str:
     if source in {"search_alerts", "get_alert_detail"}:
         return "alert_lookup"
     return "evidence_lookup"
+
+
+def _has_authoritative_conversation_state(
+    planner_task: dict[str, Any] | None,
+    conversation_context: dict[str, Any] | None,
+) -> bool:
+    task = planner_task if isinstance(planner_task, dict) else {}
+    if task.get("strategy") != "direct_answer" or task.get("intent") != "state_summary":
+        return False
+    memory = conversation_context if isinstance(conversation_context, dict) else {}
+    return bool(
+        memory.get("conversation_summary")
+        or memory.get("recent_conclusions")
+        or memory.get("unresolved_questions")
+        or memory.get("analyst_corrections")
+        or memory.get("recent_turns")
+    )
 
 
 def _active_context(

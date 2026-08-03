@@ -293,3 +293,36 @@ The server SHALL depend only on the stable planner packet and validated plan con
 #### Scenario: Planner model replacement
 - **WHEN** an approved local planner model is replaced with another model that satisfies the same packet and plan contracts
 - **THEN** context construction, validation, orchestration, and execution require no conversational code changes
+
+### Requirement: Structured action semantics determine entity cardinality
+The system SHALL define entity cardinality, evidence-filter permission, clarification requirements, tool permission, and capability selection from one authoritative action/strategy contract. The planner prompt, repair contract, validator, and dispatch SHALL consume or be tested against that same contract. The server MUST NOT derive cardinality from analyst wording or select a missing entity.
+
+#### Scenario: Open lookup discovers its entity
+- **WHEN** the planner selects `fresh_evidence_lookup` with `quick_evidence_lookup`, zero entities, one approved tool category, and valid bounded filters
+- **THEN** validation accepts the plan and dispatches the bounded search without creating a synthetic resolved entity
+
+#### Scenario: Entity-bound action
+- **WHEN** a planner selects an explanation, Decision Support, artifact, bounded investigation, or correction strategy whose contract requires one entity
+- **THEN** validation requires exactly one planner-selected authoritative entity and post-plan access validation occurs before execution
+
+#### Scenario: State summary without entity selection
+- **WHEN** a planner selects `state_summary` with sufficient authoritative conversation facts and zero entities
+- **THEN** validation accepts the plan and answers from thread state without a SOC read tool
+
+#### Scenario: Comparison cardinality
+- **WHEN** the planner selects `comparison` with `compare_entities`
+- **THEN** exactly two distinct planner-selected authoritative entities are required
+- **AND** zero, one, or more than two entities fail closed without server substitution
+
+#### Scenario: Coherent clarification
+- **WHEN** the planner selects action `clarification`, strategy `clarification_required`, ambiguous sufficiency, and a non-empty clarification question
+- **THEN** zero to two validated candidate entities are permitted
+- **AND** the clarification is persisted as an assistant turn without tool execution or an async request
+
+#### Scenario: Invalid selected entity
+- **WHEN** any plan, including clarification, selects a missing or unauthorized entity
+- **THEN** post-plan validation rejects it without disclosing or substituting another entity
+
+#### Scenario: Contract representations remain aligned
+- **WHEN** the structured semantic contract changes
+- **THEN** tests MUST prove the planner prompt, repair feedback, parser/validator, and execution assumptions expose identical cardinality, filter, clarification, tool, and capability rules

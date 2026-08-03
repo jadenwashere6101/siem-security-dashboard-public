@@ -32,6 +32,28 @@ The model produces a strict proposal containing only: `current_turn_intent`, `re
 
 Validation enforces enumerated actions, relationships, strategies, capabilities, strategy/tool/evidence relationships, one approved read-tool category at most, entity shape and count, owner/namespace boundaries, filter value bounds, size limits, and preview-only artifact safety. It never parses the analyst's sentence to decide whether the model selected the right entity, action, or filter. An invalid first result receives one repair request containing only bounded validation errors and the original compact packet. A second invalid result, timeout, or provider failure returns a concise planner-unavailable response and preserves prior state. It never invokes the prior workflow as fallback.
 
+### Action and strategy semantics own entity cardinality
+
+One server-authored structured contract is the authority for prompt guidance, repair feedback, validation, and dispatch assumptions. It validates the model-selected action and strategy without interpreting the analyst's language.
+
+| Action | Strategy | Entities | Evidence filters | Clarification | Tool execution | Capability |
+|---|---|---:|---|---|---|---|
+| `state_summary` | `direct_answer` | 0–1 | forbidden | forbidden | no | `quick_explain` |
+| `fresh_evidence_lookup` | `quick_evidence_lookup` | 0–1 | required | forbidden | one bounded read | `quick_explain` |
+| `evidence_explanation` | `direct_answer` | exactly 1 | forbidden | forbidden | no | `quick_explain` |
+| `evidence_explanation` | `quick_evidence_lookup` | exactly 1 | required | forbidden | one bounded read | `quick_explain` |
+| `decision_support` | `decision_support` | exactly 1 | forbidden | forbidden | no planner-selected read | `decision_support` |
+| `artifact_draft` | `artifact_draft` | exactly 1 | forbidden | forbidden | no planner-selected read | `generate_artifact` |
+| `bounded_investigation` | `bounded_investigation` | exactly 1 | forbidden | forbidden | existing bounded capability | `deep_investigate` |
+| `comparison` | `compare_entities` | exactly 2 | forbidden | forbidden | existing bounded capability | `deep_investigate` |
+| `clarification` | `clarification_required` | 0–2 candidate facts | forbidden | required | no | none |
+| `analyst_correction` | `direct_answer` | exactly 1 | forbidden | forbidden | no | `quick_explain` |
+| `unsupported` | `unsupported_or_boundary` | 0–2 non-executing facts | forbidden | forbidden | no | none |
+
+An open/category lookup is executable with no selected entity because its validated evidence requirements define the bounded search. Entityless `state_summary` and lookup plans execute in a neutral workflow context and do not gain a synthetic entity. Any selected entity is still validated after planning for type, existence, ownership, and RBAC. Clarification persists a normal assistant turn and never creates a tool call or async workflow request.
+
+The single repair receives the same generated contract plus exact validation errors. It may correct shape and cross-field consistency, but cannot change a valid initial action, invent or substitute an entity, remove a required clarification question, or transform clarification into a boundary plan merely to pass validation.
+
 ### Planner contract ownership
 
 | Field | Owner | Reason |

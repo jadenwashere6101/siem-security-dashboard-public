@@ -9,6 +9,7 @@ from core.ai.agentic_analyst_planner import (
     PLANNER_PACKET_MAX_CHARS,
     build_planner_packet,
     parse_and_validate_plan,
+    planner_semantic_contract,
     plan_turn,
 )
 from core.ai.config import AI_MODE_LOCAL_ONLY, AiGatewayConfig
@@ -228,6 +229,103 @@ def test_planner_owns_reference_fields_while_server_owns_safety():
     invalid, errors = parse_and_validate_plan(json.dumps(override), packet.payload)
     assert invalid is None
     assert any("unknown plan fields: safety" in error for error in errors)
+
+
+def test_open_lookup_with_zero_entities_is_valid():
+    value = _plan(entities=[])
+
+    plan, errors = parse_and_validate_plan(json.dumps(value), _packet().payload)
+
+    assert errors == []
+    assert plan.resolved_entities == ()
+    assert plan.evidence_requirements == {"severity": "high", "limit": 1}
+
+
+@pytest.mark.parametrize(
+    "intent,strategy,entities,expected",
+    [
+        ("state_summary", "direct_answer", [], None),
+        ("state_summary", "direct_answer", [{"type": "alert", "id": "9078"}], None),
+        ("evidence_explanation", "direct_answer", [], "exactly 1"),
+        ("decision_support", "decision_support", [], "exactly 1"),
+        ("artifact_draft", "artifact_draft", [], "exactly 1"),
+        ("bounded_investigation", "bounded_investigation", [], "exactly 1"),
+        ("comparison", "compare_entities", [], "exactly 2"),
+        ("comparison", "compare_entities", [{"type": "alert", "id": "9078"}], "exactly 2"),
+    ],
+)
+def test_action_strategy_contract_controls_entity_cardinality(intent, strategy, entities, expected):
+    value = _plan(
+        intent=intent,
+        strategy=strategy,
+        sufficiency="sufficient" if strategy in {"direct_answer", "decision_support", "artifact_draft"} else "insufficient",
+        tools=[],
+        requirements={},
+        entities=entities,
+    )
+
+    plan, errors = parse_and_validate_plan(json.dumps(value), _packet().payload)
+
+    if expected is None:
+        assert errors == []
+        assert plan is not None
+    else:
+        assert plan is None
+        assert any(expected in error for error in errors)
+
+
+def test_comparison_rejects_three_entities_without_substitution():
+    value = _plan(
+        intent="comparison",
+        strategy="compare_entities",
+        sufficiency="insufficient",
+        tools=[],
+        requirements={},
+        entities=[
+            {"type": "alert", "id": "9078"},
+            {"type": "alert", "id": "9011"},
+            {"type": "alert", "id": "9001"},
+        ],
+    )
+
+    plan, errors = parse_and_validate_plan(json.dumps(value), _packet().payload)
+
+    assert plan is None
+    assert any("at most two" in error for error in errors)
+
+
+def test_clarification_contract_allows_bounded_candidates_and_requires_ambiguous_state():
+    value = _plan(
+        intent="clarification",
+        strategy="clarification_required",
+        sufficiency="ambiguous",
+        tools=[],
+        requirements={},
+        entities=[{"type": "alert", "id": "9078"}, {"type": "alert", "id": "9011"}],
+        clarification="Did you mean Alert 9078 or Alert 9011?",
+    )
+    plan, errors = parse_and_validate_plan(json.dumps(value), _packet().payload)
+    assert errors == []
+    assert len(plan.resolved_entities) == 2
+
+    value["evidence_sufficiency"] = "sufficient"
+    invalid, errors = parse_and_validate_plan(json.dumps(value), _packet().payload)
+    assert invalid is None
+    assert any("requires ambiguous" in error for error in errors)
+
+
+def test_prompt_and_repair_use_the_authoritative_semantic_contract():
+    malformed = _plan(entities=[])
+    malformed["resolved_entities"] = [{"type": "alert", "id": "9078"}, {"type": "alert", "id": "9011"}]
+    gateway = SequenceGateway([json.dumps(malformed), json.dumps(_plan(entities=[]))])
+
+    outcome = plan_turn(_packet(), gateway=gateway, config=_config())
+
+    serialized = json.dumps(planner_semantic_contract(), sort_keys=True, separators=(",", ":"))
+    assert outcome.status == "planned"
+    assert serialized in gateway.requests[0].prompt
+    assert serialized in gateway.requests[1].prompt
+    assert "fresh_evidence_lookup/quick_evidence_lookup requires between 0 and 1 resolved entities" in gateway.requests[1].prompt
 
 
 @pytest.mark.parametrize(

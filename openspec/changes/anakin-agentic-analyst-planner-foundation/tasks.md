@@ -97,3 +97,11 @@
 - [x] 14.2 Replace interpretive context labels with a provenance-bearing authoritative fact packet without changing stored thread state or workflow behavior.
 - [x] 14.3 Add regression assertions that planner packets contain no focus, priority, preferred-reference, intent, or relationship fields supplied by the server.
 - [x] 14.4 Run the existing focused unit, PostgreSQL, acceptance, compilation, diff, and strict OpenSpec gates.
+
+## 15. Structured Action and Entity Cardinality Correction
+
+- [x] 15.1 Define one authoritative action/strategy contract covering entity cardinality, filter permission, clarification shape, tool execution, and capability dispatch without language interpretation.
+- [x] 15.2 Generate planner and repair guidance from the contract, align deterministic validation, and support neutral entityless execution for open lookups and state summaries.
+- [x] 15.3 Validate every planner-selected entity after planning, including non-executing clarification candidates, without server selection or substitution.
+- [x] 15.4 Add focused unit and PostgreSQL production-derived coverage for open lookup, entity-bound capabilities, comparison cardinality, clarification persistence, invalid/unauthorized entities, and contract alignment.
+- [ ] 15.5 Run Python compilation, focused AI and PostgreSQL suites, grounding/prompt-budget regressions, acceptance harness, `git diff --check`, and strict OpenSpec validation.
