@@ -50,6 +50,12 @@ Validated strategies map to current paths: `direct_answer` and `quick_evidence_l
 
 The planner's reasoning summary is audit metadata, not the answer. Downstream prompts receive the current intent and strategy so direct lookups answer directly, comparisons compare, evidence requests cite evidence, recommendations lead with the recommendation, and deep investigations retain structured analysis. Existing persona safety and evidence grounding remain. Fact/inference/confidence headings are not forced onto every response.
 
+### Provider capabilities and original workflow boundaries are pre-dispatch contracts
+
+Every capability emitted by an application service must be registered explicitly by the intended provider. The local Ollama provider advertises `agentic_analyst_planning`; the gateway continues to reject every unadvertised capability before generation. Contract tests exercise the real gateway/provider boundary and prove that a planner request reaches Ollama generation while paid fallback remains unavailable for the local-only planning profile.
+
+The original workflow value from the SIEM conversation request is validated before context selection, planner generation, repair, classification, or degraded shortcut fallback. `auto` and the four SIEM conversation capabilities are allowed. Repo Assistant and SOC Briefing are rejected as isolated namespaces, and unknown workflow names are rejected as unsupported. The validated plan is checked again after planning, but no transformed workflow may erase an explicit original boundary violation.
+
 ## Failure-Class Table
 
 | Failure class | General invariant | Deterministic enforcement location | Model responsibility | Variants tested |
@@ -69,6 +75,8 @@ The planner's reasoning summary is audit metadata, not the answer. Downstream pr
 | Repeated ineffective strategy/answer | Current intent and strategy are recorded; identical prior answer is not reused as current response | Planner validation/response metadata | Select current task | New lookup after explain; topic switch |
 | Workflow label used as content | Previous/current labels are typed hints, never analyst evidence or prompt instructions | Packet builder | Weigh current hint only | Auto after Quick Explain/Decision Support |
 | Repo/SOC/mutation boundary bypass | Ineligible namespace/action returns boundary plan, never SIEM dispatch | Route/orchestration/validator | Identify unsupported boundary | Repo query, briefing continuation, apply request |
+| Application capability rejected before generation | Every emitted capability is explicitly advertised by its intended provider; unadvertised capabilities remain fail-closed | Provider capability declaration and gateway contract tests | None | Planner capability accepted by Ollama; arbitrary capability rejected |
+| Original forbidden workflow erased by classification/fallback | Validate the original requested workflow before planning or fallback and retain it as authoritative boundary input | Conversation orchestration entry point and defensive post-plan validation | May identify textual boundary requests, but cannot override explicit workflow | Repo Assistant, SOC Briefing, unknown workflow, unavailable/malformed planner, working planner reclassification |
 
 ## Transaction and Concurrency Boundaries
 

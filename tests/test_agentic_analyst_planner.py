@@ -12,7 +12,9 @@ from core.ai.agentic_analyst_planner import (
     plan_turn,
 )
 from core.ai.config import AI_MODE_LOCAL_ONLY, AiGatewayConfig
+from core.ai.gateway import AiGateway
 from core.ai.models import AI_STATUS_SUCCESS, AiGatewayResponse, AiRequestMetadata
+from core.ai.providers import OllamaProvider
 
 
 class SequenceGateway:
@@ -187,6 +189,28 @@ def test_planner_uses_exactly_one_repair():
     assert len(gateway.requests) == 2
     assert gateway.requests[0].profile == "fast_triage"
     assert gateway.requests[0].metadata["read_only"] is True
+
+
+def test_real_planner_request_reaches_ollama_generation_contract(monkeypatch):
+    calls = []
+
+    def fake_http(method, url, *, payload=None, timeout):
+        calls.append({"method": method, "url": url, "payload": payload, "timeout": timeout})
+        return {"response": json.dumps(_plan())}
+
+    monkeypatch.setattr("core.ai.providers._http_json", fake_http)
+    config = replace(_config(), local_provider="ollama")
+    gateway = AiGateway(config=config, providers={"ollama": OllamaProvider()})
+
+    outcome = plan_turn(_packet(), gateway=gateway, config=config)
+
+    assert outcome.status == "planned"
+    assert outcome.plan.proposed_strategy == "quick_evidence_lookup"
+    assert outcome.provider_status == AI_STATUS_SUCCESS
+    assert len(calls) == 1
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["url"].endswith("/api/generate")
+    assert calls[0]["payload"]["model"] == config.profile("fast_triage").model
 
 
 def test_second_invalid_plan_does_not_fall_back_to_prior_workflow():

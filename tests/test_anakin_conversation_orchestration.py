@@ -32,7 +32,7 @@ from core.ai.session_memory_store import (
     save_thread_state,
     utc_now,
 )
-from core.ai.workflow_orchestrator import WorkflowResult, classify_workflow
+from core.ai.workflow_orchestrator import WorkflowResult, WorkflowValidationError, classify_workflow
 from core.ai.workflow_request_store import get_request
 from core.ai.workflow_request_worker import AnakinWorkflowWorkerConfig, run_anakin_workflow_worker
 from core.ai.config import AI_MODE_LOCAL_ONLY, AiGatewayConfig, load_ai_gateway_config
@@ -131,6 +131,28 @@ class PlannerThenAnswerGateway:
                 model="planner-test",
                 mode=AI_MODE_LOCAL_ONLY,
                 status=AI_STATUS_SUCCESS,
+                local_request=True,
+                paid_request=False,
+            ),
+        )
+
+
+class UnavailablePlannerGateway:
+    def __init__(self):
+        self.requests = []
+
+    def generate(self, request):
+        self.requests.append(request)
+        return AiGatewayResponse(
+            status="provider_unavailable",
+            content=None,
+            error="Planner provider unavailable.",
+            metadata=AiRequestMetadata(
+                provider="controlled-local",
+                model="planner-test",
+                mode=AI_MODE_LOCAL_ONLY,
+                status="provider_unavailable",
+                error_code="provider_unavailable",
                 local_request=True,
                 paid_request=False,
             ),
@@ -742,6 +764,82 @@ def test_budget_and_boundary_guards_are_general():
         repo_scope_boundary_response({"message": "Explain this module", "conversation": {"thread_id": "ath_x"}})
 
 
+@pytest.mark.parametrize("workflow", ["repo_assistant", "soc_briefing"])
+def test_original_isolated_workflow_is_rejected_before_planning_or_database(monkeypatch, workflow):
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.plan_turn",
+        lambda *_args, **_kwargs: pytest.fail("isolated workflow reached planner"),
+    )
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.get_db_connection",
+        lambda: pytest.fail("isolated workflow reached conversation state"),
+    )
+    payload = {
+        "workflow": workflow,
+        "prompt": "Handle this request.",
+        "conversation": {
+            "thread_id": "ath_boundary",
+            "expected_version": 1,
+            "client_request_id": f"boundary-{workflow}",
+        },
+    }
+
+    with pytest.raises(ConversationBoundaryError):
+        run_conversational_workflow(
+            payload,
+            owner_username="conversation_analyst",
+            actor_role="analyst",
+            planned={"classification": classify_workflow({"workflow": "quick_explain"})},
+        )
+
+
+def test_unknown_original_workflow_cannot_silently_become_quick_explain(monkeypatch):
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.plan_turn",
+        lambda *_args, **_kwargs: pytest.fail("unknown workflow reached planner"),
+    )
+    payload = {
+        "workflow": "invented_workflow",
+        "prompt": "Handle this request.",
+        "conversation": {
+            "thread_id": "ath_boundary",
+            "expected_version": 1,
+            "client_request_id": "boundary-unknown",
+        },
+    }
+
+    with pytest.raises(WorkflowValidationError) as error:
+        run_conversational_workflow(
+            payload,
+            owner_username="conversation_analyst",
+            actor_role="analyst",
+        )
+
+    assert error.value.error_code == "unsupported_workflow"
+
+
+def test_async_conversation_entry_rechecks_original_boundary_with_precomputed_plan():
+    payload = {
+        "workflow": "soc_briefing",
+        "prompt": "Continue the briefing.",
+        "conversation": {
+            "thread_id": "ath_boundary",
+            "expected_version": 1,
+            "client_request_id": "boundary-async",
+        },
+    }
+    precomputed = {"classification": classify_workflow({"workflow": "quick_explain"})}
+
+    with pytest.raises(ConversationBoundaryError):
+        queue_conversational_request(
+            payload,
+            classification=precomputed["classification"],
+            actor_username="conversation_analyst",
+            actor_role="analyst",
+            planned=precomputed,
+        )
+
+
 def test_stored_instruction_text_remains_untrusted_in_prompt_block():
     block = prompt_block(
         {
@@ -1283,3 +1381,128 @@ def test_production_shaped_auto_turn_plans_dispatches_and_persists(postgres_db, 
     assert turns[0]["entity_snapshot"]["active_entity"]["type"] == "alert"
     assert turns[0]["entity_snapshot"]["active_entity"]["id"] == str(alert_id)
     assert turns[-1]["role"] == "assistant"
+
+
+def test_unhinted_auto_planner_failure_does_not_dispatch_quick_explain(postgres_db, monkeypatch):
+    conn, _cur = postgres_db
+    thread, alert_id = _seed(conn)
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
+    )
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.run_workflow",
+        lambda *_args, **_kwargs: pytest.fail("unhinted planner failure dispatched Quick Explain"),
+    )
+    gateway = UnavailablePlannerGateway()
+
+    result = run_conversational_workflow(
+        _payload(
+            thread,
+            alert_id,
+            request_id="auto-planner-unavailable",
+            prompt="What matters most right now?",
+            workflow="auto",
+        ),
+        owner_username="conversation_analyst",
+        actor_role="analyst",
+        gateway=gateway,
+        config=AiGatewayConfig(
+            mode=AI_MODE_LOCAL_ONLY,
+            configured_mode=AI_MODE_LOCAL_ONLY,
+            local_provider="controlled-local",
+            local_base_url="http://127.0.0.1:11434",
+            local_model="planner-test",
+        ),
+    )
+
+    assert result.payload["metadata"]["model_invoked"] is False
+    assert "could not safely plan" in result.payload["result"]["answer"].lower()
+    assert len(gateway.requests) == 1
+    assert gateway.requests[0].capability == "agentic_analyst_planning"
+
+
+def test_explicit_quick_explain_keeps_documented_planner_unavailable_fallback(postgres_db, monkeypatch):
+    conn, _cur = postgres_db
+    thread, alert_id = _seed(conn)
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
+    )
+    executed = []
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.run_workflow",
+        lambda payload, **_kwargs: executed.append(payload) or _quick_result("Current alert evidence was explained."),
+    )
+    gateway = UnavailablePlannerGateway()
+
+    result = run_conversational_workflow(
+        _payload(thread, alert_id, request_id="explicit-quick-planner-unavailable"),
+        owner_username="conversation_analyst",
+        actor_role="analyst",
+        gateway=gateway,
+        config=AiGatewayConfig(
+            mode=AI_MODE_LOCAL_ONLY,
+            configured_mode=AI_MODE_LOCAL_ONLY,
+            local_provider="controlled-local",
+            local_base_url="http://127.0.0.1:11434",
+            local_model="planner-test",
+        ),
+    )
+
+    assert result.payload["result"]["answer"] == "Current alert evidence was explained."
+    assert len(executed) == 1
+    assert len(gateway.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "prompt,expected_fragment,expected_planner_calls",
+    [
+        ("Inspect the Repo Assistant code for this issue.", "outside this read-only SIEM conversation", 1),
+        ("Continue the SOC Briefing from this morning.", "no prior conclusion", 0),
+    ],
+)
+def test_working_planner_cannot_reclassify_textual_boundary_into_siem_execution(
+    postgres_db, monkeypatch, prompt, expected_fragment, expected_planner_calls
+):
+    conn, _cur = postgres_db
+    thread, alert_id = _seed(conn)
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
+    )
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.run_workflow",
+        lambda *_args, **_kwargs: pytest.fail("boundary plan reached SIEM workflow execution"),
+    )
+    plan = {
+        "current_turn_intent": "Identify a request outside the SIEM conversation boundary.",
+        "relationship_to_prior_turn": "new_question",
+        "resolved_entities": [{"type": "alert", "id": str(alert_id)}],
+        "evidence_sufficiency": "sufficient",
+        "required_evidence": [],
+        "proposed_strategy": "unsupported_or_boundary",
+        "proposed_capability": None,
+        "proposed_tool_categories": [],
+        "clarification_question": None,
+        "reasoning_summary": "The request belongs to an isolated product namespace.",
+        "stopping_condition": "Stop without invoking a SIEM capability.",
+        "confidence": "high",
+        "safety": {"read_only": True, "mutation_allowed": False},
+    }
+    gateway = PlannerThenAnswerGateway(plan, "unused")
+
+    result = run_conversational_workflow(
+        _payload(thread, alert_id, request_id=f"boundary-text-{alert_id}", prompt=prompt, workflow="auto"),
+        owner_username="conversation_analyst",
+        actor_role="analyst",
+        gateway=gateway,
+        config=AiGatewayConfig(
+            mode=AI_MODE_LOCAL_ONLY,
+            configured_mode=AI_MODE_LOCAL_ONLY,
+            local_provider="controlled-local",
+            local_base_url="http://127.0.0.1:11434",
+            local_model="planner-test",
+        ),
+    )
+
+    assert result.payload["metadata"]["model_invoked"] is False
+    assert expected_fragment in result.payload["result"]["answer"]
+    assert len(gateway.requests) == expected_planner_calls

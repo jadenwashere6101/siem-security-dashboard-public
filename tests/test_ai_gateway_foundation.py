@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from unittest.mock import patch
 
+import pytest
 from werkzeug.security import generate_password_hash
 
 from core.ai.config import (
@@ -365,6 +366,66 @@ def test_gateway_applies_capability_check_before_provider_use():
     assert response.status == AI_STATUS_PROVIDER_INCAPABLE
     assert local.generate_calls == 0
     assert paid.generate_calls == 0
+
+
+def test_ollama_provider_accepts_agentic_planner_and_rejects_unknown_capability():
+    provider = OllamaProvider()
+
+    planner = provider.supports(
+        AiGatewayRequest(prompt="Plan this turn.", capability="agentic_analyst_planning")
+    )
+    unknown = provider.supports(
+        AiGatewayRequest(prompt="Run an unknown capability.", capability="arbitrary_mutation")
+    )
+
+    assert planner.capable is True
+    assert planner.status == AI_STATUS_SUCCESS
+    assert unknown.capable is False
+    assert unknown.status == AI_STATUS_PROVIDER_INCAPABLE
+
+
+def test_gateway_reaches_ollama_generation_for_agentic_planner(monkeypatch):
+    calls = []
+
+    def fake_http(method, url, *, payload=None, timeout):
+        calls.append({"method": method, "url": url, "payload": payload, "timeout": timeout})
+        return {"response": '{"proposed_strategy":"direct_answer"}'}
+
+    monkeypatch.setattr("core.ai.providers._http_json", fake_http)
+    config = _config(local_provider="ollama")
+    gateway = AiGateway(config=config, providers={"ollama": OllamaProvider()})
+
+    response = gateway.generate(
+        AiGatewayRequest(
+            prompt="Return a bounded read-only plan.",
+            capability="agentic_analyst_planning",
+            profile="fast_triage",
+        )
+    )
+
+    assert response.status == AI_STATUS_SUCCESS
+    assert response.metadata.provider == "ollama"
+    assert response.metadata.local_request is True
+    assert response.metadata.paid_request is False
+    assert response.metadata.fallback_attempted is False
+    assert len(calls) == 1
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["url"].endswith("/api/generate")
+
+
+def test_gateway_keeps_unregistered_ollama_capability_fail_closed(monkeypatch):
+    monkeypatch.setattr(
+        "core.ai.providers._http_json",
+        lambda *_args, **_kwargs: pytest.fail("unsupported capability must not reach generation"),
+    )
+    gateway = AiGateway(config=_config(local_provider="ollama"), providers={"ollama": OllamaProvider()})
+
+    response = gateway.generate(
+        AiGatewayRequest(prompt="Do not execute.", capability="unregistered_capability")
+    )
+
+    assert response.status == AI_STATUS_PROVIDER_INCAPABLE
+    assert response.metadata.error_code == AI_STATUS_PROVIDER_INCAPABLE
 
 
 def test_gateway_does_not_touch_database_or_shell(monkeypatch):

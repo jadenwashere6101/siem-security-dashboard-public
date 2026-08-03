@@ -94,3 +94,29 @@ The system SHALL test at least three natural phrasings for each required behavio
 #### Scenario: End-to-end persisted planning
 - **WHEN** a production-shaped conversational request is planned through a controlled local-provider test double
 - **THEN** plan construction, validation, dispatch, response envelope, and PostgreSQL turn state complete under owner and workflow boundaries
+
+### Requirement: Planner capability is registered with the configured local provider
+The system SHALL register `agentic_analyst_planning` through the normal provider capability contract. The configured Ollama provider SHALL accept that capability and reach generation, while providers and capabilities that are not explicitly registered MUST continue to fail closed. The planning profile SHALL remain local-only with paid fallback disabled.
+
+#### Scenario: Planner reaches local generation
+- **WHEN** the gateway receives an `agentic_analyst_planning` request using the configured local planning profile
+- **THEN** Ollama capability validation accepts it and invokes local generation without attempting paid fallback
+
+#### Scenario: Unknown capability remains blocked
+- **WHEN** the gateway receives an unregistered capability
+- **THEN** it returns provider-incapable without invoking generation
+
+### Requirement: Original workflow boundaries are validated before planning
+The system SHALL validate the originally requested workflow and SIEM conversation namespace before planner generation, repair, classification, or fallback. Repo Assistant, SOC Briefing, and unsupported workflow names MUST NOT be transformed into a SIEM capability. A post-planning classification SHALL NOT erase the original request boundary.
+
+#### Scenario: Explicit isolated workflow
+- **WHEN** a SIEM conversation request explicitly names Repo Assistant or SOC Briefing
+- **THEN** the request is rejected before planner or workflow generation regardless of planner availability or output
+
+#### Scenario: Unsupported workflow
+- **WHEN** a SIEM conversation request names an unknown workflow
+- **THEN** it fails with an unsupported-workflow error and MUST NOT silently execute Quick Explain
+
+#### Scenario: Valid degraded shortcut
+- **WHEN** the current request explicitly selects an allowed SIEM shortcut and the planner is unavailable
+- **THEN** only the documented safe shortcut fallback may run; an unhinted `auto` request remains planner-unavailable

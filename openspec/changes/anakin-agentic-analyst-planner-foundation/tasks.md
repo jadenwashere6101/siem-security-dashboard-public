@@ -22,10 +22,17 @@
 ## 4. Final Gates
 
 - [x] 4.1 Run the full PostgreSQL-backed repository suite once and compare failures against current-HEAD baseline with no new failures.
-- [ ] 4.2 Run `git diff --check` and `openspec validate anakin-agentic-analyst-planner-foundation --strict`.
+- [x] 4.2 Run `git diff --check` and `openspec validate anakin-agentic-analyst-planner-foundation --strict`.
 - [x] 4.3 Review sticky-workflow, paraphrase, conflicting-state, evidence, malformed-plan, boundary, timeout, and nondeterminism variants and record remaining Spec 2/3 work.
 
 ## 5. Anakin Production Completion Gate
 
 - [ ] 5.1 Before using working, done, fully verified, or production-ready language, follow `docs/anakin-production-acceptance-policy.md` and verify every affected workflow through `browser -> /siem/ -> nginx -> frontend -> backend -> worker/Ollama -> frontend-rendered result`, capturing workflow, browser/API/UI results, latency, pass/fail, root cause, mutation status, and remaining unverified behavior.
 - [x] 5.2 Because this implementation phase forbids deployment and VM access, report exactly `Implementation complete; production behavior unverified.` and do not claim Anakin is now an intelligent analyst agent.
+
+## 6. Production Integration Correction
+
+- [x] 6.1 Register `agentic_analyst_planning` in the Ollama provider capability contract without weakening unsupported-provider checks or local-only/no-paid-fallback policy.
+- [x] 6.2 Validate the original requested workflow before planner generation, repair, classification, or fallback; reject Repo Assistant, SOC Briefing, and unknown workflows deterministically.
+- [x] 6.3 Add provider/gateway and orchestration/route regression tests proving generation reachability, original-intent boundary ordering, safe planner-unavailable behavior, and valid shortcut fallback.
+- [x] 6.4 Run focused PostgreSQL-backed tests, AI acceptance harness, Python compilation, `git diff --check`, and strict OpenSpec validation.

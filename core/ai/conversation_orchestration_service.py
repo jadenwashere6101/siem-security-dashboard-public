@@ -42,6 +42,7 @@ from core.ai.workflow_orchestrator import (
     WORKFLOW_QUICK_EXPLAIN,
     WorkflowClassification,
     WorkflowResult,
+    WorkflowValidationError,
     classify_workflow,
     run_workflow,
 )
@@ -129,6 +130,18 @@ def reject_isolated_conversation(payload: dict[str, Any], *, workflow: str) -> N
         raise ConversationBoundaryError(f"{workflow.replace('_', ' ').title()} cannot use SIEM conversation memory.")
 
 
+def validate_original_conversation_workflow(payload: dict[str, Any]) -> str:
+    """Validate the client-requested namespace before planning can transform it."""
+    requested = str(payload.get("workflow") or WORKFLOW_AUTO).strip().lower() or WORKFLOW_AUTO
+    if requested in ISOLATED_WORKFLOWS:
+        raise ConversationBoundaryError(
+            f"{requested.replace('_', ' ').title()} cannot use SIEM conversation memory."
+        )
+    if requested != WORKFLOW_AUTO and requested not in CONVERSATION_WORKFLOWS:
+        raise WorkflowValidationError("workflow is unsupported.", error_code="unsupported_workflow")
+    return requested
+
+
 def run_conversational_workflow(
     payload: dict[str, Any],
     *,
@@ -140,6 +153,7 @@ def run_conversational_workflow(
 ) -> WorkflowResult:
     if not has_conversation_envelope(payload):
         return run_workflow(payload, gateway=gateway, config=config)
+    validate_original_conversation_workflow(payload)
     planning = planned or plan_conversational_submission(
         payload,
         owner_username=owner_username,
@@ -182,6 +196,7 @@ def queue_conversational_request(
     actor_role: str,
     planned: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], int]:
+    validate_original_conversation_workflow(payload)
     planning = planned or plan_conversational_submission(payload, owner_username=actor_username)
     classification = planning["classification"]
     workflow = classification.classified_workflow
@@ -231,6 +246,7 @@ def plan_conversational_submission(
     """Build and execute a read-only planning snapshot without holding a DB lock."""
     if not has_conversation_envelope(payload):
         raise ConversationBoundaryError("Agentic planning requires a SIEM conversation envelope.")
+    requested = validate_original_conversation_workflow(payload)
     if any(field in payload for field in {"_conversation_execution", "conversation_context", "_agentic_plan"}):
         raise ConversationBoundaryError("Server-owned conversation planning fields cannot be supplied by clients.")
     envelope = payload.get("conversation")
@@ -288,7 +304,6 @@ def plan_conversational_submission(
     finally:
         conn.close()
 
-    requested = str(payload.get("workflow") or WORKFLOW_AUTO).strip().lower() or WORKFLOW_AUTO
     preferred = requested if requested in CONVERSATION_WORKFLOWS else None
     packet = build_planner_packet(
         question=_question(payload),
@@ -1710,4 +1725,5 @@ __all__ = [
     "queue_conversational_request",
     "reject_isolated_conversation",
     "run_conversational_workflow",
+    "validate_original_conversation_workflow",
 ]

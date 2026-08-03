@@ -27,6 +27,14 @@ from core.ai.models import (
 
 _LOGGER = logging.getLogger(__name__)
 
+OLLAMA_CAPABILITIES = frozenset(
+    {
+        "agentic_analyst_planning",
+        "scheduled_soc_briefing",
+        "text_generation",
+    }
+)
+
 
 class AiProvider(Protocol):
     provider_key: str
@@ -76,7 +84,7 @@ class OllamaProvider:
     provider_key = "ollama"
 
     def supports(self, request: AiGatewayRequest) -> AiCapabilityResult:
-        if request.capability not in {"text_generation", "scheduled_soc_briefing"}:
+        if request.capability not in OLLAMA_CAPABILITIES:
             return AiCapabilityResult(
                 False,
                 AI_STATUS_PROVIDER_INCAPABLE,
