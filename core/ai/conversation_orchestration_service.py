@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -14,6 +15,7 @@ from core.ai.agentic_analyst_planner import (
     plan_turn,
 )
 from core.ai.config import load_ai_gateway_config
+from core.ai.draft_schemas import DraftValidationError, SUPPORTED_DRAFT_TYPES, normalize_draft_type
 from core.ai.conversation_context import (
     ConversationContextError,
     conversation_budget,
@@ -345,6 +347,14 @@ def plan_conversational_submission(
         if outcome.plan is None and preferred:
             outcome = deterministic_shortcut_plan(packet, preferred)
     workflow = outcome.workflow or WORKFLOW_QUICK_EXPLAIN
+    if outcome.plan and outcome.plan.proposed_strategy == "artifact_draft":
+        draft_type = _resolved_draft_type(payload, outcome.plan.current_turn_intent)
+        if draft_type:
+            payload["draft_type"] = draft_type
+            workflow = "generate_artifact"
+        else:
+            outcome = _artifact_type_clarification(packet)
+            workflow = "generate_artifact"
     classification = WorkflowClassification(
         requested_workflow=requested,
         classified_workflow=workflow,
@@ -673,6 +683,17 @@ def _prepare_submission(
                 classification,
                 workflow=workflow,
                 message=message,
+                status=(
+                    "clarification_required"
+                    if planner_outcome
+                    and planner_outcome.plan
+                    and planner_outcome.plan.proposed_strategy == "clarification_required"
+                    else "unsupported_or_boundary"
+                    if planner_outcome
+                    and planner_outcome.plan
+                    and planner_outcome.plan.proposed_strategy == "unsupported_or_boundary"
+                    else str(resolution.get("status") or "unresolved")
+                ),
                 resolution=resolution,
                 thread=final_thread,
                 user_turn=completed_user,
@@ -1407,7 +1428,10 @@ def _conversation_turn_payload(
     if workflow == "generate_artifact":
         artifact = payload.get("artifact") if isinstance(payload.get("artifact"), dict) else {}
         result["artifact_safety"] = {
-            "artifact_type": _compact_scalar(artifact.get("type"), 80),
+            "artifact_type": _compact_scalar(
+                payload.get("draft_type") or payload.get("draftType") or payload.get("artifact_type") or artifact.get("type"),
+                80,
+            ),
             "preview_only": True,
             "persisted": False,
             "applied": False,
@@ -1462,6 +1486,65 @@ def _apply_planner_execution_hints(payload: dict[str, Any], plan: AgenticAnalyst
             "max_tool_calls": 1,
             "tool_requests": [tool_request],
         }
+
+
+_DRAFT_INTENT_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
+    "detection_rule_change": (
+        re.compile(r"\b(?:detection|alert)\s+rule\b", re.I),
+        re.compile(r"\b(?:tune|change)\b.*\b(?:detection|rule)\b", re.I),
+    ),
+    "playbook_draft": (re.compile(r"\bplaybook\b", re.I),),
+    "incident_note": (re.compile(r"\bincident\s+note\b", re.I),),
+    "escalation_summary": (
+        re.compile(r"\b(?:escalation|handoff)\s+(?:summary|note)\b", re.I),
+        re.compile(r"\bescalat(?:e|ion)\b", re.I),
+    ),
+    "response_recommendation": (
+        re.compile(r"\bresponse\s+recommendation\b", re.I),
+        re.compile(r"\bcontainment\s+(?:options|recommendation)\b", re.I),
+    ),
+    "investigation_checklist": (
+        re.compile(r"\b(?:investigation|analyst)\s+checklist\b", re.I),
+        re.compile(r"\bchecklist\b", re.I),
+    ),
+}
+
+
+def _resolved_draft_type(payload: dict[str, Any], planner_intent: str) -> str | None:
+    artifact = payload.get("artifact") if isinstance(payload.get("artifact"), dict) else {}
+    explicit = payload.get("draft_type") or payload.get("draftType") or payload.get("artifact_type") or artifact.get("type")
+    if explicit:
+        try:
+            return normalize_draft_type(explicit)
+        except DraftValidationError:
+            return None
+    text = " ".join((_question(payload), str(planner_intent or "")))
+    matches = {
+        draft_type
+        for draft_type, patterns in _DRAFT_INTENT_PATTERNS.items()
+        if any(pattern.search(text) for pattern in patterns)
+    }
+    return next(iter(matches)) if len(matches) == 1 and matches <= SUPPORTED_DRAFT_TYPES else None
+
+
+def _artifact_type_clarification(packet) -> PlannerOutcome:
+    labels = ", ".join(sorted(SUPPORTED_DRAFT_TYPES))
+    payload = {
+        "current_turn_intent": "Clarify the requested analyst artifact category.",
+        "evidence_sufficiency": "ambiguous",
+        "required_evidence": [],
+        "proposed_strategy": "clarification_required",
+        "proposed_tool_categories": [],
+        "evidence_requirements": {},
+        "clarification_question": f"Which artifact should I draft? Available categories: {labels}.",
+        "reasoning_summary": "Generate Artifact requires one bounded server-approved draft category.",
+        "stopping_condition": "Continue after the analyst selects one listed artifact category.",
+        "confidence": "high",
+    }
+    plan, errors = parse_and_validate_plan(json.dumps(payload), packet.payload)
+    if plan is None:
+        raise ConversationOrchestrationError("Deterministic artifact clarification failed validation: " + "; ".join(errors))
+    return PlannerOutcome("clarification", plan, packet, False, message=plan.clarification_question)
 
 
 def _planner_tool_request(
@@ -1687,6 +1770,7 @@ def _deterministic_envelope(
     *,
     workflow: str,
     message: str,
+    status: str,
     resolution: dict[str, Any],
     thread: dict[str, Any],
     user_turn: dict[str, Any],
@@ -1694,7 +1778,7 @@ def _deterministic_envelope(
     selection,
 ) -> dict[str, Any]:
     return {
-        "status": resolution.get("status"),
+        "status": status,
         "workflow": workflow,
         "classification": classification.as_dict(),
         "result": {"answer": message, "reference_resolution": resolution},

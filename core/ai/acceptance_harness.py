@@ -1615,8 +1615,16 @@ def _run_case(entry: AiInvocationInventoryEntry, case: AcceptanceCase, config: A
     error_code = None
     root_cause = None
     if prompt_error is not None:
-        error_code = "frontend_request_contract_failed"
-        root_cause = ROOT_CAUSE_FRONTEND_CONTRACT_MISMATCH
+        normalized_prompt_error = prompt_error.lower()
+        if (
+            ("prompt" in normalized_prompt_error or "synthesis context" in normalized_prompt_error)
+            and ("budget" in normalized_prompt_error or "too large" in normalized_prompt_error)
+        ):
+            error_code = "prompt_exceeded_profile_limit"
+            root_cause = ROOT_CAUSE_PROMPT_TOO_LARGE
+        else:
+            error_code = "frontend_request_contract_failed"
+            root_cause = ROOT_CAUSE_FRONTEND_CONTRACT_MISMATCH
     elif prompt_size > profile.max_prompt_chars:
         error_code = "prompt_exceeded_profile_limit"
         root_cause = ROOT_CAUSE_PROMPT_TOO_LARGE

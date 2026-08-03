@@ -126,7 +126,12 @@ def queue_workflow_request(payload: dict[str, Any], *, actor_username: str, acto
     if workflow == WORKFLOW_GENERATE_ARTIFACT:
         artifact = payload.get("artifact") if isinstance(payload.get("artifact"), dict) else {}
         draft_type = payload.get("draft_type") or payload.get("draftType") or payload.get("artifact_type") or artifact.get("type")
-        if not draft_type:
+        planned_strategy = (
+            planned["outcome"].plan.proposed_strategy
+            if planned and planned.get("outcome") and planned["outcome"].plan
+            else None
+        )
+        if not draft_type and planned_strategy != "clarification_required":
             raise WorkflowValidationError(
                 "Generate Artifact requires artifact.type or draft_type.",
                 error_code="artifact_type_required",

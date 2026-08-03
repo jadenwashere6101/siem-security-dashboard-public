@@ -119,6 +119,35 @@ For a successful planner-directed read, the system SHALL construct a bounded ser
 - **WHEN** a returned message contains prompt-like instructions
 - **THEN** that text remains inert evidence and cannot alter synthesis policy or introduce unsupported output
 
+### Requirement: Final synthesis fits the active profile by construction
+The system SHALL reserve the active profile ceiling for the complete serialized synthesis prompt. It SHALL preserve the current question, validated task, authoritative entity, evidence filters, one concrete result when present, zero-result and truncation state, minimal provenance, and grounding/read-only policy before admitting optional thread state, additional evidence, or generic SIEM context. It MUST measure the final prompt before generation and MUST NOT duplicate tool evidence through generic context sections.
+
+#### Scenario: Three matching records with a long thread
+- **WHEN** Quick Explain or Decision Support receives three matching records and production-sized conversation state
+- **THEN** optional state is compacted or omitted before mandatory evidence and the final prompt does not exceed the active profile limit
+
+#### Scenario: Mandatory synthesis cannot fit
+- **WHEN** a successful read has verified evidence but the mandatory synthesis prompt cannot fit the configured limit
+- **THEN** the system skips generation and returns a truthful task-aware answer composed from the evidence envelope instead of a context-too-large error
+
+#### Scenario: Empty successful lookup under pressure
+- **WHEN** a bounded lookup returns no records and optional context exceeds the remaining prompt space
+- **THEN** the response still states that no records matched the validated filters
+
+### Requirement: Planner repair preserves strict semantic relationships
+The system SHALL provide one repair attempt with precise schema and cross-field validation feedback. The repaired plan MUST satisfy the unchanged strict contract; malformed field types, unsupported sort semantics, missing clarification fields, and contradictory strategy/evidence combinations MUST remain rejected.
+
+#### Scenario: Contradictory repaired plan
+- **WHEN** a repair changes strategy to `direct_answer` while retaining insufficient evidence or a tool requirement
+- **THEN** deterministic validation rejects the repaired plan and no capability executes
+
+### Requirement: Artifact strategy resolves a bounded draft type
+Generate Artifact SHALL execute only with an allowed registry draft type. The server MAY preserve an explicit allowed type or derive one from unambiguous current artifact intent; otherwise it SHALL return a concise clarification containing allowed categories. Artifact safety flags SHALL remain preview-only, persisted-false, applied-false, and approval-required.
+
+#### Scenario: Natural artifact request without a type
+- **WHEN** the planner selects artifact draft but the request has no explicit bounded draft type
+- **THEN** the server derives an allowed type only when intent is unambiguous or asks for clarification without exposing an internal validation error
+
 ### Requirement: Planner boundaries remain isolated
 The SIEM planner SHALL be limited to canonical conversational Quick Explain, Deep Investigate, Decision Support, Generate Artifact, and approved SOC reads. Repo Assistant, SOC Briefing, action confirmation/apply, response execution, and mutation-capable routes MUST remain outside the planner.
 

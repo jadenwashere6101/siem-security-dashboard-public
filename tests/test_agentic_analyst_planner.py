@@ -355,6 +355,47 @@ def test_planner_prompt_defines_sort_semantics_without_accepting_aliases():
     assert "never output timestamp, asc, or desc" in prompt
 
 
+def test_planner_repair_reports_required_evidence_type_contract_precisely():
+    malformed = _plan()
+    malformed["required_evidence"] = {"alerts": "current high-severity alerts"}
+    gateway = SequenceGateway([json.dumps(malformed), json.dumps(_plan())])
+
+    outcome = plan_turn(_packet(), gateway=gateway, config=_config())
+
+    assert outcome.status == "planned"
+    assert outcome.repaired is True
+    assert len(gateway.requests) == 2
+    repair_prompt = gateway.requests[1].prompt
+    assert "required_evidence must be a list" in repair_prompt
+    assert '"required_evidence":"array of strings"' in repair_prompt
+    assert "Correct every reported schema and cross-field violation" in repair_prompt
+
+
+def test_contradictory_repaired_direct_answer_still_fails_closed():
+    malformed = _plan()
+    malformed["required_evidence"] = {"alerts": "current high-severity alerts"}
+    contradictory = _plan(strategy="direct_answer", sufficiency="insufficient", tools=[], requirements={})
+    gateway = SequenceGateway([json.dumps(malformed), json.dumps(contradictory)])
+
+    outcome = plan_turn(_packet(), gateway=gateway, config=_config())
+
+    assert outcome.status == "invalid"
+    assert outcome.plan is None
+    assert outcome.repaired is True
+    assert len(gateway.requests) == 2
+
+
+def test_planner_prompt_prefers_authoritative_state_for_state_summary_intent():
+    gateway = SequenceGateway([json.dumps(_plan(strategy="direct_answer", sufficiency="sufficient", tools=[], requirements={}))])
+    packet = _packet("Summarize our current investigation.")
+
+    outcome = plan_turn(packet, gateway=gateway, config=_config())
+
+    assert outcome.status == "planned"
+    assert "asks to summarize that state" in gateway.requests[0].prompt
+    assert "use direct_answer with sufficient evidence" in gateway.requests[0].prompt
+
+
 def test_second_invalid_plan_does_not_fall_back_to_prior_workflow():
     gateway = SequenceGateway(["not-json", "still-not-json"])
     outcome = plan_turn(_packet(), gateway=gateway, config=_config())

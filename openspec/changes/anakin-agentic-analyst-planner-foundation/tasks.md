@@ -66,3 +66,11 @@
 - [x] 10.3 Validate tool-backed model output and deterministically normalize generic, unsupported, empty-result, and truncated-result answers from envelope facts only.
 - [x] 10.4 Add production-derived explainer and PostgreSQL conversation tests covering alert, evidence, source-IP, time-window, empty, differing, injection, truncation, state, persistence, and boundary cases.
 - [x] 10.5 Run Python compilation, focused PostgreSQL-backed suites, affected explainer/workflow regressions, AI acceptance harness, `git diff --check`, and strict OpenSpec validation.
+
+## 11. Fit-by-Construction Synthesis Correction
+
+- [x] 11.1 Trace Quick Explain, Decision Support, and regular Quick Explain prompt composition; document complete-prompt ownership, priority, fallback, repair, state-summary, and artifact-type failure invariants.
+- [x] 11.2 Replace independent section budgets with a final-prompt builder that reserves mandatory evidence/safety content and admits optional context by measured priority.
+- [x] 11.3 Return task-aware deterministic evidence answers when successful evidence cannot be synthesized within the active profile limit.
+- [x] 11.4 Improve one-repair contract feedback, state-summary planning guidance, and bounded artifact draft-type handling without weakening validation.
+- [x] 11.5 Add production-derived prompt measurements and PostgreSQL workflow tests, then run compilation, focused suites, acceptance harness, `git diff --check`, and strict validation.

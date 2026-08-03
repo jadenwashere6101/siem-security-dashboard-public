@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import core.ai.conversation_orchestration_service as conversation_orchestration_service
 from core.ai.conversation_context import (
     ConversationContextTooLargeError,
     conversation_budget,
@@ -16,6 +17,7 @@ from core.ai.conversation_context import (
 from core.ai.conversation_orchestration_service import (
     ConversationBoundaryError,
     _planner_tool_request,
+    _resolved_draft_type,
     queue_conversational_request,
     run_conversational_workflow,
 )
@@ -35,6 +37,7 @@ from core.ai.session_memory_store import (
 )
 from core.ai.workflow_orchestrator import WorkflowResult, WorkflowValidationError, classify_workflow
 from core.ai.workflow_request_store import get_request
+from core.ai.workflow_request_service import queue_workflow_request
 from core.ai.workflow_request_worker import AnakinWorkflowWorkerConfig, run_anakin_workflow_worker
 from core.ai.config import AI_MODE_LOCAL_ONLY, AiGatewayConfig, load_ai_gateway_config
 from core.ai.context_builder import AiContextPayload
@@ -185,6 +188,25 @@ def test_planner_response_registry_requirements_outrank_prior_context():
         "tool_name": "get_response_registry_context",
         "arguments": {"source_ip": "203.0.113.81", "limit": 2},
     }
+
+
+@pytest.mark.parametrize(
+    "question,expected",
+    [
+        ("Draft an investigation checklist for this alert.", "investigation_checklist"),
+        ("Create an incident note for the handoff.", "incident_note"),
+        ("Prepare an escalation summary.", "escalation_summary"),
+        ("Draft a response recommendation.", "response_recommendation"),
+        ("Write a playbook draft.", "playbook_draft"),
+        ("Propose a detection rule change.", "detection_rule_change"),
+    ],
+)
+def test_artifact_intent_derives_only_bounded_registry_types(question, expected):
+    assert _resolved_draft_type({"prompt": question}, "Draft the requested analyst artifact.") == expected
+
+
+def test_ambiguous_artifact_intent_does_not_invent_a_draft_type():
+    assert _resolved_draft_type({"prompt": "Draft something useful for this investigation."}, "Create an artifact.") is None
 
 
 class PlannerThenAnswerGateway:
@@ -752,6 +774,68 @@ def test_generate_artifact_records_preview_only_assistant_turn(postgres_db, monk
         "applied": False,
         "approval_required": True,
     }
+
+
+def test_generate_artifact_derives_checklist_type_before_async_drafting(postgres_db, monkeypatch):
+    conn, _cur = postgres_db
+    thread, alert_id = _seed(conn)
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
+    )
+    payload = _payload(
+        thread,
+        alert_id,
+        request_id="derived-artifact-conversation",
+        prompt="Draft an investigation checklist for this alert.",
+        workflow="generate_artifact",
+    )
+
+    queued, status = queue_workflow_request(
+        payload,
+        actor_username="conversation_analyst",
+        actor_role="analyst",
+    )
+
+    assert status == 202
+    request = get_request(conn, queued["request_id"], actor_username="conversation_analyst")
+    assert request["request_payload"]["draft_type"] == "investigation_checklist"
+    user_turn = list_turns(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")["turns"][0]
+    assert user_turn["structured_payload"]["artifact_safety"] == {
+        "artifact_type": "investigation_checklist",
+        "preview_only": True,
+        "persisted": False,
+        "applied": False,
+        "approval_required": True,
+    }
+
+
+def test_ambiguous_artifact_request_returns_persisted_category_clarification(postgres_db, monkeypatch):
+    conn, _cur = postgres_db
+    thread, alert_id = _seed(conn)
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
+    )
+    payload = _payload(
+        thread,
+        alert_id,
+        request_id="ambiguous-artifact-conversation",
+        prompt="Draft something useful for this investigation.",
+        workflow="generate_artifact",
+    )
+
+    response, status = queue_workflow_request(
+        payload,
+        actor_username="conversation_analyst",
+        actor_role="analyst",
+    )
+
+    assert status == 200
+    assert response["status"] == "clarification_required"
+    assert "Which artifact should I draft?" in response["result"]["answer"]
+    assert "investigation_checklist" in response["result"]["answer"]
+    assert "DraftValidationError" not in response["result"]["answer"]
+    turns = list_turns(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")["turns"]
+    assert [turn["role"] for turn in turns] == ["user", "assistant"]
 
 
 def test_worker_role_loss_fails_closed_before_generation(postgres_db, monkeypatch):
@@ -1433,6 +1517,16 @@ def test_production_shaped_auto_turn_plans_dispatches_and_persists(postgres_db, 
                 ('failed_login', 'high', '203.0.113.83'::inet, 'pfsense', 'source excluded evidence marker', 'open', NOW() - INTERVAL '3 minutes')
             """
         )
+        cur.execute(
+            """
+            INSERT INTO alerts (alert_type, severity, source_ip, source, message, status, created_at)
+            VALUES
+                ('failed_login', 'high', '203.0.113.81'::inet, 'pfsense', 'second matching evidence marker', 'open', NOW() - INTERVAL '8 minutes'),
+                ('failed_login', 'high', '203.0.113.81'::inet, 'pfsense', 'third matching evidence marker', 'open', NOW() - INTERVAL '6 minutes')
+            RETURNING id
+            """
+        )
+        additional_matching_ids = [row[0] for row in cur.fetchall()]
     conn.commit()
     monkeypatch.setattr(
         "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
@@ -1452,7 +1546,7 @@ def test_production_shaped_auto_turn_plans_dispatches_and_persists(postgres_db, 
             "source_ip": "203.0.113.81",
             "time_window_minutes": 60,
             "sort": "newest",
-            "limit": 1,
+            "limit": 3,
         },
         "clarification_question": None,
         "reasoning_summary": "The current question is a new lookup and requires fresh alert-list evidence.",
@@ -1493,13 +1587,17 @@ def test_production_shaped_auto_turn_plans_dispatches_and_persists(postgres_db, 
     assert result.status_code == 200
     assert result.payload["workflow"] == "quick_explain"
     answer = result.payload["result"]["answer"]
-    assert answer.startswith(f"Alert {alert_id} is HIGH failed_login")
+    assert answer.startswith("The lookup returned 3 matching records.")
+    assert f"Alert {alert_id}" in answer
+    assert all(f"Alert {matching_id}" in answer for matching_id in additional_matching_ids)
     assert "203.0.113.81" in answer
     assert "target filtered evidence marker" in answer
     assert "Bad IP" not in answer
     assert len(gateway.requests) == 2
     assert gateway.requests[0].capability == "agentic_analyst_planning"
-    assert '"evidence_source": "search_alerts"' in gateway.requests[1].prompt
+    assert '"evidence_query_parameters"' in gateway.requests[1].prompt
+    assert '"limit":3' in gateway.requests[1].prompt
+    assert '"severity":"high"' in gateway.requests[1].prompt
     assert "target filtered evidence marker" in gateway.requests[1].prompt
     assert "low excluded evidence marker" not in gateway.requests[1].prompt
     assert "old excluded evidence marker" not in gateway.requests[1].prompt
@@ -1517,15 +1615,18 @@ def test_production_shaped_auto_turn_plans_dispatches_and_persists(postgres_db, 
         "source_ip": "203.0.113.81",
         "time_window_minutes": 60,
         "sort": "newest",
-        "limit": 1,
+        "limit": 3,
     }
     assert turns[0]["entity_snapshot"]["active_entity"]["type"] == "alert"
     assert turns[0]["entity_snapshot"]["active_entity"]["id"] == str(alert_id)
     assert turns[-1]["role"] == "assistant"
     grounding = turns[-1]["structured_payload"]["evidence_grounding"]
-    assert grounding["result_count"] == 1
-    assert grounding["records"][0]["id"] == alert_id
-    assert grounding["records"][0]["source_ip"] == "203.0.113.81"
+    assert grounding["result_count"] == 3
+    assert {record["id"] for record in grounding["records"]} == {alert_id, *additional_matching_ids}
+    assert all(record["source_ip"] == "203.0.113.81" for record in grounding["records"])
+    synthesis = result.payload["result"]["metadata"]["synthesis_prompt"]
+    assert synthesis["final_chars"] <= synthesis["profile_max_prompt_chars"]
+    assert synthesis["evidence_records_included"] == 3
 
 
 def test_production_time_window_no_match_does_not_reuse_older_alert(postgres_db, monkeypatch):
@@ -1579,6 +1680,68 @@ def test_production_time_window_no_match_does_not_reuse_older_alert(postgres_db,
     assert result.payload["result"]["evidence_envelope"]["result_count"] == 0
     assert result.payload["result"]["evidence_envelope"]["evidence_query_parameters"]["time_window_minutes"] == 60
     assert str(alert_id) not in result.payload["result"]["answer"]
+
+
+def test_conversation_state_question_uses_thread_state_without_tool_lookup(postgres_db, monkeypatch):
+    conn, _cur = postgres_db
+    thread, alert_id = _seed(conn)
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
+    )
+    original_run_workflow = conversation_orchestration_service.run_workflow
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.run_workflow",
+        lambda *_args, **_kwargs: _quick_result(f"Alert {alert_id} remains the active failed-login investigation."),
+    )
+    run_conversational_workflow(
+        _payload(thread, alert_id, request_id="state-summary-seed"),
+        owner_username="conversation_analyst",
+        actor_role="analyst",
+    )
+    current = get_thread(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")
+    monkeypatch.setattr("core.ai.conversation_orchestration_service.run_workflow", original_run_workflow)
+    monkeypatch.setattr("core.ai.context_builder.get_db_connection", lambda: NoCloseConnection(conn))
+    plan = {
+        "current_turn_intent": "Summarize the active investigation state.",
+        "evidence_sufficiency": "sufficient",
+        "required_evidence": [],
+        "proposed_strategy": "direct_answer",
+        "proposed_tool_categories": [],
+        "evidence_requirements": {},
+        "clarification_question": None,
+        "reasoning_summary": "The authoritative thread state identifies the active alert and current conclusion.",
+        "stopping_condition": "Stop after stating the active focus and current conclusion.",
+        "confidence": "high",
+    }
+    gateway = PlannerThenAnswerGateway(plan, "This alert indicates suspicious activity from a bad IP.")
+
+    result = run_conversational_workflow(
+        _payload(
+            current,
+            alert_id,
+            request_id="state-summary-question",
+            prompt="Summarize our current investigation.",
+            workflow="auto",
+        ),
+        owner_username="conversation_analyst",
+        actor_role="analyst",
+        gateway=gateway,
+        config=AiGatewayConfig(
+            mode=AI_MODE_LOCAL_ONLY,
+            configured_mode=AI_MODE_LOCAL_ONLY,
+            local_provider="controlled-local",
+            local_base_url="http://127.0.0.1:11434",
+            local_model="planner-test",
+        ),
+    )
+
+    answer = result.payload["result"]["answer"]
+    assert f"alert {alert_id}" in answer.lower()
+    assert "active failed-login investigation" in answer
+    assert "bad IP" not in answer
+    assert result.payload["result"]["tools"]["used"] is False
+    assert len(gateway.requests) == 2
+    assert "search_alerts" not in gateway.requests[1].prompt
 
 
 def test_typed_source_ip_switch_reaches_tool_and_grounded_answer(postgres_db, monkeypatch):

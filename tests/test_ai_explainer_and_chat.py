@@ -1,22 +1,28 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from werkzeug.security import generate_password_hash
 
 import core.ai.context_builder as context_builder
-from core.ai.config import AI_MODE_LOCAL_ONLY, AiGatewayConfig
+from core.ai.config import AI_MODE_LOCAL_ONLY, AiGatewayConfig, default_ai_profiles
 from core.ai.context_builder import AiContextPayload, AiContextSource, build_ai_context
 from core.ai.explainer_service import (
     _build_evidence_envelope,
     _build_prompt,
+    _build_synthesis_prompt,
+    _answer_from_context,
+    _compose_evidence_answer,
     _normalize_grounded_answer,
     chat_about_siem,
     explain_context,
 )
 from core.ai.models import AI_STATUS_SUCCESS, AiGatewayRequest, AiGatewayResponse, AiRequestMetadata
 from core.ai.profile_registry import AI_PROFILE_FAST_TRIAGE, AI_PROFILE_GUIDED_ANALYSIS
+from core.ai.soc_tool_executor import SocToolPlan
 from core.ai.soc_tools import SocToolExecutionSummary, SocToolResult, SocToolSource
 
 ADMIN_USER = "testadmin"
@@ -105,29 +111,10 @@ def _evidence_envelope(
     omitted_count=0,
     question="What's the most recent HIGH alert?",
 ):
-    data = {"items": records, "total": len(records) if total is None else total}
-    source = SocToolSource(
+    tools = _tool_summary(
+        records,
         tool_name=tool_name,
-        source_type="alerts",
-        source_path="/alerts",
-        source_helper="test",
-        generated_at="2026-07-29T21:27:00+00:00",
-        truncated=truncated,
-        omitted_count=omitted_count,
-    )
-    tools = SocToolExecutionSummary(
-        used=True,
-        calls=[
-            SocToolResult(
-                tool_name=tool_name,
-                status="success",
-                data=data,
-                sources=[source],
-                truncated=truncated,
-                omitted_count=omitted_count,
-            )
-        ],
-        sources=[source],
+        total=total,
         truncated=truncated,
         omitted_count=omitted_count,
     )
@@ -143,6 +130,35 @@ def _evidence_envelope(
         tools=tools,
         ai_context=_context_payload("dashboard"),
         conversation_context={"thread": {"resolved_entity": {"type": "dashboard", "id": "dashboard"}}},
+    )
+
+
+def _tool_summary(records, *, tool_name="search_alerts", total=None, truncated=False, omitted_count=0):
+    data = {"items": records, "total": len(records) if total is None else total}
+    source = SocToolSource(
+        tool_name=tool_name,
+        source_type="alerts",
+        source_path="/alerts",
+        source_helper="test",
+        generated_at="2026-07-29T21:27:00+00:00",
+        truncated=truncated,
+        omitted_count=omitted_count,
+    )
+    return SocToolExecutionSummary(
+        used=True,
+        calls=[
+            SocToolResult(
+                tool_name=tool_name,
+                status="success",
+                data=data,
+                sources=[source],
+                truncated=truncated,
+                omitted_count=omitted_count,
+            )
+        ],
+        sources=[source],
+        truncated=truncated,
+        omitted_count=omitted_count,
     )
 
 
@@ -412,7 +428,7 @@ def test_conversation_state_prompt_has_no_generic_alert_template():
         },
     )
 
-    assert "response_mode\": \"conversation_state" in prompt
+    assert '"response_mode":"conversation_state"' in prompt
     assert "Reviewing failed-login activity for Alert 8342" in prompt
     assert "Bad IP" not in prompt
     assert "AbuseIPDB" not in prompt
@@ -480,7 +496,234 @@ def test_production_sized_evidence_envelope_fits_fast_triage_prompt_budget():
 
     assert len(prompt) <= limit
     assert "Read-only SOC tool evidence envelope" in prompt
-    assert '"truncated": true' in prompt
+    assert '"truncated":true' in prompt
+
+
+def _three_alert_records(source_ip="18.232.121.80"):
+    return [
+        {
+            "id": 8342 - index,
+            "severity": "high",
+            "alert_type": "honeypot_env_probe_threshold",
+            "created_at": f"2026-07-29T21:{26 - index:02d}:00+00:00",
+            "source_ip": source_ip,
+            "message": "Repeated bounded activity " + ("x" * 220),
+        }
+        for index in range(3)
+    ]
+
+
+def _long_conversation_packet():
+    return {
+        "thread": {"resolved_entity": {"type": "source_ip", "id": "18.232.121.80"}},
+        "corrections": [{"summary": "The analyst identified this as a possible approved scanner. " + ("c" * 500)}],
+        "conclusions": [{"summary": "The current evidence shows repeated alert activity. " + ("d" * 600)}],
+        "unresolved_questions": [{"summary": "Whether the source is authorized. " + ("u" * 500)}],
+        "thread_summary": "Active source-IP investigation. " + ("s" * 800),
+        "recent_turns": [{"role": "assistant", "content": "older context " + ("t" * 1000)} for _ in range(8)],
+    }
+
+
+@pytest.mark.parametrize(
+    "action,profile_name",
+    [
+        ("explain", AI_PROFILE_FAST_TRIAGE),
+        ("recommend_investigation", AI_PROFILE_GUIDED_ANALYSIS),
+    ],
+)
+def test_three_record_synthesis_fits_complete_active_profile(action, profile_name):
+    config = _config()
+    limit = config.profile(profile_name).max_prompt_chars
+    envelope = _evidence_envelope(
+        _three_alert_records(),
+        parameters={"source_ip": "18.232.121.80", "sort": "newest", "limit": 3},
+        total=3,
+        question="Show alerts from 18.232.121.80.",
+    )
+
+    result = _build_synthesis_prompt(
+        _production_like_quick_context("source_ip"),
+        action=action,
+        question="Show alerts from 18.232.121.80.",
+        config=config,
+        profile_max_prompt_chars=limit,
+        conversation_context=_long_conversation_packet(),
+        planner_task={
+            "intent": "Find alerts from the requested source IP.",
+            "strategy": "quick_evidence_lookup",
+            "evidence_sufficiency": "insufficient",
+            "evidence_requirements": {"source_ip": "18.232.121.80", "sort": "newest", "limit": 3},
+        },
+        evidence_envelope=envelope,
+    )
+
+    assert result.prompt is not None
+    assert len(result.prompt) == result.measurements["final_chars"] <= limit
+    assert result.measurements["evidence_records_included"] == 3
+    assert "18.232.121.80" in result.prompt
+    assert "8342" in result.prompt
+    assert "SIEM context:" not in result.prompt
+    assert result.prompt.endswith("current task and evidence support them.")
+    if profile_name == AI_PROFILE_FAST_TRIAGE:
+        assert "older context" not in result.prompt
+
+
+def test_large_truncated_result_preserves_top_evidence_and_truncation_within_budget():
+    config = _config()
+    limit = config.profile(AI_PROFILE_FAST_TRIAGE).max_prompt_chars
+    records = _three_alert_records() + [
+        {**_three_alert_records()[0], "id": 8200 - index, "source_ip": f"198.51.100.{index + 1}"}
+        for index in range(5)
+    ]
+    envelope = _evidence_envelope(records, total=40, truncated=True, omitted_count=32)
+
+    result = _build_synthesis_prompt(
+        _production_like_quick_context("dashboard"),
+        action="explain",
+        question="What's the most recent HIGH alert?",
+        config=config,
+        profile_max_prompt_chars=limit,
+        conversation_context=_long_conversation_packet(),
+        planner_task={
+            "intent": "Find the newest high-severity alert.",
+            "strategy": "quick_evidence_lookup",
+            "evidence_sufficiency": "insufficient",
+            "evidence_requirements": {"severity": "high", "sort": "newest", "limit": 10},
+        },
+        evidence_envelope=envelope,
+    )
+
+    assert result.prompt is not None
+    assert result.measurements["final_chars"] <= limit
+    assert result.measurements["evidence_records_included"] >= 1
+    assert '"truncated":true' in result.prompt
+    assert "8342" in result.prompt
+
+
+def test_complete_prompt_remains_within_its_exact_measured_limit():
+    config = _config()
+    envelope = _evidence_envelope(_three_alert_records(), total=3)
+    initial = _build_synthesis_prompt(
+        _production_like_quick_context("dashboard"),
+        action="explain",
+        question="What's the most recent HIGH alert?",
+        config=config,
+        profile_max_prompt_chars=8000,
+        conversation_context=_long_conversation_packet(),
+        planner_task={"intent": "Find the newest HIGH alert.", "strategy": "quick_evidence_lookup", "evidence_sufficiency": "insufficient", "evidence_requirements": {"severity": "high", "sort": "newest", "limit": 3}},
+        evidence_envelope=envelope,
+    )
+    exact = _build_synthesis_prompt(
+        _production_like_quick_context("dashboard"),
+        action="explain",
+        question="What's the most recent HIGH alert?",
+        config=config,
+        profile_max_prompt_chars=initial.measurements["final_chars"],
+        conversation_context=_long_conversation_packet(),
+        planner_task={"intent": "Find the newest HIGH alert.", "strategy": "quick_evidence_lookup", "evidence_sufficiency": "insufficient", "evidence_requirements": {"severity": "high", "sort": "newest", "limit": 3}},
+        evidence_envelope=envelope,
+    )
+
+    assert exact.prompt is not None
+    assert exact.measurements["final_chars"] <= initial.measurements["final_chars"]
+    assert "What's the most recent HIGH alert?" in exact.prompt
+    assert '"severity":"high"' in exact.prompt
+    assert exact.measurements["evidence_records_included"] >= 1
+
+
+def test_mandatory_only_overflow_requires_deterministic_fallback():
+    config = _config()
+    envelope = _evidence_envelope(_three_alert_records(), total=3)
+    baseline = _build_synthesis_prompt(
+        _context_payload("dashboard"),
+        action="explain",
+        question="What's the most recent HIGH alert?",
+        config=config,
+        profile_max_prompt_chars=8000,
+        planner_task={"intent": "Find the newest HIGH alert.", "strategy": "quick_evidence_lookup", "evidence_sufficiency": "insufficient", "evidence_requirements": {"severity": "high", "sort": "newest", "limit": 3}},
+        evidence_envelope=envelope,
+    )
+    overflow = _build_synthesis_prompt(
+        _context_payload("dashboard"),
+        action="explain",
+        question="What's the most recent HIGH alert?",
+        config=config,
+        profile_max_prompt_chars=baseline.measurements["mandatory_chars"] - 1,
+        planner_task={"intent": "Find the newest HIGH alert.", "strategy": "quick_evidence_lookup", "evidence_sufficiency": "insufficient", "evidence_requirements": {"severity": "high", "sort": "newest", "limit": 3}},
+        evidence_envelope=envelope,
+    )
+
+    assert overflow.prompt is None
+    assert overflow.measurements["fallback_required"] is True
+    answer = _compose_evidence_answer(envelope, synthesis_unavailable=True)
+    assert "Alert 8342" in answer
+    assert "Additional analyst interpretation was unavailable" in answer
+
+
+def test_successful_lookup_budget_overflow_bypasses_gateway_with_grounded_answer(monkeypatch):
+    records = _three_alert_records()
+    tools = _tool_summary(records, total=3)
+    profiles = default_ai_profiles(local_model="llama3")
+    profiles[AI_PROFILE_FAST_TRIAGE] = replace(profiles[AI_PROFILE_FAST_TRIAGE], max_prompt_chars=500)
+    config = _config(profiles=profiles)
+    gateway = RecordingGateway()
+    monkeypatch.setattr(
+        "core.ai.explainer_service.build_deterministic_tool_plan",
+        lambda **_kwargs: SocToolPlan(calls=[{"tool_name": "search_alerts", "arguments": {"severity": "high", "sort": "newest", "limit": 3}}]),
+    )
+    monkeypatch.setattr("core.ai.explainer_service.execute_tool_plan", lambda *_args, **_kwargs: tools)
+    monkeypatch.setattr("core.ai.explainer_service.current_user", SimpleNamespace(role="analyst"))
+
+    result = _answer_from_context(
+        _context_payload("dashboard"),
+        action="explain",
+        question="What's the most recent HIGH alert?",
+        gateway=gateway,
+        config=config,
+        use_tools=True,
+        tool_policy={"max_tool_calls": 1},
+        planner_task={"intent": "Find the newest HIGH alert.", "strategy": "quick_evidence_lookup", "evidence_sufficiency": "insufficient", "evidence_requirements": {"severity": "high", "sort": "newest", "limit": 3}},
+    )
+
+    assert result.payload["status"] == "success"
+    assert result.payload["insufficient_context"] is False
+    assert "Alert 8342" in result.payload["answer"]
+    assert "Additional analyst interpretation was unavailable" in result.payload["answer"]
+    assert result.payload["metadata"]["grounding"]["reason"] == "synthesis_prompt_budget_fallback"
+    assert gateway.requests == []
+
+
+def test_empty_lookup_with_long_thread_retains_truthful_no_match_under_budget_pressure():
+    envelope = _evidence_envelope(
+        [],
+        parameters={"source_ip": "18.232.121.80", "time_window_minutes": 60, "sort": "newest", "limit": 10},
+        total=0,
+        question="What happened from 18.232.121.80 in the last hour?",
+    )
+    answer = _compose_evidence_answer(envelope, synthesis_unavailable=True)
+    config = _config()
+    prompt = _build_synthesis_prompt(
+        _production_like_quick_context("source_ip"),
+        action="explain",
+        question="What happened from 18.232.121.80 in the last hour?",
+        config=config,
+        profile_max_prompt_chars=config.profile(AI_PROFILE_FAST_TRIAGE).max_prompt_chars,
+        conversation_context=_long_conversation_packet(),
+        planner_task={
+            "intent": "Find recent activity for the source IP.",
+            "strategy": "quick_evidence_lookup",
+            "evidence_sufficiency": "insufficient",
+            "evidence_requirements": {"source_ip": "18.232.121.80", "time_window_minutes": 60, "sort": "newest", "limit": 10},
+        },
+        evidence_envelope=envelope,
+    )
+
+    assert prompt.prompt is not None
+    assert prompt.measurements["final_chars"] <= prompt.measurements["profile_max_prompt_chars"]
+    assert '"result_count":0' in prompt.prompt
+    assert answer.startswith("No alerts matched")
+    assert "source IP 18.232.121.80" in answer
+    assert "within the last 60 minutes" in answer
 
 
 def _login_super_admin(client):
@@ -809,8 +1052,8 @@ def test_production_like_alert_quick_explain_prompt_fits_fast_profile_with_ident
     assert question in prompt
     assert "/alerts/8605" in prompt
     assert "8605" in prompt
-    assert "_prompt_compaction" in prompt
-    assert "original_chars" in prompt
+    assert "Context sources:" in prompt
+    assert "SIEM context:" in prompt
     assert "omitted_count" in prompt
     assert "203.0.113.77" in prompt
     assert "Tone classification: casual" in prompt

@@ -501,6 +501,10 @@ def _planner_prompt(packet: dict[str, Any]) -> str:
         "response_registry source_ip/limit. sort MUST be exactly newest, oldest, or severity: use newest for descending timestamp and oldest "
         "for ascending timestamp; never output timestamp, asc, or desc as sort values. Convert explicit durations to time_window_minutes. "
         "Use concrete scalar values, never SQL, operators, or backend query syntax. "
+        "required_evidence and proposed_tool_categories MUST each be JSON arrays of strings, never objects or scalar strings. "
+        "evidence_requirements MUST be a JSON object. clarification_question MUST be a string only for clarification_required and null for executable strategies. "
+        "When authoritative thread state already identifies the active focus, conclusions, or unresolved questions and the analyst asks to summarize that state, "
+        "use direct_answer with sufficient evidence, empty required_evidence, no tool categories, and empty evidence_requirements. "
         "reasoning_summary and "
         "stopping_condition must each be non-empty and operationally specific. Required keys only: current_turn_intent, "
         "evidence_sufficiency, required_evidence, proposed_strategy, proposed_tool_categories, evidence_requirements, clarification_question, reasoning_summary, "
@@ -511,11 +515,25 @@ def _planner_prompt(packet: dict[str, Any]) -> str:
 
 
 def _repair_prompt(packet: dict[str, Any], errors: list[str]) -> str:
-    safe_errors = [_bounded_text(item, 120) for item in errors[:6]]
+    safe_errors = [_bounded_text(item, 240) for item in errors[:8]]
     return (
         _planner_prompt(packet)
-        + "\nThe prior plan was rejected. Return one corrected JSON object. Do not explain. "
-        + json.dumps({"validation_errors": safe_errors}, separators=(",", ":"))
+        + "\nThe prior plan was rejected. Correct every reported schema and cross-field violation in one JSON object; do not explain and do not change to a contradictory strategy. "
+        + json.dumps(
+            {
+                "validation_errors": safe_errors,
+                "repair_contract": {
+                    "required_evidence": "array of strings",
+                    "proposed_tool_categories": "array of zero or one approved category strings",
+                    "evidence_requirements": "object",
+                    "clarification_question": "string only for clarification_required; otherwise null",
+                    "direct_answer": "requires sufficient evidence, no tool category, and empty evidence requirements",
+                    "quick_evidence_lookup": "requires insufficient evidence, one tool category, required evidence, and evidence requirements",
+                    "sort": "newest, oldest, or severity only",
+                },
+            },
+            separators=(",", ":"),
+        )
     )
 
 
