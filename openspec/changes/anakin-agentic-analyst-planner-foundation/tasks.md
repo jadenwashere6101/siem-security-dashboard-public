@@ -113,3 +113,10 @@
 - [x] 16.3 Convert planner budget/configuration failures into truthful non-executing outcomes across synchronous and asynchronous conversation submission without sticky workflow fallback.
 - [x] 16.4 Add first-turn, three-turn, twenty-turn, many-entity, evidence-deduplication, clarification/comparison, initial/repair stress, mandatory-overflow, and semantic-contract equivalence regressions.
 - [x] 16.5 Run compilation, affected unit and PostgreSQL suites, prompt/grounding regressions, acceptance harness, `git diff --check`, and strict OpenSpec validation.
+
+## 17. Structured-Output Prompt Regression Correction
+
+- [x] 17.1 Document exact enum vocabulary, raw-JSON-only output boundaries, repair preservation, strict parsing, and prompt-budget invariants in the existing design and specification.
+- [x] 17.2 Generate explicit initial and repair enum instructions from validator-owned constants and restore JSON-only response boundaries without parser relaxation.
+- [x] 17.3 Add strict-output, enum-equivalence, repair-preservation, capability-reachability, and twenty-turn budget regressions.
+- [x] 17.4 Run compilation, affected PostgreSQL-backed planner/orchestration suites, grounding regressions, acceptance harness, `git diff --check`, and strict OpenSpec validation.

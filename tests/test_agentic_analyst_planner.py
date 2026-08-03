@@ -435,6 +435,204 @@ def test_compact_semantic_contract_is_equivalent_to_validator_authority():
     assert "resolved_entities" in planner_output_schema()["required"]
 
 
+def test_planner_prompt_explicitly_serializes_all_validator_owned_enums():
+    gateway = SequenceGateway([json.dumps(_plan())])
+
+    outcome = plan_turn(_packet(), gateway=gateway, config=_config())
+
+    assert outcome.status == "planned"
+    schema = planner_output_schema()
+    prompt = gateway.requests[0].prompt
+    assert schema["enums"]["current_turn_intent"] == sorted({action for action, _strategy in PLAN_SEMANTIC_CONTRACTS})
+    assert schema["enums"]["proposed_strategy"] == sorted({strategy for _action, strategy in PLAN_SEMANTIC_CONTRACTS})
+    assert schema["enums"]["proposed_capability"] == [
+        "decision_support", "deep_investigate", "generate_artifact", "quick_explain"
+    ]
+    assert json.dumps(schema, sort_keys=True, separators=(",", ":")) in prompt
+    assert "Use only exact enum tokens from OUTPUT_SCHEMA" in prompt
+    assert "never invent synonyms" in prompt
+    assert "capability token in a strategy field" in prompt
+
+
+def test_every_canonical_action_strategy_pair_accepts_its_exact_tokens():
+    candidates = [{"type": "alert", "id": "9078"}, {"type": "alert", "id": "9011"}]
+    for (intent, strategy), contract in PLAN_SEMANTIC_CONTRACTS.items():
+        is_lookup = contract.tool_execution_allowed
+        is_clarification = contract.clarification_required
+        value = _plan(
+            intent=intent,
+            strategy=strategy,
+            sufficiency="ambiguous" if is_clarification else "insufficient" if is_lookup else "sufficient",
+            entities=candidates[: contract.minimum_entities],
+            tools=["alerts"] if is_lookup else [],
+            requirements={"severity": "high"} if is_lookup else {},
+            clarification="Which record did you mean?" if is_clarification else None,
+            referenced_turn_sequence=2 if intent == "analyst_correction" else None,
+        )
+
+        plan, errors = parse_and_validate_plan(json.dumps(value), _packet().payload)
+
+        assert errors == [], (intent, strategy, errors)
+        assert plan.current_turn_intent == intent
+        assert plan.proposed_strategy == strategy
+
+
+def test_strategy_and_capability_vocabularies_are_not_interchangeable():
+    strategy_as_capability = _plan()
+    strategy_as_capability["proposed_strategy"] = "quick_explain"
+    capability_as_strategy = _plan()
+    capability_as_strategy["proposed_capability"] = "quick_evidence_lookup"
+
+    first, first_errors = parse_and_validate_plan(json.dumps(strategy_as_capability), _packet().payload)
+    second, second_errors = parse_and_validate_plan(json.dumps(capability_as_strategy), _packet().payload)
+
+    assert first is None
+    assert "proposed_strategy is invalid" in first_errors
+    assert second is None
+    assert "proposed_capability is incompatible with proposed_strategy" in second_errors
+
+
+@pytest.mark.parametrize("invalid_action", ["lookup", "request_for_summary"])
+def test_noncanonical_action_synonyms_fail_and_repair_receives_exact_enum_vocabulary(invalid_action):
+    malformed = _plan()
+    malformed["current_turn_intent"] = invalid_action
+    gateway = SequenceGateway([json.dumps(malformed), json.dumps(_plan())])
+
+    outcome = plan_turn(_packet(), gateway=gateway, config=_config())
+
+    assert outcome.status == "planned"
+    assert outcome.repaired is True
+    repair_prompt = gateway.requests[1].prompt
+    for canonical in planner_output_schema()["enums"]["current_turn_intent"]:
+        assert f'"{canonical}"' in repair_prompt
+    assert "current_turn_intent is invalid" in repair_prompt
+
+
+@pytest.mark.parametrize(
+    "rendered,accepted",
+    [
+        (lambda value: value, True),
+        (lambda value: f"Here is the plan: {value}", False),
+        (lambda value: f"{value}\nThis is the plan.", False),
+        (lambda value: f"Explanation first.\n```json\n{value}\n```", False),
+    ],
+)
+def test_initial_parser_accepts_only_one_json_object_without_surrounding_prose(rendered, accepted):
+    content = rendered(json.dumps(_plan()))
+
+    plan, errors = parse_and_validate_plan(content, _packet().payload)
+
+    assert (plan is not None) is accepted
+    assert (errors == []) is accepted
+
+
+def test_repair_with_surrounding_prose_remains_fail_closed():
+    malformed = _plan()
+    malformed["required_evidence"] = {"alerts": "current high-severity alerts"}
+    prose_wrapped_repair = f"Here is the corrected plan:\n{json.dumps(_plan())}\nNo other changes were made."
+    gateway = SequenceGateway([json.dumps(malformed), prose_wrapped_repair])
+
+    outcome = plan_turn(_packet(), gateway=gateway, config=_config())
+
+    assert outcome.status == "invalid"
+    assert outcome.plan is None
+    assert outcome.repaired is True
+    assert len(gateway.requests) == 2
+
+
+def test_repair_prompt_has_hard_output_boundaries_and_preserves_unreported_valid_fields():
+    malformed = _plan()
+    malformed["required_evidence"] = {"alerts": "current high-severity alerts"}
+    gateway = SequenceGateway([json.dumps(malformed), json.dumps(_plan())])
+
+    outcome = plan_turn(_packet(), gateway=gateway, config=_config())
+
+    assert outcome.status == "planned"
+    prompt = gateway.requests[1].prompt
+    assert prompt.startswith("Return ONLY the repaired JSON object. Your entire response must begin with { and end with }.")
+    assert prompt.endswith("Return ONLY one JSON object beginning with { and ending with }; no text before or after it.")
+    assert '"preserve_original_fields"' in prompt
+    assert '"resolved_entities"' in prompt
+    assert '"evidence_requirements"' in prompt
+    assert '"proposed_strategy"' in prompt
+    assert "Change only invalid fields" in prompt
+
+
+@pytest.mark.parametrize(
+    "intent,strategy,sufficiency,entities,tools,requirements,clarification",
+    [
+        ("state_summary", "direct_answer", "sufficient", [], [], {}, None),
+        ("fresh_evidence_lookup", "quick_evidence_lookup", "insufficient", [], ["alerts"], {"severity": "high"}, None),
+        ("decision_support", "decision_support", "sufficient", [{"type": "alert", "id": "9078"}], [], {}, None),
+        ("artifact_draft", "artifact_draft", "sufficient", [{"type": "alert", "id": "9078"}], [], {}, None),
+        ("bounded_investigation", "bounded_investigation", "insufficient", [{"type": "alert", "id": "9078"}], [], {}, None),
+        ("comparison", "compare_entities", "insufficient", [{"type": "alert", "id": "9078"}, {"type": "alert", "id": "9011"}], [], {}, None),
+        ("clarification", "clarification_required", "ambiguous", [], [], {}, "Which alert did you mean?"),
+    ],
+)
+def test_controlled_valid_outputs_reach_every_planner_capability_contract(
+    intent, strategy, sufficiency, entities, tools, requirements, clarification
+):
+    value = _plan(
+        intent=intent,
+        strategy=strategy,
+        sufficiency=sufficiency,
+        entities=entities,
+        tools=tools,
+        requirements=requirements,
+        clarification=clarification,
+    )
+
+    plan, errors = parse_and_validate_plan(json.dumps(value), _packet().payload)
+
+    assert errors == []
+    assert plan is not None
+    assert plan.current_turn_intent == intent
+    assert plan.proposed_strategy == strategy
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "What's the newest HIGH alert?",
+        "Show the latest high-severity alert.",
+        "Did any high priority alert just arrive?",
+    ],
+)
+def test_varied_open_lookup_turns_use_canonical_zero_entity_plan(question):
+    gateway = SequenceGateway([json.dumps(_plan(entities=[]))])
+
+    outcome = plan_turn(_packet(question), gateway=gateway, config=_config())
+
+    assert outcome.status == "planned"
+    assert outcome.plan.current_turn_intent == "fresh_evidence_lookup"
+    assert outcome.plan.proposed_strategy == "quick_evidence_lookup"
+    assert outcome.plan.resolved_entities == ()
+    assert len(gateway.requests) == 1
+
+
+@pytest.mark.parametrize("question", ["Which IP?", "Compare which alerts?", "Is which one worse?"])
+def test_varied_ambiguity_turns_accept_canonical_clarification_plan(question):
+    value = _plan(
+        intent="clarification",
+        strategy="clarification_required",
+        sufficiency="ambiguous",
+        entities=[],
+        tools=[],
+        requirements={},
+        clarification="Which alert or source IP did you mean?",
+    )
+    gateway = SequenceGateway([json.dumps(value)])
+
+    outcome = plan_turn(_packet(question), gateway=gateway, config=_config())
+
+    assert outcome.status == "planned"
+    assert outcome.plan.current_turn_intent == "clarification"
+    assert outcome.plan.proposed_strategy == "clarification_required"
+    assert outcome.plan.clarification_question
+    assert outcome.plan.proposed_tool_categories == ()
+
+
 def test_repair_prompt_is_independently_bounded_and_does_not_embed_initial_prompt():
     malformed = _plan()
     malformed["required_evidence"] = {"alerts": "current high-severity alerts"}

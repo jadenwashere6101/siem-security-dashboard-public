@@ -349,3 +349,21 @@ The system SHALL define entity cardinality, evidence-filter permission, clarific
 #### Scenario: Contract representations remain aligned
 - **WHEN** the structured semantic contract changes
 - **THEN** tests MUST prove the planner prompt, repair feedback, parser/validator, and execution assumptions expose identical cardinality, filter, clarification, tool, and capability rules
+
+### Requirement: Planner prompts communicate the exact structured-output vocabulary
+The initial and repair prompts SHALL explicitly enumerate every model-owned bounded token from the same authoritative constants and semantic contract used by validation. Both prompts SHALL require exactly one bare JSON object and SHALL prohibit markdown, fences, leading prose, and trailing commentary. Strict parsing SHALL continue to reject prose-wrapped or malformed output rather than extracting an embedded object.
+
+#### Scenario: Invalid action synonym is proposed
+- **WHEN** the model emits a semantically related token that is not a canonical `current_turn_intent`
+- **THEN** validation fails closed
+- **AND** the single repair prompt includes the exact canonical action vocabulary
+
+#### Scenario: Repair adds commentary
+- **WHEN** a repair response contains explanatory text before or after an otherwise valid JSON object
+- **THEN** strict parsing rejects the repair
+- **AND** no capability executes
+
+#### Scenario: Explicit vocabulary remains within budget
+- **WHEN** the initial or repair prompt includes all canonical enum instructions and a production-shaped twenty-turn fact packet
+- **THEN** the complete serialized prompt remains within the active profile ceiling
+- **AND** optional facts are compacted before structured-output instructions

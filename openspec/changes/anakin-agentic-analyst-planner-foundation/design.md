@@ -255,3 +255,16 @@ No database migration or persistent runtime configuration edit is required becau
 ## Open Questions
 
 The verified 3B model does not meet the planner contract. The dedicated 8B profile is an implementation correction based on measured local-model evidence, but its production valid-plan rate remains a deployment acceptance question. Failure after one repair is reported as a model capability limitation and does not authorize validator weakening or Spec 2 work.
+
+### Strict structured-output instructions survive prompt compaction
+
+Prompt compaction may shorten explanatory prose and optional facts, but it must not remove the exact machine vocabulary required by validation. The initial and repair prompts serialize allowed action, strategy, capability, sufficiency, relationship, confidence, artifact, and tool tokens from the same constants and semantic contracts used by the parser and validator. The model is instructed to emit exactly one bare JSON object with no markdown, fences, introductory prose, or trailing commentary.
+
+The repair prompt repeats the output boundary at its beginning and end, includes exact validation errors, pins the first valid action, and identifies valid proposal fields that must be preserved. Repair remains one attempt and strict parsing remains fail-closed; prose scraping and arbitrary JSON extraction are not introduced. These mandatory instructions participate in the existing complete-prompt budget, so optional conversation facts are compacted before schema vocabulary or response boundaries.
+
+| Failure class | Invariant | Enforcement location | Variants tested |
+|---|---|---|---|
+| Model invents action or strategy synonyms | Every allowed token is rendered from validator-owned constants | Output schema and initial/repair prompt builders | `lookup`, `request_for_summary`, capability/strategy confusion |
+| Repair wraps JSON in prose | Both repair boundaries require a response beginning with `{` and ending with `}` and prohibit commentary | Repair prompt and strict JSON parser | Prefix, suffix, fenced explanation |
+| Prompt and validator enums drift | Prompt enum serialization and validation use the same in-process sets/contracts | Schema equivalence tests | Actions, strategies, relationships, sufficiency, confidence, artifacts |
+| Restored instructions overflow the planner profile | Structured-output instructions are mandatory and optional facts are admitted only against the final prompt | Fit-by-construction initial and repair builders | First turn, twenty turns, repair stress |
