@@ -10,6 +10,7 @@ Anakin currently fixes a conversational request to a workflow before interpretin
 - Permit at most one bounded structured-plan repair; invalid, unavailable, oversized, or boundary-violating plans fail safely without reverting to sticky workflow routing.
 - Dispatch validated plans through existing capability and approved SOC read-tool paths, with no unrestricted iterative tool loop.
 - Add production-shaped behavioral, PostgreSQL, prompt-budget, boundary, failure, and repeated-run planner evaluations.
+- Route planner generation through a dedicated local-only `agentic_planning` profile using `llama3.1:8b`, without changing Quick Explain or other workflow profiles.
 
 ## Capabilities
 
@@ -23,4 +24,4 @@ None.
 
 ## Impact
 
-The change affects the canonical SIEM conversation orchestration and async request dispatch paths, adds a planner module and planner-focused tests, and records planner metadata in existing bounded conversation/workflow envelopes. Session-memory ownership, PostgreSQL thread state, existing tool executors, capability implementations, response-action routes, Repo Assistant, SOC Briefing, models, profiles, and frontend architecture remain unchanged.
+The change affects the canonical SIEM conversation orchestration and async request dispatch paths, adds a planner module and planner-focused tests, records planner metadata in existing bounded conversation/workflow envelopes, and adds one planner-only local model profile. Session-memory ownership, PostgreSQL thread state, existing tool executors, capability implementations, response-action routes, Repo Assistant, SOC Briefing, existing workflow profile assignments, and frontend architecture remain unchanged.

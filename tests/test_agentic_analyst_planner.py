@@ -15,6 +15,7 @@ from core.ai.config import AI_MODE_LOCAL_ONLY, AiGatewayConfig
 from core.ai.gateway import AiGateway
 from core.ai.models import AI_STATUS_SUCCESS, AiGatewayResponse, AiRequestMetadata
 from core.ai.providers import OllamaProvider
+from core.ai.profile_registry import AI_PROFILE_AGENTIC_PLANNING
 
 
 class SequenceGateway:
@@ -187,8 +188,26 @@ def test_planner_uses_exactly_one_repair():
     assert outcome.status == "planned"
     assert outcome.repaired is True
     assert len(gateway.requests) == 2
-    assert gateway.requests[0].profile == "fast_triage"
+    assert gateway.requests[0].profile == AI_PROFILE_AGENTIC_PLANNING
+    assert gateway.requests[1].profile == AI_PROFILE_AGENTIC_PLANNING
     assert gateway.requests[0].metadata["read_only"] is True
+
+
+def test_planner_repairs_one_cross_field_contradiction_without_server_rewriting():
+    contradictory = _plan(
+        sufficiency="sufficient",
+        strategy="direct_answer",
+        capability="quick_explain",
+        tools=["alerts"],
+    )
+    gateway = SequenceGateway([json.dumps(contradictory), json.dumps(_plan())])
+
+    outcome = plan_turn(_packet(), gateway=gateway, config=_config())
+
+    assert outcome.status == "planned"
+    assert outcome.repaired is True
+    assert outcome.plan.proposed_strategy == "quick_evidence_lookup"
+    assert len(gateway.requests) == 2
 
 
 def test_real_planner_request_reaches_ollama_generation_contract(monkeypatch):
@@ -210,7 +229,32 @@ def test_real_planner_request_reaches_ollama_generation_contract(monkeypatch):
     assert len(calls) == 1
     assert calls[0]["method"] == "POST"
     assert calls[0]["url"].endswith("/api/generate")
-    assert calls[0]["payload"]["model"] == config.profile("fast_triage").model
+    assert calls[0]["payload"]["model"] == "llama3.1:8b"
+    assert calls[0]["payload"]["options"]["num_predict"] == 1024
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["reasoning_summary", "stopping_condition"],
+)
+def test_planner_rejects_empty_required_explanatory_fields(field):
+    value = _plan()
+    value[field] = ""
+
+    plan, errors = parse_and_validate_plan(json.dumps(value), _packet().payload)
+
+    assert plan is None
+    assert any(f"{field} is required" in error for error in errors)
+
+
+def test_quick_evidence_lookup_requires_named_evidence():
+    value = _plan()
+    value["required_evidence"] = []
+
+    plan, errors = parse_and_validate_plan(json.dumps(value), _packet().payload)
+
+    assert plan is None
+    assert any("requires at least one required_evidence item" in error for error in errors)
 
 
 def test_second_invalid_plan_does_not_fall_back_to_prior_workflow():

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import os
 
 from core.ai.profile_registry import (
+    AI_PROFILE_AGENTIC_PLANNING,
     AI_PROFILE_DEEP_BRIEFING,
     AI_PROFILE_DEVELOPER_ASSISTANT,
     AI_PROFILE_FAST_TRIAGE,
@@ -31,18 +32,22 @@ DEFAULT_LOCAL_TIMEOUT_SECONDS = 10.0
 DEFAULT_PAID_TIMEOUT_SECONDS = 20.0
 DEFAULT_MAX_PROMPT_CHARS = 12000
 DEFAULT_FAST_MODEL = "llama3.2:3b"
+DEFAULT_AGENTIC_PLANNING_MODEL = "llama3.1:8b"
 DEFAULT_GUIDED_MODEL = "llama3.1:8b"
 DEFAULT_DEEP_MODEL = "llama3.1:8b"
 DEFAULT_DEVELOPER_MODEL = "llama3.1:8b"
 DEFAULT_FAST_TIMEOUT_SECONDS = 45.0
+DEFAULT_AGENTIC_PLANNING_TIMEOUT_SECONDS = 90.0
 DEFAULT_GUIDED_TIMEOUT_SECONDS = 120.0
 DEFAULT_DEEP_TIMEOUT_SECONDS = 150.0
 DEFAULT_DEVELOPER_TIMEOUT_SECONDS = 120.0
 DEFAULT_FAST_MAX_PROMPT_CHARS = 8000
+DEFAULT_AGENTIC_PLANNING_MAX_PROMPT_CHARS = 8000
 DEFAULT_GUIDED_MAX_PROMPT_CHARS = 14000
 DEFAULT_DEEP_MAX_PROMPT_CHARS = 18000
 DEFAULT_DEVELOPER_MAX_PROMPT_CHARS = 20000
 DEFAULT_FAST_MAX_OUTPUT_TOKENS = 512
+DEFAULT_AGENTIC_PLANNING_MAX_OUTPUT_TOKENS = 1024
 DEFAULT_GUIDED_MAX_OUTPUT_TOKENS = 1200
 DEFAULT_DEEP_MAX_OUTPUT_TOKENS = 1800
 DEFAULT_DEVELOPER_MAX_OUTPUT_TOKENS = 1600
@@ -163,6 +168,28 @@ def default_ai_profiles(
             max_output_tokens=_env_positive_int("AI_FAST_MAX_OUTPUT_TOKENS", DEFAULT_FAST_MAX_OUTPUT_TOKENS),
             temperature=_env_positive_float("AI_FAST_TEMPERATURE", 0.2),
             task_category="quick SOC triage and short explanations",
+        ),
+        AI_PROFILE_AGENTIC_PLANNING: AiModelProfile(
+            name=AI_PROFILE_AGENTIC_PLANNING,
+            model=_profile_model(
+                "AI_AGENTIC_PLANNING_MODEL",
+                DEFAULT_AGENTIC_PLANNING_MODEL,
+                "",
+            ),
+            timeout_seconds=_profile_timeout(
+                "AI_AGENTIC_PLANNING_TIMEOUT_SECONDS",
+                DEFAULT_AGENTIC_PLANNING_TIMEOUT_SECONDS,
+            ),
+            max_prompt_chars=_env_positive_int(
+                "AI_AGENTIC_PLANNING_MAX_PROMPT_CHARS",
+                DEFAULT_AGENTIC_PLANNING_MAX_PROMPT_CHARS,
+            ),
+            max_output_tokens=_env_positive_int(
+                "AI_AGENTIC_PLANNING_MAX_OUTPUT_TOKENS",
+                DEFAULT_AGENTIC_PLANNING_MAX_OUTPUT_TOKENS,
+            ),
+            temperature=_env_positive_float("AI_AGENTIC_PLANNING_TEMPERATURE", 0.1),
+            task_category="bounded agentic analyst turn planning",
         ),
         AI_PROFILE_GUIDED_ANALYSIS: AiModelProfile(
             name=AI_PROFILE_GUIDED_ANALYSIS,

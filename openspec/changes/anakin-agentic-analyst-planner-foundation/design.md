@@ -16,7 +16,7 @@ Session memory already separates analyst statements, corrections, model inferenc
 
 **Non-Goals:**
 
-- An iterative tool loop, autonomous investigation, more than one planner-selected evidence action, new SOC tools, workflow removal, full capability conversion, model/profile changes, frontend redesign, long-term memory, embeddings/RAG, mutation, or workspace writes.
+- An iterative tool loop, autonomous investigation, more than one planner-selected evidence action, new SOC tools, workflow removal, full capability conversion, changes to non-planner model/profile assignments, frontend redesign, long-term memory, embeddings/RAG, mutation, or workspace writes.
 
 ## Decisions
 
@@ -56,6 +56,12 @@ Every capability emitted by an application service must be registered explicitly
 
 The original workflow value from the SIEM conversation request is validated before context selection, planner generation, repair, classification, or degraded shortcut fallback. `auto` and the four SIEM conversation capabilities are allowed. Repo Assistant and SOC Briefing are rejected as isolated namespaces, and unknown workflow names are rejected as unsupported. The validated plan is checked again after planning, but no transformed workflow may erase an explicit original boundary violation.
 
+### Planner uses a dedicated local 8B profile
+
+The planner requests the approved `agentic_planning` profile through the profile registry and gateway for both its initial proposal and its single repair attempt. The profile defaults to `llama3.1:8b`, is local-only, disables paid fallback, and owns an 8,000-character prompt budget, 1,024-token output budget, 90-second timeout, and low deterministic temperature. Provider response metadata records the selected profile and model.
+
+`fast_triage` remains assigned to Quick Explain and other existing short-triage paths with `llama3.2:3b`; Guided Analysis, Deep Briefing, and Developer Assistant retain their existing assignments. Planner prompt instructions make strategy/capability/tool relationships explicit, but deterministic validation remains authoritative and performs no intent-changing correction. At most one model repair remains permitted.
+
 ## Failure-Class Table
 
 | Failure class | General invariant | Deterministic enforcement location | Model responsibility | Variants tested |
@@ -70,7 +76,8 @@ The original workflow value from the SIEM conversation request is validated befo
 | Stale evidence treated as current | Stale evidence cannot satisfy evidence sufficiency | Packet builder/validator | Request refresh or qualify | Expired and mixed-freshness evidence |
 | User claim or inference promoted to fact | Assertion provenance is immutable in packet and plan | Context builder/validator | Treat claims as statements/inferences | Scanner, owned IP, service account |
 | Invalid or repaired-invalid schema | Exactly one repair; then fail closed without sticky fallback | Parser/validator/planner service | Produce/repair strict JSON | Missing fields, bad enum, malformed JSON |
-| Plan/prompt over budget | Mandatory packet fits; optional content compacts; final sizes checked | Packet/prompt builder | Stay within output contract | Production-sized thread/evidence/entity state |
+| Plan/prompt over budget | Mandatory packet fits; optional content compacts; final sizes checked against the dedicated planner profile | Packet/prompt builder and `agentic_planning` profile | Stay within output contract | Production-sized thread/evidence/entity state, initial and repair prompts |
+| Planner assigned an undersized or shared workflow model | Planner always selects its dedicated local-only 8B profile; other workflow assignments remain unchanged | Profile registry, config, planner request, provider metadata tests | Satisfy the existing plan contract | Initial plan, repair, Quick Explain regression, all profile inventory defaults |
 | Timeout/provider failure | Preserve prior state and return planner unavailable; no old dispatch | Planner service/orchestration | None after failure | Timeout, disabled, provider error |
 | Repeated ineffective strategy/answer | Current intent and strategy are recorded; identical prior answer is not reused as current response | Planner validation/response metadata | Select current task | New lookup after explain; topic switch |
 | Workflow label used as content | Previous/current labels are typed hints, never analyst evidence or prompt instructions | Packet builder | Weigh current hint only | Auto after Quick Explain/Decision Support |
@@ -87,16 +94,16 @@ The original workflow value from the SIEM conversation request is validated befo
 
 ## Risks / Trade-offs
 
-- [The configured local model may not reliably satisfy the contract] -> Measure repeated controlled and available-local runs honestly; fail safely and recommend a controlled stronger-local-model evaluation rather than growing keyword rules.
-- [A planner call adds latency] -> Use the existing fast local planning profile and compact packet; preserve explicit latency metadata and timeout handling.
+- [The dedicated 8B local model may still fail cross-field validation] -> Keep deterministic validation and one repair, measure real-model runs after deployment, and stop before Spec 2 if the valid-plan rate remains weak.
+- [A planner call adds latency] -> Use the dedicated bounded planning profile and compact packet; preserve explicit latency metadata and timeout handling.
 - [Existing capabilities cannot execute every ideal plan] -> Validate only Spec 1 mappings and at most one bounded evidence category; defer iterative plans and complete capability conversion.
 - [Two-phase planning can race with another tab] -> Require the planning snapshot's expected version at submission and replan after the client reloads.
 - [Direct answer may still be stylistically repetitive downstream] -> Pass task shape without imposing prose; broader capability response conversion remains Spec 3.
 
 ## Migration Plan
 
-No database migration or runtime configuration change is required. Deploy later only after an approved commit and the documented Mac-to-VM process. Rollback removes planner dispatch and server-only plan metadata while leaving thread records valid; no stored plan is treated as evidence.
+No database migration or persistent runtime configuration edit is required because the dedicated profile has a source-owned default. Deploy later only after an approved commit and the documented Mac-to-VM process. Rollback restores the prior source commit; thread records remain valid and no stored plan is treated as evidence.
 
 ## Open Questions
 
-Whether the currently configured local model meets the repeated-run contract is an implementation measurement, not an assumed architecture decision. A failure is reported as a model capability limitation and does not authorize a model change in this spec.
+The verified 3B model does not meet the planner contract. The dedicated 8B profile is an implementation correction based on measured local-model evidence, but its production valid-plan rate remains a deployment acceptance question. Failure after one repair is reported as a model capability limitation and does not authorize validator weakening or Spec 2 work.

@@ -36,3 +36,11 @@
 - [x] 6.2 Validate the original requested workflow before planner generation, repair, classification, or fallback; reject Repo Assistant, SOC Briefing, and unknown workflows deterministically.
 - [x] 6.3 Add provider/gateway and orchestration/route regression tests proving generation reachability, original-intent boundary ordering, safe planner-unavailable behavior, and valid shortcut fallback.
 - [x] 6.4 Run focused PostgreSQL-backed tests, AI acceptance harness, Python compilation, `git diff --check`, and strict OpenSpec validation.
+
+## 7. Planner Model/Profile Correction
+
+- [x] 7.1 Add a dedicated local-only `agentic_planning` profile using `llama3.1:8b` with planner-specific prompt, output, timeout, and temperature limits and paid fallback disabled.
+- [x] 7.2 Route initial and repair planner requests through the dedicated profile while preserving every existing workflow profile assignment.
+- [x] 7.3 Keep deterministic cross-field validation authoritative, clarify semantic relationships in the planner prompt, and add focused valid, repair, and fail-closed tests.
+- [x] 7.4 Run Python compilation, profile/provider/gateway/planner/orchestration tests, affected PostgreSQL-backed suites, AI acceptance harness, `git diff --check`, and strict OpenSpec validation.
+- [ ] 7.5 After a separately authorized deployment, run the real-model planner capability matrix before declaring readiness for Spec 2.

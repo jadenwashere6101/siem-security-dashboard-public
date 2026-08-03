@@ -399,18 +399,21 @@ def test_gateway_reaches_ollama_generation_for_agentic_planner(monkeypatch):
         AiGatewayRequest(
             prompt="Return a bounded read-only plan.",
             capability="agentic_analyst_planning",
-            profile="fast_triage",
+            profile="agentic_planning",
         )
     )
 
     assert response.status == AI_STATUS_SUCCESS
     assert response.metadata.provider == "ollama"
+    assert response.metadata.profile == "agentic_planning"
+    assert response.metadata.model == "llama3.1:8b"
     assert response.metadata.local_request is True
     assert response.metadata.paid_request is False
     assert response.metadata.fallback_attempted is False
     assert len(calls) == 1
     assert calls[0]["method"] == "POST"
     assert calls[0]["url"].endswith("/api/generate")
+    assert calls[0]["payload"]["model"] == "llama3.1:8b"
 
 
 def test_gateway_keeps_unregistered_ollama_capability_fail_closed(monkeypatch):

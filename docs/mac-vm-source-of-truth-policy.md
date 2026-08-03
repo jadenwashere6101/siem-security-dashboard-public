@@ -1,8 +1,8 @@
-# Mac and VM Source-of-Truth Policy
+# Mac, Azure VM, and Mini PC Source-of-Truth Policy
 
 ## Non-Negotiable Rule
 
-**Mac = development/source of truth. VM = deployment target only.**
+**Mac = development/source of truth. Azure VM = production application/runtime. Mini PC = production local-AI inference host.**
 
 Never write source code on the VM. Never use `git merge origin/main` or `git pull` to synchronize the VM — merging is never used to sync the VM, clean or dirty. After a clean-tree and approved-commit preflight (see VM Clean-Tree Gate), synchronize only with:
 
@@ -14,6 +14,84 @@ git reset --hard origin/main
 The only exception:
 
 - **VM emergency hotfix** — requires explicit user authorization, a backup, and a documented rollback, and must be copied back into the Mac source of truth immediately and reconciled through normal version control.
+
+Do not develop application source on the Mini PC. It is an inference appliance, not a second source checkout, SIEM deployment target, worker host, or application database host.
+
+## Verified Production Architecture
+
+The following topology was verified read-only on 2026-08-03:
+
+```text
+Mac source-of-truth repository
+  -> OpenSpec, implementation, tests, builds, approved commit/push
+  -> approved source or frontend artifact
+  -> Azure VM
+
+Analyst browser
+  -> public HTTPS /siem/
+  -> Azure VM nginx and static frontend
+  -> Azure VM Gunicorn/Flask on 127.0.0.1:5051
+     -> PostgreSQL, queues, conversation state, SOC tools, and audit state
+     -> synchronous planner and Quick Explain orchestration
+     -> queued asynchronous workflow requests
+
+Azure VM systemd runtime
+  -> siem-backend.service
+  -> anakin-workflow-worker.timer/service
+  -> soc-briefing-worker.timer/service
+  -> soar-playbook-worker.service
+  -> soar-response-action-worker.timer/service
+  -> pfsense-syslog-listener.service
+
+Azure VM backend or AI worker
+  -> local-only AI Gateway
+  -> AI_LOCAL_BASE_URL over Tailscale
+  -> Mini PC Ollama HTTP API on TCP 11434
+     -> llama3.2:3b or llama3.1:8b inference
+  -> result returns to the calling VM process
+  -> backend/worker validates and persists the response
+  -> frontend polls or receives and renders the result
+```
+
+Verified live facts:
+
+- the Azure VM's effective AI gateway is `local_only` with provider `ollama`;
+- the VM's effective `AI_LOCAL_BASE_URL` matches the Mini PC's Tailscale address;
+- VM-to-Mini-PC Tailscale ping and Ollama `/api/version` and `/api/tags` calls succeed;
+- the Mini PC runs Ollama `0.32.5` and has both `llama3.2:3b` and `llama3.1:8b` installed;
+- a live `plan_turn` request from the VM reached the Mini PC and received a successful Ollama generation response;
+- no paid fallback is part of this verified path.
+
+Do not store the Mini PC's Tailscale IP, tailnet name, or private endpoint in this public repository. The exact endpoint belongs only in protected runtime configuration. Verify endpoint identity by comparing sanitized VM configuration, Mini PC listener state, and Tailscale peer identity.
+
+## Mini PC Runtime Contract
+
+The production inference host is `ANAKIN-MINI-PC`, a Windows 11 GMKtec NucBox K8 Plus. Ollama is installed per-user and runs as `ollama.exe serve` from that runtime user's Windows startup session; it is not a Windows service.
+
+Ollama is intentionally bound to the Mini PC's Tailscale address, not to `127.0.0.1`, the LAN address, or all interfaces. Windows Firewall allows TCP `11434` only from the Azure SIEM VM's Tailscale peer. Therefore:
+
+- a failed `http://127.0.0.1:11434` check does **not** prove Ollama is stopped;
+- an audit run under a different Windows account may not find the per-user executable, startup entry, process context, or model store;
+- Mini PC verification must inspect the actual Ollama runtime account, effective `OLLAMA_HOST`, Tailscale-bound listener, process, and API through that bound address;
+- Azure verification must originate from the VM and use its protected `AI_LOCAL_BASE_URL`.
+
+The Mini PC has approximately 32 GB installed RAM and stores the required Ollama models in the Ollama runtime user's profile. The current installed model contract is:
+
+| Model | Production use | Verified state |
+| --- | --- | --- |
+| `llama3.2:3b` | Current `fast_triage` default, including planner requests | Installed; generation works; planner contract validation fails reproducibly |
+| `llama3.1:8b` | Guided Analysis, Deep Briefing, and Developer Assistant through the effective profile/fallback configuration | Installed; generation works; materially better planner structure, but current planner plans still fail cross-field validation |
+
+## Planner Model Verification Status
+
+The real planner contract was evaluated through the Mini PC with identical prompts/settings for three trials per model:
+
+- `llama3.2:3b` repeatedly omitted 8 of 13 required fields and proposed invalid capability values. It is not sufficient for the current planner contract.
+- `llama3.1:8b` repeatedly returned all 13 required fields with valid JSON and mostly valid enums. Its remaining failures were cross-field logic errors, including requesting tools with `direct_answer` and leaving required reasoning/stopping fields empty.
+- The contract is not considered excessively strict based on this evidence: the 8B model satisfies its structural requirements, while the validator correctly rejects contradictory plans.
+- Production remains configured to use `llama3.2:3b` for `fast_triage` until a separate approved implementation/runtime change alters that selection. Verification evidence is not authorization to change the model.
+
+Do not report the planner as working based only on provider success. Distinguish `provider_status=success` from `plan validation accepted`; the verified live 3B planner response reached Ollama successfully but remained invalid after its bounded repair attempt.
 
 ## Authoritative Locations
 
@@ -29,11 +107,19 @@ VM repository/runtime:
 jaden@4.204.25.149:/home/jaden/siem-security-dashboard
 ```
 
+Mini PC inference runtime:
+
+```text
+Host identity: ANAKIN-MINI-PC
+Transport: Tailscale-private Ollama HTTP endpoint on TCP 11434
+Exact address: protected Azure VM runtime configuration, not source control
+```
+
 The old `/Users/jadengomez/Desktop/siem-security-dashboard-public` checkout is obsolete and absent. Agents must not use or recreate it.
 
 ## Ownership
 
-**Ownership test:** durable source, specification, migration, backend, frontend, test, and documentation changes belong to Mac AI. Live configuration, installed services, deployment, database/runtime cleanup, and production smoke tests belong to VM AI.
+**Ownership test:** durable source, specification, migration, backend, frontend, test, and documentation changes belong to Mac AI. Azure VM AI owns deployment, application runtime, database/queues/workers, and production acceptance. Mini PC runtime work is limited to Ollama, installed models, Tailscale-bound inference, and model performance/capability verification.
 
 ### Mac AI
 
@@ -43,6 +129,7 @@ Use the Mac repository for:
 - frontend/backend source and deployment templates;
 - migrations, schema snapshot, seed files, scripts, tests, and documentation;
 - frontend production builds;
+- temporary model-evaluation harnesses generated from source, using identical packets/settings across compared models;
 - commits and pushes, only when explicitly authorized.
 
 ### VM AI
@@ -54,9 +141,44 @@ Use the VM only for explicitly authorized:
 - runtime `.env`/secret configuration without exposing values;
 - systemd install/reload/restart/status and journal review;
 - database/runtime queue, approval, and dead-letter operations;
-- backend health checks, frontend artifact deployment, and live smoke tests.
+- backend health checks, frontend artifact deployment, and live smoke tests;
+- sanitized effective AI gateway/profile verification and VM-to-Mini-PC connectivity checks;
+- end-to-end production acceptance through the real `/siem/` browser path.
 
 The VM AI must not invent or implement durable fixes. Any required source, migration, unit-template, wrapper, API, or UI change is handed back to the Mac AI.
+
+### Mini PC Runtime
+
+Use the Mini PC only for explicitly authorized:
+
+- Tailscale and Ollama readiness/listener checks;
+- installed-model inventory and direct generation tests;
+- model-only capability, latency, resource, and thermal evaluation;
+- separately approved Ollama/model installation or configuration work.
+
+Do not use the Mini PC for source implementation, OpenSpec work, SIEM application deployment, PostgreSQL changes, queue/worker execution, or production acceptance by itself. Direct Ollama success proves inference availability only; it does not prove planner validation, VM orchestration, worker completion, or frontend rendering.
+
+## Machine Responsibility Matrix
+
+| Activity | Authoritative machine | Rule |
+| --- | --- | --- |
+| Feature implementation, OpenSpec, migrations, tests, and documentation | Mac | All durable source changes originate here. |
+| Commit and push | Mac | Only with explicit user authorization. |
+| Application deployment, migrations, nginx, backend, workers, timers, and PostgreSQL | Azure VM | Sync only an approved commit through the clean-tree gate. |
+| Runtime and queue verification | Azure VM | Verify effective installed state, not only repository templates. |
+| Ollama service, model inventory, and model-only evaluation | Mini PC | Inspect the actual Ollama Windows account and Tailscale-bound endpoint. |
+| End-to-end AI performance | Azure VM plus Mini PC | Separate application/queue latency from Ollama generation latency. |
+| Production acceptance | Azure VM `/siem/` path plus Mini PC | Must include the configured provider, worker when applicable, and rendered UI. |
+
+## AI Runtime Verification Procedure
+
+For every AI deployment or model evaluation:
+
+1. On the Mini PC, verify the actual Ollama runtime account, `ollama.exe serve`, effective `OLLAMA_HOST`, TCP `11434` listener, Tailscale identity, `/api/version`, `/api/tags`, and installed models. Do not substitute loopback when Ollama is Tailscale-bound.
+2. On the Azure VM, verify sanitized effective `AI_GATEWAY_MODE`, `AI_LOCAL_PROVIDER`, `AI_LOCAL_BASE_URL` host identity, and effective model per profile. Source defaults alone are insufficient.
+3. From the Azure VM, run Tailscale ping, TCP connectivity, `/api/version`, and `/api/tags` against the configured endpoint.
+4. Exercise the actual application path and record provider status, selected profile/model, validation status, repair status, latency, and final UI result.
+5. For model comparisons, use byte-identical planner packets, prompts, generation settings, and repeated trials. Provider success and structurally valid JSON are separate measurements from semantically valid plans.
 
 ## Spec-to-Deployment Workflow
 
@@ -79,6 +201,8 @@ Automated tests, OpenSpec validation, frontend builds, service health, direct-ba
 ```text
 browser -> /siem/ -> nginx -> frontend -> backend -> worker/Ollama -> frontend-rendered result
 ```
+
+In the verified production topology, nginx, frontend, backend, and workers run on the Azure VM; Ollama inference runs on the Mini PC over Tailscale. Synchronous paths may call Ollama directly from Gunicorn, while asynchronous paths include the Azure VM worker before Ollama.
 
 If that browser-path verification was not performed, the only allowed completion wording is:
 

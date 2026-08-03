@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 AI_PROFILE_FAST_TRIAGE = "fast_triage"
+AI_PROFILE_AGENTIC_PLANNING = "agentic_planning"
 AI_PROFILE_GUIDED_ANALYSIS = "guided_analysis"
 AI_PROFILE_DEEP_BRIEFING = "deep_briefing"
 AI_PROFILE_DEVELOPER_ASSISTANT = "developer_assistant"
@@ -11,6 +12,7 @@ AI_PROFILE_DEVELOPER_ASSISTANT = "developer_assistant"
 APPROVED_AI_PROFILES = frozenset(
     {
         AI_PROFILE_FAST_TRIAGE,
+        AI_PROFILE_AGENTIC_PLANNING,
         AI_PROFILE_GUIDED_ANALYSIS,
         AI_PROFILE_DEEP_BRIEFING,
         AI_PROFILE_DEVELOPER_ASSISTANT,
@@ -304,6 +306,10 @@ def profile_for_investigation() -> str:
 
 def profile_for_chat() -> str:
     return AI_PROFILE_FAST_TRIAGE
+
+
+def profile_for_agentic_planning() -> str:
+    return AI_PROFILE_AGENTIC_PLANNING
 
 
 def profile_for_soc_briefing() -> str:

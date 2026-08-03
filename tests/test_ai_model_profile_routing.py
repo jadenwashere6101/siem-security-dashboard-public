@@ -3,6 +3,10 @@ from unittest.mock import MagicMock
 
 from core.ai.config import (
     AI_MODE_LOCAL_ONLY,
+    DEFAULT_AGENTIC_PLANNING_MAX_OUTPUT_TOKENS,
+    DEFAULT_AGENTIC_PLANNING_MAX_PROMPT_CHARS,
+    DEFAULT_AGENTIC_PLANNING_MODEL,
+    DEFAULT_AGENTIC_PLANNING_TIMEOUT_SECONDS,
     DEFAULT_DEEP_TIMEOUT_SECONDS,
     DEFAULT_DEVELOPER_TIMEOUT_SECONDS,
     DEFAULT_FAST_TIMEOUT_SECONDS,
@@ -25,6 +29,7 @@ from core.ai.investigation_models import (
 )
 from core.ai.models import AI_STATUS_SUCCESS, AiCapabilityResult, AiGatewayRequest, AiGatewayResponse, AiRequestMetadata
 from core.ai.profile_registry import (
+    AI_PROFILE_AGENTIC_PLANNING,
     AI_PROFILE_DEEP_BRIEFING,
     AI_PROFILE_DEVELOPER_ASSISTANT,
     AI_PROFILE_FAST_TRIAGE,
@@ -35,6 +40,7 @@ from core.ai.profile_registry import (
     GUIDED_INVESTIGATION_WORKFLOWS,
     inventory_selectors,
     profile_for_draft_type,
+    profile_for_agentic_planning,
     profile_for_explain_action,
     profile_for_investigation,
     profile_for_repo_assistant,
@@ -116,6 +122,7 @@ def test_profile_inventory_covers_backend_ai_selectors():
         WORKFLOW_DASHBOARD_ANOMALY,
     } == GUIDED_INVESTIGATION_WORKFLOWS
     assert profile_for_investigation() == AI_PROFILE_GUIDED_ANALYSIS
+    assert profile_for_agentic_planning() == AI_PROFILE_AGENTIC_PLANNING
     assert profile_for_soc_briefing() == AI_PROFILE_DEEP_BRIEFING
     assert profile_for_repo_assistant() == AI_PROFILE_DEVELOPER_ASSISTANT
 
@@ -137,6 +144,26 @@ def test_correlation_heavy_explain_actions_use_guided_profile():
 
     for action in ("ask_dashboard", "explain_anomaly", "explain_alert", "why_important", "general_chat"):
         assert profile_for_explain_action(action) == AI_PROFILE_FAST_TRIAGE
+
+
+def test_agentic_planning_has_dedicated_local_8b_profile_without_changing_fast_triage():
+    config = _config()
+
+    planner = config.profile(AI_PROFILE_AGENTIC_PLANNING)
+    quick = config.profile(AI_PROFILE_FAST_TRIAGE)
+
+    assert APPROVED_AI_PROFILES.issuperset({AI_PROFILE_AGENTIC_PLANNING, AI_PROFILE_FAST_TRIAGE})
+    assert planner.model == DEFAULT_AGENTIC_PLANNING_MODEL == "llama3.1:8b"
+    assert planner.timeout_seconds == DEFAULT_AGENTIC_PLANNING_TIMEOUT_SECONDS == 90.0
+    assert planner.max_prompt_chars == DEFAULT_AGENTIC_PLANNING_MAX_PROMPT_CHARS == 8000
+    assert planner.max_output_tokens == DEFAULT_AGENTIC_PLANNING_MAX_OUTPUT_TOKENS == 1024
+    assert planner.local_only is True
+    assert planner.paid_fallback_enabled is False
+    assert quick.model == "llama3.2:3b"
+    assert quick.max_output_tokens == 512
+    assert config.profile(AI_PROFILE_GUIDED_ANALYSIS).model == "llama3.1:8b"
+    assert config.profile(AI_PROFILE_DEEP_BRIEFING).model == "llama3.1:8b"
+    assert config.profile(AI_PROFILE_DEVELOPER_ASSISTANT).model == "llama3.1:8b"
 
 
 def test_legacy_local_timeout_does_not_override_profile_defaults(monkeypatch):

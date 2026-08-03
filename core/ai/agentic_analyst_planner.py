@@ -7,7 +7,7 @@ from typing import Any
 from core.ai.config import AiGatewayConfig, load_ai_gateway_config
 from core.ai.gateway import AiGateway
 from core.ai.models import AI_STATUS_SUCCESS, AiGatewayRequest
-from core.ai.profile_registry import AI_PROFILE_FAST_TRIAGE
+from core.ai.profile_registry import profile_for_agentic_planning
 from core.ai.session_memory_store import sanitize_structured_value
 
 
@@ -239,7 +239,8 @@ def plan_turn(
     config: AiGatewayConfig | None = None,
 ) -> PlannerOutcome:
     resolved_config = config if config is not None else load_ai_gateway_config()
-    profile = resolved_config.profile(AI_PROFILE_FAST_TRIAGE)
+    profile_name = profile_for_agentic_planning()
+    profile = resolved_config.profile(profile_name)
     prompt = _planner_prompt(packet.payload)
     if len(prompt) + PLANNER_PROMPT_RESERVE_CHARS > profile.max_prompt_chars:
         raise PlannerConfigurationError(
@@ -251,7 +252,7 @@ def plan_turn(
         AiGatewayRequest(
             prompt=prompt,
             capability="agentic_analyst_planning",
-            profile=AI_PROFILE_FAST_TRIAGE,
+            profile=profile_name,
             metadata={"read_only": True, "task": "turn_planning", "schema_version": 1},
         )
     )
@@ -284,7 +285,7 @@ def plan_turn(
         AiGatewayRequest(
             prompt=repair_prompt,
             capability="agentic_analyst_planning",
-            profile=AI_PROFILE_FAST_TRIAGE,
+            profile=profile_name,
             metadata={"read_only": True, "task": "turn_plan_repair", "repair_attempt": 1},
         )
     )
@@ -377,6 +378,8 @@ def parse_and_validate_plan(
     required_evidence = _string_list(payload.get("required_evidence"), max_items=6)
     if not isinstance(payload.get("required_evidence"), list):
         errors.append("required_evidence must be a list")
+    if strategy == "quick_evidence_lookup" and not required_evidence:
+        errors.append("quick_evidence_lookup requires at least one required_evidence item")
     stopping = _bounded_text(payload.get("stopping_condition"), 500)
     if not stopping:
         errors.append("stopping_condition is required")
@@ -463,6 +466,9 @@ def _planner_prompt(packet: dict[str, Any]) -> str:
         "compare_entities, clarification_required, unsupported_or_boundary. Use at most one approved read tool category. "
         "A prior or preferred workflow is context, never authority over the current question. Stale evidence is insufficient. "
         "Never propose mutation, Repo Assistant, SOC Briefing continuation, or an entity absent from resolved focus/comparison entities. "
+        "Keep strategy fields internally consistent: direct_answer uses quick_explain with no tool category; quick_evidence_lookup uses "
+        "quick_explain, insufficient evidence, one non-empty required_evidence item, and exactly one approved tool category; each other "
+        "strategy must use its matching capability. reasoning_summary and stopping_condition must each be non-empty and operationally specific. "
         "Required keys: current_turn_intent, relationship_to_prior_turn, resolved_entities, evidence_sufficiency, required_evidence, "
         "proposed_strategy, proposed_capability, proposed_tool_categories, clarification_question, reasoning_summary, stopping_condition, "
         "confidence, safety. relationship_to_prior_turn must be continuation, new_question, entity_switch, comparison, or "

@@ -106,6 +106,21 @@ The system SHALL register `agentic_analyst_planning` through the normal provider
 - **WHEN** the gateway receives an unregistered capability
 - **THEN** it returns provider-incapable without invoking generation
 
+### Requirement: Planner uses a dedicated local planning profile
+The system SHALL route initial and repair planner requests through the approved `agentic_planning` profile using the local `llama3.1:8b` model. The profile SHALL have planner-specific prompt, output, timeout, and temperature limits, SHALL remain local-only, and SHALL disable paid fallback. Existing Quick Explain and other workflow profile assignments MUST remain unchanged.
+
+#### Scenario: Planner profile is observable
+- **WHEN** the planner submits a proposal or its one bounded repair
+- **THEN** the gateway and provider metadata identify profile `agentic_planning` and model `llama3.1:8b`
+
+#### Scenario: Quick Explain profile is unchanged
+- **WHEN** Quick Explain executes outside the planner generation stage
+- **THEN** it continues using `fast_triage` and its existing `llama3.2:3b` assignment
+
+#### Scenario: Contradictory 8B plan
+- **WHEN** the model combines `direct_answer` with a tool category, omits required evidence for a lookup, leaves reasoning or stopping conditions empty, or otherwise violates strategy relationships
+- **THEN** deterministic validation rejects the plan, permits at most one bounded model repair, and fails closed if the repaired plan remains invalid
+
 ### Requirement: Original workflow boundaries are validated before planning
 The system SHALL validate the originally requested workflow and SIEM conversation namespace before planner generation, repair, classification, or fallback. Repo Assistant, SOC Briefing, and unsupported workflow names MUST NOT be transformed into a SIEM capability. A post-planning classification SHALL NOT erase the original request boundary.
 
