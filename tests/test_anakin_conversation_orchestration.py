@@ -464,6 +464,27 @@ def test_unique_pronoun_and_explicit_entity_switch_resolve_without_guessing():
     assert switched["referent"]["id"] == "203.0.113.81"
 
 
+def test_literal_valid_ip_becomes_current_entity_even_when_not_already_tracked():
+    result = resolve_reference(
+        "Show me alerts from 203.0.113.99.",
+        thread={
+            "primary_entity": {"type": "dashboard", "id": "dashboard"},
+            "focus_state": {"active": {"type": "dashboard", "id": "dashboard"}, "history": []},
+        },
+        entities=[],
+        turns=[],
+        explicit_entity={"type": "dashboard", "id": "dashboard"},
+    )
+
+    assert result["status"] == "resolved"
+    assert result["intent"] == "explicit_entity"
+    assert result["referent"] == {
+        "type": "source_ip",
+        "id": "203.0.113.99",
+        "display_alias": "Source IP 203.0.113.99",
+    }
+
+
 def test_stale_evidence_is_reported_missing_from_selected_context(postgres_db):
     conn, _cur = postgres_db
     thread, _alert_id = _seed(conn)
@@ -1418,6 +1439,7 @@ def test_production_shaped_auto_turn_plans_dispatches_and_persists(postgres_db, 
     )
     monkeypatch.setattr("core.ai.context_builder.get_db_connection", lambda: NoCloseConnection(conn))
     monkeypatch.setattr("core.ai.soc_tool_executor.get_db_connection", lambda: NoCloseConnection(conn))
+    monkeypatch.setattr("core.ai.explainer_service.current_user", SimpleNamespace(role="analyst"))
     plan = {
         "current_turn_intent": "Find the newest high-severity alert.",
         "evidence_sufficiency": "insufficient",
@@ -1439,7 +1461,7 @@ def test_production_shaped_auto_turn_plans_dispatches_and_persists(postgres_db, 
     }
     gateway = PlannerThenAnswerGateway(
         plan,
-        "The newest matching HIGH alert is Alert %s, a failed-login detection from 203.0.113.81." % alert_id,
+        "Bad IP: This alert indicates suspicious activity. Check whether it touched sensitive hosts.",
     )
     payload = _payload(
         thread,
@@ -1470,10 +1492,14 @@ def test_production_shaped_auto_turn_plans_dispatches_and_persists(postgres_db, 
     )
     assert result.status_code == 200
     assert result.payload["workflow"] == "quick_explain"
-    assert result.payload["result"]["answer"].startswith(f"The newest matching HIGH alert is Alert {alert_id}")
+    answer = result.payload["result"]["answer"]
+    assert answer.startswith(f"Alert {alert_id} is HIGH failed_login")
+    assert "203.0.113.81" in answer
+    assert "target filtered evidence marker" in answer
+    assert "Bad IP" not in answer
     assert len(gateway.requests) == 2
     assert gateway.requests[0].capability == "agentic_analyst_planning"
-    assert '"tool_name": "search_alerts"' in gateway.requests[1].prompt
+    assert '"evidence_source": "search_alerts"' in gateway.requests[1].prompt
     assert "target filtered evidence marker" in gateway.requests[1].prompt
     assert "low excluded evidence marker" not in gateway.requests[1].prompt
     assert "old excluded evidence marker" not in gateway.requests[1].prompt
@@ -1496,6 +1522,117 @@ def test_production_shaped_auto_turn_plans_dispatches_and_persists(postgres_db, 
     assert turns[0]["entity_snapshot"]["active_entity"]["type"] == "alert"
     assert turns[0]["entity_snapshot"]["active_entity"]["id"] == str(alert_id)
     assert turns[-1]["role"] == "assistant"
+    grounding = turns[-1]["structured_payload"]["evidence_grounding"]
+    assert grounding["result_count"] == 1
+    assert grounding["records"][0]["id"] == alert_id
+    assert grounding["records"][0]["source_ip"] == "203.0.113.81"
+
+
+def test_production_time_window_no_match_does_not_reuse_older_alert(postgres_db, monkeypatch):
+    conn, _cur = postgres_db
+    thread, alert_id = _seed(conn)
+    with conn.cursor() as cur:
+        cur.execute("UPDATE alerts SET created_at = NOW() - INTERVAL '2 hours' WHERE id = %s", (alert_id,))
+    conn.commit()
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
+    )
+    monkeypatch.setattr("core.ai.context_builder.get_db_connection", lambda: NoCloseConnection(conn))
+    monkeypatch.setattr("core.ai.soc_tool_executor.get_db_connection", lambda: NoCloseConnection(conn))
+    monkeypatch.setattr("core.ai.explainer_service.current_user", SimpleNamespace(role="analyst"))
+    plan = {
+        "current_turn_intent": "Find alert activity in the analyst's explicit time window.",
+        "evidence_sufficiency": "insufficient",
+        "required_evidence": ["alerts observed in the requested time window"],
+        "proposed_strategy": "quick_evidence_lookup",
+        "proposed_tool_categories": ["alerts"],
+        "evidence_requirements": {"sort": "newest", "limit": 10},
+        "clarification_question": None,
+        "reasoning_summary": "The current question requires a bounded time-filtered lookup.",
+        "stopping_condition": "Stop after reporting records inside the requested window or a truthful no-match result.",
+        "confidence": "high",
+    }
+    gateway = PlannerThenAnswerGateway(plan, "A HIGH alert occurred recently.")
+    payload = _payload(
+        thread,
+        alert_id,
+        request_id="agentic-time-window-no-match",
+        prompt="What happened in the last hour?",
+        workflow="auto",
+    )
+
+    result = run_conversational_workflow(
+        payload,
+        owner_username="conversation_analyst",
+        actor_role="analyst",
+        gateway=gateway,
+        config=AiGatewayConfig(
+            mode=AI_MODE_LOCAL_ONLY,
+            configured_mode=AI_MODE_LOCAL_ONLY,
+            local_provider="controlled-local",
+            local_base_url="http://127.0.0.1:11434",
+            local_model="planner-test",
+        ),
+    )
+
+    assert result.payload["result"]["answer"] == "No alerts matched within the last 60 minutes."
+    assert result.payload["result"]["evidence_envelope"]["result_count"] == 0
+    assert result.payload["result"]["evidence_envelope"]["evidence_query_parameters"]["time_window_minutes"] == 60
+    assert str(alert_id) not in result.payload["result"]["answer"]
+
+
+def test_typed_source_ip_switch_reaches_tool_and_grounded_answer(postgres_db, monkeypatch):
+    conn, _cur = postgres_db
+    thread, alert_id = _seed(conn, source_ip="203.0.113.99")
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
+    )
+    monkeypatch.setattr("core.ai.context_builder.get_db_connection", lambda: NoCloseConnection(conn))
+    monkeypatch.setattr("core.ai.soc_tool_executor.get_db_connection", lambda: NoCloseConnection(conn))
+    monkeypatch.setattr("core.ai.explainer_service.current_user", SimpleNamespace(role="analyst"))
+    plan = {
+        "current_turn_intent": "Find alerts for the explicitly supplied source IP.",
+        "evidence_sufficiency": "insufficient",
+        "required_evidence": ["alerts matching the source IP"],
+        "proposed_strategy": "quick_evidence_lookup",
+        "proposed_tool_categories": ["alerts"],
+        "evidence_requirements": {"source_ip": "203.0.113.99", "sort": "newest", "limit": 10},
+        "clarification_question": None,
+        "reasoning_summary": "The literal IP is a valid accessible SIEM entity requiring a bounded alert lookup.",
+        "stopping_condition": "Stop after summarizing alerts matching the source IP.",
+        "confidence": "high",
+    }
+    gateway = PlannerThenAnswerGateway(plan, "This IP appears suspicious.")
+    payload = _payload(
+        thread,
+        alert_id,
+        request_id="agentic-explicit-source-ip",
+        prompt="Show me alerts from 203.0.113.99.",
+        workflow="auto",
+    )
+    payload["context_type"] = "dashboard"
+    payload["context"] = {}
+    payload["entity"] = {"type": "dashboard", "id": "dashboard"}
+
+    result = run_conversational_workflow(
+        payload,
+        owner_username="conversation_analyst",
+        actor_role="analyst",
+        gateway=gateway,
+        config=AiGatewayConfig(
+            mode=AI_MODE_LOCAL_ONLY,
+            configured_mode=AI_MODE_LOCAL_ONLY,
+            local_provider="controlled-local",
+            local_base_url="http://127.0.0.1:11434",
+            local_model="planner-test",
+        ),
+    )
+
+    answer = result.payload["result"]["answer"]
+    assert "source IP 203.0.113.99" in answer
+    assert f"Alert {alert_id}" in answer
+    assert result.payload["conversation"]["active_entity"]["type"] == "source_ip"
+    assert result.payload["conversation"]["active_entity"]["id"] == "203.0.113.99"
 
 
 def test_unhinted_auto_planner_failure_does_not_dispatch_quick_explain(postgres_db, monkeypatch):

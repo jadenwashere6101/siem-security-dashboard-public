@@ -543,8 +543,12 @@ def _explain_payload_from_envelope(payload: dict[str, Any], *, action: str) -> d
         "tool_policy": payload.get("tool_policy"),
         "conversation_context": payload.get("conversation_context"),
         "planner_task": {
+            "intent": payload.get("planner_intent"),
             "strategy": payload.get("planner_strategy"),
             "evidence_sufficiency": payload.get("planner_evidence_sufficiency"),
+            "evidence_requirements": payload.get("planner_evidence_requirements")
+            if isinstance(payload.get("planner_evidence_requirements"), dict)
+            else {},
         },
     }
 

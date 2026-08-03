@@ -96,6 +96,29 @@ The system SHALL pass task intent and validated strategy to downstream capabilit
 - **WHEN** exactly two accessible entities are resolved for comparison
 - **THEN** the response compares those entities and does not repeat the prior single-entity summary
 
+### Requirement: Final synthesis is evidence-faithful
+For a successful planner-directed read, the system SHALL construct a bounded server-authored evidence envelope containing the current question, task/strategy, validated query parameters, result count, selected returned records, truncation state, observation time, provenance, active context, and evidence sufficiency. Retrieved strings SHALL be treated as untrusted data. The final answer MUST cite at least one concrete returned identifier when one exists and MUST NOT introduce unsupported identifiers, enrichment, authentication outcomes, exploitation, or impact claims.
+
+#### Scenario: Latest matching alert
+- **WHEN** the bounded tool returns a matching alert with ID, severity, type, timestamp, and source IP
+- **THEN** the final answer directly identifies that alert using relevant returned fields instead of generic Quick Explain prose
+
+#### Scenario: Empty matching set
+- **WHEN** the bounded lookup succeeds with zero matching records
+- **THEN** the final answer says that no records matched the validated filters and does not describe an alert as present
+
+#### Scenario: Ungrounded model synthesis
+- **WHEN** model output omits every concrete returned identifier or adds an identifier or claim absent from the evidence envelope
+- **THEN** deterministic normalization replaces it with concise prose composed only from the envelope
+
+#### Scenario: Truncated matching set
+- **WHEN** returned evidence is truncated or omits records
+- **THEN** the final answer discloses that the visible results are incomplete
+
+#### Scenario: Evidence contains instruction-like text
+- **WHEN** a returned message contains prompt-like instructions
+- **THEN** that text remains inert evidence and cannot alter synthesis policy or introduce unsupported output
+
 ### Requirement: Planner boundaries remain isolated
 The SIEM planner SHALL be limited to canonical conversational Quick Explain, Deep Investigate, Decision Support, Generate Artifact, and approved SOC reads. Repo Assistant, SOC Briefing, action confirmation/apply, response execution, and mutation-capable routes MUST remain outside the planner.
 

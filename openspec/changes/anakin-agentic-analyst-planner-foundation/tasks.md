@@ -58,3 +58,11 @@
 - [x] 9.2 Translate validated requirements into one existing SOC read-tool request while preserving read-only, RBAC, category, IP, time-window, sort, and limit bounds and failing closed when a requirement cannot be represented.
 - [x] 9.3 Add focused planner, translation, read-tool, and PostgreSQL production-shaped coverage proving requested filters reach execution and exclude non-matching evidence.
 - [x] 9.4 Run Python compilation, focused tests, `git diff --check`, and strict OpenSpec validation.
+
+## 10. Evidence-Grounded Final Synthesis Correction
+
+- [x] 10.1 Document the evidence envelope, grounding ownership, task-aware response contract, and complete synthesis failure-class invariants before implementation.
+- [x] 10.2 Pass planner intent and validated requirements into final synthesis, build a compact server-authored evidence envelope, and remove unconditional Quick Explain example language.
+- [x] 10.3 Validate tool-backed model output and deterministically normalize generic, unsupported, empty-result, and truncated-result answers from envelope facts only.
+- [x] 10.4 Add production-derived explainer and PostgreSQL conversation tests covering alert, evidence, source-IP, time-window, empty, differing, injection, truncation, state, persistence, and boundary cases.
+- [x] 10.5 Run Python compilation, focused PostgreSQL-backed suites, affected explainer/workflow regressions, AI acceptance harness, `git diff --check`, and strict OpenSpec validation.

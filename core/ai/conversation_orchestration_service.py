@@ -1083,6 +1083,9 @@ def _assistant_structured_payload(
         structured["provider_status"] = normalized.provider_status
     if normalized.error:
         structured["terminal_error"] = normalized.error
+    evidence_envelope = result.get("evidence_envelope")
+    if isinstance(evidence_envelope, dict):
+        structured["evidence_grounding"] = _bounded_evidence_value(evidence_envelope)
     if workflow == "generate_artifact":
         structured.pop("confidence", None)
         structured["artifact"] = _bounded_artifact(result.get("draft") or result.get("artifact"))
@@ -1445,6 +1448,7 @@ def _apply_planner_execution_hints(payload: dict[str, Any], plan: AgenticAnalyst
     payload["planner_intent"] = plan.current_turn_intent
     payload["planner_strategy"] = plan.proposed_strategy
     payload["planner_evidence_sufficiency"] = plan.evidence_sufficiency
+    payload["planner_evidence_requirements"] = dict(plan.evidence_requirements)
     if plan.proposed_strategy == "quick_evidence_lookup":
         tool_request = _planner_tool_request(
             plan.proposed_tool_categories[0],

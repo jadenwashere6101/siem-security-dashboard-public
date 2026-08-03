@@ -162,7 +162,7 @@ def resolve_reference(
             "candidates": [],
         }
 
-    if explicit_switch and not _CORRECTION.search(text):
+    if explicit_switch and explicit.get("type") not in {"dashboard", "general"} and not _CORRECTION.search(text):
         return _resolved("explicit_entity", [explicit], referent=explicit)
 
     explicit_ips = _valid_ip_tokens(text)
@@ -171,7 +171,9 @@ def resolve_reference(
         if len(matches) == 1:
             return _resolved("explicit_entity", matches, referent=matches[0])
         if len(explicit_ips) == 1:
-            return _unresolved("explicit_entity", "The referenced IP is not part of this thread's validated entities.")
+            source_ip = next(iter(explicit_ips))
+            entity = {"type": "source_ip", "id": source_ip, "display_alias": f"Source IP {source_ip}"}
+            return _resolved("explicit_entity", [entity], referent=entity)
 
     if _WHY.match(text):
         if latest_assistant:
@@ -640,10 +642,12 @@ def _resolved_primary_entity(
     intent = str(resolution.get("intent") or "")
     if intent == "go_back" and referent.get("id"):
         return _public_entity(referent)
-    if explicit and explicit.get("type") and explicit.get("id"):
+    if explicit and explicit.get("type") not in {"dashboard", "general"} and explicit.get("id"):
         return explicit
     if intent in {"explicit_entity", "entity_reference", "which_ip"} and referent.get("id"):
         return _public_entity(referent)
+    if explicit and explicit.get("type") and explicit.get("id"):
+        return explicit
     if intent in {"why", "evidence", "continue"} and isinstance(referent.get("entity"), dict):
         entity = _public_entity(referent["entity"])
         if entity.get("type") and entity.get("id"):

@@ -63,12 +63,13 @@ def test_quick_explain_prompt_uses_persona_and_stays_concise_tool_free():
     assert "quick explain style" in prompt
     assert "2-6 concise sentences" in prompt
     assert "use only already-loaded bounded context" in prompt
-    assert "at most one concrete next check" in prompt
+    assert "do not force inference" in prompt
     assert "do not repeat the alert description" in prompt
     assert "generic monitoring advice" in prompt
-    assert "tiny style example" in prompt
-    assert "bad: this alert indicates suspicious activity" in prompt
-    assert "good: this looks more like noisy recon" in prompt
+    assert "server-authored evidence envelope" in prompt
+    assert "tiny style example" not in prompt
+    assert "successful login yet" not in prompt
+    assert "sensitive hosts" not in prompt
     assert "style examples for interactive answers" not in prompt
     assert "you are a read-only siem analyst assistant" not in prompt
 
@@ -100,7 +101,9 @@ def test_interactive_policies_include_natural_conversation_rules_and_examples():
 
     quick = quick_explain_policy("casual").lower()
     assert "answer immediately" in quick
-    assert "tiny style example" in quick
+    assert "tiny style example" not in quick
+    assert "successful login yet" not in quick
+    assert "sensitive hosts" not in quick
     assert "style examples for interactive answers" not in quick
     assert len(quick_explain_policy("casual")) <= 3400
 

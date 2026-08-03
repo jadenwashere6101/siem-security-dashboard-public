@@ -326,6 +326,35 @@ def test_alert_evidence_requirements_are_normalized_without_query_generation():
     assert plan.evidence_requirements == {**requirements, "severity": "high"}
 
 
+@pytest.mark.parametrize(
+    "question,expected_minutes",
+    [
+        ("What happened in the last hour?", 60),
+        ("Show alerts from the past 30 minutes.", 30),
+        ("Review activity over the previous 2 days.", 2880),
+    ],
+)
+def test_explicit_duration_is_deterministically_owned_by_server(question, expected_minutes):
+    plan, errors = parse_and_validate_plan(
+        json.dumps(_plan(requirements={"sort": "newest", "limit": 10})),
+        _packet(question).payload,
+    )
+
+    assert errors == []
+    assert plan.evidence_requirements["time_window_minutes"] == expected_minutes
+
+
+def test_planner_prompt_defines_sort_semantics_without_accepting_aliases():
+    gateway = SequenceGateway([json.dumps(_plan())])
+
+    outcome = plan_turn(_packet(), gateway=gateway, config=_config())
+
+    assert outcome.status == "planned"
+    prompt = gateway.requests[0].prompt
+    assert "sort MUST be exactly newest, oldest, or severity" in prompt
+    assert "never output timestamp, asc, or desc" in prompt
+
+
 def test_second_invalid_plan_does_not_fall_back_to_prior_workflow():
     gateway = SequenceGateway(["not-json", "still-not-json"])
     outcome = plan_turn(_packet(), gateway=gateway, config=_config())

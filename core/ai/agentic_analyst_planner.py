@@ -386,6 +386,12 @@ def parse_and_validate_plan(
         tool_category=tools[0] if len(tools) == 1 else None,
     )
     errors.extend(requirement_errors)
+    explicit_window = _explicit_time_window_minutes(planner_packet.get("current_user_message"))
+    if explicit_window is not None and strategy == "quick_evidence_lookup" and tools == ["alerts"]:
+        if explicit_window > MAX_PLANNER_TIME_WINDOW_MINUTES:
+            errors.append("explicit time window exceeds the bounded maximum")
+        else:
+            evidence_requirements["time_window_minutes"] = explicit_window
     if strategy == "quick_evidence_lookup" and not evidence_requirements:
         errors.append("quick_evidence_lookup requires structured evidence_requirements")
     if strategy != "quick_evidence_lookup" and evidence_requirements:
@@ -492,7 +498,9 @@ def _planner_prompt(packet: dict[str, Any]) -> str:
         "tool category and an empty evidence_requirements object. For alerts, evidence_requirements may contain only severity, alert_type, "
         "source_ip, destination_ip, hostname, username, time_window_minutes, sort, and limit. Category subsets are: incidents severity/limit; "
         "source_ip_activity source_ip; events/authentication_activity/network_activity/recon_activity source_ip/alert_type/limit; "
-        "response_registry source_ip/limit. Use concrete scalar values, never SQL, operators, or backend query syntax. "
+        "response_registry source_ip/limit. sort MUST be exactly newest, oldest, or severity: use newest for descending timestamp and oldest "
+        "for ascending timestamp; never output timestamp, asc, or desc as sort values. Convert explicit durations to time_window_minutes. "
+        "Use concrete scalar values, never SQL, operators, or backend query syntax. "
         "reasoning_summary and "
         "stopping_condition must each be non-empty and operationally specific. Required keys only: current_turn_intent, "
         "evidence_sufficiency, required_evidence, proposed_strategy, proposed_tool_categories, evidence_requirements, clarification_question, reasoning_summary, "
@@ -623,6 +631,21 @@ def _validated_evidence_requirements(
         else:
             normalized["sort"] = sort
     return normalized, errors
+
+
+def _explicit_time_window_minutes(value: Any) -> int | None:
+    text = str(value or "").strip().lower()
+    match = re.search(
+        r"\b(?:last|past|previous)\s+(?:(\d+)\s+)?(minute|minutes|hour|hours|day|days)\b",
+        text,
+    )
+    if not match:
+        return None
+    amount = int(match.group(1) or 1)
+    multiplier = {"minute": 1, "minutes": 1, "hour": 60, "hours": 60, "day": 1440, "days": 1440}[
+        match.group(2)
+    ]
+    return amount * multiplier
 
 
 def _packet_has_answerable_context(packet: dict[str, Any]) -> bool:
