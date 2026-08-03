@@ -22,6 +22,7 @@ from core.ai.repo_assistant_service import RepoAssistantValidationError, repo_sc
 from core.ai.session_memory_service import read_thread_request
 from core.ai.session_memory_service import ThreadTargetUnavailableError
 from core.ai.session_memory_store import (
+    MAX_JSON_DEPTH,
     SessionMemoryError,
     append_turn,
     create_evidence,
@@ -113,6 +114,14 @@ def _quick_result(answer="This alert shows repeated blocked scan attempts."):
     )
 
 
+def _structured_depth(value):
+    if isinstance(value, dict):
+        return 1 + max((_structured_depth(item) for item in value.values()), default=0)
+    if isinstance(value, list):
+        return 1 + max((_structured_depth(item) for item in value), default=0)
+    return 0
+
+
 def _async_result(workflow, answer="Review the correlated firewall evidence."):
     if workflow == "generate_artifact":
         result = {"status": "success", "draft": {"title": "Review checklist", "steps": ["Review firewall logs"]}}
@@ -159,14 +168,19 @@ def test_sync_follow_up_persists_ordered_turns_and_terminal_retry(postgres_db, m
     def fake_run(payload, **_kwargs):
         calls.append(payload)
         assert payload["conversation_context"]["thread"]["thread_id"] == thread["thread_id"]
+        assert payload["context"]["workspace"]["threat_brief"]["sections"][0]["items"][0]["source"]["ip"] == "203.0.113.81"
         return _quick_result()
 
     monkeypatch.setattr("core.ai.conversation_orchestration_service.run_workflow", fake_run)
-    first = run_conversational_workflow(
-        _payload(thread, alert_id), owner_username="conversation_analyst", actor_role="analyst"
-    )
+    payload = _payload(thread, alert_id)
+    payload["context"]["workspace"] = {
+        "threat_brief": {
+            "sections": [{"items": [{"source": {"ip": "203.0.113.81", "metadata": {"labels": ["scan"]}}}]}]
+        }
+    }
+    first = run_conversational_workflow(payload, owner_username="conversation_analyst", actor_role="analyst")
     duplicate = run_conversational_workflow(
-        _payload(thread, alert_id), owner_username="conversation_analyst", actor_role="analyst"
+        payload, owner_username="conversation_analyst", actor_role="analyst"
     )
 
     assert first.payload["conversation"]["assistant_turn"]["sequence"] == 2
@@ -179,6 +193,10 @@ def test_sync_follow_up_persists_ordered_turns_and_terminal_retry(postgres_db, m
         ("user", "completed"),
         ("assistant", "completed"),
     ]
+    stored = page["turns"][0]["structured_payload"]
+    assert _structured_depth(stored) <= MAX_JSON_DEPTH
+    assert "workspace" not in stored["resolved_execution_context"]["context"]
+    assert stored["resolved_execution_context"]["active_entity"]["id"] == str(alert_id)
 
 
 def test_failed_sync_generation_records_no_assistant_inference(postgres_db, monkeypatch):
@@ -422,6 +440,9 @@ def test_async_request_links_turn_recovers_and_persists_assistant(postgres_db, m
         prompt="Deep investigate this alert and correlate the evidence.",
         workflow="deep_investigate",
     )
+    payload["context"]["workspace"] = {
+        "evidence": {"alerts": [{"source": {"ip": "203.0.113.81", "details": {"blocked": True}}}]}
+    }
     classification = classify_workflow(payload)
     queued, status = queue_conversational_request(
         payload,
@@ -434,7 +455,10 @@ def test_async_request_links_turn_recovers_and_persists_assistant(postgres_db, m
     monkeypatch.setattr(
         "core.ai.workflow_request_worker._run_with_user_context",
         lambda payload, workflow, **_kwargs: (
-            _async_result(workflow) if payload.get("conversation_context") else pytest.fail("conversation context missing")
+            _async_result(workflow)
+            if payload.get("conversation_context")
+            and payload["context"]["workspace"]["evidence"]["alerts"][0]["source"]["ip"] == "203.0.113.81"
+            else pytest.fail("full execution context or conversation context missing")
         ),
     )
     stats = run_anakin_workflow_worker(

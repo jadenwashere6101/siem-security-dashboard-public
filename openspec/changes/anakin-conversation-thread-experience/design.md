@@ -106,3 +106,17 @@ No schema migration is required. A later authorized deployment ships the fronten
 ## Open Questions
 
 None. Explicit New Thread is implemented as a non-default thread using the existing API; reset uses the existing reset endpoint and fresh replacement semantics.
+
+## Production Correction: Bounded Turn Persistence
+
+Production requests built by the canonical App path carry evidence-rich workflow context. A measured dashboard request was 8,094 serialized bytes at depth 6. Conversation orchestration then embedded its resolved copy under `anakin_turns.structured_payload.resolved_execution_context`, producing 5,873 bytes at depth 7 and correctly triggering the unchanged session-memory depth limit of 6 before model invocation.
+
+The workflow request and conversation turn have different storage contracts. The workflow path retains the complete validated context needed by prompts and tools. The turn serializer persists only the question in `content`, workflow intent, compact entity identity/display fields, bounded reference outcome, safe provenance, and artifact safety labels. It must not copy workspace state, workflow envelopes, tool evidence, or nested context trees into `structured_payload`.
+
+All mounted entry points continue through `App.handleAskAi` and therefore one frontend workflow-request builder. Backend orchestration applies the canonical turn serializer regardless of entry point or client variation. Retry retains the corrected workflow request and never reconstructs a turn payload from rejected browser data.
+
+| Failure class | Invariant | Enforcement | Variants |
+|---|---|---|---|
+| Rich UI context exceeds turn depth | Workflow context and turn memory are serialized separately | Shared App request builder plus orchestration turn serializer | Dashboard, alert, source IP, incident, recon, registry, workspace |
+| Deep metadata reaches persistence | Only allowlisted semantic scalars and bounded entity/reference lists enter a turn | Orchestration serializer before `append_turn` | Nested alert/event metadata and unknown objects |
+| Retry repeats rejected shape | Retry reuses full workflow execution context but turn persistence is regenerated canonically | App retry plus backend idempotency | Sync and async workflows |

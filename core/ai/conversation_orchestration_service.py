@@ -94,6 +94,21 @@ class AssistantTerminalContent:
     error: str | None = None
 
 
+_TURN_CONTEXT_IDENTITY_FIELDS = (
+    "alert_id",
+    "incident_id",
+    "source_ip",
+    "host",
+    "hostname",
+    "user",
+    "username",
+    "activity_id",
+    "recon_activity_id",
+    "registry_id",
+    "investigation_id",
+)
+
+
 def has_conversation_envelope(payload: Any) -> bool:
     return isinstance(payload, dict) and payload.get("conversation") is not None
 
@@ -195,7 +210,17 @@ def prepare_worker_conversation(conn, job: dict[str, Any]) -> tuple[dict[str, An
     turn = get_turn_by_id(conn, thread_id=thread_id, owner_username=job["actor_username"], turn_id=int(turn_id))
     if turn is None or turn.get("lifecycle_status") not in {"queued", "running"}:
         raise ConversationBoundaryError("Linked conversation turn is not available for execution.")
-    stored_context = _resolved_context_from_turn(turn)
+    execution_metadata = (
+        payload.get("_conversation_execution")
+        if isinstance(payload.get("_conversation_execution"), dict)
+        else {}
+    )
+    full_context = execution_metadata.get("resolved_context")
+    stored_context = (
+        _resolved_context_from_value(full_context)
+        if isinstance(full_context, dict)
+        else _resolved_context_from_turn(turn)
+    )
     _validate_resolved_entities(conn, owner_username=job["actor_username"], resolved=stored_context)
     profile = load_ai_gateway_config().profile(WORKFLOW_PROFILES[workflow])
     selection = select_conversation_context(
@@ -409,10 +434,12 @@ def _prepare_submission(
             workflow=workflow,
             content=_question(payload),
             assertion_type=assertion_type,
-            structured_payload={
-                "reference_resolution": resolution,
-                "resolved_execution_context": resolved_context.as_dict(),
-            },
+            structured_payload=_conversation_turn_payload(
+                workflow=workflow,
+                payload=payload,
+                resolution=resolution,
+                resolved=resolved_context,
+            ),
             parent_turn_id=parent_turn_id,
             entity_snapshot=entity_snapshot,
             lifecycle_status="queued",
@@ -1117,6 +1144,12 @@ def _resolved_context_from_turn(turn: dict[str, Any]) -> ResolvedExecutionContex
     value = structured.get("resolved_execution_context")
     if not isinstance(value, dict):
         raise ConversationBoundaryError("Queued conversation turn is missing its resolved execution context.")
+    if not isinstance(value.get("resolution"), dict) and isinstance(structured.get("reference_resolution"), dict):
+        value = {**value, "resolution": structured["reference_resolution"]}
+    return _resolved_context_from_value(value)
+
+
+def _resolved_context_from_value(value: dict[str, Any]) -> ResolvedExecutionContext:
     active = _normalized_entity(value.get("active_entity"))
     entities = _distinct_entities(value.get("entities") if isinstance(value.get("entities"), list) else [])
     comparison = _distinct_entities(
@@ -1138,6 +1171,138 @@ def _resolved_context_from_turn(turn: dict[str, Any]) -> ResolvedExecutionContex
         resolution=resolution,
         source=str(value.get("source") or "conversation"),
     )
+
+
+def _conversation_turn_payload(
+    *,
+    workflow: str,
+    payload: dict[str, Any],
+    resolution: dict[str, Any],
+    resolved: ResolvedExecutionContext,
+) -> dict[str, Any]:
+    compact_resolution = _compact_turn_resolution(resolution)
+    result: dict[str, Any] = {
+        "schema_version": 1,
+        "reference_resolution": compact_resolution,
+        "resolved_execution_context": {
+            "active_entity": _compact_turn_entity(resolved.active_entity),
+            "entities": [_compact_turn_entity(item) for item in resolved.entities[:20]],
+            "comparison_entities": [
+                _compact_turn_entity(item) for item in resolved.comparison_entities[:2]
+            ],
+            "context_type": resolved.context_type,
+            "context": _compact_turn_context(resolved.context),
+            "source": resolved.source,
+        },
+        "workflow_intent": {
+            "workflow": workflow,
+            "command": _compact_command_intent(payload),
+        },
+        "provenance": {"type": "conversation_submission"},
+    }
+    if workflow == "generate_artifact":
+        artifact = payload.get("artifact") if isinstance(payload.get("artifact"), dict) else {}
+        result["artifact_safety"] = {
+            "artifact_type": _compact_scalar(artifact.get("type"), 80),
+            "preview_only": True,
+            "persisted": False,
+            "applied": False,
+            "approval_required": True,
+        }
+    return result
+
+
+def _compact_turn_resolution(value: dict[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "status": _compact_scalar(value.get("status"), 64),
+        "intent": _compact_scalar(value.get("intent"), 64),
+    }
+    message = _compact_scalar(value.get("message"), 500)
+    if message:
+        result["message"] = message
+    referent = _compact_turn_referent(value.get("referent"))
+    if referent:
+        result["referent"] = referent
+    candidates = [
+        entity
+        for entity in (_compact_turn_entity(item) for item in (value.get("candidates") or [])[:6])
+        if entity.get("type") and entity.get("id")
+    ] if isinstance(value.get("candidates"), list) else []
+    result["candidates"] = candidates
+    return result
+
+
+def _compact_turn_referent(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    if isinstance(value.get("entities"), list):
+        entities = [
+            entity
+            for entity in (_compact_turn_entity(item) for item in value["entities"][:2])
+            if entity.get("type") and entity.get("id")
+        ]
+        return {"entities": entities} if entities else None
+    result = {
+        key: compact
+        for key, limit in (
+            ("type", 64),
+            ("id", 128),
+            ("database_id", 32),
+            ("sequence", 32),
+            ("content", 700),
+        )
+        if (compact := _compact_scalar(value.get(key), limit)) is not None
+    }
+    entity = _compact_turn_entity(value.get("entity"))
+    if entity.get("type") and entity.get("id"):
+        result["entity"] = entity
+    unresolved = value.get("value")
+    if isinstance(unresolved, dict):
+        result["value"] = {
+            key: compact
+            for key, limit in (("content", 500), ("turn_id", 128), ("assertion_type", 64))
+            if (compact := _compact_scalar(unresolved.get(key), limit)) is not None
+        }
+    return result or None
+
+
+def _compact_turn_entity(value: Any) -> dict[str, Any]:
+    entity = _normalized_entity(value)
+    if not entity:
+        return {}
+    result = {"type": entity["type"], "id": entity["id"]}
+    alias = _compact_scalar(entity.get("display_alias"), 160)
+    if alias:
+        result["display_alias"] = alias
+    return result
+
+
+def _compact_turn_context(value: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: compact
+        for key in _TURN_CONTEXT_IDENTITY_FIELDS
+        if (compact := _compact_scalar(value.get(key), 256)) is not None
+    }
+
+
+def _compact_command_intent(payload: dict[str, Any]) -> dict[str, Any] | None:
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    command = context.get("command") if isinstance(context.get("command"), dict) else {}
+    result = {
+        key: compact
+        for key, limit in (("id", 128), ("intent", 128), ("label", 160))
+        if (compact := _compact_scalar(command.get(key), limit)) is not None
+    }
+    return result or None
+
+
+def _compact_scalar(value: Any, limit: int) -> str | int | float | bool | None:
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, (dict, list, tuple, set)):
+        return None
+    text = str(value).strip()
+    return text[:limit] if text else None
 
 
 def _validate_resolved_entities(conn, *, owner_username: str, resolved: ResolvedExecutionContext) -> None:

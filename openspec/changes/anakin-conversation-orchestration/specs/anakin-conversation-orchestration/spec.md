@@ -136,3 +136,18 @@ The system SHALL revalidate referenced entities and thread ownership at submissi
 #### Scenario: Active entity was deleted
 - **WHEN** a follow-up references an entity that is no longer accessible
 - **THEN** the system returns a target-unavailable or expired-context response and preserves the existing focus without model invocation
+
+### Requirement: Conversation turns use a bounded semantic serialization
+The system SHALL persist a canonical user-turn payload containing only bounded reference status, compact resolved entity identity/display fields, workflow intent provenance, and applicable artifact safety labels. It SHALL NOT persist complete workflow context, workspace state, tool results, evidence trees, or duplicated request envelopes in `anakin_turns.structured_payload`.
+
+#### Scenario: Full workflow context is deeply nested
+- **WHEN** an authenticated conversational workflow contains valid evidence-rich production context
+- **THEN** the workflow execution path retains that context separately while turn persistence remains within existing depth, size, collection, secret-redaction, and control-marker limits
+
+#### Scenario: Async worker resumes a canonical turn
+- **WHEN** a queued worker prepares execution
+- **THEN** it uses the server-owned resolved execution context linked in the workflow request and does not depend on a full context copy in the user turn
+
+#### Scenario: Malformed public payload remains deep
+- **WHEN** a caller directly submits an arbitrarily deep structured payload
+- **THEN** bounded validation rejects it without increasing limits or persisting any part of it

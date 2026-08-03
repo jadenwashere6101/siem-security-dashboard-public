@@ -51,3 +51,10 @@ Full-suite correction note: the unrestricted PostgreSQL run executed without req
 - [x] 7.5 Add production-derived PostgreSQL, prompt-budget measurement, ownership, reset, workflow-boundary, and terminal-result regression coverage.
 - [x] 7.6 Run focused compilation/tests/harness and strict validation, then run the full PostgreSQL suite once and compare failures with baseline `266fb35`.
 - [x] 7.7 Complete the failure-class review and production-unverified handoff without commit, push, VM access, deployment, model/config changes, or production mutation.
+
+## 8. Production Turn-Serialization Correction
+
+- [x] 8.1 Replace full resolved-context turn persistence with one bounded semantic serializer while leaving validation limits unchanged.
+- [x] 8.2 Preserve full execution context in synchronous memory and async server-owned workflow requests; make worker recovery prefer that server-owned context.
+- [x] 8.3 Add PostgreSQL regressions for every production-derived frontend shape, entity alignment, artifact safety, malformed deep input, and assistant attachment.
+- [x] 8.4 Run focused PostgreSQL suites, acceptance checks, strict validation, and verify the correction solves the failure class rather than one nesting path.

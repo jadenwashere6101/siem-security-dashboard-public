@@ -149,3 +149,11 @@ Quick Explain, Ask Anakin auto-routing, Deep Investigate, and Decision Support b
 ## Open Questions
 
 None. Full conversational UI, explicit New Thread controls, long-term memory, and production cleanup scheduling remain dependent work.
+
+## Production Correction: Canonical Conversation-Turn Serializer
+
+`_prepare_submission` previously persisted `resolved_context.as_dict()`. That object intentionally contains the full workflow execution context and is not a valid turn-memory representation. A production-derived dashboard request became depth 7 under `structured_payload` and was rejected by the unchanged depth-6 sanitizer.
+
+The submission transaction now derives two distinct values: the full resolved execution context for the existing workflow request/model/tool path, and a canonical bounded turn payload for PostgreSQL thread memory. The turn payload is schema-tolerant at its inputs but allowlisted at its output. Async workers recover the full server-owned resolved context from their workflow request envelope and use the compact turn copy only as a backward-compatible fallback.
+
+The public sanitizer remains fail-closed. Unknown/deep values are omitted from canonical turn memory, while direct malformed public structured payloads still fail validation. No depth or size limit is increased.

@@ -31,3 +31,10 @@
 - [x] 5.1 Run the complete frontend suite once after focused tests pass.
 - [x] 5.2 Run `git diff --check` and strict OpenSpec validation.
 - [x] 5.3 Record that local implementation is not production verification and require deployment plus real `/siem/` browser-path acceptance before using working, done, fully verified, or production-ready language.
+
+## 6. Production Structured-Payload Correction
+
+- [x] 6.1 Reproduce and measure the real App-built dashboard request through conversation persistence and record endpoint, field, depth, size, constructor, and validator.
+- [x] 6.2 Centralize frontend conversational workflow payload construction so every mounted entry point and retry uses one path while preserving full execution context.
+- [x] 6.3 Add production-derived frontend request-builder fixtures for dashboard, alert, source IP, incident, recon, registry, workspace, artifact, and nested event metadata.
+- [x] 6.4 Run focused and full frontend regression suites, production build, strict validation, and handoff checks.

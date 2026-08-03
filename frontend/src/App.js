@@ -113,15 +113,14 @@ import {
   createExtensionCommandSlots,
   normalizeContextualAiOptions,
 } from "./utils/anakinCommandRegistry";
-
-const ENTITY_AI_CONTEXT_TYPES = new Set([
-  "alert",
-  "source_ip",
-  "incident",
-  "recon_activity",
-  "response_registry",
-  "detection",
-]);
+import {
+  anakinConversationEntity,
+  buildAnakinRequestContext,
+  buildAnakinWorkflowSubmission,
+  isAsyncAnakinWorkflow,
+  normalizeAnakinContextType,
+  stableAnakinEntityId,
+} from "./utils/anakinConversationRequest";
 
 const ASYNC_ANAKIN_WORKFLOWS = new Set(["auto", "deep_investigate", "decision_support", "generate_artifact"]);
 const ASYNC_ANAKIN_STORAGE_KEY = "anakin.activeWorkflowRequests.v1";
@@ -260,38 +259,6 @@ function sleep(ms, signal) {
     };
     signal?.addEventListener("abort", onAbort, { once: true });
   });
-}
-
-function normalizeAiContextType(value) {
-  return String(value || "").trim().toLowerCase().replaceAll("-", "_");
-}
-
-function stableAiEntityId(context = {}) {
-  if (!context || typeof context !== "object") return null;
-  return (
-    context.alert_id ??
-    context.incident_id ??
-    context.source_ip ??
-    context.activity_id ??
-    context.recon_activity_id ??
-    context.registry_id ??
-    context.id ??
-    context.rule_id ??
-    null
-  );
-}
-
-function conversationEntity(contextType, context = {}, activeSection = "dashboard") {
-  const normalizedType = normalizeAiContextType(contextType);
-  const entityId = stableAiEntityId(context);
-  if (ENTITY_AI_CONTEXT_TYPES.has(normalizedType) && entityId !== null) {
-    const numericOnlyTypes = new Set(["alert", "incident", "recon_activity", "response_registry", "detection"]);
-    if (!numericOnlyTypes.has(normalizedType) || /^\d+$/.test(String(entityId))) {
-      return { type: normalizedType, id: String(entityId) };
-    }
-  }
-  if (normalizedType === "dashboard") return { type: "dashboard", id: "dashboard" };
-  return { type: "general", id: String(entityId || activeSection || "workspace") };
 }
 
 function newAiClientRequestId() {
@@ -2505,32 +2472,11 @@ function AppInner() {
       openAnakinSurface();
       const visibleContext = buildVisibleAiContext();
       const contextualCommand = normalizeContextualAiOptions(options);
-      const normalizedContextType = normalizeAiContextType(options.contextType);
+      const normalizedContextType = normalizeAnakinContextType(options.contextType);
       const entityContext = options.context && typeof options.context === "object" ? options.context : {};
-      const shouldIncludeVisibleContext = !ENTITY_AI_CONTEXT_TYPES.has(normalizedContextType);
-      const contextKey = JSON.stringify({
-        contextType: normalizedContextType || "general",
-        workflow: options.workflow || "",
-        action: options.action || "",
-        draftType: options.draftType || "",
-        artifactType: options.artifactType || "",
-        investigation: Boolean(options.investigation),
-        entityId: stableAiEntityId(entityContext),
-        command: contextualCommand.id,
-      });
-      const context = {
-        ...(shouldIncludeVisibleContext ? visibleContext : { active_section: activeSection }),
-        command: {
-          id: contextualCommand.id,
-          label: contextualCommand.label,
-          intent: contextualCommand.intent,
-          read_only: contextualCommand.readOnly,
-        },
-        ...entityContext,
-      };
       const usesWorkflowRoute = Boolean(options.workflow || options.artifactType);
       const requestedWorkflow = options.artifactType ? "generate_artifact" : (options.workflow || "auto");
-      const usesAsyncWorkflowRoute = ASYNC_ANAKIN_WORKFLOWS.has(requestedWorkflow);
+      const usesAsyncWorkflowRoute = isAsyncAnakinWorkflow(requestedWorkflow);
       const clientRequestId = options.clientRequestId || newAiClientRequestId();
       let conversation = null;
       if (usesWorkflowRoute) {
@@ -2539,7 +2485,7 @@ function AppInner() {
           if (options.threadId) {
             resolvedThreadState = await loadAnakinThread(options.threadId, { open: false });
           } else {
-            const entity = conversationEntity(normalizedContextType, entityContext, activeSection);
+            const entity = anakinConversationEntity(normalizedContextType, entityContext, activeSection);
             const resolved = await createAiThread({ domain: "siem", primary_entity: entity, is_default: true });
             resolvedThreadState = await loadAnakinThread(resolved.thread.thread_id, { open: false });
             if (!resolvedThreadState) resolvedThreadState = { thread: resolved.thread };
@@ -2562,22 +2508,32 @@ function AppInner() {
           return;
         }
       }
-      const payload = usesWorkflowRoute
-        ? {
-            workflow: requestedWorkflow,
-            prompt: options.prompt || options.question || options.instruction || "",
-            context_type: options.contextType,
-            entity: entityContext,
-            context,
-            artifact: options.artifactType ? { type: options.artifactType } : options.artifact,
-            tool_policy: options.toolPolicy || (
-              options.workflow === "deep_investigate"
-                ? { max_tool_calls: 5, time_window_hours: 24 }
-                : undefined
-            ),
-            client_request_id: clientRequestId,
+      const workflowSubmission = usesWorkflowRoute
+        ? buildAnakinWorkflowSubmission({
+            options,
+            activeSection,
+            visibleContext,
+            contextualCommand,
             conversation,
-          }
+            clientRequestId,
+          })
+        : null;
+      const context = workflowSubmission?.payload.context || buildAnakinRequestContext({
+        contextType: normalizedContextType,
+        entityContext,
+        activeSection,
+        visibleContext,
+        contextualCommand,
+      });
+      const contextKey = workflowSubmission?.contextKey || JSON.stringify({
+        contextType: normalizedContextType || "general",
+        action: options.action || "",
+        draftType: options.draftType || "",
+        entityId: stableAnakinEntityId(entityContext),
+        command: contextualCommand.id,
+      });
+      const payload = usesWorkflowRoute
+        ? workflowSubmission.payload
         : options.draftType
         ? {
             draft_type: options.draftType,

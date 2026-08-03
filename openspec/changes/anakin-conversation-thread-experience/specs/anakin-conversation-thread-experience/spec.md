@@ -87,3 +87,14 @@ The conversation UI SHALL use task and outcome language and SHALL NOT expose can
 #### Scenario: Progress and results are displayed
 - **WHEN** a turn is queued, running, clarified, completed, or failed
 - **THEN** the UI describes the analyst-visible state without architecture terminology
+
+### Requirement: Conversation submission separates workflow context from turn memory
+Every mounted SIEM Anakin entry point SHALL use one canonical workflow-request builder, and conversation turn persistence SHALL contain only bounded thread-memory fields rather than the complete frontend workspace or workflow context.
+
+#### Scenario: Evidence-rich production context is submitted
+- **WHEN** dashboard, alert, source-IP, incident, recon, registry, or workspace context includes nested UI or evidence metadata
+- **THEN** workflow execution receives its required context while the stored user turn contains only compact workflow intent, question, entity identity/display fields, bounded reference/provenance data, and applicable artifact safety labels
+
+#### Scenario: Failed submission is retried
+- **WHEN** the analyst retries a conversational workflow
+- **THEN** the corrected canonical request path is used and rejected nested turn data is not resubmitted
