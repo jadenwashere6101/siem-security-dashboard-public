@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 import subprocess
 from unittest.mock import patch
@@ -8,8 +9,10 @@ from unittest.mock import patch
 from werkzeug.security import generate_password_hash
 
 from core.ai.session_memory_store import MAX_JSON_DEPTH, create_thread, get_thread, list_turns
+from core.ai.config import AI_MODE_LOCAL_ONLY, AiGatewayConfig, default_ai_profiles
 from core.ai.workflow_orchestrator import WorkflowResult
 from core.ai.models import AI_STATUS_SUCCESS, AiGatewayResponse, AiRequestMetadata
+from core.ai.profile_registry import AI_PROFILE_AGENTIC_PLANNING
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -267,6 +270,69 @@ def _quick_result(payload, **_kwargs):
             "error": None,
         }
     )
+
+
+def _undersized_planner_config():
+    base = AiGatewayConfig(
+        mode=AI_MODE_LOCAL_ONLY,
+        configured_mode=AI_MODE_LOCAL_ONLY,
+        local_provider="controlled-local",
+        local_base_url="http://127.0.0.1:11434",
+        local_model="planner-test",
+    )
+    profiles = default_ai_profiles(local_model=base.local_model)
+    profiles[AI_PROFILE_AGENTIC_PLANNING] = replace(
+        profiles[AI_PROFILE_AGENTIC_PLANNING],
+        max_prompt_chars=1000,
+    )
+    return replace(base, profiles=profiles)
+
+
+def test_planner_mandatory_overflow_returns_safe_route_response(client, postgres_db):
+    conn, _cur = postgres_db
+    owner, ids = _seed_targets(conn)
+    wrapper = NoCloseConnection(conn)
+    user = _fake_user(owner)
+    thread, _created = create_thread(
+        conn,
+        owner_username=owner,
+        primary_entity_type="alert",
+        primary_entity_id=str(ids["alert"]),
+        scope_key=f"entity:alert:{ids['alert']}",
+        is_default=True,
+    )
+    conn.commit()
+    payload = {
+        "workflow": "auto",
+        "context_type": "alert",
+        "context": {"alert_id": ids["alert"]},
+        "entity": {"type": "alert", "id": str(ids["alert"])},
+        "prompt": "Should this alert be escalated?",
+        "client_request_id": "planner-route-overflow",
+        "conversation": {
+            "thread_id": thread["thread_id"],
+            "expected_version": thread["version"],
+            "client_request_id": "planner-route-overflow",
+        },
+    }
+
+    with patch("routes.auth_routes.get_user_by_username", return_value=user), patch(
+        "core.auth.get_user_by_username", return_value=user
+    ), patch("core.ai.conversation_orchestration_service.get_db_connection", return_value=wrapper), patch(
+        "core.ai.conversation_orchestration_service.load_ai_gateway_config",
+        return_value=_undersized_planner_config(),
+    ), patch("core.audit_helpers.get_db_connection", return_value=wrapper), patch(
+        "routes.ai_routes.log_audit_event", return_value=None
+    ), patch("core.ai.agentic_analyst_planner.AiGateway") as gateway_class:
+        assert client.post("/login", json={"username": owner, "password": "pass"}).status_code == 200
+        response = client.post("/ai/workflows/requests", json=payload)
+
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "planner_unavailable"
+    assert "Internal server error" not in json.dumps(response.get_json())
+    gateway_class.assert_not_called()
+    turns = list_turns(conn, thread_id=thread["thread_id"], owner_username=owner)["turns"]
+    assert turns[-1]["structured_payload"]["agentic_plan"]["error_code"] == "agentic_planner_configuration_error"
 
 
 def test_production_frontend_payloads_cross_real_conversation_routes(client, postgres_db):

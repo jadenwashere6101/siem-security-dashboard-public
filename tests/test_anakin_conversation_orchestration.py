@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
 
 import core.ai.conversation_orchestration_service as conversation_orchestration_service
+from core.ai.config import AI_MODE_LOCAL_ONLY, AiGatewayConfig, default_ai_profiles, load_ai_gateway_config
 from core.ai.conversation_context import (
     ConversationContextTooLargeError,
     conversation_budget,
@@ -38,7 +40,7 @@ from core.ai.workflow_orchestrator import WorkflowResult, WorkflowValidationErro
 from core.ai.workflow_request_store import get_request
 from core.ai.workflow_request_service import queue_workflow_request
 from core.ai.workflow_request_worker import AnakinWorkflowWorkerConfig, run_anakin_workflow_worker
-from core.ai.config import AI_MODE_LOCAL_ONLY, AiGatewayConfig, load_ai_gateway_config
+from core.ai.profile_registry import AI_PROFILE_AGENTIC_PLANNING
 from core.ai.context_builder import AiContextPayload
 from core.ai.drafting_service import _build_draft_prompt, _empty_tool_summary as empty_draft_tools, _parse_request
 from core.ai.explainer_service import _build_prompt
@@ -241,6 +243,16 @@ def _controlled_planner_config():
         local_base_url="http://127.0.0.1:11434",
         local_model="planner-test",
     )
+
+
+def _undersized_planner_config(max_prompt_chars=1000):
+    base = _controlled_planner_config()
+    profiles = default_ai_profiles(local_model=base.local_model)
+    profiles[AI_PROFILE_AGENTIC_PLANNING] = replace(
+        profiles[AI_PROFILE_AGENTIC_PLANNING],
+        max_prompt_chars=max_prompt_chars,
+    )
+    return replace(base, profiles=profiles)
 
 
 def _semantic_plan(
@@ -1229,6 +1241,120 @@ def test_context_packet_final_bookkeeping_always_fits_assigned_budget(postgres_d
         for item in selected.packet["entities"]
     )
     assert selected.packet["bounds"]["compacted"] is True
+
+
+@pytest.mark.parametrize("turn_count", [3, 20])
+def test_accumulated_thread_planner_prompt_fits_active_profile(postgres_db, monkeypatch, turn_count):
+    conn, _cur = postgres_db
+    thread, alert_id = _seed(conn)
+    current = thread
+    for index in range(turn_count):
+        is_assistant = index % 2 == 1
+        _turn, current, _ = append_turn(
+            conn,
+            thread_id=thread["thread_id"],
+            owner_username="conversation_analyst",
+            expected_version=current["version"],
+            client_request_id=f"planner-history-{turn_count}-{index}",
+            role="assistant" if is_assistant else "user",
+            workflow="quick_explain",
+            content=f"Recorded conversation turn {index}: " + ("bounded SIEM observation " * 25),
+            assertion_type="model_inference" if is_assistant else "analyst_statement",
+            structured_payload=(
+                {"confidence": "medium", "provenance": {"workflow": "quick_explain"}}
+                if is_assistant
+                else {}
+            ),
+            entity_snapshot={"active_entity": {"type": "alert", "id": str(alert_id)}},
+        )
+    conn.commit()
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
+    )
+    gateway = PlannerThenAnswerGateway(
+        _semantic_plan("state_summary", "direct_answer", entities=[]),
+        "unused",
+    )
+
+    planned = plan_conversational_submission(
+        _payload(
+            current,
+            alert_id,
+            request_id=f"planner-history-{turn_count}-request",
+            prompt="Summarize the authoritative investigation state.",
+            workflow="auto",
+        ),
+        owner_username="conversation_analyst",
+        gateway=gateway,
+        config=_controlled_planner_config(),
+    )
+
+    assert planned["outcome"].status == "planned"
+    assert len(gateway.requests) == 1
+    assert len(gateway.requests[0].prompt) <= 8000
+    assert planned["outcome"].packet.payload["current_user_message"] == "Summarize the authoritative investigation state."
+
+
+def test_mandatory_planner_overflow_is_safe_for_sync_and_async_submission(postgres_db, monkeypatch):
+    conn, _cur = postgres_db
+    thread, alert_id = _seed(conn)
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
+    )
+    gateway = PlannerThenAnswerGateway(
+        _semantic_plan("decision_support", "decision_support", entities=[{"type": "alert", "id": str(alert_id)}]),
+        "unused",
+    )
+    config = _undersized_planner_config()
+
+    sync_result = run_conversational_workflow(
+        _payload(
+            thread,
+            alert_id,
+            request_id="planner-mandatory-overflow-sync",
+            prompt="Should I escalate this alert?",
+            workflow="auto",
+        ),
+        owner_username="conversation_analyst",
+        actor_role="analyst",
+        gateway=gateway,
+        config=config,
+    )
+
+    assert sync_result.status_code == 200
+    assert sync_result.payload["status"] == "planner_unavailable"
+    assert len(gateway.requests) == 0
+    sync_turns = list_turns(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")["turns"]
+    assert sync_turns[-1]["structured_payload"]["agentic_plan"]["error_code"] == "agentic_planner_configuration_error"
+
+    current = get_thread(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")
+    async_payload = _payload(
+        current,
+        alert_id,
+        request_id="planner-mandatory-overflow-async",
+        prompt="Recommend the safest next response.",
+        workflow="decision_support",
+    )
+    planned = plan_conversational_submission(
+        async_payload,
+        owner_username="conversation_analyst",
+        gateway=gateway,
+        config=config,
+    )
+    response, status = queue_conversational_request(
+        async_payload,
+        classification=planned["classification"],
+        actor_username="conversation_analyst",
+        actor_role="analyst",
+        planned=planned,
+    )
+
+    assert status == 200
+    assert response["status"] == "planner_unavailable"
+    assert response.get("request_id") is None
+    assert len(gateway.requests) == 0
+    async_turns = list_turns(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")["turns"]
+    assert async_turns[-1]["structured_payload"]["agentic_plan"]["error_code"] == "agentic_planner_configuration_error"
 
 
 def test_ordinary_second_turn_quick_explain_fits_and_uses_current_entity(postgres_db, monkeypatch):

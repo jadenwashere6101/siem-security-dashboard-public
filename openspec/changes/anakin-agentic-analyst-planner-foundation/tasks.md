@@ -104,4 +104,12 @@
 - [x] 15.2 Generate planner and repair guidance from the contract, align deterministic validation, and support neutral entityless execution for open lookups and state summaries.
 - [x] 15.3 Validate every planner-selected entity after planning, including non-executing clarification candidates, without server selection or substitution.
 - [x] 15.4 Add focused unit and PostgreSQL production-derived coverage for open lookup, entity-bound capabilities, comparison cardinality, clarification persistence, invalid/unauthorized entities, and contract alignment.
-- [ ] 15.5 Run Python compilation, focused AI and PostgreSQL suites, grounding/prompt-budget regressions, acceptance harness, `git diff --check`, and strict OpenSpec validation.
+- [x] 15.5 Run Python compilation, focused AI and PostgreSQL suites, grounding/prompt-budget regressions, acceptance harness, `git diff --check`, and strict OpenSpec validation.
+
+## 16. Fit-by-Construction Planner Prompt Correction
+
+- [x] 16.1 Make one complete-prompt builder reserve mandatory planner content and measured gateway framing before admitting deduplicated optional facts against the active profile ceiling.
+- [x] 16.2 Build an independently bounded one-attempt repair prompt from the original proposal, exact errors, compact contract/schema, and required authoritative facts without nesting the initial prompt.
+- [x] 16.3 Convert planner budget/configuration failures into truthful non-executing outcomes across synchronous and asynchronous conversation submission without sticky workflow fallback.
+- [x] 16.4 Add first-turn, three-turn, twenty-turn, many-entity, evidence-deduplication, clarification/comparison, initial/repair stress, mandatory-overflow, and semantic-contract equivalence regressions.
+- [x] 16.5 Run compilation, affected unit and PostgreSQL suites, prompt/grounding regressions, acceptance harness, `git diff --check`, and strict OpenSpec validation.

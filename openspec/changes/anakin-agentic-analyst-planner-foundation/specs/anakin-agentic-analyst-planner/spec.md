@@ -18,6 +18,29 @@ The system SHALL construct a measured planner packet from the current message, u
 - **WHEN** a thread contains multiple entities, corrections, stale and fresh evidence, unresolved questions, and recent turns
 - **THEN** the planner packet compacts deterministically, preserves the current message and bounded entity facts, identifies omissions, and fits its assigned budget
 
+### Requirement: Complete planner prompts fit by construction
+The system SHALL use one builder to measure the exact initial and repair prompts against the active `agentic_planning` profile ceiling, including measured gateway framing. Mandatory policy, the complete current message, output schema, the compact semantic contract, safety instructions, and bounded authoritative entity identities MUST be reserved before optional facts are admitted. Optional facts MUST be omitted before any mandatory content, and the exact prompt MUST be checked immediately before gateway generation.
+
+#### Scenario: Ordinary accumulated history remains bounded
+- **WHEN** an eligible thread contains twenty production-shaped turns, many entities, conclusions, unresolved questions, and recent tool results
+- **THEN** the complete planner prompt remains within the active profile ceiling
+- **AND** compaction does not select, rank, or interpret conversational entities
+
+#### Scenario: Repair is independently bounded
+- **WHEN** an initial proposal requires the one allowed repair
+- **THEN** the repair prompt contains the complete current message, original proposal, exact errors, compact contract/schema, and sufficient authoritative facts
+- **AND** it fits independently without embedding the full initial prompt
+
+#### Scenario: Mandatory planner content cannot fit
+- **WHEN** the mandatory initial or repair content exceeds the active profile ceiling
+- **THEN** no gateway request or deterministic conversational fallback occurs
+- **AND** the analyst receives a truthful non-executing planner-unavailable result rather than an HTTP 500
+
+#### Scenario: Compact contract remains authoritative
+- **WHEN** action/strategy semantics are serialized for either planner prompt
+- **THEN** the compact representation is generated from the same `PLAN_SEMANTIC_CONTRACTS` authority used by validation
+- **AND** regression tests prove every action, strategy, cardinality, filter, clarification, tool, and capability value is equivalent
+
 ### Requirement: Plans use a strict structured contract
 The system SHALL require the model proposal to declare current intent, prior-turn relationship, resolved entities, evidence sufficiency, required evidence, strategy, capability, tool categories, bounded semantic evidence requirements, bounded artifact type, clarification, reasoning summary, and confidence. The server SHALL populate read-only safety and execution metadata and SHALL validate every model-selected entity after planning. Plans SHALL contain no executable code or backend query syntax.
 

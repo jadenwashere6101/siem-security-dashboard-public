@@ -6,9 +6,12 @@ import json
 import pytest
 
 from core.ai.agentic_analyst_planner import (
+    PLAN_SEMANTIC_CONTRACTS,
+    PLANNER_GATEWAY_FRAMING_CHARS,
     PLANNER_PACKET_MAX_CHARS,
     build_planner_packet,
     parse_and_validate_plan,
+    planner_output_schema,
     planner_semantic_contract,
     plan_turn,
 )
@@ -185,6 +188,89 @@ def test_packet_is_fit_by_construction_with_production_sized_state():
     assert packet.omitted
 
 
+def test_complete_prompt_builder_preserves_full_question_and_fits_twenty_turns():
+    question = "Compare the two validated alert records and explain whether the newer evidence changes our current conclusion. " * 8
+    turns = [
+        {
+            "sequence": sequence,
+            "role": "assistant" if sequence % 2 == 0 else "user",
+            "content": f"Recorded turn {sequence} " + ("bounded context " * 30),
+            "entity": {"type": "alert", "id": str(9000 + sequence % 2)},
+        }
+        for sequence in range(1, 21)
+    ]
+    packet = build_planner_packet(
+        question=question,
+        request_context={"context_type": "alert"},
+        conversation_packet={
+            "entities": [
+                {"type": "alert", "id": "9000", "source_type": "turn_snapshot", "sequence": 18},
+                {"type": "alert", "id": "9001", "source_type": "turn_snapshot", "sequence": 20},
+            ],
+            "recent_tool_results": [
+                {"source_type": "alerts", "snapshot": {"alert_id": 9001}, "observed_at": "2026-08-03T12:00:00Z"}
+            ],
+            "recent_conclusions": [{"content": "The newer alert remains under review."}],
+            "unresolved_questions": [{"question": "Was follow-up activity observed?"}],
+            "conversation_summary": "Two related alerts are being compared.",
+            "recent_turns": turns,
+        },
+        preferred_capability=None,
+        latency_class={"mode": "sync"},
+        max_prompt_chars=8000,
+    )
+
+    assert packet.payload["current_user_message"] == question.strip()
+    assert packet.prompt_chars + packet.gateway_framing_chars <= 8000
+    assert packet.gateway_framing_chars == PLANNER_GATEWAY_FRAMING_CHARS == 0
+    assert {item["id"] for item in packet.payload["facts"]["entities"]} == {"9000", "9001"}
+    assert packet.omitted
+
+
+def test_many_entities_remain_typed_and_unranked_within_complete_prompt_budget():
+    entities = [
+        {"type": "alert", "id": str(9100 + index), "source_type": "entity_index", "sequence": index}
+        for index in range(20)
+    ]
+    packet = build_planner_packet(
+        question="Which two records should be compared?",
+        request_context={"context_type": "general"},
+        conversation_packet={"entities": entities},
+        preferred_capability=None,
+        latency_class={"mode": "sync"},
+        max_prompt_chars=8000,
+    )
+
+    assert [(item["type"], item["id"]) for item in packet.payload["facts"]["entities"]] == [
+        ("alert", str(9100 + index)) for index in range(20)
+    ]
+    assert all("rank" not in item and "priority" not in item for item in packet.payload["facts"]["entities"])
+    assert packet.prompt_chars <= 8000
+
+
+def test_duplicate_tool_facts_are_embedded_once():
+    evidence = {
+        "source_type": "alerts",
+        "source_ref": "bounded-alert-search",
+        "snapshot": {"alert_id": 9078, "severity": "high"},
+        "observed_at": "2026-08-03T12:00:00Z",
+    }
+    packet = build_planner_packet(
+        question="Show me the evidence.",
+        request_context={"context_type": "alert"},
+        conversation_packet={
+            "entities": [{"type": "alert", "id": "9078", "source_type": "verified_evidence"}],
+            "recent_tool_results": [evidence, dict(evidence), dict(evidence)],
+        },
+        preferred_capability=None,
+        latency_class={"mode": "sync"},
+        max_prompt_chars=8000,
+    )
+
+    assert len(packet.payload["facts"]["recent_tool_results"]) == 1
+    assert packet.prompt_chars <= 8000
+
+
 def test_server_authored_planner_context_is_a_model_agnostic_fact_packet():
     packet = _packet().payload
     banned = {
@@ -326,6 +412,77 @@ def test_prompt_and_repair_use_the_authoritative_semantic_contract():
     assert serialized in gateway.requests[0].prompt
     assert serialized in gateway.requests[1].prompt
     assert "fresh_evidence_lookup/quick_evidence_lookup requires between 0 and 1 resolved entities" in gateway.requests[1].prompt
+
+
+def test_compact_semantic_contract_is_equivalent_to_validator_authority():
+    compact = planner_semantic_contract()
+    fields = compact["fields"]
+
+    assert set(compact["rules"]) == {
+        f"{action}/{strategy}" for action, strategy in PLAN_SEMANTIC_CONTRACTS
+    }
+    for (action, strategy), expected in PLAN_SEMANTIC_CONTRACTS.items():
+        reconstructed = dict(zip(fields, compact["rules"][f"{action}/{strategy}"]))
+        assert reconstructed == {
+            "min_entities": expected.minimum_entities,
+            "max_entities": expected.maximum_entities,
+            "filters": expected.evidence_filters_allowed,
+            "clarification": expected.clarification_required,
+            "tools": expected.tool_execution_allowed,
+            "capability": expected.capability,
+        }
+    assert "current_turn_intent" in planner_output_schema()["required"]
+    assert "resolved_entities" in planner_output_schema()["required"]
+
+
+def test_repair_prompt_is_independently_bounded_and_does_not_embed_initial_prompt():
+    malformed = _plan()
+    malformed["required_evidence"] = {"alerts": "current high-severity alerts"}
+    gateway = SequenceGateway([json.dumps(malformed), json.dumps(_plan())])
+
+    outcome = plan_turn(_packet(), gateway=gateway, config=_config())
+
+    assert outcome.status == "planned"
+    assert outcome.repaired is True
+    assert outcome.repair_prompt_chars == len(gateway.requests[1].prompt)
+    assert len(gateway.requests[0].prompt) <= 8000
+    assert len(gateway.requests[1].prompt) <= 8000
+    assert "REPAIR_PACKET=" in gateway.requests[1].prompt
+    assert "SERVER_PACKET=" not in gateway.requests[1].prompt
+    assert gateway.requests[0].prompt not in gateway.requests[1].prompt
+
+
+def test_gateway_receives_exact_prompt_approved_by_complete_builder():
+    packet = _packet()
+    gateway = SequenceGateway([json.dumps(_plan())])
+
+    outcome = plan_turn(packet, gateway=gateway, config=_config())
+
+    assert outcome.status == "planned"
+    assert gateway.requests[0].prompt == outcome.packet.prompt
+    assert len(gateway.requests[0].prompt) + outcome.packet.gateway_framing_chars <= 8000
+
+
+def test_repair_mandatory_overflow_fails_without_second_gateway_call():
+    packet = build_planner_packet(
+        question="Q" * 1800,
+        request_context={"context_type": "general"},
+        conversation_packet={"entities": []},
+        preferred_capability=None,
+        latency_class={"mode": "sync"},
+        max_prompt_chars=8000,
+    )
+    oversized_invalid_proposal = json.dumps(
+        {"current_turn_intent": "fresh_evidence_lookup", "padding": "x" * 3300}
+    )
+    gateway = SequenceGateway([oversized_invalid_proposal, json.dumps(_plan())])
+
+    outcome = plan_turn(packet, gateway=gateway, config=_config())
+
+    assert outcome.status == "invalid"
+    assert outcome.error_code == "agentic_plan_repair_too_large"
+    assert outcome.plan is None
+    assert len(gateway.requests) == 1
 
 
 @pytest.mark.parametrize(

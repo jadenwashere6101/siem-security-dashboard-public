@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
 from core.ai.agentic_analyst_planner import (
     AgenticAnalystPlan,
+    PlannerConfigurationError,
     PlannerOutcome,
     build_planner_packet,
     deterministic_shortcut_plan,
+    planner_configuration_outcome,
+    planner_unavailable_packet,
     plan_turn,
 )
 from core.ai.config import load_ai_gateway_config
@@ -48,6 +52,7 @@ from core.ai.workflow_orchestrator import (
     run_workflow,
 )
 from core.ai.workflow_request_store import create_or_get_request, serialize_request
+from core.ai.profile_registry import profile_for_agentic_planning
 from core.auth import User
 from core.db import get_db_connection
 
@@ -57,6 +62,7 @@ CONVERSATION_WORKFLOWS = frozenset(
 )
 ASYNC_CONVERSATION_WORKFLOWS = frozenset({"deep_investigate", "decision_support", "generate_artifact"})
 ISOLATED_WORKFLOWS = frozenset({"repo_assistant", "soc_briefing"})
+_LOGGER = logging.getLogger(__name__)
 
 
 class ConversationOrchestrationError(SessionMemoryError):
@@ -290,13 +296,27 @@ def plan_conversational_submission(
         conn.close()
 
     preferred = requested if requested in CONVERSATION_WORKFLOWS else None
-    packet = build_planner_packet(
-        question=_question(payload),
-        request_context=_planner_request_context(payload),
-        conversation_packet=selection.packet,
-        preferred_capability=preferred,
-        latency_class=WORKFLOW_LATENCY_TARGETS.get(preferred or WORKFLOW_QUICK_EXPLAIN),
-    )
+    question = _question(payload)
+    planner_profile = resolved_config.profile(profile_for_agentic_planning())
+    packet_error = None
+    try:
+        packet = build_planner_packet(
+            question=question,
+            request_context=_planner_request_context(payload),
+            conversation_packet=selection.packet,
+            preferred_capability=preferred,
+            latency_class=WORKFLOW_LATENCY_TARGETS.get(preferred or WORKFLOW_QUICK_EXPLAIN),
+            max_prompt_chars=planner_profile.max_prompt_chars,
+        )
+    except PlannerConfigurationError as error:
+        packet_error = error
+        packet = planner_unavailable_packet(question, max_prompt_chars=planner_profile.max_prompt_chars)
+        _LOGGER.warning(
+            "agentic_planner_prompt_configuration_error thread_id=%s owner=%s error_code=%s",
+            thread_id,
+            owner_username,
+            error.error_code,
+        )
     if existing_turn is not None:
         outcome = PlannerOutcome(
             "idempotent_existing",
@@ -305,9 +325,14 @@ def plan_conversational_submission(
             False,
             message="Returning the original conversation submission.",
         )
+    elif packet_error is not None:
+        outcome = planner_configuration_outcome(packet, packet_error)
     else:
         outcome = plan_turn(packet, gateway=gateway, config=resolved_config)
-        if outcome.plan is None and preferred:
+        if outcome.plan is None and preferred and outcome.error_code not in {
+            PlannerConfigurationError.error_code,
+            "agentic_plan_repair_too_large",
+        }:
             outcome = deterministic_shortcut_plan(packet, preferred)
     workflow = outcome.workflow or WORKFLOW_QUICK_EXPLAIN
     if outcome.plan and outcome.plan.proposed_strategy == "artifact_draft":
