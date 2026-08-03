@@ -542,6 +542,10 @@ def _explain_payload_from_envelope(payload: dict[str, Any], *, action: str) -> d
         "use_tools": payload.get("use_tools", False),
         "tool_policy": payload.get("tool_policy"),
         "conversation_context": payload.get("conversation_context"),
+        "planner_task": {
+            "strategy": payload.get("planner_strategy"),
+            "evidence_sufficiency": payload.get("planner_evidence_sufficiency"),
+        },
     }
 
 

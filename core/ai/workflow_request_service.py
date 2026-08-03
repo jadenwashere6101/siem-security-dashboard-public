@@ -22,6 +22,7 @@ from core.ai.workflow_request_store import (
 from core.db import get_db_connection
 from core.ai.conversation_orchestration_service import (
     has_conversation_envelope,
+    plan_conversational_submission,
     queue_conversational_request,
     run_conversational_workflow,
 )
@@ -56,7 +57,17 @@ FORBIDDEN_DECISION_FIELDS = frozenset(
 def queue_workflow_request(payload: dict[str, Any], *, actor_username: str, actor_role: str) -> tuple[dict[str, Any], int]:
     if not isinstance(payload, dict):
         raise WorkflowValidationError("JSON object body is required.")
-    classification = classify_workflow(payload)
+    if any(field in payload for field in FORBIDDEN_ASYNC_FIELDS):
+        raise WorkflowValidationError(
+            "Async workflow requests cannot preview, confirm, apply, or mutate state.",
+            error_code="async_workflow_read_only",
+        )
+    planned = (
+        plan_conversational_submission(payload, owner_username=actor_username)
+        if has_conversation_envelope(payload)
+        else None
+    )
+    classification = planned["classification"] if planned else classify_workflow(payload)
     workflow = classification.classified_workflow
     requested_workflow = str(payload.get("workflow") or "").strip().lower()
     if classification.chooser_required:
@@ -78,12 +89,15 @@ def queue_workflow_request(payload: dict[str, Any], *, actor_username: str, acto
             },
             200,
         )
-    if requested_workflow == WORKFLOW_AUTO and workflow == WORKFLOW_QUICK_EXPLAIN:
+    if workflow == WORKFLOW_QUICK_EXPLAIN and (
+        requested_workflow == WORKFLOW_AUTO or planned is not None
+    ):
         result = (
             run_conversational_workflow(
                 payload,
                 owner_username=actor_username,
                 actor_role=actor_role,
+                planned=planned,
             )
             if has_conversation_envelope(payload)
             else run_workflow(payload)
@@ -103,11 +117,6 @@ def queue_workflow_request(payload: dict[str, Any], *, actor_username: str, acto
             f"Workflow {workflow} is not available through async workflow requests.",
             status_code=400,
             error_code="workflow_not_async",
-        )
-    if any(field in payload for field in FORBIDDEN_ASYNC_FIELDS):
-        raise WorkflowValidationError(
-            "Async workflow requests cannot preview, confirm, apply, or mutate state.",
-            error_code="async_workflow_read_only",
         )
     if workflow == WORKFLOW_DECISION_SUPPORT and any(field in payload for field in FORBIDDEN_DECISION_FIELDS):
         raise WorkflowValidationError(
@@ -131,6 +140,7 @@ def queue_workflow_request(payload: dict[str, Any], *, actor_username: str, acto
             classification=classification,
             actor_username=actor_username,
             actor_role=actor_role,
+            planned=planned,
         )
 
     key = idempotency_key_for_payload(payload, actor_username=actor_username)

@@ -5,6 +5,14 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
+from core.ai.agentic_analyst_planner import (
+    AgenticAnalystPlan,
+    PlannerOutcome,
+    build_planner_packet,
+    deterministic_shortcut_plan,
+    parse_and_validate_plan,
+    plan_turn,
+)
 from core.ai.config import load_ai_gateway_config
 from core.ai.conversation_context import (
     ConversationContextError,
@@ -15,6 +23,7 @@ from core.ai.session_memory_service import validate_conversation_entity, validat
 from core.ai.session_memory_store import (
     SessionMemoryError,
     SessionMemoryValidationError,
+    ThreadVersionConflictError,
     append_turn,
     create_evidence,
     fail_execution_turn,
@@ -28,6 +37,8 @@ from core.ai.session_memory_store import (
 )
 from core.ai.workflow_orchestrator import (
     WORKFLOW_PROFILES,
+    WORKFLOW_AUTO,
+    WORKFLOW_LATENCY_TARGETS,
     WORKFLOW_QUICK_EXPLAIN,
     WorkflowClassification,
     WorkflowResult,
@@ -125,12 +136,19 @@ def run_conversational_workflow(
     actor_role: str,
     gateway=None,
     config=None,
+    planned: dict[str, Any] | None = None,
 ) -> WorkflowResult:
-    classification = classify_workflow(payload)
-    workflow = classification.classified_workflow
-    reject_isolated_conversation(payload, workflow=workflow)
     if not has_conversation_envelope(payload):
         return run_workflow(payload, gateway=gateway, config=config)
+    planning = planned or plan_conversational_submission(
+        payload,
+        owner_username=owner_username,
+        gateway=gateway,
+        config=config,
+    )
+    classification = planning["classification"]
+    workflow = classification.classified_workflow
+    reject_isolated_conversation(payload, workflow=workflow)
     if workflow != WORKFLOW_QUICK_EXPLAIN:
         raise ConversationBoundaryError("Conversational long-running workflows must use the async request route.")
     resolved_config = config if config is not None else load_ai_gateway_config()
@@ -140,6 +158,7 @@ def run_conversational_workflow(
         owner_username=owner_username,
         classification=classification,
         resolved_config=resolved_config,
+        planner_outcome=planning["outcome"],
     )
     if prepared.get("duplicate_result") is not None:
         return WorkflowResult(prepared["duplicate_result"], 200)
@@ -161,10 +180,17 @@ def queue_conversational_request(
     classification: WorkflowClassification,
     actor_username: str,
     actor_role: str,
+    planned: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], int]:
+    planning = planned or plan_conversational_submission(payload, owner_username=actor_username)
+    classification = planning["classification"]
     workflow = classification.classified_workflow
     reject_isolated_conversation(payload, workflow=workflow)
-    if workflow not in ASYNC_CONVERSATION_WORKFLOWS:
+    non_executing = planning["outcome"].plan is None or planning["outcome"].plan.proposed_strategy in {
+        "clarification_required",
+        "unsupported_or_boundary",
+    }
+    if workflow not in ASYNC_CONVERSATION_WORKFLOWS and not non_executing:
         raise ConversationBoundaryError("The selected workflow is not an asynchronous conversation workflow.")
     resolved_config = load_ai_gateway_config()
     prepared = _prepare_submission(
@@ -175,6 +201,7 @@ def queue_conversational_request(
         resolved_config=resolved_config,
         create_async_request=True,
         actor_role=actor_role,
+        planner_outcome=planning["outcome"],
     )
     if prepared.get("deterministic_result") is not None:
         return prepared["deterministic_result"], 200
@@ -192,6 +219,135 @@ def queue_conversational_request(
         }
     )
     return serialized, 202 if prepared["request_created"] else 200
+
+
+def plan_conversational_submission(
+    payload: dict[str, Any],
+    *,
+    owner_username: str,
+    gateway=None,
+    config=None,
+) -> dict[str, Any]:
+    """Build and execute a read-only planning snapshot without holding a DB lock."""
+    if not has_conversation_envelope(payload):
+        raise ConversationBoundaryError("Agentic planning requires a SIEM conversation envelope.")
+    if any(field in payload for field in {"_conversation_execution", "conversation_context", "_agentic_plan"}):
+        raise ConversationBoundaryError("Server-owned conversation planning fields cannot be supplied by clients.")
+    envelope = payload.get("conversation")
+    if not isinstance(envelope, dict):
+        raise SessionMemoryValidationError("conversation must be an object.")
+    thread_id = _required_text(envelope.get("thread_id"), "conversation.thread_id", 128)
+    expected_version = _positive_int(envelope.get("expected_version"), "conversation.expected_version")
+    client_request_id = _required_text(
+        envelope.get("client_request_id") or payload.get("client_request_id"),
+        "conversation.client_request_id",
+        256,
+    )
+    resolved_config = config if config is not None else load_ai_gateway_config()
+    conn = get_db_connection()
+    existing_turn = None
+    try:
+        thread = validate_owned_thread(conn, thread_id=thread_id, owner_username=owner_username)
+        existing_turn = get_turn_by_client_request(
+            conn,
+            thread_id=thread_id,
+            owner_username=owner_username,
+            client_request_id=client_request_id,
+        )
+        if existing_turn is None and int(thread.get("version") or 0) != expected_version:
+            raise ThreadVersionConflictError("Conversation thread version is stale; reload before planning the next turn.")
+        explicit_entity = _explicit_entity(payload)
+        if explicit_entity:
+            validate_conversation_entity(
+                conn,
+                owner_username=owner_username,
+                entity_type=explicit_entity["type"],
+                entity_id=explicit_entity["id"],
+            )
+        profile = resolved_config.profile(WORKFLOW_PROFILES[WORKFLOW_QUICK_EXPLAIN])
+        selection = select_conversation_context(
+            conn,
+            thread=thread,
+            owner_username=owner_username,
+            question=_question(payload),
+            workflow=WORKFLOW_QUICK_EXPLAIN,
+            max_chars=conversation_budget(
+                profile_max_prompt_chars=profile.max_prompt_chars,
+                workflow=WORKFLOW_QUICK_EXPLAIN,
+            ),
+            explicit_entity=explicit_entity,
+        )
+        resolved_context = _resolve_execution_context(
+            conn,
+            payload=payload,
+            thread=thread,
+            owner_username=owner_username,
+            selection=selection,
+            explicit_entity=explicit_entity,
+        )
+    finally:
+        conn.close()
+
+    requested = str(payload.get("workflow") or WORKFLOW_AUTO).strip().lower() or WORKFLOW_AUTO
+    preferred = requested if requested in CONVERSATION_WORKFLOWS else None
+    packet = build_planner_packet(
+        question=_question(payload),
+        resolved_context=resolved_context.as_dict(),
+        conversation_packet=selection.packet,
+        preferred_capability=preferred,
+        latency_class=WORKFLOW_LATENCY_TARGETS.get(preferred or WORKFLOW_QUICK_EXPLAIN),
+    )
+    resolution = selection.resolution
+    if existing_turn is not None:
+        existing_workflow = str(existing_turn.get("workflow") or preferred or WORKFLOW_QUICK_EXPLAIN)
+        prior = deterministic_shortcut_plan(packet, existing_workflow)
+        outcome = PlannerOutcome(
+            "idempotent_existing",
+            prior.plan,
+            packet,
+            False,
+            message="Returning the original conversation submission.",
+        )
+    elif resolution.get("status") in {"clarification_required", "unresolved", "command_required"}:
+        plan_payload = {
+            "current_turn_intent": str(resolution.get("intent") or "clarification"),
+            "relationship_to_prior_turn": "continuation",
+            "resolved_entities": _planner_entities(resolved_context),
+            "evidence_sufficiency": "ambiguous",
+            "required_evidence": [],
+            "proposed_strategy": "clarification_required",
+            "proposed_capability": None,
+            "proposed_tool_categories": [],
+            "clarification_question": str(resolution.get("message") or "Which entity should I use?"),
+            "reasoning_summary": "The server-owned reference resolver did not identify one safe referent.",
+            "stopping_condition": "Continue only after the analyst supplies an unambiguous entity or instruction.",
+            "confidence": "high",
+            "safety": {"read_only": True, "mutation_allowed": False},
+        }
+        plan, errors = parse_and_validate_plan(json.dumps(plan_payload), packet.payload)
+        if plan is None:
+            raise ConversationOrchestrationError("Deterministic clarification plan failed validation: " + "; ".join(errors))
+        outcome = PlannerOutcome("clarification", plan, packet, False, message=plan.clarification_question)
+    else:
+        outcome = plan_turn(packet, gateway=gateway, config=resolved_config)
+        if outcome.plan is None and preferred:
+            outcome = deterministic_shortcut_plan(packet, preferred)
+    workflow = outcome.workflow or WORKFLOW_QUICK_EXPLAIN
+    classification = WorkflowClassification(
+        requested_workflow=requested,
+        classified_workflow=workflow,
+        confidence=outcome.plan.confidence if outcome.plan else "low",
+        reason=(
+            f"Validated agentic plan selected {outcome.plan.proposed_strategy}."
+            if outcome.plan
+            else "The agentic planner did not return a valid executable plan."
+        ),
+    )
+    return {
+        "outcome": outcome,
+        "classification": classification,
+        "planning_thread_version": thread.get("version"),
+    }
 
 
 def prepare_worker_conversation(conn, job: dict[str, Any]) -> tuple[dict[str, Any], str]:
@@ -343,8 +499,9 @@ def _prepare_submission(
     resolved_config,
     create_async_request: bool = False,
     actor_role: str | None = None,
+    planner_outcome: PlannerOutcome | None = None,
 ) -> dict[str, Any]:
-    if "_conversation_execution" in payload or "conversation_context" in payload:
+    if "_conversation_execution" in payload or "conversation_context" in payload or "_agentic_plan" in payload:
         raise ConversationBoundaryError("Server-owned conversation fields cannot be supplied by clients.")
     envelope = payload.get("conversation")
     if not isinstance(envelope, dict):
@@ -422,7 +579,13 @@ def _prepare_submission(
             explicit_entity=explicit_entity,
         )
         entity_snapshot = resolved_context.entity_snapshot
+        if planner_outcome and planner_outcome.plan:
+            _validate_plan_alignment(planner_outcome.plan, resolved_context)
         execution_payload = _apply_resolved_context(payload, resolved_context)
+        execution_payload["workflow"] = workflow
+        if planner_outcome:
+            execution_payload["_agentic_plan"] = planner_outcome.metadata()
+            _apply_planner_execution_hints(execution_payload, planner_outcome.plan)
         _assert_execution_alignment(execution_payload, resolved_context, selection.packet)
         user_turn, updated_thread, _created = append_turn(
             conn,
@@ -439,6 +602,7 @@ def _prepare_submission(
                 payload=payload,
                 resolution=resolution,
                 resolved=resolved_context,
+                planner_outcome=planner_outcome,
             ),
             parent_turn_id=parent_turn_id,
             entity_snapshot=entity_snapshot,
@@ -453,8 +617,28 @@ def _prepare_submission(
             "resolved_context": resolved_context,
             "execution_payload": execution_payload,
         }
-        if resolution.get("status") in {"clarification_required", "unresolved", "command_required"}:
-            message = str(resolution.get("message") or "Clarify the referenced investigation context before continuing.")
+        if (
+            resolution.get("status") in {"clarification_required", "unresolved", "command_required"}
+            or planner_outcome is not None
+            and planner_outcome.plan is None
+            or planner_outcome is not None
+            and planner_outcome.plan is not None
+            and planner_outcome.plan.proposed_strategy in {"clarification_required", "unsupported_or_boundary"}
+        ):
+            boundary_message = (
+                "That request is outside this read-only SIEM conversation. Use the dedicated approved surface or action workflow."
+                if planner_outcome
+                and planner_outcome.plan
+                and planner_outcome.plan.proposed_strategy == "unsupported_or_boundary"
+                else None
+            )
+            message = str(
+                boundary_message
+                or (planner_outcome.plan.clarification_question if planner_outcome and planner_outcome.plan else None)
+                or (planner_outcome.message if planner_outcome else None)
+                or resolution.get("message")
+                or "Clarify the referenced investigation context before continuing."
+            )
             completed_user, assistant_turn, final_thread = finalize_execution_turn(
                 conn,
                 thread_id=thread_id,
@@ -468,6 +652,7 @@ def _prepare_submission(
                     "confidence": "high",
                     "provenance": {"type": "deterministic_reference_resolver"},
                     "reference_resolution": resolution,
+                    "agentic_plan": planner_outcome.metadata() if planner_outcome else None,
                 },
                 entity_snapshot=entity_snapshot,
             )
@@ -492,6 +677,7 @@ def _prepare_submission(
                     "turn_id": user_turn["id"],
                     "expected_thread_version": user_turn["thread_version_after_append"],
                     "resolved_context": resolved_context.as_dict(),
+                    "agentic_plan": planner_outcome.metadata() if planner_outcome else None,
                 },
             }
             request_row, request_created = create_or_get_request(
@@ -1179,6 +1365,7 @@ def _conversation_turn_payload(
     payload: dict[str, Any],
     resolution: dict[str, Any],
     resolved: ResolvedExecutionContext,
+    planner_outcome: PlannerOutcome | None = None,
 ) -> dict[str, Any]:
     compact_resolution = _compact_turn_resolution(resolution)
     result: dict[str, Any] = {
@@ -1200,6 +1387,8 @@ def _conversation_turn_payload(
         },
         "provenance": {"type": "conversation_submission"},
     }
+    if planner_outcome:
+        result["agentic_plan"] = _compact_planner_turn(planner_outcome)
     if workflow == "generate_artifact":
         artifact = payload.get("artifact") if isinstance(payload.get("artifact"), dict) else {}
         result["artifact_safety"] = {
@@ -1210,6 +1399,85 @@ def _conversation_turn_payload(
             "approval_required": True,
         }
     return result
+
+
+def _compact_planner_turn(outcome: PlannerOutcome) -> dict[str, Any]:
+    plan = outcome.plan
+    return {
+        "status": outcome.status,
+        "strategy": plan.proposed_strategy if plan else None,
+        "capability": plan.proposed_capability if plan else None,
+        "intent": _compact_scalar(plan.current_turn_intent, 180) if plan else None,
+        "relationship": plan.relationship_to_prior_turn if plan else None,
+        "evidence_sufficiency": plan.evidence_sufficiency if plan else None,
+        "confidence": plan.confidence if plan else None,
+        "read_only": True,
+        "repaired": outcome.repaired,
+        "packet_chars": outcome.packet.serialized_chars,
+        "prompt_chars": outcome.packet.prompt_chars,
+        "error_code": outcome.error_code,
+    }
+
+
+def _planner_entities(resolved: ResolvedExecutionContext) -> list[dict[str, str]]:
+    entities = list(resolved.comparison_entities) if resolved.comparison_entities else [resolved.active_entity]
+    return [
+        {"type": str(item.get("type") or ""), "id": str(item.get("id") or "")}
+        for item in entities
+        if item.get("type") and item.get("id")
+    ]
+
+
+def _validate_plan_alignment(plan: AgenticAnalystPlan, resolved: ResolvedExecutionContext) -> None:
+    authoritative = {_entity_identity(item) for item in (resolved.comparison_entities or (resolved.active_entity,))}
+    proposed = {_entity_identity(item) for item in plan.resolved_entities}
+    if proposed != authoritative:
+        raise ConversationBoundaryError("Validated plan entities no longer match the authoritative execution context.")
+
+
+def _apply_planner_execution_hints(payload: dict[str, Any], plan: AgenticAnalystPlan | None) -> None:
+    if plan is None:
+        return
+    payload["planner_intent"] = plan.current_turn_intent
+    payload["planner_strategy"] = plan.proposed_strategy
+    payload["planner_evidence_sufficiency"] = plan.evidence_sufficiency
+    if plan.proposed_strategy == "quick_evidence_lookup":
+        tool_request = _planner_tool_request(plan.proposed_tool_categories[0], payload)
+        if tool_request is None:
+            raise ConversationBoundaryError("The validated evidence category cannot be translated into a bounded read request.")
+        payload["use_tools"] = True
+        payload["tool_policy"] = {
+            "max_tool_calls": 1,
+            "tool_requests": [tool_request],
+        }
+
+
+def _planner_tool_request(category: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    if category == "alerts":
+        return {"tool_name": "search_alerts", "arguments": {"sort": "newest", "limit": 10}}
+    if category == "incidents":
+        incident_id = context.get("incident_id")
+        if incident_id:
+            return {"tool_name": "get_incident_timeline", "arguments": {"incident_id": incident_id}}
+        return {"tool_name": "search_incidents", "arguments": {"limit": 10}}
+    if category == "source_ip_activity" and context.get("source_ip"):
+        return {"tool_name": "get_source_ip_context", "arguments": {"source_ip": context["source_ip"]}}
+    if category == "response_registry":
+        arguments = {
+            key: context[key]
+            for key in ("registry_id", "source_ip")
+            if context.get(key) not in (None, "")
+        }
+        return {"tool_name": "get_response_registry_context", "arguments": arguments} if arguments else None
+    if category in {"events", "authentication_activity", "network_activity", "recon_activity"}:
+        arguments = {
+            key: context[key]
+            for key in ("alert_id", "source_ip", "activity_id")
+            if context.get(key) not in (None, "")
+        }
+        return {"tool_name": "get_related_events", "arguments": arguments} if arguments else None
+    return None
 
 
 def _compact_turn_resolution(value: dict[str, Any]) -> dict[str, Any]:

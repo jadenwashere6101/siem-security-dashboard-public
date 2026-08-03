@@ -9,6 +9,7 @@ from werkzeug.security import generate_password_hash
 
 from core.ai.session_memory_store import MAX_JSON_DEPTH, create_thread, get_thread, list_turns
 from core.ai.workflow_orchestrator import WorkflowResult
+from core.ai.models import AI_STATUS_SUCCESS, AiGatewayResponse, AiRequestMetadata
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -23,6 +24,56 @@ class NoCloseConnection:
 
     def close(self):
         return None
+
+
+class ProductionShapePlannerGateway:
+    def __init__(self, **_kwargs):
+        pass
+
+    def generate(self, request):
+        packet = json.loads(request.prompt.split("SERVER_PACKET=", 1)[1])
+        entities = []
+        for item in [packet.get("resolved_focus"), *(packet.get("comparison_entities") or [])]:
+            if isinstance(item, dict) and item.get("type") and item.get("id"):
+                identity = {"type": item["type"], "id": item["id"]}
+                if identity not in entities:
+                    entities.append(identity)
+        hint = packet.get("preferred_capability_hint")
+        capability = hint or "quick_explain"
+        strategy = {
+            "quick_explain": "quick_evidence_lookup",
+            "deep_investigate": "bounded_investigation",
+            "decision_support": "decision_support",
+            "generate_artifact": "artifact_draft",
+        }[capability]
+        plan = {
+            "current_turn_intent": "Handle the current production-shaped SIEM request.",
+            "relationship_to_prior_turn": "new_question",
+            "resolved_entities": entities,
+            "evidence_sufficiency": "insufficient",
+            "required_evidence": ["current bounded SIEM evidence"],
+            "proposed_strategy": strategy,
+            "proposed_capability": capability,
+            "proposed_tool_categories": ["alerts"] if strategy == "quick_evidence_lookup" else [],
+            "clarification_question": None,
+            "reasoning_summary": "The current request requires the selected bounded SIEM capability.",
+            "stopping_condition": "Stop after the selected read-only capability returns a bounded result.",
+            "confidence": "high",
+            "safety": {"read_only": True, "mutation_allowed": False},
+        }
+        return AiGatewayResponse(
+            status=AI_STATUS_SUCCESS,
+            content=json.dumps(plan),
+            error=None,
+            metadata=AiRequestMetadata(
+                provider="controlled-local",
+                model="planner-test",
+                mode="local_only",
+                status=AI_STATUS_SUCCESS,
+                local_request=True,
+                paid_request=False,
+            ),
+        )
 
 
 def _depth(value):
@@ -224,9 +275,10 @@ def test_production_frontend_payloads_cross_real_conversation_routes(client, pos
         "core.auth.get_user_by_username", return_value=user
     ), patch("core.ai.conversation_orchestration_service.get_db_connection", return_value=wrapper), patch(
         "core.ai.session_memory_service.get_db_connection", return_value=wrapper
-    ), patch("core.ai.conversation_orchestration_service.run_workflow", side_effect=fake_run), patch(
-        "core.audit_helpers.get_db_connection", return_value=wrapper
-    ), patch("routes.ai_routes.log_audit_event", return_value=None
+        ), patch("core.ai.conversation_orchestration_service.run_workflow", side_effect=fake_run), patch(
+            "core.audit_helpers.get_db_connection", return_value=wrapper
+        ), patch("core.ai.agentic_analyst_planner.AiGateway", ProductionShapePlannerGateway
+        ), patch("routes.ai_routes.log_audit_event", return_value=None
     ):
         assert client.post("/login", json={"username": owner, "password": "pass"}).status_code == 200
         for item in generated:

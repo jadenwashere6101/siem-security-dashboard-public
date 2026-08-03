@@ -35,13 +35,14 @@ from core.ai.session_memory_store import (
 from core.ai.workflow_orchestrator import WorkflowResult, classify_workflow
 from core.ai.workflow_request_store import get_request
 from core.ai.workflow_request_worker import AnakinWorkflowWorkerConfig, run_anakin_workflow_worker
-from core.ai.config import load_ai_gateway_config
+from core.ai.config import AI_MODE_LOCAL_ONLY, AiGatewayConfig, load_ai_gateway_config
 from core.ai.context_builder import AiContextPayload
 from core.ai.drafting_service import _build_draft_prompt, _empty_tool_summary as empty_draft_tools, _parse_request
 from core.ai.explainer_service import _build_prompt
 from core.ai.investigation_planner import InvestigationPlan
 from core.ai.investigation_service import _build_correlation_prompt
 from core.ai.soc_tools import SocToolExecutionSummary
+from core.ai.models import AI_STATUS_SUCCESS, AiGatewayResponse, AiRequestMetadata
 
 
 class NoCloseConnection:
@@ -114,6 +115,28 @@ def _quick_result(answer="This alert shows repeated blocked scan attempts."):
     )
 
 
+class PlannerThenAnswerGateway:
+    def __init__(self, plan, answer):
+        self.responses = [json.dumps(plan), answer]
+        self.requests = []
+
+    def generate(self, request):
+        self.requests.append(request)
+        return AiGatewayResponse(
+            status=AI_STATUS_SUCCESS,
+            content=self.responses.pop(0),
+            error=None,
+            metadata=AiRequestMetadata(
+                provider="controlled-local",
+                model="planner-test",
+                mode=AI_MODE_LOCAL_ONLY,
+                status=AI_STATUS_SUCCESS,
+                local_request=True,
+                paid_request=False,
+            ),
+        )
+
+
 def _structured_depth(value):
     if isinstance(value, dict):
         return 1 + max((_structured_depth(item) for item in value.values()), default=0)
@@ -164,6 +187,14 @@ def test_sync_follow_up_persists_ordered_turns_and_terminal_retry(postgres_db, m
     wrapper = NoCloseConnection(conn)
     monkeypatch.setattr("core.ai.conversation_orchestration_service.get_db_connection", lambda: wrapper)
     calls = []
+    planner_calls = []
+    from core.ai.conversation_orchestration_service import plan_turn as real_plan_turn
+
+    def recording_plan_turn(*args, **kwargs):
+        planner_calls.append(args[0])
+        return real_plan_turn(*args, **kwargs)
+
+    monkeypatch.setattr("core.ai.conversation_orchestration_service.plan_turn", recording_plan_turn)
 
     def fake_run(payload, **_kwargs):
         calls.append(payload)
@@ -188,6 +219,7 @@ def test_sync_follow_up_persists_ordered_turns_and_terminal_retry(postgres_db, m
     assert duplicate.payload["result"]["answer"] == "This alert shows repeated blocked scan attempts."
     json.dumps(duplicate.payload)
     assert len(calls) == 1
+    assert len(planner_calls) == 1
     page = list_turns(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")
     assert [(turn["role"], turn["lifecycle_status"]) for turn in page["turns"]] == [
         ("user", "completed"),
@@ -1184,3 +1216,70 @@ def test_deep_investigate_true_failure_preserves_prior_conclusion(postgres_db, m
         turn["content"] != "Provider unavailable."
         for turn in list_turns(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")["turns"]
     )
+
+
+def test_production_shaped_auto_turn_plans_dispatches_and_persists(postgres_db, monkeypatch):
+    conn, _cur = postgres_db
+    thread, alert_id = _seed(conn)
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
+    )
+    monkeypatch.setattr("core.ai.context_builder.get_db_connection", lambda: NoCloseConnection(conn))
+    monkeypatch.setattr("core.ai.soc_tool_executor.get_db_connection", lambda: NoCloseConnection(conn))
+    plan = {
+        "current_turn_intent": "Find the newest high-severity alert.",
+        "relationship_to_prior_turn": "new_question",
+        "resolved_entities": [{"type": "alert", "id": str(alert_id)}],
+        "evidence_sufficiency": "insufficient",
+        "required_evidence": ["current alert detail"],
+        "proposed_strategy": "quick_evidence_lookup",
+        "proposed_capability": "quick_explain",
+        "proposed_tool_categories": ["alerts"],
+        "clarification_question": None,
+        "reasoning_summary": "The current question is a new lookup and requires fresh alert-list evidence.",
+        "stopping_condition": "Stop after identifying the newest accessible high-severity alert.",
+        "confidence": "high",
+        "safety": {"read_only": True, "mutation_allowed": False},
+    }
+    gateway = PlannerThenAnswerGateway(
+        plan,
+        "The newest HIGH alert is Alert %s, a port-scan detection from 203.0.113.81." % alert_id,
+    )
+    payload = _payload(
+        thread,
+        alert_id,
+        request_id="agentic-production-shape",
+        prompt="What's the most recent HIGH alert?",
+        workflow="auto",
+    )
+    payload["context"].update(
+        {
+            "severity": "HIGH",
+            "source_ip": "203.0.113.81",
+            "dashboard": {"counts": {"alerts": 40, "high": 3}, "filters": {"window": "24h"}},
+        }
+    )
+    result = run_conversational_workflow(
+        payload,
+        owner_username="conversation_analyst",
+        actor_role="analyst",
+        gateway=gateway,
+        config=AiGatewayConfig(
+            mode=AI_MODE_LOCAL_ONLY,
+            configured_mode=AI_MODE_LOCAL_ONLY,
+            local_provider="controlled-local",
+            local_base_url="http://127.0.0.1:11434",
+            local_model="planner-test",
+        ),
+    )
+    assert result.status_code == 200
+    assert result.payload["workflow"] == "quick_explain"
+    assert result.payload["result"]["answer"].startswith(f"The newest HIGH alert is Alert {alert_id}")
+    assert len(gateway.requests) == 2
+    assert gateway.requests[0].capability == "agentic_analyst_planning"
+    assert '"tool_name": "search_alerts"' in gateway.requests[1].prompt
+    turns = list_turns(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")["turns"]
+    assert turns[0]["structured_payload"]["agentic_plan"]["strategy"] == "quick_evidence_lookup"
+    assert turns[0]["entity_snapshot"]["active_entity"]["type"] == "alert"
+    assert turns[0]["entity_snapshot"]["active_entity"]["id"] == str(alert_id)
+    assert turns[-1]["role"] == "assistant"

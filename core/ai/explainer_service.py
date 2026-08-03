@@ -101,6 +101,7 @@ def explain_context(
         tool_policy=tool_policy,
         planning_context=context,
         conversation_context=payload.get("conversation_context"),
+        planner_task=payload.get("planner_task"),
     )
 
 
@@ -180,6 +181,7 @@ def _answer_from_context(
     tool_policy: dict[str, Any] | None = None,
     planning_context: dict[str, Any] | None = None,
     conversation_context: dict[str, Any] | None = None,
+    planner_task: dict[str, Any] | None = None,
 ) -> AiServiceResult:
     profile_name = profile_for_explain_action(action)
     profile = config.profile(profile_name)
@@ -223,6 +225,7 @@ def _answer_from_context(
         profile_max_prompt_chars=profile.max_prompt_chars,
         tone=tone,
         conversation_context=conversation_context,
+        planner_task=planner_task,
     )
     if len(prompt) > profile.max_prompt_chars:
         return AiServiceResult(
@@ -283,6 +286,7 @@ def _build_prompt(
     profile_max_prompt_chars: int | None = None,
     tone: str | None = None,
     conversation_context: dict[str, Any] | None = None,
+    planner_task: dict[str, Any] | None = None,
 ) -> str:
     budget = profile_max_prompt_chars or (config.max_prompt_chars if config else 12000)
     tool_budget = max(1000, budget // 3)
@@ -296,9 +300,19 @@ def _build_prompt(
     context_json = _context_json_for_prompt(ai_context, budget=max(4000, budget - len(memory)), tools_json=tools_json)
     question_line = question or _default_question(action, ai_context.context_type)
     policy = decision_support_policy(tone) if _is_decision_support_action(action) else quick_explain_policy(tone)
+    task = planner_task if isinstance(planner_task, dict) else {}
+    strategy = str(task.get("strategy") or "").strip()
+    sufficiency = str(task.get("evidence_sufficiency") or "").strip()
+    task_line = (
+        f"Validated current-turn task: strategy={strategy}; evidence_sufficiency={sufficiency}. "
+        "Match the answer shape to the current question and do not repeat an earlier workflow template.\n"
+        if strategy
+        else ""
+    )
     return (
         f"{policy}\n"
         f"{memory}"
+        f"{task_line}"
         f"Action: {action}\n"
         f"Question: {question_line}\n"
         f"Context type: {ai_context.context_type}\n"
