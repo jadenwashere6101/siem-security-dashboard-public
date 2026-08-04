@@ -39,8 +39,8 @@
 - [x] 4.5 Atomically validate the authorized runtime gateway mode, Anthropic model, daily cap, and routing-enabled fields while rejecting unknown, inconsistent, or credential-like fields.
 - [x] 4.6 Apply valid policy changes to subsequent gateway authorizations without restart and prove a cap/mode reduction cannot be bypassed by stale process-local state.
 - [x] 4.7 Emit existing-format sanitized audit events for successful, invalid, and RBAC-denied mutations with actor, outcome, old/new values, `updated_by`, and `updated_at`.
-- [ ] 4.8 Add the minimal super-admin runtime policy UI by copying the chosen existing settings pattern, with validation/error states and no provider choice exposed to analyst workflows.
-- [ ] 4.9 Add focused store, route, RBAC, immediate-effect, audit, frontend service/component, dark-theme, accessibility, and production-build coverage.
+- [x] 4.8 Add the minimal super-admin runtime policy UI by copying the chosen existing settings pattern, with validation/error states and no provider choice exposed to analyst workflows.
+- [x] 4.9 Add focused store, route, RBAC, immediate-effect, audit, frontend service/component, dark-theme, accessibility, and production-build coverage.
 
 ## 5. Phase 5 - Observability
 

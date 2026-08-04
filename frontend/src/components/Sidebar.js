@@ -16,6 +16,7 @@ const SECTION_ICONS = {
   "detection-simulator": "◇",
   "detection-rules": "≡",
   "pfsense-ingest-filters": "▥",
+  "ai-gateway-config": "AI",
   "notification-policy": "✉",
   "admin-users": "◉",
   "admin-audit-logs": "◷",

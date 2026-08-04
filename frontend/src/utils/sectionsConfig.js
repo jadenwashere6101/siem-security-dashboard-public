@@ -116,6 +116,12 @@ export const sectionsConfig = [
     visibleWhen: ({ isSuperAdmin }) => isSuperAdmin,
   },
   {
+    id: "ai-gateway-config",
+    label: "AI Gateway Policy",
+    group: "administration",
+    visibleWhen: ({ isSuperAdmin }) => isSuperAdmin,
+  },
+  {
     id: "notification-policy",
     label: "Notification Policy",
     group: "administration",

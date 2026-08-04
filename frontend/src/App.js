@@ -5,6 +5,7 @@ import AdminUsersPanel from "./components/AdminUsersPanel";
 import AuditLogPanel from "./components/AuditLogPanel";
 import DetectionRulesPanel from "./components/DetectionRulesPanel";
 import PfsenseIngestFiltersPanel from "./components/PfsenseIngestFiltersPanel";
+import AiGatewayConfigPanel from "./components/AiGatewayConfigPanel";
 import NotificationPolicyPanel from "./components/NotificationPolicyPanel";
 import IncidentsPanel from "./components/IncidentsPanel";
 import ApprovalsPanel from "./components/ApprovalsPanel";
@@ -3151,6 +3152,17 @@ function AppInner() {
 
         {activeSection === "pfsense-ingest-filters" && isSectionVisible("pfsense-ingest-filters", roleFlags) && (
           <PfsenseIngestFiltersPanel
+            displaySettings={settings.display}
+            cardStyle={cardStyle}
+            cardHeaderStyle={cardHeaderStyle}
+            cardTitleStyle={cardTitleStyle}
+            cardSubtitleStyle={cardSubtitleStyle}
+          />
+        )}
+
+        {activeSection === "ai-gateway-config" && isSectionVisible("ai-gateway-config", roleFlags) && (
+          <AiGatewayConfigPanel
+            userRole={userRole}
             displaySettings={settings.display}
             cardStyle={cardStyle}
             cardHeaderStyle={cardHeaderStyle}
