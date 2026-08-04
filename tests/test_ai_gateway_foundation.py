@@ -520,6 +520,7 @@ def test_ai_status_route_rejects_viewer(client, mock_db):
 def test_ai_status_route_allows_analyst_and_sanitizes(client, mock_db, monkeypatch):
     monkeypatch.setenv("AI_GATEWAY_MODE", AI_MODE_DISABLED)
     monkeypatch.setenv("AI_LOCAL_BASE_URL", "https://user:secret@example.test")
+    monkeypatch.setattr("core.ai.providers._http_json", lambda *_args, **_kwargs: {"models": []})
     patchers = _login_role(client, username="ai_analyst", password="p", role="analyst")
     try:
         resp = client.get("/ai/status")
@@ -529,7 +530,8 @@ def test_ai_status_route_allows_analyst_and_sanitizes(client, mock_db, monkeypat
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["read_only"] is True
-    assert data["gateway"]["mode"] == AI_MODE_DISABLED
+    assert data["gateway"]["mode"] == AI_MODE_LOCAL_ONLY
+    assert data["runtime_configuration"]["status"] == "unavailable"
     assert "secret" not in str(data)
 
 

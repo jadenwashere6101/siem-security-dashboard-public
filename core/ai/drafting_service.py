@@ -124,7 +124,7 @@ def create_draft(
             status_code=200,
         )
 
-    resolved_gateway = gateway if gateway is not None else AiGateway(config=resolved_config)
+    resolved_gateway = gateway if gateway is not None else AiGateway()
     gateway_response = resolved_gateway.generate(
         AiGatewayRequest(
             prompt=prompt,

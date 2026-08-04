@@ -90,7 +90,7 @@ def run_investigation(
 
     started = time.monotonic()
     resolved_config = config if config is not None else load_ai_gateway_config()
-    resolved_gateway = gateway if gateway is not None else AiGateway(config=resolved_config)
+    resolved_gateway = gateway if gateway is not None else AiGateway()
     cancel_check = is_cancelled or (lambda: False)
     run_id = _run_id(payload.get("client_request_id"))
     context_type = str(payload.get("context_type") or "").strip().lower()

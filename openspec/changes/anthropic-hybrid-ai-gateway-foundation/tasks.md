@@ -32,13 +32,13 @@
 
 ## 4. Phase 4 - Runtime Administration
 
-- [ ] 4.1 Re-audit current `detection_config` and pfSense runtime configuration code immediately before implementation and document the exact store, route, validation, audit, and UI elements to copy.
-- [ ] 4.2 Add an additive PostgreSQL migration/schema definition for non-secret gateway runtime policy with `updated_by` and `updated_at`; keep all credentials environment-only.
-- [ ] 4.3 Implement source-controlled safe defaults plus a validated durable runtime policy store whose unreadable/invalid state forces effective `local_only` mode, disables paid routing, and falls to `disabled` only when local defaults are invalid.
-- [ ] 4.4 Add authenticated read and super-admin-only mutation handling using existing admin blueprint, transaction, error, and RBAC conventions.
-- [ ] 4.5 Validate gateway mode, exhaustive profile/provider/model assignments, daily cap, pricing, timeouts, and paid-fallback combinations atomically and reject unknown or credential-like fields.
-- [ ] 4.6 Apply valid policy changes to subsequent gateway authorizations without restart and prove a cap/mode reduction cannot be bypassed by stale process-local state.
-- [ ] 4.7 Emit existing-format sanitized audit events for successful, invalid, and RBAC-denied mutations with actor, outcome, old/new values, `updated_by`, and `updated_at`.
+- [x] 4.1 Re-audit current `detection_config` and pfSense runtime configuration code immediately before implementation and document the exact store, route, validation, audit, and UI elements to copy.
+- [x] 4.2 Add an additive PostgreSQL migration/schema definition for non-secret gateway runtime policy with `updated_by` and `updated_at`; keep all credentials environment-only.
+- [x] 4.3 Implement source-controlled safe defaults plus a validated durable runtime policy store whose unreadable/invalid state forces effective `local_only` mode, disables paid routing, and falls to `disabled` only when local defaults are invalid.
+- [x] 4.4 Add authenticated read and super-admin-only mutation handling using existing admin blueprint, transaction, error, and RBAC conventions.
+- [x] 4.5 Atomically validate the authorized runtime gateway mode, Anthropic model, daily cap, and routing-enabled fields while rejecting unknown, inconsistent, or credential-like fields.
+- [x] 4.6 Apply valid policy changes to subsequent gateway authorizations without restart and prove a cap/mode reduction cannot be bypassed by stale process-local state.
+- [x] 4.7 Emit existing-format sanitized audit events for successful, invalid, and RBAC-denied mutations with actor, outcome, old/new values, `updated_by`, and `updated_at`.
 - [ ] 4.8 Add the minimal super-admin runtime policy UI by copying the chosen existing settings pattern, with validation/error states and no provider choice exposed to analyst workflows.
 - [ ] 4.9 Add focused store, route, RBAC, immediate-effect, audit, frontend service/component, dark-theme, accessibility, and production-build coverage.
 

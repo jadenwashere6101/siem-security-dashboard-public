@@ -178,6 +178,11 @@ class PostgresPaidUsageStore:
         try:
             conn = self._connection_factory()
             with conn.cursor() as cur:
+                _assert_runtime_policy_current(
+                    cur,
+                    model=model,
+                    pricing=pricing,
+                )
                 cur.execute(
                     """
                     INSERT INTO ai_paid_usage_days (usage_day, daily_cap_usd)
@@ -199,8 +204,18 @@ class PostgresPaidUsageStore:
                 if row is None:
                     raise PaidAccountingUnavailable("Paid AI usage day is unavailable.")
                 stored_cap, reserved, settled = (Decimal(str(value)) for value in row)
-                effective_cap = min(stored_cap, pricing.daily_cap_usd)
                 used = reserved + settled
+                effective_cap = pricing.daily_cap_usd
+                if stored_cap != effective_cap and used <= effective_cap:
+                    cur.execute(
+                        """
+                        UPDATE ai_paid_usage_days
+                        SET daily_cap_usd = %s, updated_at = NOW()
+                        WHERE usage_day = %s
+                        """,
+                        (effective_cap, usage_day),
+                    )
+                    stored_cap = effective_cap
                 remaining = max(Decimal("0"), effective_cap - used)
                 if requested_cost > remaining:
                     cur.execute(
@@ -285,6 +300,13 @@ class PostgresPaidUsageStore:
                 attempt_kind=attempt_kind,
             )
         except PaidBudgetExhausted:
+            raise
+        except PaidAccountingConfigurationError:
+            if conn is not None:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
             raise
         except Exception:
             if conn is not None:
@@ -469,7 +491,8 @@ class PostgresPaidUsageStore:
                 cap = pricing.daily_cap_usd
                 reserved = settled = Decimal("0")
             else:
-                cap, reserved, settled = (Decimal(str(value)) for value in day_row)
+                _stored_cap, reserved, settled = (Decimal(str(value)) for value in day_row)
+                cap = pricing.daily_cap_usd
             return PaidUsageSummary(
                 usage_day=usage_day,
                 daily_cap_usd=cap,
@@ -516,3 +539,33 @@ def _attempt_kind(request: AiGatewayRequest) -> str:
     repair_attempt = request.metadata.get("repair_attempt")
     task = request.metadata.get("task")
     return "repair" if repair_attempt == 1 or task == "turn_plan_repair" else "initial"
+
+
+def _assert_runtime_policy_current(
+    cur,
+    *,
+    model: str,
+    pricing: PaidUsagePricing,
+) -> None:
+    cur.execute(
+        """
+        SELECT gateway_mode, preferred_anthropic_model,
+               daily_paid_budget_usd, anthropic_routing_enabled
+        FROM ai_gateway_config
+        WHERE id = 1
+        FOR SHARE
+        """
+    )
+    row = cur.fetchone()
+    if row is None:
+        return
+    runtime_cap = Decimal(str(row[2]))
+    if (
+        row[0] != "automatic_fallback"
+        or row[1] != model
+        or runtime_cap != pricing.daily_cap_usd
+        or row[3] is not True
+    ):
+        raise PaidAccountingConfigurationError(
+            "Paid AI runtime policy changed before authorization."
+        )

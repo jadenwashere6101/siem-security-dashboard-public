@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from core.ai.config import AiGatewayConfig, load_ai_gateway_config
+from core.ai.gateway_config_store import PostgresGatewayConfigStore, runtime_config_view
 from core.ai.models import AI_STATUS_BUDGET_EXHAUSTED
 from core.ai.paid_usage_store import (
     PaidAccountingError,
@@ -15,8 +16,15 @@ def get_ai_gateway_status(
     config: AiGatewayConfig | None = None,
     providers: dict[str, AiProvider] | None = None,
     accounting_store: PostgresPaidUsageStore | None = None,
+    runtime_config_store: PostgresGatewayConfigStore | None = None,
 ) -> dict[str, object]:
-    resolved_config = config if config is not None else load_ai_gateway_config()
+    if config is not None:
+        resolved_config = config
+    else:
+        source_config = load_ai_gateway_config()
+        resolved_config = (runtime_config_store or PostgresGatewayConfigStore()).resolve(
+            source_config
+        )
     resolved_providers = providers if providers is not None else build_default_providers()
 
     local_provider = resolved_providers.get(resolved_config.local_provider)
@@ -89,6 +97,7 @@ def get_ai_gateway_status(
 
     return {
         "gateway": resolved_config.sanitized(),
+        "runtime_configuration": runtime_config_view(resolved_config),
         "providers": provider_rows,
         "budget": budget,
         "read_only": True,

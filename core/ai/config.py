@@ -87,6 +87,11 @@ class AiGatewayConfig:
     anthropic_input_cost_per_million_tokens: float = DEFAULT_ANTHROPIC_INPUT_COST_PER_MILLION_TOKENS
     anthropic_output_cost_per_million_tokens: float = DEFAULT_ANTHROPIC_OUTPUT_COST_PER_MILLION_TOKENS
     anthropic_budget_valid: bool = True
+    runtime_config_status: str = "source"
+    runtime_config_error_code: str | None = None
+    runtime_config_updated_by: str | None = None
+    runtime_config_updated_at: str | None = None
+    runtime_anthropic_routing_requested: bool | None = None
     max_prompt_chars: int = DEFAULT_MAX_PROMPT_CHARS
     profiles: dict[str, AiModelProfile] | None = None
 
@@ -156,6 +161,11 @@ class AiGatewayConfig:
             "anthropic_output_cost_per_million_tokens": self.anthropic_output_cost_per_million_tokens,
             "anthropic_budget_valid": self.anthropic_budget_valid,
             "anthropic_budget_configured": self.anthropic_budget_configured,
+            "runtime_config_status": self.runtime_config_status,
+            "runtime_config_error_code": self.runtime_config_error_code,
+            "runtime_config_updated_by": self.runtime_config_updated_by,
+            "runtime_config_updated_at": self.runtime_config_updated_at,
+            "runtime_anthropic_routing_requested": self.runtime_anthropic_routing_requested,
             "max_prompt_chars": self.max_prompt_chars,
             "profiles": {
                 name: profile.sanitized()

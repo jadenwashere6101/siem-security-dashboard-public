@@ -527,7 +527,7 @@ def plan_turn(
             packet,
             PlannerConfigurationError("Final planner prompt exceeded the active profile immediately before generation."),
         )
-    planner_gateway = gateway if gateway is not None else AiGateway(config=resolved_config)
+    planner_gateway = gateway if gateway is not None else AiGateway()
     paid_correlation_id = uuid.uuid4().hex
     response = planner_gateway.generate(
         AiGatewayRequest(

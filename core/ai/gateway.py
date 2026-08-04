@@ -28,6 +28,7 @@ from core.ai.models import (
     AiRequestMetadata,
     estimate_tokens,
 )
+from core.ai.gateway_config_store import PostgresGatewayConfigStore
 from core.ai.paid_usage_store import (
     PaidAccountingConfigurationError,
     PaidAccountingUnavailable,
@@ -53,12 +54,21 @@ class AiGateway:
         config: AiGatewayConfig | None = None,
         providers: dict[str, AiProvider] | None = None,
         accounting_store: PostgresPaidUsageStore | None = None,
+        runtime_config_store: PostgresGatewayConfigStore | None = None,
     ):
-        self.config = config if config is not None else load_ai_gateway_config()
+        self._source_config = config if config is not None else load_ai_gateway_config()
+        self.runtime_config_store = (
+            runtime_config_store
+            if runtime_config_store is not None
+            else (PostgresGatewayConfigStore() if config is None else None)
+        )
+        self.config = self._source_config
         self.providers = providers if providers is not None else build_default_providers()
         self.accounting_store = accounting_store or PostgresPaidUsageStore()
 
     def generate(self, request: AiGatewayRequest) -> AiGatewayResponse:
+        if self.runtime_config_store is not None:
+            self.config = self.runtime_config_store.resolve(self._source_config)
         prompt_tokens = estimate_tokens(request.prompt)
         profile = self.config.profile(request.profile)
         try:

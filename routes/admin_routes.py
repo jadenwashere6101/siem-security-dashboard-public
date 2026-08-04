@@ -6,6 +6,13 @@ from psycopg2.extras import Json
 from werkzeug.security import generate_password_hash
 
 from core.audit_helpers import log_audit_event
+from core.ai.config import load_ai_gateway_config
+from core.ai.gateway_config_store import (
+    GatewayConfigValidationError,
+    PostgresGatewayConfigStore,
+    runtime_config_view,
+    validate_gateway_config_updates,
+)
 from core.approval_store import (
     expire_pending_requests,
     get_latest_approval_for_queue_action,
@@ -59,6 +66,14 @@ PFSENSE_DETECTION_HEALTH_RULE_IDS = (
 )
 _SEVERITY_TO_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
 _RANK_TO_SEVERITY = {rank: severity for severity, rank in _SEVERITY_TO_RANK.items()}
+AI_GATEWAY_RUNTIME_FIELDS = frozenset(
+    {
+        "gateway_mode",
+        "preferred_anthropic_model",
+        "daily_paid_budget_usd",
+        "anthropic_routing_enabled",
+    }
+)
 
 
 def _pfsense_detection_health_badge(fired_count):
@@ -67,6 +82,119 @@ def _pfsense_detection_health_badge(fired_count):
     if fired_count >= 5:
         return "Needs Review"
     return "Normal"
+
+
+def _audit_ai_gateway_config(event_type, *, details):
+    log_audit_event(
+        event_type,
+        actor_username=getattr(current_user, "id", None),
+        actor_role=getattr(current_user, "role", None),
+        http_method=request.method,
+        request_path=request.path,
+        source_ip=request.remote_addr,
+        details=details,
+    )
+
+
+@admin_bp.route("/admin/ai-gateway-config", methods=["GET"])
+@login_required
+@super_admin_required
+def get_ai_gateway_config_route():
+    source_config = load_ai_gateway_config()
+    store = PostgresGatewayConfigStore(connection_factory=lambda: get_db_connection())
+    effective = store.resolve(source_config)
+    return jsonify(runtime_config_view(effective)), 200
+
+
+@admin_bp.route("/admin/ai-gateway-config", methods=["PATCH"])
+@login_required
+@super_admin_required
+def update_ai_gateway_config_route():
+    source_config = load_ai_gateway_config()
+    store = PostgresGatewayConfigStore(connection_factory=lambda: get_db_connection())
+    payload = request.get_json(silent=True)
+    old_effective = store.resolve(source_config)
+    try:
+        validate_gateway_config_updates(payload)
+    except GatewayConfigValidationError as error:
+        _audit_ai_gateway_config(
+            "ai_gateway_config_update_rejected",
+            details={
+                "outcome": "rejected",
+                "reason": "validation_error",
+                "old": runtime_config_view(old_effective)["configuration"],
+                "new": None,
+                "accepted_fields": (
+                    sorted(set(payload) & AI_GATEWAY_RUNTIME_FIELDS)
+                    if isinstance(payload, dict)
+                    else []
+                ),
+                "submitted_field_count": len(payload) if isinstance(payload, dict) else 0,
+            },
+        )
+        return jsonify({"error": str(error)}), 400
+
+    conn = None
+    cur = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        old_policy, new_policy = store.stage_update(
+            cur,
+            source_config=source_config,
+            updates=payload,
+            updated_by=str(current_user.id),
+        )
+        effective = store.resolve_with_cursor(cur, source_config)
+        conn.commit()
+        _audit_ai_gateway_config(
+            "ai_gateway_config_updated",
+            details={
+                "outcome": "success",
+                "old": old_policy.as_dict(),
+                "new": new_policy.as_dict(),
+                "updated_at": new_policy.updated_at,
+            },
+        )
+        return jsonify(runtime_config_view(effective)), 200
+    except GatewayConfigValidationError as error:
+        if conn:
+            conn.rollback()
+        _audit_ai_gateway_config(
+            "ai_gateway_config_update_rejected",
+            details={
+                "outcome": "rejected",
+                "reason": "validation_error",
+                "old": runtime_config_view(old_effective)["configuration"],
+                "new": None,
+                "accepted_fields": sorted(set(payload) & AI_GATEWAY_RUNTIME_FIELDS),
+                "submitted_field_count": len(payload),
+            },
+        )
+        return jsonify({"error": str(error)}), 400
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        current_app.logger.error(
+            "Unable to update AI gateway runtime configuration error_type=%s",
+            type(error).__name__,
+        )
+        _audit_ai_gateway_config(
+            "ai_gateway_config_update_failed",
+            details={
+                "outcome": "failed",
+                "reason": "configuration_store_unavailable",
+                "old": runtime_config_view(old_effective)["configuration"],
+                "new": None,
+                "accepted_fields": sorted(set(payload) & AI_GATEWAY_RUNTIME_FIELDS),
+            },
+        )
+        return jsonify({"error": "AI gateway configuration store is unavailable."}), 503
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 
 @admin_bp.route("/admin/pfsense-ingest-filters", methods=["GET"])

@@ -155,7 +155,7 @@ def test_schema_snapshot_marker_matches_latest_migration():
         migrations_dir=repo_root / "migrations",
     )
 
-    assert version == 34
+    assert version == 35
 
 
 def test_ai_paid_usage_accounting_migration_is_additive_and_secret_free():
@@ -211,6 +211,57 @@ def test_ai_paid_usage_accounting_migration_applies_forward(postgres_db):
         "ai_paid_request_attempts",
         "ai_paid_usage_days",
     ]
+    conn.commit()
+
+
+def test_ai_gateway_runtime_config_migration_is_additive_and_secret_free():
+    repo_root = Path(__file__).resolve().parent.parent
+    migration_sql = (repo_root / "migrations" / "0035_ai_gateway_runtime_config.sql").read_text()
+    schema_sql = (repo_root / "schema.sql").read_text()
+
+    assert "CREATE TABLE IF NOT EXISTS ai_gateway_config" in migration_sql
+    assert "CREATE TABLE IF NOT EXISTS ai_gateway_config" in schema_sql
+    for field in (
+        "gateway_mode",
+        "preferred_anthropic_model",
+        "daily_paid_budget_usd",
+        "anthropic_routing_enabled",
+        "updated_by",
+        "updated_at",
+    ):
+        assert field in migration_sql
+    for forbidden in ("api_key", "authorization", "endpoint", "prompt", "evidence", "secret"):
+        assert forbidden not in migration_sql.lower()
+    for destructive in ("DROP ", "TRUNCATE ", "DELETE FROM ", "ALTER TABLE ", "RENAME "):
+        assert destructive not in migration_sql.upper()
+
+
+def test_ai_gateway_runtime_config_migration_applies_forward(postgres_db):
+    repo_root = Path(__file__).resolve().parent.parent
+    migration_sql = (repo_root / "migrations" / "0035_ai_gateway_runtime_config.sql").read_text()
+    conn, cur = postgres_db
+
+    cur.execute("DROP TABLE ai_gateway_config")
+    cur.execute(migration_sql)
+    cur.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'ai_gateway_config'
+        """
+    )
+    columns = {row[0] for row in cur.fetchall()}
+
+    assert {
+        "id",
+        "gateway_mode",
+        "preferred_anthropic_model",
+        "daily_paid_budget_usd",
+        "anthropic_routing_enabled",
+        "updated_by",
+        "updated_at",
+    }.issubset(columns)
     conn.commit()
 
 

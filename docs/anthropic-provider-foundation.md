@@ -30,6 +30,16 @@ AI_ANTHROPIC_OUTPUT_COST_PER_MILLION_TOKENS=
 
 Paid execution is enabled only when provider configuration, pricing, the daily cap, gateway mode, and transactional PostgreSQL authorization all succeed. No standalone routing environment switch can bypass accounting.
 
+## Runtime administration in Phase 4
+
+The backend reads the single-row `ai_gateway_config` policy before each gateway request. With no override row, validated source configuration remains effective. A valid override can change gateway mode, preferred Anthropic model, daily paid budget, and whether Anthropic routing is requested without restarting web or worker services.
+
+This follows the existing detection and pfSense configuration lifecycle: an additive PostgreSQL table, whole-policy backend validation, direct request-time reads, `updated_by`, `updated_at`, super-admin-only `GET` and `PATCH` at `/admin/ai-gateway-config`, and existing-format audit events containing sanitized old/new non-secret values and request context. No frontend configuration UI is added in this phase.
+
+Invalid or unavailable runtime policy fails closed to effective `local_only` with Anthropic routing disabled. If validated local configuration is unavailable, effective mode becomes `disabled`. `/ai/status` reports requested and effective sanitized runtime policy so operators can distinguish an applied override from default, invalid, or unavailable configuration.
+
+The runtime table and API never accept or return API keys, provider endpoints, prompts, completions, or evidence. Anthropic credentials remain environment-only, and model pricing rates remain under the existing Phase 3 environment configuration until separately authorized scope changes them.
+
 ## Readiness and safety
 
 `/ai/status` includes an Anthropic provider row even when no Anthropic configuration exists. Phase 1 readiness is configuration-only and performs no provider network request or generation. It reports provider/model, configuration state, missing environment-variable names, and credential presence as a boolean. It never returns the key, authorization headers, prompts, provider response bodies, or provider endpoints.

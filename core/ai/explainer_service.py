@@ -299,7 +299,7 @@ def _answer_from_context(
         )
     prompt = prompt_build.prompt
 
-    resolved_gateway = gateway if gateway is not None else AiGateway(config=config)
+    resolved_gateway = gateway if gateway is not None else AiGateway()
     gateway_response = resolved_gateway.generate(
         AiGatewayRequest(
             prompt=prompt,
