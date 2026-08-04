@@ -18,6 +18,7 @@ from core.ai.conversation_context import (
 from core.ai.conversation_orchestration_service import (
     ConversationBoundaryError,
     _bounded_artifact,
+    _normalize_conversation_turn_payload,
     _planner_tool_request,
     plan_conversational_submission,
     queue_conversational_request,
@@ -388,6 +389,7 @@ def test_sync_follow_up_persists_ordered_turns_and_terminal_retry(postgres_db, m
     ]
     stored = page["turns"][0]["structured_payload"]
     assert _structured_depth(stored) <= MAX_JSON_DEPTH
+    assert "storage_normalization" not in stored
     assert "workspace" not in stored["resolved_execution_context"]["context"]
     assert stored["resolved_execution_context"]["active_entity"]["id"] == str(alert_id)
 
@@ -880,6 +882,66 @@ def test_arbitrary_nested_session_payload_still_fails_closed():
         sanitize_structured_value(nested)
 
 
+def test_conversation_turn_normalization_is_branch_specific_and_shallow_turns_are_unchanged():
+    shallow = {
+        "schema_version": 1,
+        "reference_resolution": {"status": "resolved", "candidates": [{"type": "alert", "id": "7"}]},
+        "workflow_intent": {"workflow": "generate_artifact"},
+        "provenance": {"type": "conversation_submission"},
+    }
+    assert _normalize_conversation_turn_payload(shallow) == shallow
+
+    deep = {
+        **shallow,
+        "resolved_execution_context": {
+            "active_entity": {"type": "alert", "id": "7"},
+            "context": {
+                "filters": {
+                    "window": {
+                        "value": "24h",
+                        "provenance": {"source": {"kind": "planner", "stage": "resolution"}},
+                    }
+                }
+            },
+        },
+        "reference_resolution": {
+            "status": "resolved",
+            "candidates": [{"type": "alert", "id": "7"}],
+            "audit": {"provider": {"attempt": {"details": {"source": {"kind": "agentic_planner"}}}}},
+        },
+        "agentic_plan": {
+            "intent": "artifact_draft",
+            "strategy": "artifact_draft",
+            "capability": "generate_artifact",
+            "evidence_requirements": {
+                "filters": {
+                    "severity": {
+                        "value": "high",
+                        "provenance": {"source": {"kind": "planner_interpreted", "stage": "planning"}},
+                    }
+                }
+            },
+        },
+    }
+
+    normalized = _normalize_conversation_turn_payload(deep)
+
+    assert _structured_depth(deep) > MAX_JSON_DEPTH
+    assert _structured_depth(normalized) <= MAX_JSON_DEPTH
+    assert normalized["resolved_execution_context"]["active_entity"] == {"type": "alert", "id": "7"}
+    assert normalized["reference_resolution"]["status"] == "resolved"
+    assert normalized["agentic_plan"]["intent"] == "artifact_draft"
+    assert "high" in json.dumps(normalized["agentic_plan"]["evidence_requirements"])
+    assert normalized["provenance"] == {"type": "conversation_submission"}
+    metadata = normalized["storage_normalization"]
+    assert metadata["boundary"] == "conversation_user_turn"
+    assert {item["branch"] for item in metadata["branches"]} == {
+        "resolved_execution_context",
+        "reference_resolution",
+        "agentic_plan",
+    }
+
+
 def test_long_lived_thread_persists_nested_artifact_preview_without_apply(postgres_db, monkeypatch):
     conn, _cur = postgres_db
     thread, alert_id = _seed(conn)
@@ -899,6 +961,51 @@ def test_long_lived_thread_persists_nested_artifact_preview_without_apply(postgr
     conn.commit()
     monkeypatch.setattr(
         "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
+    )
+    original_resolution = conversation_orchestration_service._compact_turn_resolution
+    original_context = conversation_orchestration_service._compact_turn_context
+    original_plan = conversation_orchestration_service._compact_planner_turn
+
+    def deeply_auditable_resolution(value):
+        compact = original_resolution(value)
+        compact["audit"] = {
+            "provider": {"attempt": {"details": {"source": {"kind": "agentic_planner"}}}}
+        }
+        return compact
+
+    def deeply_filtered_context(value):
+        compact = original_context(value)
+        compact["filters"] = {
+            "window": {
+                "value": "24h",
+                "provenance": {"source": {"kind": "resolved_execution_context", "stage": "resolution"}},
+            }
+        }
+        return compact
+
+    def deeply_auditable_plan(outcome):
+        compact = original_plan(outcome)
+        compact["evidence_requirements"] = {
+            "filters": {
+                "severity": {
+                    "value": "high",
+                    "provenance": {"source": {"kind": "planner_interpreted", "stage": "planning"}},
+                }
+            }
+        }
+        return compact
+
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service._compact_turn_resolution",
+        deeply_auditable_resolution,
+    )
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service._compact_turn_context",
+        deeply_filtered_context,
+    )
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service._compact_planner_turn",
+        deeply_auditable_plan,
     )
     payload = _payload(
         thread,
@@ -957,9 +1064,26 @@ def test_long_lived_thread_persists_nested_artifact_preview_without_apply(postgr
     assert stats["success"] == 1
     turns = list_turns(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")["turns"]
     assistant = turns[-1]
+    user_turn = turns[-2]
     artifact = assistant["structured_payload"]["artifact"]
     assert len(turns) == 12
     assert assistant["assertion_type"] == "artifact_preview"
+    assert user_turn["workflow"] == "generate_artifact"
+    assert _structured_depth(user_turn["structured_payload"]) <= MAX_JSON_DEPTH
+    assert user_turn["structured_payload"]["resolved_execution_context"]["active_entity"]["id"] == str(alert_id)
+    assert user_turn["structured_payload"]["agentic_plan"]["intent"] == "artifact_draft"
+    assert user_turn["structured_payload"]["agentic_plan"]["strategy"] == "artifact_draft"
+    assert user_turn["structured_payload"]["agentic_plan"]["capability"] == "generate_artifact"
+    assert "high" in json.dumps(user_turn["structured_payload"]["agentic_plan"]["evidence_requirements"])
+    assert user_turn["structured_payload"]["provenance"] == {"type": "conversation_submission"}
+    normalization = user_turn["structured_payload"]["storage_normalization"]
+    assert normalization["original_depth"] > MAX_JSON_DEPTH
+    assert normalization["stored_depth"] <= MAX_JSON_DEPTH
+    assert {item["branch"] for item in normalization["branches"]} == {
+        "resolved_execution_context",
+        "reference_resolution",
+        "agentic_plan",
+    }
     assert assistant["artifact_safety"] == {
         "preview_only": True,
         "persisted": False,

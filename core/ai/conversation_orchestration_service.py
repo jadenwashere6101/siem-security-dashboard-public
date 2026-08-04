@@ -25,6 +25,7 @@ from core.ai.conversation_context import (
 )
 from core.ai.session_memory_service import validate_conversation_entity, validate_owned_thread
 from core.ai.session_memory_store import (
+    MAX_JSON_DEPTH,
     SessionMemoryError,
     SessionMemoryValidationError,
     ThreadVersionConflictError,
@@ -1120,11 +1121,12 @@ def _bounded_artifact(value: Any) -> Any:
     safe_value = redact_sensitive_values(value)
     original_depth = _structured_value_depth(safe_value)
     flattened_paths: list[str] = []
-    normalized = _normalize_artifact_storage_value(
+    normalized = _normalize_depth_bounded_storage_value(
         safe_value,
         path="artifact",
         depth=0,
         flattened_paths=flattened_paths,
+        field_name="generated artifact preview",
     )
     stored_depth = _structured_value_depth(normalized)
     normalized["storage_normalization"] = {
@@ -1141,12 +1143,13 @@ def _bounded_artifact(value: Any) -> Any:
     return normalized
 
 
-def _normalize_artifact_storage_value(
+def _normalize_depth_bounded_storage_value(
     value: Any,
     *,
     path: str,
     depth: int,
     flattened_paths: list[str],
+    field_name: str,
 ) -> Any:
     if depth >= 4 and isinstance(value, (dict, list, tuple)):
         flattened_paths.append(path)
@@ -1154,25 +1157,27 @@ def _normalize_artifact_storage_value(
         return rendered[:4000] + ("... [truncated]" if len(rendered) > 4000 else "")
     if isinstance(value, dict):
         if len(value) > 100:
-            raise SessionMemoryValidationError("generated artifact preview has too many fields.")
+            raise SessionMemoryValidationError(f"{field_name} has too many fields.")
         return {
-            str(key)[:128]: _normalize_artifact_storage_value(
+            str(key)[:128]: _normalize_depth_bounded_storage_value(
                 child,
                 path=f"{path}.{str(key)[:128]}",
                 depth=depth + 1,
                 flattened_paths=flattened_paths,
+                field_name=field_name,
             )
             for key, child in value.items()
         }
     if isinstance(value, (list, tuple)):
         if len(value) > 100:
-            raise SessionMemoryValidationError("generated artifact preview has too many list entries.")
+            raise SessionMemoryValidationError(f"{field_name} has too many list entries.")
         return [
-            _normalize_artifact_storage_value(
+            _normalize_depth_bounded_storage_value(
                 child,
                 path=f"{path}[{index}]",
                 depth=depth + 1,
                 flattened_paths=flattened_paths,
+                field_name=field_name,
             )
             for index, child in enumerate(value)
         ]
@@ -1609,6 +1614,44 @@ def _conversation_turn_payload(
             "applied": False,
             "approval_required": True,
         }
+    return _normalize_conversation_turn_payload(result)
+
+
+def _normalize_conversation_turn_payload(value: dict[str, Any]) -> dict[str, Any]:
+    result = dict(value)
+    original_depth = _structured_value_depth(result)
+    normalized_branches: list[dict[str, Any]] = []
+    for branch_name in ("resolved_execution_context", "reference_resolution", "agentic_plan"):
+        branch = result.get(branch_name)
+        if not isinstance(branch, dict) or 1 + _structured_value_depth(branch) <= MAX_JSON_DEPTH:
+            continue
+        flattened_paths: list[str] = []
+        normalized = _normalize_depth_bounded_storage_value(
+            redact_sensitive_values(branch),
+            path=branch_name,
+            depth=0,
+            flattened_paths=flattened_paths,
+            field_name=f"conversation turn {branch_name}",
+        )
+        result[branch_name] = normalized
+        normalized_branches.append(
+            {
+                "branch": branch_name,
+                "original_depth": _structured_value_depth(branch),
+                "stored_depth": _structured_value_depth(normalized),
+                "flattened_paths": flattened_paths[:40],
+                "flattened_path_count": len(flattened_paths),
+                "truncated": len(flattened_paths) > 40,
+            }
+        )
+    if normalized_branches:
+        result["storage_normalization"] = {
+            "boundary": "conversation_user_turn",
+            "original_depth": original_depth,
+            "stored_depth": _structured_value_depth(result),
+            "branches": normalized_branches,
+        }
+        result["storage_normalization"]["stored_depth"] = _structured_value_depth(result)
     return result
 
 

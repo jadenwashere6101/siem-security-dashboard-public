@@ -28,3 +28,14 @@ The system SHALL preserve the existing preview-only Artifact Generation boundary
 #### Scenario: Fresh or long-lived thread generates an artifact
 - **WHEN** Artifact Generation completes in a fresh thread or after repeated conversation turns
 - **THEN** the assistant preview SHALL persist with approval required and with persisted/applied operational flags remaining false
+
+### Requirement: Server-authored artifact user turns are depth bounded
+The system SHALL conditionally normalize over-depth `resolved_execution_context`, `reference_resolution`, and `agentic_plan` branches at the Artifact Generation user-turn persistence boundary without changing shallow turns.
+
+#### Scenario: Long-lived artifact request contains over-depth planner context
+- **WHEN** an Artifact Generation user turn contains a server-resolved context, reference resolution, or agentic plan branch that would exceed the session-memory depth limit
+- **THEN** the system SHALL preserve critical entity identity, intent, strategy, capability, filters, provenance, and planner outcome metadata in a depth-bounded representation and persist explicit normalization metadata
+
+#### Scenario: Ordinary shallow user turn is persisted
+- **WHEN** all server-authored conversation turn branches fit within the existing session-memory depth limit
+- **THEN** the system SHALL persist those branches unchanged and SHALL NOT add normalization metadata
