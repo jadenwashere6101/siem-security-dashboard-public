@@ -43,7 +43,7 @@ The system SHALL register `agentic_analyst_planning` through the normal provider
 - **THEN** it returns provider-incapable without invoking generation
 
 ### Requirement: Planner uses a dedicated planning profile
-The system SHALL route initial and repair planner requests through the approved `agentic_planning` profile using its backend-configured Anthropic provider and approved Anthropic model. The profile SHALL retain an 8,000-character prompt limit, 1,024-token output limit, 90-second per-generation timeout, and `0.1` temperature unless a separately validated profile change updates those existing contract bounds. It SHALL prohibit local fallback, and each proposal and repair SHALL independently satisfy paid-mode, readiness, and budget policy. Existing Quick Explain and other workflow profile assignments MUST remain unchanged and Ollama-only.
+The system SHALL route initial and repair planner requests through the approved `agentic_planning` profile using its backend-configured Anthropic provider and approved Anthropic model. The profile SHALL retain an 8,000-character prompt limit, 4,096-token output limit, 90-second per-generation timeout, and `0.1` temperature unless a separately validated profile change updates those existing contract bounds. It SHALL prohibit local fallback, and each proposal and repair SHALL independently satisfy paid-mode, readiness, and budget policy. Existing Quick Explain and other workflow profile assignments MUST remain unchanged and Ollama-only.
 
 #### Scenario: Planner profile is observable
 - **WHEN** the planner submits a proposal or its one bounded repair

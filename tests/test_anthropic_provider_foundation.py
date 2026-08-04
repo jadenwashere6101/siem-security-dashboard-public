@@ -208,7 +208,10 @@ def test_mocked_anthropic_generation_normalizes_profile_and_reported_usage(monke
     def fake_transport(*, payload, headers, timeout):
         captured.update(payload=payload, headers=headers, timeout=timeout)
         return {
-            "content": [{"type": "text", "text": '{"strategy":"direct_answer"}'}],
+            "content": [
+                {"type": "thinking", "thinking": "bounded reasoning"},
+                {"type": "text", "text": '{"strategy":"direct_answer"}'},
+            ],
             "usage": {"input_tokens": 17, "output_tokens": 9},
         }
 
@@ -232,7 +235,7 @@ def test_mocked_anthropic_generation_normalizes_profile_and_reported_usage(monke
     assert response.metadata.cost_source is None
     assert captured["payload"] == {
         "model": "claude-test-model",
-        "max_tokens": 1024,
+        "max_tokens": 4096,
         "messages": [
             {"role": "user", "content": "Return a bounded read-only plan."}
         ],
@@ -287,7 +290,14 @@ def test_unexpected_anthropic_error_logs_only_exception_type(monkeypatch, caplog
 
 
 def test_malformed_anthropic_response_is_normalized(monkeypatch):
-    monkeypatch.setattr("core.ai.providers._anthropic_http_json", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        "core.ai.providers._anthropic_http_json",
+        lambda **_kwargs: {
+            "content": [{"type": "thinking", "thinking": "truncated reasoning"}],
+            "stop_reason": "max_tokens",
+            "usage": {"input_tokens": 17, "output_tokens": 4096},
+        },
+    )
 
     response = AnthropicProvider().generate(_planner_request(), _anthropic_config())
 

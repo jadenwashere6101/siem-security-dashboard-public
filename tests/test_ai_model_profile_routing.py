@@ -171,7 +171,7 @@ def test_profile_provider_routing_is_explicit_and_agentic_planning_uses_anthropi
     assert planner.model == "claude-test-model"
     assert planner.timeout_seconds == DEFAULT_AGENTIC_PLANNING_TIMEOUT_SECONDS == 90.0
     assert planner.max_prompt_chars == DEFAULT_AGENTIC_PLANNING_MAX_PROMPT_CHARS == 8000
-    assert planner.max_output_tokens == DEFAULT_AGENTIC_PLANNING_MAX_OUTPUT_TOKENS == 1024
+    assert planner.max_output_tokens == DEFAULT_AGENTIC_PLANNING_MAX_OUTPUT_TOKENS == 4096
     assert planner.local_only is False
     assert planner.paid_fallback_enabled is True
     assert all(

@@ -858,7 +858,7 @@ def test_real_planner_request_reaches_anthropic_generation_contract(monkeypatch)
     assert outcome.provider_status == AI_STATUS_SUCCESS
     assert len(calls) == 1
     assert calls[0]["payload"]["model"] == "claude-test-model"
-    assert calls[0]["payload"]["max_tokens"] == 1024
+    assert calls[0]["payload"]["max_tokens"] == 4096
     assert calls[0]["timeout"] == 90.0
 
 
