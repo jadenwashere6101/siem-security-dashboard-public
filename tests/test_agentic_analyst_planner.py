@@ -15,10 +15,15 @@ from core.ai.agentic_analyst_planner import (
     planner_semantic_contract,
     plan_turn,
 )
-from core.ai.config import AI_MODE_LOCAL_ONLY, AiGatewayConfig
+from core.ai.config import (
+    AI_MODE_AUTOMATIC_FALLBACK,
+    AI_MODE_LOCAL_ONLY,
+    AiGatewayConfig,
+    default_ai_profiles,
+)
 from core.ai.gateway import AiGateway
 from core.ai.models import AI_STATUS_SUCCESS, AiGatewayResponse, AiRequestMetadata
-from core.ai.providers import OllamaProvider
+from core.ai.providers import AnthropicProvider
 from core.ai.profile_registry import AI_PROFILE_AGENTIC_PLANNING
 
 
@@ -78,6 +83,22 @@ def _config():
     )
     profiles = base.profiles or None
     return replace(base, profiles=profiles)
+
+
+def _anthropic_config():
+    model = "claude-test-model"
+    return AiGatewayConfig(
+        mode=AI_MODE_AUTOMATIC_FALLBACK,
+        configured_mode=AI_MODE_AUTOMATIC_FALLBACK,
+        local_provider="ollama",
+        local_base_url="http://127.0.0.1:11434",
+        local_model="llama3.2:3b",
+        anthropic_enabled=True,
+        anthropic_routing_enabled=True,
+        anthropic_api_key="test-key-never-send",
+        anthropic_model=model,
+        profiles=default_ai_profiles(local_model="llama3.2:3b", anthropic_model=model),
+    )
 
 
 def _packet(question="What's the newest HIGH alert?", *, evidence=None, corrections=None):
@@ -749,16 +770,16 @@ def test_planner_repairs_one_cross_field_contradiction_without_server_rewriting(
     assert len(gateway.requests) == 2
 
 
-def test_real_planner_request_reaches_ollama_generation_contract(monkeypatch):
+def test_real_planner_request_reaches_anthropic_generation_contract(monkeypatch):
     calls = []
 
-    def fake_http(method, url, *, payload=None, timeout):
-        calls.append({"method": method, "url": url, "payload": payload, "timeout": timeout})
-        return {"response": json.dumps(_plan())}
+    def fake_http(*, payload, headers, timeout):
+        calls.append({"payload": payload, "headers": headers, "timeout": timeout})
+        return {"content": [{"type": "text", "text": json.dumps(_plan())}], "usage": {}}
 
-    monkeypatch.setattr("core.ai.providers._http_json", fake_http)
-    config = replace(_config(), local_provider="ollama")
-    gateway = AiGateway(config=config, providers={"ollama": OllamaProvider()})
+    monkeypatch.setattr("core.ai.providers._anthropic_http_json", fake_http)
+    config = _anthropic_config()
+    gateway = AiGateway(config=config, providers={"anthropic": AnthropicProvider()})
 
     outcome = plan_turn(_packet(), gateway=gateway, config=config)
 
@@ -766,10 +787,8 @@ def test_real_planner_request_reaches_ollama_generation_contract(monkeypatch):
     assert outcome.plan.proposed_strategy == "quick_evidence_lookup"
     assert outcome.provider_status == AI_STATUS_SUCCESS
     assert len(calls) == 1
-    assert calls[0]["method"] == "POST"
-    assert calls[0]["url"].endswith("/api/generate")
-    assert calls[0]["payload"]["model"] == "qwen3:14b"
-    assert calls[0]["payload"]["options"]["num_predict"] == 1024
+    assert calls[0]["payload"]["model"] == "claude-test-model"
+    assert calls[0]["payload"]["max_tokens"] == 1024
     assert calls[0]["timeout"] == 90.0
 
 
@@ -779,23 +798,23 @@ def test_initial_and_repair_planner_generations_each_receive_full_profile_timeou
     responses = [json.dumps(malformed), json.dumps(_plan())]
     calls = []
 
-    def fake_http(method, url, *, payload=None, timeout):
-        calls.append({"method": method, "url": url, "payload": payload, "timeout": timeout})
-        return {"response": responses.pop(0)}
+    def fake_http(*, payload, headers, timeout):
+        calls.append({"payload": payload, "headers": headers, "timeout": timeout})
+        return {"content": [{"type": "text", "text": responses.pop(0)}], "usage": {}}
 
-    monkeypatch.setattr("core.ai.providers._http_json", fake_http)
-    config = replace(_config(), local_provider="ollama")
+    monkeypatch.setattr("core.ai.providers._anthropic_http_json", fake_http)
+    config = _anthropic_config()
 
     outcome = plan_turn(
         _packet(),
-        gateway=AiGateway(config=config, providers={"ollama": OllamaProvider()}),
+        gateway=AiGateway(config=config, providers={"anthropic": AnthropicProvider()}),
         config=config,
     )
 
     assert outcome.status == "planned"
     assert outcome.repaired is True
     assert len(calls) == 2
-    assert all(call["payload"]["model"] == "qwen3:14b" for call in calls)
+    assert all(call["payload"]["model"] == "claude-test-model" for call in calls)
     assert all(call["timeout"] == 90.0 for call in calls)
 
 

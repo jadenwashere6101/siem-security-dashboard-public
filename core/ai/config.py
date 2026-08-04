@@ -10,8 +10,11 @@ from core.ai.profile_registry import (
     AI_PROFILE_DEVELOPER_ASSISTANT,
     AI_PROFILE_FAST_TRIAGE,
     AI_PROFILE_GUIDED_ANALYSIS,
+    AI_PROVIDER_ANTHROPIC,
+    AI_PROVIDER_OLLAMA,
     APPROVED_AI_PROFILES,
     AiModelProfile,
+    validate_profile_provider_routing,
 )
 
 AI_MODE_DISABLED = "disabled"
@@ -35,7 +38,7 @@ DEFAULT_ANTHROPIC_TIMEOUT_SECONDS = 20.0
 DEFAULT_ANTHROPIC_API_VERSION = "2023-06-01"
 DEFAULT_MAX_PROMPT_CHARS = 12000
 DEFAULT_FAST_MODEL = "llama3.2:3b"
-DEFAULT_AGENTIC_PLANNING_MODEL = "qwen3:14b"
+DEFAULT_AGENTIC_PLANNING_MODEL = ""
 DEFAULT_GUIDED_MODEL = "llama3.1:8b"
 DEFAULT_DEEP_MODEL = "llama3.1:8b"
 DEFAULT_DEVELOPER_MODEL = "llama3.1:8b"
@@ -101,7 +104,11 @@ class AiGatewayConfig:
         profile_name = str(name or AI_PROFILE_FAST_TRIAGE).strip().lower()
         if profile_name not in APPROVED_AI_PROFILES:
             profile_name = AI_PROFILE_FAST_TRIAGE
-        profiles = self.profiles or default_ai_profiles(local_model=self.local_model, local_timeout_seconds=self.local_timeout_seconds)
+        profiles = self.profiles or default_ai_profiles(
+            local_model=self.local_model,
+            local_timeout_seconds=self.local_timeout_seconds,
+            anthropic_model=self.anthropic_model,
+        )
         return profiles.get(profile_name) or profiles[AI_PROFILE_FAST_TRIAGE]
 
     def sanitized(self) -> dict[str, object]:
@@ -251,11 +258,13 @@ def default_ai_profiles(
     *,
     local_model: str = "",
     local_timeout_seconds: float = DEFAULT_LOCAL_TIMEOUT_SECONDS,
+    anthropic_model: str = "",
 ) -> dict[str, AiModelProfile]:
     del local_timeout_seconds
-    return {
+    profiles = {
         AI_PROFILE_FAST_TRIAGE: AiModelProfile(
             name=AI_PROFILE_FAST_TRIAGE,
+            provider=AI_PROVIDER_OLLAMA,
             model=_profile_model("AI_FAST_MODEL", DEFAULT_FAST_MODEL, ""),
             timeout_seconds=_env_positive_float("AI_FAST_TIMEOUT_SECONDS", DEFAULT_FAST_TIMEOUT_SECONDS),
             max_prompt_chars=_env_positive_int("AI_FAST_MAX_PROMPT_CHARS", DEFAULT_FAST_MAX_PROMPT_CHARS),
@@ -265,11 +274,8 @@ def default_ai_profiles(
         ),
         AI_PROFILE_AGENTIC_PLANNING: AiModelProfile(
             name=AI_PROFILE_AGENTIC_PLANNING,
-            model=_profile_model(
-                "AI_AGENTIC_PLANNING_MODEL",
-                DEFAULT_AGENTIC_PLANNING_MODEL,
-                "",
-            ),
+            provider=AI_PROVIDER_ANTHROPIC,
+            model=anthropic_model,
             timeout_seconds=_profile_timeout(
                 "AI_AGENTIC_PLANNING_TIMEOUT_SECONDS",
                 DEFAULT_AGENTIC_PLANNING_TIMEOUT_SECONDS,
@@ -284,9 +290,12 @@ def default_ai_profiles(
             ),
             temperature=_env_positive_float("AI_AGENTIC_PLANNING_TEMPERATURE", 0.1),
             task_category="bounded agentic analyst turn planning",
+            local_only=False,
+            paid_fallback_enabled=True,
         ),
         AI_PROFILE_GUIDED_ANALYSIS: AiModelProfile(
             name=AI_PROFILE_GUIDED_ANALYSIS,
+            provider=AI_PROVIDER_OLLAMA,
             model=_profile_model("AI_GUIDED_MODEL", DEFAULT_GUIDED_MODEL, local_model),
             timeout_seconds=_profile_timeout("AI_GUIDED_TIMEOUT_SECONDS", DEFAULT_GUIDED_TIMEOUT_SECONDS),
             max_prompt_chars=_env_positive_int("AI_GUIDED_MAX_PROMPT_CHARS", DEFAULT_GUIDED_MAX_PROMPT_CHARS),
@@ -296,6 +305,7 @@ def default_ai_profiles(
         ),
         AI_PROFILE_DEEP_BRIEFING: AiModelProfile(
             name=AI_PROFILE_DEEP_BRIEFING,
+            provider=AI_PROVIDER_OLLAMA,
             model=_profile_model("AI_DEEP_MODEL", DEFAULT_DEEP_MODEL, local_model),
             timeout_seconds=_profile_timeout("AI_DEEP_TIMEOUT_SECONDS", DEFAULT_DEEP_TIMEOUT_SECONDS),
             max_prompt_chars=_env_positive_int("AI_DEEP_MAX_PROMPT_CHARS", DEFAULT_DEEP_MAX_PROMPT_CHARS),
@@ -305,6 +315,7 @@ def default_ai_profiles(
         ),
         AI_PROFILE_DEVELOPER_ASSISTANT: AiModelProfile(
             name=AI_PROFILE_DEVELOPER_ASSISTANT,
+            provider=AI_PROVIDER_OLLAMA,
             model=_profile_model("AI_DEVELOPER_MODEL", DEFAULT_DEVELOPER_MODEL, local_model),
             timeout_seconds=_profile_timeout("AI_DEVELOPER_TIMEOUT_SECONDS", DEFAULT_DEVELOPER_TIMEOUT_SECONDS),
             max_prompt_chars=_env_positive_int("AI_DEVELOPER_MAX_PROMPT_CHARS", DEFAULT_DEVELOPER_MAX_PROMPT_CHARS),
@@ -313,6 +324,8 @@ def default_ai_profiles(
             task_category="repository architecture assistance",
         ),
     }
+    validate_profile_provider_routing(profiles)
+    return profiles
 
 
 def load_ai_gateway_config() -> AiGatewayConfig:
@@ -325,9 +338,11 @@ def load_ai_gateway_config() -> AiGatewayConfig:
         "AI_LOCAL_TIMEOUT_SECONDS",
         DEFAULT_LOCAL_TIMEOUT_SECONDS,
     )
+    anthropic_model = _env_text("AI_ANTHROPIC_MODEL")
     profiles = default_ai_profiles(
         local_model=legacy_local_model,
         local_timeout_seconds=legacy_local_timeout,
+        anthropic_model=anthropic_model,
     )
     fast_profile = profiles[AI_PROFILE_FAST_TRIAGE]
     anthropic_timeout, anthropic_timeout_valid = _env_positive_float_with_validity(
@@ -357,7 +372,7 @@ def load_ai_gateway_config() -> AiGatewayConfig:
         anthropic_enabled=anthropic_enabled,
         anthropic_enabled_valid=anthropic_enabled_valid,
         anthropic_api_key=_env_text("ANTHROPIC_API_KEY"),
-        anthropic_model=_env_text("AI_ANTHROPIC_MODEL"),
+        anthropic_model=anthropic_model,
         anthropic_timeout_seconds=anthropic_timeout,
         anthropic_timeout_valid=anthropic_timeout_valid,
         anthropic_api_version=_env_text(

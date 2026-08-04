@@ -80,7 +80,7 @@ The Mini PC has approximately 32 GB installed RAM and stores the required Ollama
 
 | Model | Production use | Verified state |
 | --- | --- | --- |
-| `qwen3:14b` | Source-controlled dedicated `agentic_planning` default after deployment | Installed and benchmarked; materially outperforms the previous planner model, with production acceptance still required |
+| `qwen3:14b` | Current verified deployed `agentic_planning` baseline pending an authorized hybrid rollout | Installed and benchmarked; materially outperforms the previous local planner model |
 | `llama3.2:3b` | Existing `fast_triage` default, including Quick Explain | Installed; generation works; assignment unchanged |
 | `llama3.1:8b` | Guided Analysis, Deep Briefing, and Developer Assistant; previous planner model | Installed and retained; no longer the configured `agentic_planning` model after deployment |
 
@@ -88,7 +88,7 @@ The Mini PC has approximately 32 GB installed RAM and stores the required Ollama
 
 An apples-to-apples Mini PC benchmark changed only the planner model while preserving architecture, prompts, facts, schema, validator, temperature, token limit, and prompt limit. Compared with `llama3.1:8b`, `qwen3:14b` improved semantic action accuracy from `16.7%` to `70%`, complete valid-plan rate after repair from `0%` to `36.7%`, and repair success from `0%` to `24%`; clarification collapse fell from `93%` to `17%`, and meaningful action diversity increased from effectively two classes to eight.
 
-The source-controlled `agentic_planning` default is therefore `qwen3:14b`. The benchmark does not complete production acceptance: after an approved commit and deployment, the Azure VM must verify the effective profile/model and the real `/siem/` workflow path. Median initial planner generation was approximately `44.9s`, maximum initial generation approximately `76.7s`, and an initial-plus-repair path may approach `2.4` minutes.
+The previously deployed local `agentic_planning` baseline is therefore `qwen3:14b`. Phase 2 Mac source assigns `agentic_planning` to a feature-disabled Anthropic profile, while production remains on the verified local baseline until an approved commit, later paid-budget controls, deployment, and browser-path acceptance exist. Median local initial planner generation was approximately `44.9s`, maximum initial generation approximately `76.7s`, and an initial-plus-repair path may approach `2.4` minutes.
 
 Do not report the planner as working based only on provider success or benchmark results. Distinguish `provider_status=success` from `plan validation accepted` and from a grounded analyst-facing result.
 

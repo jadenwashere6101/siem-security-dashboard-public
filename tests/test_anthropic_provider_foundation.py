@@ -216,7 +216,7 @@ def test_mocked_anthropic_generation_normalizes_profile_and_reported_usage(monke
     assert captured["payload"]["model"] == "claude-test-model"
     assert captured["payload"]["max_tokens"] == 1024
     assert captured["payload"]["temperature"] == 0.1
-    assert captured["timeout"] == 12.5
+    assert captured["timeout"] == 90.0
     assert captured["headers"]["x-api-key"] == FAKE_ANTHROPIC_KEY
     assert FAKE_ANTHROPIC_KEY not in str(response.as_dict())
 
@@ -274,7 +274,7 @@ def test_malformed_anthropic_response_is_normalized(monkeypatch):
     assert response.content is None
 
 
-def test_gateway_blocks_anthropic_routing_during_provider_foundation(monkeypatch):
+def test_gateway_blocks_anthropic_routing_until_paid_accounting_exists(monkeypatch):
     monkeypatch.setattr(
         "core.ai.providers._anthropic_http_json",
         lambda **_kwargs: pytest.fail("Phase 1 gateway reached Anthropic HTTP"),
@@ -292,6 +292,7 @@ def test_gateway_blocks_anthropic_routing_during_provider_foundation(monkeypatch
         AiGatewayRequest(
             prompt="Attempt paid fallback.",
             capability="agentic_analyst_planning",
+            profile=AI_PROFILE_AGENTIC_PLANNING,
         )
     )
 

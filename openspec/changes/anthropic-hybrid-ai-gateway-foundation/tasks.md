@@ -10,13 +10,13 @@
 
 ## 2. Phase 2 - Profile Routing
 
-- [ ] 2.1 Extend the backend profile model and validation with trusted provider assignment and paid-fallback eligibility while preserving model, prompt, output, timeout, and temperature controls.
-- [ ] 2.2 Update the machine-readable inventory so `agentic_planning` maps to Anthropic and `fast_triage`, `guided_analysis`, `deep_briefing`, and `developer_assistant` map explicitly to Ollama.
-- [ ] 2.3 Change gateway resolution from global local-first order to profile provider/model resolution under the existing four gateway modes.
-- [ ] 2.4 Reject or ignore all client-supplied provider, model, profile, fallback, timeout, token, cost, and budget controls at backend boundaries.
-- [ ] 2.5 Route initial planner proposals through `agentic_planning` without changing planner packet construction, semantic ownership, validation, orchestration, evidence, or async boundaries.
-- [ ] 2.6 Enforce one repair with the same Anthropic provider/model, repair-stable decisions, precise validation feedback, and no Ollama substitution.
-- [ ] 2.7 Add route, service, worker, and inventory tests covering every profile in every applicable gateway mode and proving Ollama-only workflows never use paid fallback.
+- [x] 2.1 Extend the backend profile model and validation with trusted provider assignment and paid-fallback eligibility while preserving model, prompt, output, timeout, and temperature controls.
+- [x] 2.2 Update the machine-readable inventory so `agentic_planning` maps to Anthropic and `fast_triage`, `guided_analysis`, `deep_briefing`, and `developer_assistant` map explicitly to Ollama.
+- [x] 2.3 Change gateway resolution from global local-first order to profile provider/model resolution under the existing four gateway modes.
+- [x] 2.4 Reject or ignore all client-supplied provider, model, profile, fallback, timeout, token, cost, and budget controls at backend boundaries.
+- [x] 2.5 Route initial planner proposals through `agentic_planning` without changing planner packet construction, semantic ownership, validation, orchestration, evidence, or async boundaries.
+- [x] 2.6 Enforce one repair with the same Anthropic provider/model, repair-stable decisions, precise validation feedback, and no Ollama substitution.
+- [x] 2.7 Add route, service, worker, and inventory tests covering every profile in every applicable gateway mode and proving Ollama-only workflows never use paid fallback.
 
 ## 3. Phase 3 - Cost, Accounting, and Safety
 

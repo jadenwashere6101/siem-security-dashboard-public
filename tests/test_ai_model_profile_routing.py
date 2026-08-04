@@ -6,7 +6,6 @@ from core.ai.config import (
     AI_MODE_LOCAL_ONLY,
     DEFAULT_AGENTIC_PLANNING_MAX_OUTPUT_TOKENS,
     DEFAULT_AGENTIC_PLANNING_MAX_PROMPT_CHARS,
-    DEFAULT_AGENTIC_PLANNING_MODEL,
     DEFAULT_AGENTIC_PLANNING_TIMEOUT_SECONDS,
     DEFAULT_DEEP_TIMEOUT_SECONDS,
     DEFAULT_DEVELOPER_TIMEOUT_SECONDS,
@@ -36,9 +35,12 @@ from core.ai.profile_registry import (
     AI_PROFILE_FAST_TRIAGE,
     AI_PROFILE_GUIDED_ANALYSIS,
     APPROVED_AI_PROFILES,
+    AI_PROVIDER_ANTHROPIC,
+    AI_PROVIDER_OLLAMA,
     FAST_EXPLAIN_ACTIONS,
     GUIDED_DRAFT_TYPES,
     GUIDED_INVESTIGATION_WORKFLOWS,
+    PROFILE_PROVIDER_ROUTING,
     inventory_selectors,
     profile_for_draft_type,
     profile_for_agentic_planning,
@@ -54,6 +56,7 @@ def _config(**overrides):
     profiles = default_ai_profiles(
         local_model="llama3.1:8b",
         local_timeout_seconds=30,
+        anthropic_model="claude-test-model",
     )
     profiles[AI_PROFILE_FAST_TRIAGE] = replace(
         profiles[AI_PROFILE_FAST_TRIAGE],
@@ -70,6 +73,9 @@ def _config(**overrides):
         local_base_url="http://127.0.0.1:11434",
         local_model="llama3.1:8b",
         local_timeout_seconds=30,
+        anthropic_enabled=True,
+        anthropic_api_key="test-key-never-send",
+        anthropic_model="claude-test-model",
         profiles=profiles,
     )
     return replace(base, **overrides)
@@ -147,19 +153,31 @@ def test_correlation_heavy_explain_actions_use_guided_profile():
         assert profile_for_explain_action(action) == AI_PROFILE_FAST_TRIAGE
 
 
-def test_agentic_planning_has_dedicated_local_qwen_profile_without_changing_other_profiles():
+def test_profile_provider_routing_is_explicit_and_agentic_planning_uses_anthropic():
     config = _config()
 
     planner = config.profile(AI_PROFILE_AGENTIC_PLANNING)
     quick = config.profile(AI_PROFILE_FAST_TRIAGE)
 
     assert APPROVED_AI_PROFILES.issuperset({AI_PROFILE_AGENTIC_PLANNING, AI_PROFILE_FAST_TRIAGE})
-    assert planner.model == DEFAULT_AGENTIC_PLANNING_MODEL == "qwen3:14b"
+    assert PROFILE_PROVIDER_ROUTING == {
+        AI_PROFILE_FAST_TRIAGE: AI_PROVIDER_OLLAMA,
+        AI_PROFILE_AGENTIC_PLANNING: AI_PROVIDER_ANTHROPIC,
+        AI_PROFILE_GUIDED_ANALYSIS: AI_PROVIDER_OLLAMA,
+        AI_PROFILE_DEEP_BRIEFING: AI_PROVIDER_OLLAMA,
+        AI_PROFILE_DEVELOPER_ASSISTANT: AI_PROVIDER_OLLAMA,
+    }
+    assert planner.provider == AI_PROVIDER_ANTHROPIC
+    assert planner.model == "claude-test-model"
     assert planner.timeout_seconds == DEFAULT_AGENTIC_PLANNING_TIMEOUT_SECONDS == 90.0
     assert planner.max_prompt_chars == DEFAULT_AGENTIC_PLANNING_MAX_PROMPT_CHARS == 8000
     assert planner.max_output_tokens == DEFAULT_AGENTIC_PLANNING_MAX_OUTPUT_TOKENS == 1024
-    assert planner.local_only is True
-    assert planner.paid_fallback_enabled is False
+    assert planner.local_only is False
+    assert planner.paid_fallback_enabled is True
+    assert all(
+        config.profile(profile_name).provider == AI_PROVIDER_OLLAMA
+        for profile_name in APPROVED_AI_PROFILES - {AI_PROFILE_AGENTIC_PLANNING}
+    )
     assert quick.model == "llama3.2:3b"
     assert quick.max_output_tokens == 512
     assert config.profile(AI_PROFILE_GUIDED_ANALYSIS).model == "llama3.1:8b"
@@ -167,27 +185,12 @@ def test_agentic_planning_has_dedicated_local_qwen_profile_without_changing_othe
     assert config.profile(AI_PROFILE_DEVELOPER_ASSISTANT).model == "llama3.1:8b"
 
 
-def test_ollama_provider_reports_qwen_planner_profile_metadata(monkeypatch):
-    captured = {}
+def test_scheduled_soc_briefing_remains_local_only():
+    profile = _config().profile(profile_for_soc_briefing())
 
-    def fake_http_json(method, url, *, payload=None, timeout):
-        captured.update(method=method, url=url, payload=payload, timeout=timeout)
-        return {"response": "{}"}
-
-    monkeypatch.setattr("core.ai.providers._http_json", fake_http_json)
-
-    response = OllamaProvider().generate(
-        AiGatewayRequest(prompt="Plan this turn", profile=AI_PROFILE_AGENTIC_PLANNING),
-        _config(),
-    )
-
-    assert response.status == AI_STATUS_SUCCESS
-    assert response.metadata.profile == AI_PROFILE_AGENTIC_PLANNING
-    assert response.metadata.model == "qwen3:14b"
-    assert response.metadata.timeout_seconds == 90.0
-    assert captured["payload"]["model"] == "qwen3:14b"
-    assert captured["payload"]["options"] == {"num_predict": 1024, "temperature": 0.1}
-    assert captured["timeout"] == 90.0
+    assert profile.provider == AI_PROVIDER_OLLAMA
+    assert profile.local_only is True
+    assert profile.paid_fallback_enabled is False
 
 
 def test_source_of_truth_policy_records_planner_model_and_machine_roles():
@@ -199,7 +202,7 @@ def test_source_of_truth_policy_records_planner_model_and_machine_roles():
     assert "Tailscale-private Ollama HTTP endpoint" in policy
     assert "`qwen3:14b`" in policy
     assert "`llama3.1:8b`" in policy
-    assert "no longer the configured `agentic_planning` model after deployment" in policy
+    assert "Phase 2 Mac source assigns `agentic_planning` to a feature-disabled Anthropic profile" in policy
     assert "Never edit source code on the VM" in policy
     assert "inference host only" in policy
 
@@ -291,7 +294,16 @@ def test_gateway_ignores_client_model_timeout_metadata_and_uses_trusted_profile(
         AiGatewayRequest(
             prompt="Explain this",
             profile=AI_PROFILE_FAST_TRIAGE,
-            metadata={"model": "bad-model", "timeout_seconds": 999},
+            metadata={
+                "provider": "anthropic",
+                "model": "bad-model",
+                "profile": AI_PROFILE_AGENTIC_PLANNING,
+                "fallback": True,
+                "timeout_seconds": 999,
+                "max_output_tokens": 99999,
+                "cost": 0,
+                "budget": 99999,
+            },
         )
     )
 
@@ -313,8 +325,13 @@ def test_explain_route_ignores_client_profile_model_and_timeout_fields(monkeypat
             "question": "Explain this recon activity.",
             "context": {"activity_id": 90},
             "profile": AI_PROFILE_FAST_TRIAGE,
+            "provider": "anthropic",
             "model": "client-selected-model",
+            "fallback": True,
             "timeout_seconds": 1,
+            "max_output_tokens": 99999,
+            "cost": 0,
+            "budget": 99999,
         },
         gateway=AiGateway(config=_config(), providers={"ollama": provider}),
     )

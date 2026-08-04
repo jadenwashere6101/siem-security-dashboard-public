@@ -25,7 +25,13 @@ from core.ai.models import (
     AiRequestMetadata,
     estimate_tokens,
 )
-from core.ai.providers import AiProvider, build_default_providers, with_fallback_metadata
+from core.ai.providers import AiProvider, build_default_providers
+from core.ai.profile_registry import (
+    AI_PROVIDER_ANTHROPIC,
+    AI_PROVIDER_OLLAMA,
+    APPROVED_AI_PROFILES,
+    validate_profile_provider_routing,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -43,10 +49,31 @@ class AiGateway:
     def generate(self, request: AiGatewayRequest) -> AiGatewayResponse:
         prompt_tokens = estimate_tokens(request.prompt)
         profile = self.config.profile(request.profile)
+        try:
+            validate_profile_provider_routing(
+                self.config.profiles
+                or {
+                    name: self.config.profile(name)
+                    for name in APPROVED_AI_PROFILES
+                }
+            )
+        except (KeyError, ValueError):
+            return _failure_response(
+                mode=self.config.mode,
+                status=AI_STATUS_CONFIGURATION_ERROR,
+                provider=profile.provider or None,
+                model=profile.model or None,
+                error="AI profile provider routing is invalid and failed closed.",
+                error_code="invalid_profile_provider_routing",
+                prompt_tokens=prompt_tokens,
+                profile=profile,
+            )
         if not self.config.mode_valid:
             return _failure_response(
                 mode=self.config.mode,
                 status=AI_STATUS_CONFIGURATION_ERROR,
+                provider=profile.provider,
+                model=profile.model or None,
                 error="AI gateway configuration is invalid and failed closed.",
                 error_code=AI_STATUS_CONFIGURATION_ERROR,
                 prompt_tokens=prompt_tokens,
@@ -56,62 +83,94 @@ class AiGateway:
             return _failure_response(
                 mode=self.config.mode,
                 status=AI_STATUS_DISABLED,
+                provider=profile.provider,
+                model=profile.model or None,
                 error="AI gateway is disabled.",
                 error_code=AI_STATUS_DISABLED,
                 prompt_tokens=prompt_tokens,
                 profile=profile,
             )
 
-        local_response = self._try_local(request)
-        if local_response.status == AI_STATUS_SUCCESS:
-            return local_response
-
-        fallback_reason = local_response.metadata.error_code or local_response.status
-        profile_enforced = request.profile is not None
-        if self.config.mode == AI_MODE_LOCAL_ONLY or (
-            profile_enforced and (profile.local_only or not profile.paid_fallback_enabled)
-        ):
-            return with_fallback_metadata(
-                local_response,
-                fallback_attempted=False,
-                fallback_reason=fallback_reason,
+        if profile.provider == AI_PROVIDER_OLLAMA:
+            return self._try_profile_provider(request, profile=profile, paid_request=False)
+        if profile.provider != AI_PROVIDER_ANTHROPIC:
+            return _failure_response(
+                mode=self.config.mode,
+                status=AI_STATUS_CONFIGURATION_ERROR,
+                provider=profile.provider or None,
+                model=profile.model or None,
+                error="AI profile provider is not registered in the trusted routing table.",
+                error_code="profile_provider_not_registered",
+                prompt_tokens=prompt_tokens,
+                profile=profile,
+            )
+        if self.config.mode == AI_MODE_LOCAL_ONLY:
+            return _failure_response(
+                mode=self.config.mode,
+                status=AI_STATUS_FALLBACK_BLOCKED,
+                provider=profile.provider,
+                model=profile.model or None,
+                error="The selected AI profile requires a paid provider that local-only mode prohibits.",
+                error_code="profile_provider_blocked_by_mode",
+                prompt_tokens=prompt_tokens,
+                profile=profile,
             )
         if self.config.mode == AI_MODE_ASK_BEFORE_PAID_FALLBACK:
             return _failure_response(
                 mode=self.config.mode,
                 status=AI_STATUS_FALLBACK_REQUIRES_CONFIRMATION,
-                error="Paid fallback requires analyst confirmation.",
+                provider=profile.provider,
+                model=profile.model or None,
+                error="Paid profile execution requires analyst confirmation.",
                 error_code=AI_STATUS_FALLBACK_REQUIRES_CONFIRMATION,
                 prompt_tokens=prompt_tokens,
-                fallback_attempted=True,
-                fallback_reason=fallback_reason,
                 profile=profile,
             )
         if self.config.mode == AI_MODE_AUTOMATIC_FALLBACK:
-            return self._try_automatic_paid_fallback(request, fallback_reason)
-
+            return self._try_paid_profile(request, profile=profile)
         return _failure_response(
             mode=self.config.mode,
             status=AI_STATUS_CONFIGURATION_ERROR,
+            provider=profile.provider,
+            model=profile.model or None,
             error="AI gateway mode is unsupported.",
             error_code=AI_STATUS_CONFIGURATION_ERROR,
             prompt_tokens=prompt_tokens,
             profile=profile,
         )
 
-    def _try_local(self, request: AiGatewayRequest) -> AiGatewayResponse:
-        provider = self.providers.get(self.config.local_provider)
-        if provider is None or not self.config.local_configured:
-            profile = self.config.profile(request.profile)
+    def _try_profile_provider(self, request: AiGatewayRequest, *, profile, paid_request: bool) -> AiGatewayResponse:
+        provider_key = profile.provider
+        if provider_key == AI_PROVIDER_OLLAMA:
+            configured = self.config.local_provider == provider_key and self.config.local_configured and bool(profile.model)
+            not_configured_code = "local_provider_not_configured"
+            not_configured_message = "Local AI provider is not configured for the selected AI profile."
+        elif provider_key == AI_PROVIDER_ANTHROPIC:
+            configured = (
+                self.config.anthropic_enabled
+                and self.config.anthropic_configured
+                and bool(profile.model)
+                and profile.model == self.config.anthropic_model
+            )
+            not_configured_code = "anthropic_configuration_invalid"
+            not_configured_message = "Anthropic provider configuration is invalid or incomplete."
+        else:
+            configured = False
+            not_configured_code = "profile_provider_not_registered"
+            not_configured_message = "AI profile provider is not registered."
+
+        provider = self.providers.get(provider_key)
+        if provider is None or not configured:
             return _failure_response(
                 mode=self.config.mode,
-                status=AI_STATUS_PROVIDER_UNAVAILABLE,
-                provider=self.config.local_provider or None,
-                model=profile.model or self.config.local_model or None,
-                error="Local AI provider is not configured for the selected AI profile.",
-                error_code="local_provider_not_configured",
+                status=AI_STATUS_PROVIDER_UNAVAILABLE if provider_key == AI_PROVIDER_OLLAMA else AI_STATUS_CONFIGURATION_ERROR,
+                provider=provider_key,
+                model=profile.model or None,
+                error=not_configured_message,
+                error_code=not_configured_code,
                 prompt_tokens=estimate_tokens(request.prompt),
-                local_request=True,
+                local_request=not paid_request,
+                paid_request=paid_request,
                 profile=profile,
             )
 
@@ -120,117 +179,62 @@ class AiGateway:
             return _failure_response(
                 mode=self.config.mode,
                 status=AI_STATUS_PROVIDER_INCAPABLE,
-                provider=self.config.local_provider,
-                model=self.config.profile(request.profile).model,
-                error=capability.reason or "Local AI provider is incapable.",
+                provider=provider_key,
+                model=profile.model or None,
+                error=capability.reason or "AI provider is incapable.",
                 error_code=capability.status,
                 prompt_tokens=estimate_tokens(request.prompt),
-                local_request=True,
-                profile=self.config.profile(request.profile),
+                local_request=not paid_request,
+                paid_request=paid_request,
+                profile=profile,
             )
 
         try:
             return provider.generate(request, self.config)
-        except Exception:
-            _LOGGER.exception("ai_gateway_provider_error provider=%s", self.config.local_provider)
+        except Exception as error:
+            _LOGGER.warning(
+                "ai_gateway_provider_error provider=%s error_type=%s",
+                provider_key,
+                type(error).__name__,
+            )
             return _failure_response(
                 mode=self.config.mode,
                 status=AI_STATUS_FAILED,
-                provider=self.config.local_provider,
-                model=self.config.profile(request.profile).model,
-                error="Local AI provider failed.",
+                provider=provider_key,
+                model=profile.model or None,
+                error="AI provider failed.",
                 error_code="provider_exception",
                 prompt_tokens=estimate_tokens(request.prompt),
-                local_request=True,
-                profile=self.config.profile(request.profile),
+                local_request=not paid_request,
+                paid_request=paid_request,
+                profile=profile,
             )
 
-    def _try_automatic_paid_fallback(
-        self,
-        request: AiGatewayRequest,
-        fallback_reason: str | None,
-    ) -> AiGatewayResponse:
+    def _try_paid_profile(self, request: AiGatewayRequest, *, profile) -> AiGatewayResponse:
         prompt_tokens = estimate_tokens(request.prompt)
-        profile = self.config.profile(request.profile)
-        if self.config.paid_provider == "anthropic" and not self.config.anthropic_routing_enabled:
+        if not profile.paid_fallback_enabled or profile.local_only:
             return _failure_response(
                 mode=self.config.mode,
                 status=AI_STATUS_FALLBACK_BLOCKED,
-                provider="anthropic",
-                model=self.config.anthropic_model or self.config.paid_model or None,
-                error="Anthropic routing is not enabled in the provider-foundation phase.",
+                provider=profile.provider,
+                model=profile.model or None,
+                error="The selected AI profile is not eligible for paid execution.",
+                error_code="profile_not_paid_eligible",
+                prompt_tokens=prompt_tokens,
+                profile=profile,
+            )
+        if not self.config.anthropic_routing_enabled:
+            return _failure_response(
+                mode=self.config.mode,
+                status=AI_STATUS_FALLBACK_BLOCKED,
+                provider=profile.provider,
+                model=profile.model or None,
+                error="Anthropic profile routing remains feature-disabled until paid accounting is implemented.",
                 error_code="anthropic_routing_not_enabled",
                 prompt_tokens=prompt_tokens,
-                fallback_attempted=True,
-                fallback_reason=fallback_reason,
-                paid_request=False,
                 profile=profile,
             )
-        if not self.config.paid_fallback_enabled or not self.config.paid_configured:
-            return _failure_response(
-                mode=self.config.mode,
-                status=AI_STATUS_FALLBACK_BLOCKED,
-                error="Paid fallback is not enabled or configured.",
-                error_code=AI_STATUS_FALLBACK_BLOCKED,
-                prompt_tokens=prompt_tokens,
-                fallback_attempted=True,
-                fallback_reason=fallback_reason,
-                profile=profile,
-            )
-
-        provider = self.providers.get(self.config.paid_provider)
-        if provider is None:
-            return _failure_response(
-                mode=self.config.mode,
-                status=AI_STATUS_FALLBACK_BLOCKED,
-                provider=self.config.paid_provider,
-                model=self.config.paid_model,
-                error="Paid AI provider is not registered.",
-                error_code="paid_provider_not_registered",
-                prompt_tokens=prompt_tokens,
-                fallback_attempted=True,
-                fallback_reason=fallback_reason,
-                paid_request=True,
-                profile=profile,
-            )
-
-        capability = provider.supports(request)
-        if not capability.capable:
-            return _failure_response(
-                mode=self.config.mode,
-                status=AI_STATUS_PROVIDER_INCAPABLE,
-                provider=self.config.paid_provider,
-                model=self.config.paid_model,
-                error=capability.reason or "Paid AI provider is incapable.",
-                error_code=capability.status,
-                prompt_tokens=prompt_tokens,
-                fallback_attempted=True,
-                fallback_reason=fallback_reason,
-                paid_request=True,
-                profile=profile,
-            )
-
-        try:
-            return with_fallback_metadata(
-                provider.generate(request, self.config),
-                fallback_attempted=True,
-                fallback_reason=fallback_reason,
-            )
-        except Exception:
-            _LOGGER.exception("ai_gateway_provider_error provider=%s", self.config.paid_provider)
-            return _failure_response(
-                mode=self.config.mode,
-                status=AI_STATUS_FAILED,
-                provider=self.config.paid_provider,
-                model=self.config.paid_model,
-                error="Paid AI provider failed.",
-                error_code="provider_exception",
-                prompt_tokens=prompt_tokens,
-                fallback_attempted=True,
-                fallback_reason=fallback_reason,
-                paid_request=True,
-                profile=profile,
-            )
+        return self._try_profile_provider(request, profile=profile, paid_request=True)
 
 
 def _failure_response(

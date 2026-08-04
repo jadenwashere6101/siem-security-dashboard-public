@@ -102,7 +102,7 @@ def _config(**overrides) -> AiGatewayConfig:
     base = AiGatewayConfig(
         mode=AI_MODE_LOCAL_ONLY,
         configured_mode=AI_MODE_LOCAL_ONLY,
-        local_provider="local",
+        local_provider="ollama",
         local_base_url="http://127.0.0.1:11434",
         local_model="llama3",
         paid_provider="paid",
@@ -238,11 +238,11 @@ def test_paid_readiness_reports_env_names_not_secret_values(monkeypatch):
 
 
 def test_gateway_disabled_does_not_contact_providers():
-    local = FakeProvider("local", local_request=True)
-    paid = FakeProvider("paid", paid_request=True)
+    local = FakeProvider("ollama", local_request=True)
+    paid = FakeProvider("anthropic", paid_request=True)
     gateway = AiGateway(
         config=_config(mode=AI_MODE_DISABLED, configured_mode=AI_MODE_DISABLED),
-        providers={"local": local, "paid": paid},
+        providers={"ollama": local, "anthropic": paid},
     )
 
     response = gateway.generate(AiGatewayRequest(prompt="explain"))
@@ -253,10 +253,10 @@ def test_gateway_disabled_does_not_contact_providers():
     assert response.metadata.read_only is True
 
 
-def test_gateway_uses_local_first_success_without_paid_fallback():
-    local = FakeProvider("local", local_request=True)
-    paid = FakeProvider("paid", paid_request=True)
-    gateway = AiGateway(config=_config(), providers={"local": local, "paid": paid})
+def test_gateway_uses_ollama_profile_without_paid_fallback():
+    local = FakeProvider("ollama", local_request=True)
+    paid = FakeProvider("anthropic", paid_request=True)
+    gateway = AiGateway(config=_config(), providers={"ollama": local, "anthropic": paid})
 
     response = gateway.generate(AiGatewayRequest(prompt="explain"))
 
@@ -270,12 +270,12 @@ def test_gateway_uses_local_first_success_without_paid_fallback():
 
 def test_gateway_local_only_never_calls_paid_when_local_fails():
     local = FakeProvider(
-        "local",
+        "ollama",
         response_status=AI_STATUS_PROVIDER_TIMEOUT,
         local_request=True,
     )
-    paid = FakeProvider("paid", paid_request=True)
-    gateway = AiGateway(config=_config(), providers={"local": local, "paid": paid})
+    paid = FakeProvider("anthropic", paid_request=True)
+    gateway = AiGateway(config=_config(), providers={"ollama": local, "anthropic": paid})
 
     response = gateway.generate(AiGatewayRequest(prompt="explain"))
 
@@ -285,81 +285,86 @@ def test_gateway_local_only_never_calls_paid_when_local_fails():
     assert response.metadata.fallback_attempted is False
 
 
-def test_gateway_ask_before_fallback_never_calls_paid_provider():
+def test_gateway_ask_mode_does_not_make_ollama_profile_paid_eligible():
     local = FakeProvider(
-        "local",
+        "ollama",
         response_status=AI_STATUS_PROVIDER_UNAVAILABLE,
         local_request=True,
     )
-    paid = FakeProvider("paid", paid_request=True)
+    paid = FakeProvider("anthropic", paid_request=True)
     gateway = AiGateway(
         config=_config(
             mode=AI_MODE_ASK_BEFORE_PAID_FALLBACK,
             configured_mode=AI_MODE_ASK_BEFORE_PAID_FALLBACK,
         ),
-        providers={"local": local, "paid": paid},
+        providers={"ollama": local, "anthropic": paid},
     )
 
     response = gateway.generate(AiGatewayRequest(prompt="explain"))
 
-    assert response.status == AI_STATUS_FALLBACK_REQUIRES_CONFIRMATION
+    assert response.status == AI_STATUS_PROVIDER_UNAVAILABLE
     assert local.generate_calls == 1
     assert paid.generate_calls == 0
-    assert response.metadata.fallback_attempted is True
+    assert response.metadata.fallback_attempted is False
     assert response.metadata.paid_request is False
 
 
-def test_gateway_automatic_fallback_blocked_without_explicit_enablement():
+def test_gateway_automatic_mode_does_not_make_ollama_profile_paid_eligible():
     local = FakeProvider(
-        "local",
+        "ollama",
         response_status=AI_STATUS_PROVIDER_UNAVAILABLE,
         local_request=True,
     )
-    paid = FakeProvider("paid", paid_request=True)
+    paid = FakeProvider("anthropic", paid_request=True)
     gateway = AiGateway(
         config=_config(
             mode=AI_MODE_AUTOMATIC_FALLBACK,
             configured_mode=AI_MODE_AUTOMATIC_FALLBACK,
             paid_fallback_enabled=False,
         ),
-        providers={"local": local, "paid": paid},
+        providers={"ollama": local, "anthropic": paid},
     )
 
     response = gateway.generate(AiGatewayRequest(prompt="explain"))
 
-    assert response.status == AI_STATUS_FALLBACK_BLOCKED
+    assert response.status == AI_STATUS_PROVIDER_UNAVAILABLE
     assert paid.generate_calls == 0
 
 
-def test_gateway_automatic_fallback_calls_paid_only_when_allowed():
-    local = FakeProvider(
-        "local",
-        response_status=AI_STATUS_PROVIDER_UNAVAILABLE,
-        local_request=True,
-    )
-    paid = FakeProvider("paid", paid_request=True)
+def test_gateway_automatic_mode_calls_only_anthropic_for_agentic_profile_when_test_guard_allows():
+    local = FakeProvider("ollama", local_request=True)
+    paid = FakeProvider("anthropic", paid_request=True)
     gateway = AiGateway(
         config=_config(
             mode=AI_MODE_AUTOMATIC_FALLBACK,
             configured_mode=AI_MODE_AUTOMATIC_FALLBACK,
-            paid_fallback_enabled=True,
+            anthropic_enabled=True,
+            anthropic_routing_enabled=True,
+            anthropic_api_key="test-key-never-send",
+            anthropic_model="claude-test-model",
         ),
-        providers={"local": local, "paid": paid},
+        providers={"ollama": local, "anthropic": paid},
     )
 
-    response = gateway.generate(AiGatewayRequest(prompt="explain"))
+    response = gateway.generate(
+        AiGatewayRequest(
+            prompt="plan",
+            capability="agentic_analyst_planning",
+            profile="agentic_planning",
+        )
+    )
 
     assert response.status == AI_STATUS_SUCCESS
-    assert local.generate_calls == 1
+    assert local.generate_calls == 0
     assert paid.generate_calls == 1
-    assert response.metadata.fallback_attempted is True
+    assert response.metadata.fallback_attempted is False
     assert response.metadata.paid_request is True
 
 
 def test_gateway_applies_capability_check_before_provider_use():
-    local = FakeProvider("local", capable=False, local_request=True)
-    paid = FakeProvider("paid", paid_request=True)
-    gateway = AiGateway(config=_config(), providers={"local": local, "paid": paid})
+    local = FakeProvider("ollama", capable=False, local_request=True)
+    paid = FakeProvider("anthropic", paid_request=True)
+    gateway = AiGateway(config=_config(), providers={"ollama": local, "anthropic": paid})
 
     response = gateway.generate(AiGatewayRequest(prompt="explain", capability="tool_use"))
 
@@ -384,7 +389,7 @@ def test_ollama_provider_accepts_agentic_planner_and_rejects_unknown_capability(
     assert unknown.status == AI_STATUS_PROVIDER_INCAPABLE
 
 
-def test_gateway_reaches_ollama_generation_for_agentic_planner(monkeypatch):
+def test_gateway_never_routes_agentic_planner_to_ollama(monkeypatch):
     calls = []
 
     def fake_http(method, url, *, payload=None, timeout):
@@ -403,17 +408,14 @@ def test_gateway_reaches_ollama_generation_for_agentic_planner(monkeypatch):
         )
     )
 
-    assert response.status == AI_STATUS_SUCCESS
-    assert response.metadata.provider == "ollama"
+    assert response.status == AI_STATUS_FALLBACK_BLOCKED
+    assert response.metadata.provider == "anthropic"
     assert response.metadata.profile == "agentic_planning"
-    assert response.metadata.model == "qwen3:14b"
-    assert response.metadata.local_request is True
+    assert response.metadata.model is None
+    assert response.metadata.local_request is False
     assert response.metadata.paid_request is False
     assert response.metadata.fallback_attempted is False
-    assert len(calls) == 1
-    assert calls[0]["method"] == "POST"
-    assert calls[0]["url"].endswith("/api/generate")
-    assert calls[0]["payload"]["model"] == "qwen3:14b"
+    assert len(calls) == 0
 
 
 def test_gateway_keeps_unregistered_ollama_capability_fail_closed(monkeypatch):
@@ -432,8 +434,8 @@ def test_gateway_keeps_unregistered_ollama_capability_fail_closed(monkeypatch):
 
 
 def test_gateway_does_not_touch_database_or_shell(monkeypatch):
-    local = FakeProvider("local", local_request=True)
-    gateway = AiGateway(config=_config(), providers={"local": local})
+    local = FakeProvider("ollama", local_request=True)
+    gateway = AiGateway(config=_config(), providers={"ollama": local})
 
     monkeypatch.setattr(
         "core.db.get_db_connection",

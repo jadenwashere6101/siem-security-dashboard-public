@@ -333,7 +333,7 @@ class AnthropicProvider:
         if not capability.capable:
             return _provider_response(
                 provider=self.provider_key,
-                model=config.anthropic_model or None,
+                model=profile.model or None,
                 mode=config.mode,
                 status=AI_STATUS_PROVIDER_INCAPABLE,
                 prompt_tokens=prompt_tokens,
@@ -349,7 +349,7 @@ class AnthropicProvider:
         except AiGatewayConfigurationError:
             return _provider_response(
                 provider=self.provider_key,
-                model=config.anthropic_model or None,
+                model=profile.model or None,
                 mode=config.mode,
                 status=AI_STATUS_CONFIGURATION_ERROR,
                 prompt_tokens=prompt_tokens,
@@ -363,7 +363,7 @@ class AnthropicProvider:
         if len(request.prompt) > profile.max_prompt_chars:
             return _provider_response(
                 provider=self.provider_key,
-                model=config.anthropic_model,
+                model=profile.model,
                 mode=config.mode,
                 status=AI_STATUS_FAILED,
                 prompt_tokens=prompt_tokens,
@@ -375,7 +375,7 @@ class AnthropicProvider:
             )
 
         payload = {
-            "model": config.anthropic_model,
+            "model": profile.model,
             "max_tokens": profile.max_output_tokens,
             "messages": [{"role": "user", "content": request.prompt}],
             "temperature": profile.temperature,
@@ -391,7 +391,7 @@ class AnthropicProvider:
             response = _anthropic_http_json(
                 payload=payload,
                 headers=headers,
-                timeout=config.anthropic_timeout_seconds,
+                timeout=profile.timeout_seconds,
             )
             content = _anthropic_content(response)
             input_tokens, output_tokens = _anthropic_usage(response)
@@ -453,7 +453,7 @@ class AnthropicProvider:
 
         return _provider_response(
             provider=self.provider_key,
-            model=config.anthropic_model,
+            model=profile.model,
             mode=config.mode,
             status=AI_STATUS_SUCCESS,
             prompt_tokens=prompt_tokens,
@@ -479,7 +479,7 @@ class AnthropicProvider:
     ) -> AiGatewayResponse:
         return _provider_response(
             provider=self.provider_key,
-            model=config.anthropic_model or None,
+            model=profile.model or None,
             mode=config.mode,
             status=status,
             prompt_tokens=prompt_tokens,

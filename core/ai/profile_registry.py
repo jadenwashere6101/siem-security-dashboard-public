@@ -9,6 +9,9 @@ AI_PROFILE_GUIDED_ANALYSIS = "guided_analysis"
 AI_PROFILE_DEEP_BRIEFING = "deep_briefing"
 AI_PROFILE_DEVELOPER_ASSISTANT = "developer_assistant"
 
+AI_PROVIDER_OLLAMA = "ollama"
+AI_PROVIDER_ANTHROPIC = "anthropic"
+
 APPROVED_AI_PROFILES = frozenset(
     {
         AI_PROFILE_FAST_TRIAGE,
@@ -19,10 +22,36 @@ APPROVED_AI_PROFILES = frozenset(
     }
 )
 
+PROFILE_PROVIDER_ROUTING = {
+    AI_PROFILE_FAST_TRIAGE: AI_PROVIDER_OLLAMA,
+    AI_PROFILE_AGENTIC_PLANNING: AI_PROVIDER_ANTHROPIC,
+    AI_PROFILE_GUIDED_ANALYSIS: AI_PROVIDER_OLLAMA,
+    AI_PROFILE_DEEP_BRIEFING: AI_PROVIDER_OLLAMA,
+    AI_PROFILE_DEVELOPER_ASSISTANT: AI_PROVIDER_OLLAMA,
+}
+
+
+def validate_profile_provider_routing(profiles: dict[str, "AiModelProfile"]) -> None:
+    if set(profiles) != set(APPROVED_AI_PROFILES):
+        raise ValueError("AI profile routing must define every approved profile exactly once.")
+    for profile_name, expected_provider in PROFILE_PROVIDER_ROUTING.items():
+        profile = profiles[profile_name]
+        if profile.name != profile_name or profile.provider != expected_provider:
+            raise ValueError(f"AI profile routing is invalid for {profile_name}.")
+        if expected_provider == AI_PROVIDER_OLLAMA and (
+            not profile.local_only or profile.paid_fallback_enabled
+        ):
+            raise ValueError(f"Ollama profile {profile_name} must remain local-only.")
+        if expected_provider == AI_PROVIDER_ANTHROPIC and (
+            profile.local_only or not profile.paid_fallback_enabled
+        ):
+            raise ValueError(f"Anthropic profile {profile_name} must be paid-eligible and prohibit local routing.")
+
 
 @dataclass(frozen=True)
 class AiModelProfile:
     name: str
+    provider: str
     model: str
     timeout_seconds: float
     max_prompt_chars: int
