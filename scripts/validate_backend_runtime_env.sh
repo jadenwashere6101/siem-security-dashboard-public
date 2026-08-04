@@ -93,7 +93,16 @@ if bool_true "${AI_ANTHROPIC_ENABLED:-false}"; then
   anthropic_api_version="${ANTHROPIC_API_VERSION:-2023-06-01}"
   [[ "$anthropic_api_version" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
     || die "ANTHROPIC_API_VERSION must use YYYY-MM-DD format when Anthropic is enabled."
-  anthropic_status="configured-unassigned"
+  for budget_name in \
+    AI_ANTHROPIC_DAILY_BUDGET_USD \
+    AI_ANTHROPIC_INPUT_COST_PER_MILLION_TOKENS \
+    AI_ANTHROPIC_OUTPUT_COST_PER_MILLION_TOKENS; do
+    present "$budget_name" || die "Anthropic is enabled but ${budget_name} is missing."
+    budget_value="${!budget_name}"
+    [[ "$budget_value" =~ ^[0-9]+([.][0-9]+)?$ && ! "$budget_value" =~ ^0+([.]0+)?$ ]] \
+      || die "${budget_name} must be a positive number when Anthropic is enabled."
+  done
+  anthropic_status="configured-budgeted"
 fi
 
 rate_limit_storage_summary="$(

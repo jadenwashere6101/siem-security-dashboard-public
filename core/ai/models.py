@@ -14,6 +14,8 @@ AI_STATUS_PROVIDER_MALFORMED_RESPONSE = "provider_malformed_response"
 AI_STATUS_FALLBACK_REQUIRES_CONFIRMATION = "fallback_requires_confirmation"
 AI_STATUS_FALLBACK_BLOCKED = "fallback_blocked"
 AI_STATUS_CONFIGURATION_ERROR = "configuration_error"
+AI_STATUS_BUDGET_EXHAUSTED = "budget_exhausted"
+AI_STATUS_ACCOUNTING_UNAVAILABLE = "accounting_unavailable"
 AI_STATUS_FAILED = "failed"
 
 
@@ -93,6 +95,13 @@ class AiRequestMetadata:
     task_category: str | None = None
     timeout_seconds: float | None = None
     max_output_tokens: int | None = None
+    accounting_attempt_id: str | None = None
+    accounting_usage_day: str | None = None
+    accounting_attempt_kind: str | None = None
+    budget_reserved_usd: float | None = None
+    budget_remaining_usd: float | None = None
+    usage_cost_usd: float | None = None
+    usage_cost_source: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)

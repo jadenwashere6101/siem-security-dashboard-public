@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import date
+from decimal import Decimal
 import json
 
 import pytest
@@ -22,8 +24,18 @@ from core.ai.config import (
     default_ai_profiles,
 )
 from core.ai.gateway import AiGateway
-from core.ai.models import AI_STATUS_SUCCESS, AiGatewayResponse, AiRequestMetadata
+from core.ai.models import (
+    AI_STATUS_BUDGET_EXHAUSTED,
+    AI_STATUS_SUCCESS,
+    AiGatewayResponse,
+    AiRequestMetadata,
+)
 from core.ai.providers import AnthropicProvider
+from core.ai.paid_usage_store import (
+    PaidBudgetExhausted,
+    PaidUsageReservation,
+    PaidUsageSettlement,
+)
 from core.ai.profile_registry import AI_PROFILE_AGENTIC_PLANNING
 
 
@@ -73,6 +85,57 @@ class FailureGateway:
         )
 
 
+class AllowingAccountingStore:
+    def __init__(self):
+        self.attempts = 0
+        self.kinds = []
+        self.correlations = []
+
+    def reserve(self, *, request, **_kwargs):
+        self.attempts += 1
+        kind = "repair" if request.metadata.get("repair_attempt") == 1 else "initial"
+        self.kinds.append(kind)
+        self.correlations.append(request.metadata.get("paid_correlation_id"))
+        return PaidUsageReservation(
+            attempt_id=f"test-attempt-{self.attempts}",
+            usage_day=date(2026, 8, 4),
+            reserved_cost_usd=Decimal("0.10"),
+            remaining_usd=Decimal("4.90"),
+            estimated_input_tokens=10,
+            estimated_output_tokens=20,
+            correlation_id=request.metadata.get("paid_correlation_id"),
+            attempt_kind=kind,
+        )
+
+    def settle(self, reservation, _response, **_kwargs):
+        return PaidUsageSettlement(
+            attempt_id=reservation.attempt_id,
+            usage_day=reservation.usage_day,
+            charged_cost_usd=Decimal("0.10"),
+            remaining_usd=Decimal("4.90"),
+            input_tokens=10,
+            output_tokens=20,
+            total_tokens=30,
+            token_usage_source="estimated",
+            cost_source="estimated",
+        )
+
+
+class RepairBudgetExhaustedAccountingStore(AllowingAccountingStore):
+    def reserve(self, *, request, **kwargs):
+        if self.attempts == 1:
+            self.attempts += 1
+            self.kinds.append("repair")
+            self.correlations.append(request.metadata.get("paid_correlation_id"))
+            raise PaidBudgetExhausted(
+                attempt_id="blocked-repair",
+                usage_day=date(2026, 8, 4),
+                requested_usd=Decimal("0.10"),
+                remaining_usd=Decimal("0.01"),
+            )
+        return super().reserve(request=request, **kwargs)
+
+
 def _config():
     base = AiGatewayConfig(
         mode=AI_MODE_LOCAL_ONLY,
@@ -97,6 +160,9 @@ def _anthropic_config():
         anthropic_routing_enabled=True,
         anthropic_api_key="test-key-never-send",
         anthropic_model=model,
+        anthropic_daily_budget_usd=5.0,
+        anthropic_input_cost_per_million_tokens=3.0,
+        anthropic_output_cost_per_million_tokens=15.0,
         profiles=default_ai_profiles(local_model="llama3.2:3b", anthropic_model=model),
     )
 
@@ -779,7 +845,11 @@ def test_real_planner_request_reaches_anthropic_generation_contract(monkeypatch)
 
     monkeypatch.setattr("core.ai.providers._anthropic_http_json", fake_http)
     config = _anthropic_config()
-    gateway = AiGateway(config=config, providers={"anthropic": AnthropicProvider()})
+    gateway = AiGateway(
+        config=config,
+        providers={"anthropic": AnthropicProvider()},
+        accounting_store=AllowingAccountingStore(),
+    )
 
     outcome = plan_turn(_packet(), gateway=gateway, config=config)
 
@@ -804,10 +874,15 @@ def test_initial_and_repair_planner_generations_each_receive_full_profile_timeou
 
     monkeypatch.setattr("core.ai.providers._anthropic_http_json", fake_http)
     config = _anthropic_config()
+    accounting = AllowingAccountingStore()
 
     outcome = plan_turn(
         _packet(),
-        gateway=AiGateway(config=config, providers={"anthropic": AnthropicProvider()}),
+        gateway=AiGateway(
+            config=config,
+            providers={"anthropic": AnthropicProvider()},
+            accounting_store=accounting,
+        ),
         config=config,
     )
 
@@ -816,6 +891,41 @@ def test_initial_and_repair_planner_generations_each_receive_full_profile_timeou
     assert len(calls) == 2
     assert all(call["payload"]["model"] == "claude-test-model" for call in calls)
     assert all(call["timeout"] == 90.0 for call in calls)
+    assert accounting.kinds == ["initial", "repair"]
+    assert accounting.correlations[0]
+    assert accounting.correlations[0] == accounting.correlations[1]
+
+
+def test_repair_budget_exhaustion_blocks_second_anthropic_call_and_degrades_gracefully(monkeypatch):
+    malformed = _plan()
+    malformed["required_evidence"] = {"alerts": "current high-severity alerts"}
+    calls = []
+
+    def fake_http(*, payload, headers, timeout):
+        calls.append({"payload": payload, "headers": headers, "timeout": timeout})
+        return {"content": [{"type": "text", "text": json.dumps(malformed)}], "usage": {}}
+
+    monkeypatch.setattr("core.ai.providers._anthropic_http_json", fake_http)
+    config = _anthropic_config()
+    accounting = RepairBudgetExhaustedAccountingStore()
+    outcome = plan_turn(
+        _packet(),
+        gateway=AiGateway(
+            config=config,
+            providers={"anthropic": AnthropicProvider()},
+            accounting_store=accounting,
+        ),
+        config=config,
+    )
+
+    assert len(calls) == 1
+    assert accounting.kinds == ["initial", "repair"]
+    assert accounting.correlations[0] == accounting.correlations[1]
+    assert outcome.status == "unavailable"
+    assert outcome.repaired is True
+    assert outcome.provider_status == AI_STATUS_BUDGET_EXHAUSTED
+    assert outcome.error_code == AI_STATUS_BUDGET_EXHAUSTED
+    assert outcome.plan is None
 
 
 def test_planner_rejects_empty_required_reasoning_summary():

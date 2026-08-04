@@ -156,11 +156,14 @@ def test_runtime_validator_accepts_enabled_unassigned_anthropic_without_leaking_
             AI_ANTHROPIC_MODEL="claude-test-model",
             AI_ANTHROPIC_TIMEOUT_SECONDS="12.5",
             ANTHROPIC_API_VERSION="2023-06-01",
+            AI_ANTHROPIC_DAILY_BUDGET_USD="5",
+            AI_ANTHROPIC_INPUT_COST_PER_MILLION_TOKENS="3",
+            AI_ANTHROPIC_OUTPUT_COST_PER_MILLION_TOKENS="15",
         )
     )
 
     assert result.returncode == 0
-    assert "anthropic=configured-unassigned" in result.stdout
+    assert "anthropic=configured-budgeted" in result.stdout
     assert "test-key-must-not-appear" not in result.stdout
 
 
@@ -170,6 +173,17 @@ def test_runtime_validator_accepts_enabled_unassigned_anthropic_without_leaking_
         ("AI_ANTHROPIC_ENABLED", "sometimes", "recognized boolean"),
         ("AI_ANTHROPIC_TIMEOUT_SECONDS", "0", "must be a positive number"),
         ("AI_ANTHROPIC_TIMEOUT_SECONDS", "invalid", "must be a positive number"),
+        ("AI_ANTHROPIC_DAILY_BUDGET_USD", "0", "must be a positive number"),
+        (
+            "AI_ANTHROPIC_INPUT_COST_PER_MILLION_TOKENS",
+            "invalid",
+            "must be a positive number",
+        ),
+        (
+            "AI_ANTHROPIC_OUTPUT_COST_PER_MILLION_TOKENS",
+            "0",
+            "must be a positive number",
+        ),
         ("ANTHROPIC_API_VERSION", "latest", "must use YYYY-MM-DD"),
         ("AI_ANTHROPIC_MODEL", "invalid model", "valid provider model identifier"),
     ],
@@ -184,6 +198,9 @@ def test_runtime_validator_rejects_invalid_required_anthropic_values(
         "AI_ANTHROPIC_ENABLED": "true",
         "ANTHROPIC_API_KEY": "test-key-must-not-appear",
         "AI_ANTHROPIC_MODEL": "claude-test-model",
+        "AI_ANTHROPIC_DAILY_BUDGET_USD": "5",
+        "AI_ANTHROPIC_INPUT_COST_PER_MILLION_TOKENS": "3",
+        "AI_ANTHROPIC_OUTPUT_COST_PER_MILLION_TOKENS": "15",
         name: value,
     }
     if name == "AI_ANTHROPIC_ENABLED":

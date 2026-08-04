@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import logging
 import time
 
@@ -12,6 +13,8 @@ from core.ai.config import (
     load_ai_gateway_config,
 )
 from core.ai.models import (
+    AI_STATUS_ACCOUNTING_UNAVAILABLE,
+    AI_STATUS_BUDGET_EXHAUSTED,
     AI_STATUS_CONFIGURATION_ERROR,
     AI_STATUS_DISABLED,
     AI_STATUS_FALLBACK_BLOCKED,
@@ -25,7 +28,14 @@ from core.ai.models import (
     AiRequestMetadata,
     estimate_tokens,
 )
-from core.ai.providers import AiProvider, build_default_providers
+from core.ai.paid_usage_store import (
+    PaidAccountingConfigurationError,
+    PaidAccountingUnavailable,
+    PaidBudgetExhausted,
+    PostgresPaidUsageStore,
+    pricing_from_config,
+)
+from core.ai.providers import AiProvider, build_default_providers, with_fallback_metadata
 from core.ai.profile_registry import (
     AI_PROVIDER_ANTHROPIC,
     AI_PROVIDER_OLLAMA,
@@ -42,9 +52,11 @@ class AiGateway:
         *,
         config: AiGatewayConfig | None = None,
         providers: dict[str, AiProvider] | None = None,
+        accounting_store: PostgresPaidUsageStore | None = None,
     ):
         self.config = config if config is not None else load_ai_gateway_config()
         self.providers = providers if providers is not None else build_default_providers()
+        self.accounting_store = accounting_store or PostgresPaidUsageStore()
 
     def generate(self, request: AiGatewayRequest) -> AiGatewayResponse:
         prompt_tokens = estimate_tokens(request.prompt)
@@ -224,7 +236,7 @@ class AiGateway:
                 profile=profile,
             )
         if not self.config.anthropic_routing_enabled:
-            return _failure_response(
+            blocked = _failure_response(
                 mode=self.config.mode,
                 status=AI_STATUS_FALLBACK_BLOCKED,
                 provider=profile.provider,
@@ -234,7 +246,180 @@ class AiGateway:
                 prompt_tokens=prompt_tokens,
                 profile=profile,
             )
-        return self._try_profile_provider(request, profile=profile, paid_request=True)
+            return self._fallback_or_degraded(request, profile=profile, blocked=blocked)
+
+        provider = self.providers.get(profile.provider)
+        configured = (
+            provider is not None
+            and self.config.anthropic_enabled
+            and self.config.anthropic_configured
+            and profile.model == self.config.anthropic_model
+        )
+        if not configured:
+            blocked = _failure_response(
+                mode=self.config.mode,
+                status=AI_STATUS_CONFIGURATION_ERROR,
+                provider=profile.provider,
+                model=profile.model or None,
+                error="Anthropic provider configuration is invalid or incomplete.",
+                error_code="anthropic_configuration_invalid",
+                prompt_tokens=prompt_tokens,
+                profile=profile,
+            )
+            return self._fallback_or_degraded(request, profile=profile, blocked=blocked)
+
+        capability = provider.supports(request)
+        if not capability.capable:
+            return _failure_response(
+                mode=self.config.mode,
+                status=AI_STATUS_PROVIDER_INCAPABLE,
+                provider=profile.provider,
+                model=profile.model or None,
+                error=capability.reason or "AI provider is incapable.",
+                error_code=capability.status,
+                prompt_tokens=prompt_tokens,
+                profile=profile,
+            )
+
+        try:
+            pricing = pricing_from_config(self.config)
+            reservation = self.accounting_store.reserve(
+                request=request,
+                provider=profile.provider,
+                model=profile.model,
+                profile=profile.name,
+                max_output_tokens=profile.max_output_tokens,
+                pricing=pricing,
+            )
+        except PaidBudgetExhausted as error:
+            blocked = _failure_response(
+                mode=self.config.mode,
+                status=AI_STATUS_BUDGET_EXHAUSTED,
+                provider=profile.provider,
+                model=profile.model,
+                error="Daily paid AI budget is exhausted; the provider was not contacted.",
+                error_code=AI_STATUS_BUDGET_EXHAUSTED,
+                prompt_tokens=prompt_tokens,
+                profile=profile,
+                accounting_attempt_id=error.attempt_id,
+                accounting_usage_day=error.usage_day.isoformat(),
+                budget_remaining_usd=float(error.remaining_usd),
+            )
+            return self._fallback_or_degraded(request, profile=profile, blocked=blocked)
+        except PaidAccountingConfigurationError:
+            blocked = _failure_response(
+                mode=self.config.mode,
+                status=AI_STATUS_CONFIGURATION_ERROR,
+                provider=profile.provider,
+                model=profile.model,
+                error="Paid AI budget or pricing configuration is invalid.",
+                error_code="paid_accounting_configuration_invalid",
+                prompt_tokens=prompt_tokens,
+                profile=profile,
+            )
+            return self._fallback_or_degraded(request, profile=profile, blocked=blocked)
+        except PaidAccountingUnavailable:
+            blocked = _failure_response(
+                mode=self.config.mode,
+                status=AI_STATUS_ACCOUNTING_UNAVAILABLE,
+                provider=profile.provider,
+                model=profile.model,
+                error="Paid AI accounting is unavailable; the provider was not contacted.",
+                error_code=AI_STATUS_ACCOUNTING_UNAVAILABLE,
+                prompt_tokens=prompt_tokens,
+                profile=profile,
+            )
+            return self._fallback_or_degraded(request, profile=profile, blocked=blocked)
+
+        try:
+            response = provider.generate(request, self.config)
+        except Exception as error:
+            _LOGGER.warning(
+                "ai_gateway_provider_error provider=%s error_type=%s",
+                profile.provider,
+                type(error).__name__,
+            )
+            response = _failure_response(
+                mode=self.config.mode,
+                status=AI_STATUS_FAILED,
+                provider=profile.provider,
+                model=profile.model,
+                error="AI provider failed.",
+                error_code="provider_exception",
+                prompt_tokens=prompt_tokens,
+                paid_request=True,
+                profile=profile,
+            )
+
+        try:
+            settlement = self.accounting_store.settle(
+                reservation,
+                response,
+                pricing=pricing,
+            )
+        except PaidAccountingUnavailable:
+            return _failure_response(
+                mode=self.config.mode,
+                status=AI_STATUS_ACCOUNTING_UNAVAILABLE,
+                provider=profile.provider,
+                model=profile.model,
+                error="Paid AI request completed but accounting settlement is unavailable; the result was withheld.",
+                error_code=AI_STATUS_ACCOUNTING_UNAVAILABLE,
+                prompt_tokens=prompt_tokens,
+                paid_request=True,
+                profile=profile,
+                accounting_attempt_id=reservation.attempt_id,
+                accounting_usage_day=reservation.usage_day.isoformat(),
+                accounting_attempt_kind=reservation.attempt_kind,
+                budget_reserved_usd=float(reservation.reserved_cost_usd),
+                budget_remaining_usd=float(reservation.remaining_usd),
+            )
+
+        return replace(
+            response,
+            metadata=replace(
+                response.metadata,
+                estimated_cost_usd=float(settlement.charged_cost_usd),
+                actual_billed_cost_usd=None,
+                cost_source=settlement.cost_source,
+                accounting_attempt_id=settlement.attempt_id,
+                accounting_usage_day=settlement.usage_day.isoformat(),
+                accounting_attempt_kind=reservation.attempt_kind,
+                budget_reserved_usd=float(reservation.reserved_cost_usd),
+                budget_remaining_usd=float(settlement.remaining_usd),
+                usage_cost_usd=float(settlement.charged_cost_usd),
+                usage_cost_source=settlement.cost_source,
+            ),
+        )
+
+    def _fallback_or_degraded(self, request: AiGatewayRequest, *, profile, blocked: AiGatewayResponse) -> AiGatewayResponse:
+        fallback_name = profile.local_fallback_profile
+        if not fallback_name:
+            return blocked
+        fallback_profile = self.config.profile(fallback_name)
+        if fallback_profile.provider != AI_PROVIDER_OLLAMA:
+            return blocked
+        fallback_request = replace(request, profile=fallback_profile.name)
+        local_response = self._try_profile_provider(
+            fallback_request,
+            profile=fallback_profile,
+            paid_request=False,
+        )
+        local_response = with_fallback_metadata(
+            local_response,
+            fallback_attempted=True,
+            fallback_reason=blocked.metadata.error_code or blocked.status,
+        )
+        return replace(
+            local_response,
+            metadata=replace(
+                local_response.metadata,
+                accounting_attempt_id=blocked.metadata.accounting_attempt_id,
+                accounting_usage_day=blocked.metadata.accounting_usage_day,
+                accounting_attempt_kind=blocked.metadata.accounting_attempt_kind,
+                budget_remaining_usd=blocked.metadata.budget_remaining_usd,
+            ),
+        )
 
 
 def _failure_response(
@@ -251,6 +436,11 @@ def _failure_response(
     local_request: bool = False,
     paid_request: bool = False,
     profile=None,
+    accounting_attempt_id: str | None = None,
+    accounting_usage_day: str | None = None,
+    accounting_attempt_kind: str | None = None,
+    budget_reserved_usd: float | None = None,
+    budget_remaining_usd: float | None = None,
 ) -> AiGatewayResponse:
     started = time.monotonic()
     return AiGatewayResponse(
@@ -275,5 +465,10 @@ def _failure_response(
             task_category=profile.task_category if profile else None,
             timeout_seconds=profile.timeout_seconds if profile else None,
             max_output_tokens=profile.max_output_tokens if profile else None,
+            accounting_attempt_id=accounting_attempt_id,
+            accounting_usage_day=accounting_usage_day,
+            accounting_attempt_kind=accounting_attempt_kind,
+            budget_reserved_usd=budget_reserved_usd,
+            budget_remaining_usd=budget_remaining_usd,
         ),
     )

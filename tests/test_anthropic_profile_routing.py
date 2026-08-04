@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import date
+from decimal import Decimal
 
 import pytest
 
@@ -25,6 +27,7 @@ from core.ai.models import (
     AiProviderReadiness,
     AiRequestMetadata,
 )
+from core.ai.paid_usage_store import PaidUsageReservation, PaidUsageSettlement
 from core.ai.profile_registry import (
     AI_PROFILE_AGENTIC_PLANNING,
     AI_PROFILE_DEEP_BRIEFING,
@@ -80,6 +83,33 @@ class RecordingProvider:
         )
 
 
+class AllowingAccountingStore:
+    def reserve(self, **_kwargs):
+        return PaidUsageReservation(
+            attempt_id="test-attempt",
+            usage_day=date(2026, 8, 4),
+            reserved_cost_usd=Decimal("0.10"),
+            remaining_usd=Decimal("4.90"),
+            estimated_input_tokens=10,
+            estimated_output_tokens=20,
+            correlation_id=None,
+            attempt_kind="initial",
+        )
+
+    def settle(self, reservation, _response, **_kwargs):
+        return PaidUsageSettlement(
+            attempt_id=reservation.attempt_id,
+            usage_day=reservation.usage_day,
+            charged_cost_usd=Decimal("0.10"),
+            remaining_usd=Decimal("4.90"),
+            input_tokens=10,
+            output_tokens=20,
+            total_tokens=30,
+            token_usage_source="estimated",
+            cost_source="estimated",
+        )
+
+
 def _config(mode: str, *, routing_enabled: bool = False) -> AiGatewayConfig:
     anthropic_model = "claude-test-model"
     return AiGatewayConfig(
@@ -92,6 +122,9 @@ def _config(mode: str, *, routing_enabled: bool = False) -> AiGatewayConfig:
         anthropic_routing_enabled=routing_enabled,
         anthropic_api_key="test-key-never-send",
         anthropic_model=anthropic_model,
+        anthropic_daily_budget_usd=5.0,
+        anthropic_input_cost_per_million_tokens=3.0,
+        anthropic_output_cost_per_million_tokens=15.0,
         profiles=default_ai_profiles(
             local_model="llama3.2:3b",
             anthropic_model=anthropic_model,
@@ -165,6 +198,7 @@ def test_agentic_profile_resolves_directly_to_anthropic_when_test_guard_is_enabl
     response = AiGateway(
         config=_config(AI_MODE_AUTOMATIC_FALLBACK, routing_enabled=True),
         providers=providers,
+        accounting_store=AllowingAccountingStore(),
     ).generate(
         AiGatewayRequest(
             prompt="plan this turn",

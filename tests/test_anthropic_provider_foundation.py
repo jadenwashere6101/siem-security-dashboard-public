@@ -54,6 +54,10 @@ def _anthropic_config(**overrides) -> AiGatewayConfig:
         anthropic_timeout_seconds=12.5,
         anthropic_timeout_valid=True,
         anthropic_api_version="2023-06-01",
+        anthropic_daily_budget_usd=5.0,
+        anthropic_input_cost_per_million_tokens=3.0,
+        anthropic_output_cost_per_million_tokens=15.0,
+        anthropic_budget_valid=True,
     )
     return replace(base, **overrides)
 
@@ -108,13 +112,16 @@ def test_anthropic_environment_config_loads_without_exposing_key(monkeypatch):
     monkeypatch.setenv("AI_ANTHROPIC_MODEL", "claude-test-model")
     monkeypatch.setenv("AI_ANTHROPIC_TIMEOUT_SECONDS", "15")
     monkeypatch.setenv("ANTHROPIC_API_VERSION", "2023-06-01")
+    monkeypatch.setenv("AI_ANTHROPIC_DAILY_BUDGET_USD", "5")
+    monkeypatch.setenv("AI_ANTHROPIC_INPUT_COST_PER_MILLION_TOKENS", "3")
+    monkeypatch.setenv("AI_ANTHROPIC_OUTPUT_COST_PER_MILLION_TOKENS", "15")
 
     config = load_ai_gateway_config()
 
     assert config.anthropic_enabled is True
     assert config.anthropic_configured is True
     assert config.anthropic_timeout_seconds == 15
-    assert config.anthropic_routing_enabled is False
+    assert config.anthropic_routing_enabled is True
     assert config.sanitized()["anthropic_api_key_configured"] is True
     assert FAKE_ANTHROPIC_KEY not in repr(config)
     assert FAKE_ANTHROPIC_KEY not in str(config.sanitized())
@@ -141,6 +148,16 @@ def test_local_only_startup_does_not_require_anthropic_credentials(monkeypatch):
         ({"anthropic_model": ""}, "AI_ANTHROPIC_MODEL"),
         ({"anthropic_model": "invalid model"}, "AI_ANTHROPIC_MODEL"),
         ({"anthropic_timeout_valid": False}, "AI_ANTHROPIC_TIMEOUT_SECONDS"),
+        ({"anthropic_budget_valid": False}, "budget and pricing"),
+        ({"anthropic_daily_budget_usd": 0}, "AI_ANTHROPIC_DAILY_BUDGET_USD"),
+        (
+            {"anthropic_input_cost_per_million_tokens": 0},
+            "AI_ANTHROPIC_INPUT_COST_PER_MILLION_TOKENS",
+        ),
+        (
+            {"anthropic_output_cost_per_million_tokens": 0},
+            "AI_ANTHROPIC_OUTPUT_COST_PER_MILLION_TOKENS",
+        ),
         ({"anthropic_api_version": "latest"}, "ANTHROPIC_API_VERSION"),
     ],
 )

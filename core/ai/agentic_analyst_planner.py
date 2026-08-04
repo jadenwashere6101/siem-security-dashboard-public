@@ -6,6 +6,7 @@ import ipaddress
 import json
 import logging
 import re
+import uuid
 from typing import Any
 
 from core.ai.config import (
@@ -527,12 +528,18 @@ def plan_turn(
             PlannerConfigurationError("Final planner prompt exceeded the active profile immediately before generation."),
         )
     planner_gateway = gateway if gateway is not None else AiGateway(config=resolved_config)
+    paid_correlation_id = uuid.uuid4().hex
     response = planner_gateway.generate(
         AiGatewayRequest(
             prompt=prompt,
             capability="agentic_analyst_planning",
             profile=profile_name,
-            metadata={"read_only": True, "task": "turn_planning", "schema_version": 1},
+            metadata={
+                "read_only": True,
+                "task": "turn_planning",
+                "schema_version": 1,
+                "paid_correlation_id": paid_correlation_id,
+            },
         )
     )
     if response.status != AI_STATUS_SUCCESS or not response.content:
@@ -584,9 +591,25 @@ def plan_turn(
             prompt=repair_prompt,
             capability="agentic_analyst_planning",
             profile=profile_name,
-            metadata={"read_only": True, "task": "turn_plan_repair", "repair_attempt": 1},
+            metadata={
+                "read_only": True,
+                "task": "turn_plan_repair",
+                "repair_attempt": 1,
+                "paid_correlation_id": paid_correlation_id,
+            },
         )
     )
+    if repair.status != AI_STATUS_SUCCESS or not repair.content:
+        return PlannerOutcome(
+            status="unavailable",
+            plan=None,
+            packet=packet,
+            repaired=True,
+            provider_status=repair.status,
+            error_code=repair.metadata.error_code or repair.status,
+            message="I could not safely repair this plan. No analysis or evidence lookup was performed.",
+            repair_prompt_chars=len(repair_prompt),
+        )
     if repair.status == AI_STATUS_SUCCESS and repair.content:
         repaired, repair_errors = parse_and_validate_plan(
             repair.content,

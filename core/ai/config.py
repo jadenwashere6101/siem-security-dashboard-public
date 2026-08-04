@@ -36,6 +36,9 @@ DEFAULT_LOCAL_TIMEOUT_SECONDS = 10.0
 DEFAULT_PAID_TIMEOUT_SECONDS = 20.0
 DEFAULT_ANTHROPIC_TIMEOUT_SECONDS = 20.0
 DEFAULT_ANTHROPIC_API_VERSION = "2023-06-01"
+DEFAULT_ANTHROPIC_DAILY_BUDGET_USD = 0.0
+DEFAULT_ANTHROPIC_INPUT_COST_PER_MILLION_TOKENS = 0.0
+DEFAULT_ANTHROPIC_OUTPUT_COST_PER_MILLION_TOKENS = 0.0
 DEFAULT_MAX_PROMPT_CHARS = 12000
 DEFAULT_FAST_MODEL = "llama3.2:3b"
 DEFAULT_AGENTIC_PLANNING_MODEL = ""
@@ -80,6 +83,10 @@ class AiGatewayConfig:
     anthropic_timeout_seconds: float = DEFAULT_ANTHROPIC_TIMEOUT_SECONDS
     anthropic_timeout_valid: bool = True
     anthropic_api_version: str = DEFAULT_ANTHROPIC_API_VERSION
+    anthropic_daily_budget_usd: float = DEFAULT_ANTHROPIC_DAILY_BUDGET_USD
+    anthropic_input_cost_per_million_tokens: float = DEFAULT_ANTHROPIC_INPUT_COST_PER_MILLION_TOKENS
+    anthropic_output_cost_per_million_tokens: float = DEFAULT_ANTHROPIC_OUTPUT_COST_PER_MILLION_TOKENS
+    anthropic_budget_valid: bool = True
     max_prompt_chars: int = DEFAULT_MAX_PROMPT_CHARS
     profiles: dict[str, AiModelProfile] | None = None
 
@@ -98,6 +105,15 @@ class AiGatewayConfig:
             and self.anthropic_model
             and self.anthropic_timeout_valid
             and self.anthropic_api_version
+        )
+
+    @property
+    def anthropic_budget_configured(self) -> bool:
+        return bool(
+            self.anthropic_budget_valid
+            and self.anthropic_daily_budget_usd > 0
+            and self.anthropic_input_cost_per_million_tokens > 0
+            and self.anthropic_output_cost_per_million_tokens > 0
         )
 
     def profile(self, name: str | None = None) -> AiModelProfile:
@@ -135,6 +151,11 @@ class AiGatewayConfig:
             "anthropic_timeout_valid": self.anthropic_timeout_valid,
             "anthropic_api_version": self.anthropic_api_version,
             "anthropic_configured": self.anthropic_configured,
+            "anthropic_daily_budget_usd": self.anthropic_daily_budget_usd,
+            "anthropic_input_cost_per_million_tokens": self.anthropic_input_cost_per_million_tokens,
+            "anthropic_output_cost_per_million_tokens": self.anthropic_output_cost_per_million_tokens,
+            "anthropic_budget_valid": self.anthropic_budget_valid,
+            "anthropic_budget_configured": self.anthropic_budget_configured,
             "max_prompt_chars": self.max_prompt_chars,
             "profiles": {
                 name: profile.sanitized()
@@ -218,6 +239,22 @@ def validate_ai_gateway_startup(config: AiGatewayConfig | None = None) -> AiGate
     if not resolved.anthropic_timeout_valid:
         raise AiGatewayConfigurationError(
             "AI_ANTHROPIC_TIMEOUT_SECONDS must be a positive number when Anthropic is enabled."
+        )
+    if not resolved.anthropic_budget_valid:
+        raise AiGatewayConfigurationError(
+            "Anthropic budget and pricing values must be positive numbers when Anthropic is enabled."
+        )
+    budget_missing = []
+    if resolved.anthropic_daily_budget_usd <= 0:
+        budget_missing.append("AI_ANTHROPIC_DAILY_BUDGET_USD")
+    if resolved.anthropic_input_cost_per_million_tokens <= 0:
+        budget_missing.append("AI_ANTHROPIC_INPUT_COST_PER_MILLION_TOKENS")
+    if resolved.anthropic_output_cost_per_million_tokens <= 0:
+        budget_missing.append("AI_ANTHROPIC_OUTPUT_COST_PER_MILLION_TOKENS")
+    if budget_missing:
+        raise AiGatewayConfigurationError(
+            "Anthropic is enabled but required budget environment variables are missing: "
+            + ", ".join(budget_missing)
         )
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", resolved.anthropic_api_version):
         raise AiGatewayConfigurationError(
@@ -353,6 +390,23 @@ def load_ai_gateway_config() -> AiGatewayConfig:
         "AI_ANTHROPIC_ENABLED",
         False,
     )
+    anthropic_daily_budget, anthropic_daily_budget_valid = _env_positive_float_with_validity(
+        "AI_ANTHROPIC_DAILY_BUDGET_USD",
+        DEFAULT_ANTHROPIC_DAILY_BUDGET_USD,
+    )
+    anthropic_input_cost, anthropic_input_cost_valid = _env_positive_float_with_validity(
+        "AI_ANTHROPIC_INPUT_COST_PER_MILLION_TOKENS",
+        DEFAULT_ANTHROPIC_INPUT_COST_PER_MILLION_TOKENS,
+    )
+    anthropic_output_cost, anthropic_output_cost_valid = _env_positive_float_with_validity(
+        "AI_ANTHROPIC_OUTPUT_COST_PER_MILLION_TOKENS",
+        DEFAULT_ANTHROPIC_OUTPUT_COST_PER_MILLION_TOKENS,
+    )
+    anthropic_budget_valid = (
+        anthropic_daily_budget_valid
+        and anthropic_input_cost_valid
+        and anthropic_output_cost_valid
+    )
 
     return AiGatewayConfig(
         mode=mode,
@@ -371,6 +425,14 @@ def load_ai_gateway_config() -> AiGatewayConfig:
         paid_fallback_enabled=_env_bool("AI_PAID_FALLBACK_ENABLED", False),
         anthropic_enabled=anthropic_enabled,
         anthropic_enabled_valid=anthropic_enabled_valid,
+        anthropic_routing_enabled=(
+            anthropic_enabled
+            and anthropic_enabled_valid
+            and anthropic_budget_valid
+            and anthropic_daily_budget > 0
+            and anthropic_input_cost > 0
+            and anthropic_output_cost > 0
+        ),
         anthropic_api_key=_env_text("ANTHROPIC_API_KEY"),
         anthropic_model=anthropic_model,
         anthropic_timeout_seconds=anthropic_timeout,
@@ -379,6 +441,10 @@ def load_ai_gateway_config() -> AiGatewayConfig:
             "ANTHROPIC_API_VERSION",
             DEFAULT_ANTHROPIC_API_VERSION,
         ),
+        anthropic_daily_budget_usd=anthropic_daily_budget,
+        anthropic_input_cost_per_million_tokens=anthropic_input_cost,
+        anthropic_output_cost_per_million_tokens=anthropic_output_cost,
+        anthropic_budget_valid=anthropic_budget_valid,
         max_prompt_chars=_env_positive_int("AI_MAX_PROMPT_CHARS", DEFAULT_MAX_PROMPT_CHARS),
         profiles=profiles,
     )

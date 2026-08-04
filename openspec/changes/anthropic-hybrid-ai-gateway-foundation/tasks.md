@@ -20,15 +20,15 @@
 
 ## 3. Phase 3 - Cost, Accounting, and Safety
 
-- [ ] 3.1 Add an additive PostgreSQL migration/schema definition for shared paid-request accounting and validate forward application without modifying credential storage.
-- [ ] 3.2 Implement a gateway-owned accounting store/service for provider, model, profile, correlation/repair identity, status, token counts or estimates, cost or estimate, and provider latency.
-- [ ] 3.3 Implement conservative pre-call cost calculation from validated provider/model pricing, estimated input tokens, and maximum output tokens.
-- [ ] 3.4 Implement transactional shared budget reservation so concurrent Gunicorn and worker requests can never authorize combined spend above the daily cap.
-- [ ] 3.5 Reconcile reservations to provider-reported usage and retain the conservative charge when reliable usage is unavailable.
-- [ ] 3.6 Implement UTC-day lazy rollover on the first budget-controlled request after the date changes, including concurrent first-request coverage and no scheduler dependency.
-- [ ] 3.7 Fail closed before provider contact when runtime policy, pricing, accounting, or budget state is invalid or unreadable; force effective mode to `local_only` with validated source defaults, or `disabled` if those defaults are invalid.
-- [ ] 3.8 Independently authorize and account planner repair; return the existing graceful non-executing planner outcome when repair budget is insufficient.
-- [ ] 3.9 Add unit, PostgreSQL integration, concurrency, timeout, provider-error, UTC rollover, and forced-budget-exhaustion tests that assert no silent cap overrun.
+- [x] 3.1 Add an additive PostgreSQL migration/schema definition for shared paid-request accounting and validate forward application without modifying credential storage.
+- [x] 3.2 Implement a gateway-owned accounting store/service for provider, model, profile, correlation/repair identity, status, token counts or estimates, cost or estimate, and provider latency.
+- [x] 3.3 Implement conservative pre-call cost calculation from validated provider/model pricing, estimated input tokens, and maximum output tokens.
+- [x] 3.4 Implement transactional shared budget reservation so concurrent Gunicorn and worker requests can never authorize combined spend above the daily cap.
+- [x] 3.5 Reconcile reservations to provider-reported usage and retain the conservative charge when reliable usage is unavailable.
+- [x] 3.6 Implement UTC-day lazy rollover on the first budget-controlled request after the date changes, including concurrent first-request coverage and no scheduler dependency.
+- [x] 3.7 Fail closed before provider contact when source policy, pricing, accounting, or budget state is invalid or unreadable; use only an explicitly configured Ollama fallback, otherwise return a degraded non-executing outcome.
+- [x] 3.8 Independently authorize and account planner repair; return the existing graceful non-executing planner outcome when repair budget is insufficient.
+- [x] 3.9 Add unit, PostgreSQL integration, concurrency, timeout, provider-error, UTC rollover, and forced-budget-exhaustion tests that assert no silent cap overrun.
 
 ## 4. Phase 4 - Runtime Administration
 

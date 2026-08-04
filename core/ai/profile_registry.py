@@ -46,6 +46,10 @@ def validate_profile_provider_routing(profiles: dict[str, "AiModelProfile"]) -> 
             profile.local_only or not profile.paid_fallback_enabled
         ):
             raise ValueError(f"Anthropic profile {profile_name} must be paid-eligible and prohibit local routing.")
+        if profile.local_fallback_profile is not None:
+            fallback_provider = PROFILE_PROVIDER_ROUTING.get(profile.local_fallback_profile)
+            if fallback_provider != AI_PROVIDER_OLLAMA:
+                raise ValueError(f"AI profile {profile_name} has an invalid local fallback profile.")
 
 
 @dataclass(frozen=True)
@@ -60,6 +64,7 @@ class AiModelProfile:
     task_category: str
     local_only: bool = True
     paid_fallback_enabled: bool = False
+    local_fallback_profile: str | None = None
 
     def sanitized(self) -> dict[str, Any]:
         return asdict(self)

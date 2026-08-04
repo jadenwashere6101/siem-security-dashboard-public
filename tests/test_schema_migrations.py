@@ -155,7 +155,63 @@ def test_schema_snapshot_marker_matches_latest_migration():
         migrations_dir=repo_root / "migrations",
     )
 
-    assert version == 33
+    assert version == 34
+
+
+def test_ai_paid_usage_accounting_migration_is_additive_and_secret_free():
+    repo_root = Path(__file__).resolve().parent.parent
+    migration_sql = (repo_root / "migrations" / "0034_ai_paid_usage_accounting.sql").read_text()
+    schema_sql = (repo_root / "schema.sql").read_text()
+
+    for table in ("ai_paid_usage_days", "ai_paid_request_attempts"):
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in migration_sql
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in schema_sql
+    for field in (
+        "usage_day",
+        "daily_cap_usd",
+        "reserved_usd",
+        "settled_usd",
+        "provider",
+        "model",
+        "profile",
+        "correlation_id",
+        "attempt_kind",
+        "status",
+        "input_tokens",
+        "output_tokens",
+        "estimated_cost_usd",
+        "actual_billed_cost_usd",
+        "provider_latency_ms",
+    ):
+        assert field in migration_sql
+    for forbidden in ("api_key", "authorization", "prompt", "evidence", "completion_text"):
+        assert forbidden not in migration_sql.lower()
+    for destructive in ("DROP ", "TRUNCATE ", "DELETE FROM ", "ALTER TABLE ", "RENAME "):
+        assert destructive not in migration_sql.upper()
+
+
+def test_ai_paid_usage_accounting_migration_applies_forward(postgres_db):
+    repo_root = Path(__file__).resolve().parent.parent
+    migration_sql = (repo_root / "migrations" / "0034_ai_paid_usage_accounting.sql").read_text()
+    conn, cur = postgres_db
+
+    cur.execute("DROP TABLE ai_paid_request_attempts, ai_paid_usage_days")
+    cur.execute(migration_sql)
+    cur.execute(
+        """
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = current_schema()
+          AND table_name IN ('ai_paid_usage_days', 'ai_paid_request_attempts')
+        ORDER BY table_name
+        """
+    )
+
+    assert [row[0] for row in cur.fetchall()] == [
+        "ai_paid_request_attempts",
+        "ai_paid_usage_days",
+    ]
+    conn.commit()
 
 
 def test_anakin_async_workflow_requests_migration_scope():
