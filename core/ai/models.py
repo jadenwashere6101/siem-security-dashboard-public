@@ -8,6 +8,9 @@ AI_STATUS_SUCCESS = "success"
 AI_STATUS_PROVIDER_UNAVAILABLE = "provider_unavailable"
 AI_STATUS_PROVIDER_TIMEOUT = "provider_timeout"
 AI_STATUS_PROVIDER_INCAPABLE = "provider_incapable"
+AI_STATUS_PROVIDER_AUTHENTICATION_ERROR = "provider_authentication_error"
+AI_STATUS_PROVIDER_RATE_LIMITED = "provider_rate_limited"
+AI_STATUS_PROVIDER_MALFORMED_RESPONSE = "provider_malformed_response"
 AI_STATUS_FALLBACK_REQUIRES_CONFIRMATION = "fallback_requires_confirmation"
 AI_STATUS_FALLBACK_BLOCKED = "fallback_blocked"
 AI_STATUS_CONFIGURATION_ERROR = "configuration_error"
@@ -44,6 +47,8 @@ class AiProviderReadiness:
     credential_configured: dict[str, bool] = field(default_factory=dict)
     error_code: str | None = None
     profile: str | None = None
+    readiness_scope: str | None = None
+    latency_ms: int | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -57,6 +62,8 @@ class AiProviderReadiness:
             "credential_configured": dict(self.credential_configured),
             "error_code": self.error_code,
             "profile": self.profile,
+            "readiness_scope": self.readiness_scope,
+            "latency_ms": self.latency_ms,
         }
 
 
@@ -70,7 +77,13 @@ class AiRequestMetadata:
     latency_ms: int | None = None
     estimated_prompt_tokens: int = 0
     estimated_completion_tokens: int = 0
+    provider_reported_prompt_tokens: int | None = None
+    provider_reported_completion_tokens: int | None = None
+    provider_reported_total_tokens: int | None = None
+    token_usage_source: str = "estimated"
     estimated_cost_usd: float | None = None
+    actual_billed_cost_usd: float | None = None
+    cost_source: str | None = None
     local_request: bool = False
     paid_request: bool = False
     fallback_attempted: bool = False

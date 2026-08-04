@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
+import re
 
 from core.ai.profile_registry import (
     AI_PROFILE_AGENTIC_PLANNING,
@@ -30,6 +31,8 @@ VALID_AI_GATEWAY_MODES = frozenset(
 DEFAULT_LOCAL_PROVIDER = "ollama"
 DEFAULT_LOCAL_TIMEOUT_SECONDS = 10.0
 DEFAULT_PAID_TIMEOUT_SECONDS = 20.0
+DEFAULT_ANTHROPIC_TIMEOUT_SECONDS = 20.0
+DEFAULT_ANTHROPIC_API_VERSION = "2023-06-01"
 DEFAULT_MAX_PROMPT_CHARS = 12000
 DEFAULT_FAST_MODEL = "llama3.2:3b"
 DEFAULT_AGENTIC_PLANNING_MODEL = "qwen3:14b"
@@ -66,6 +69,14 @@ class AiGatewayConfig:
     paid_model: str = ""
     paid_timeout_seconds: float = DEFAULT_PAID_TIMEOUT_SECONDS
     paid_fallback_enabled: bool = False
+    anthropic_enabled: bool = False
+    anthropic_enabled_valid: bool = True
+    anthropic_routing_enabled: bool = False
+    anthropic_api_key: str = field(default="", repr=False, compare=False)
+    anthropic_model: str = ""
+    anthropic_timeout_seconds: float = DEFAULT_ANTHROPIC_TIMEOUT_SECONDS
+    anthropic_timeout_valid: bool = True
+    anthropic_api_version: str = DEFAULT_ANTHROPIC_API_VERSION
     max_prompt_chars: int = DEFAULT_MAX_PROMPT_CHARS
     profiles: dict[str, AiModelProfile] | None = None
 
@@ -76,6 +87,15 @@ class AiGatewayConfig:
     @property
     def paid_configured(self) -> bool:
         return bool(self.paid_provider and self.paid_model)
+
+    @property
+    def anthropic_configured(self) -> bool:
+        return bool(
+            self.anthropic_api_key
+            and self.anthropic_model
+            and self.anthropic_timeout_valid
+            and self.anthropic_api_version
+        )
 
     def profile(self, name: str | None = None) -> AiModelProfile:
         profile_name = str(name or AI_PROFILE_FAST_TRIAGE).strip().lower()
@@ -99,6 +119,15 @@ class AiGatewayConfig:
             "paid_timeout_seconds": self.paid_timeout_seconds,
             "paid_fallback_enabled": self.paid_fallback_enabled,
             "paid_configured": self.paid_configured,
+            "anthropic_enabled": self.anthropic_enabled,
+            "anthropic_enabled_valid": self.anthropic_enabled_valid,
+            "anthropic_routing_enabled": self.anthropic_routing_enabled,
+            "anthropic_api_key_configured": bool(self.anthropic_api_key),
+            "anthropic_model": self.anthropic_model,
+            "anthropic_timeout_seconds": self.anthropic_timeout_seconds,
+            "anthropic_timeout_valid": self.anthropic_timeout_valid,
+            "anthropic_api_version": self.anthropic_api_version,
+            "anthropic_configured": self.anthropic_configured,
             "max_prompt_chars": self.max_prompt_chars,
             "profiles": {
                 name: profile.sanitized()
@@ -118,6 +147,18 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_bool_with_validity(name: str, default: bool = False) -> tuple[bool, bool]:
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return default, True
+    normalized = str(raw).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True, True
+    if normalized in {"0", "false", "no", "off"}:
+        return False, True
+    return default, False
+
+
 def _env_positive_float(name: str, default: float) -> float:
     raw = os.getenv(name)
     try:
@@ -127,6 +168,59 @@ def _env_positive_float(name: str, default: float) -> float:
     if value <= 0:
         return default
     return value
+
+
+def _env_positive_float_with_validity(name: str, default: float) -> tuple[float, bool]:
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return default, True
+    try:
+        value = float(str(raw).strip())
+    except (TypeError, ValueError):
+        return default, False
+    if value <= 0:
+        return default, False
+    return value, True
+
+
+class AiGatewayConfigurationError(RuntimeError):
+    """Raised when explicitly enabled AI provider configuration is unsafe."""
+
+
+def validate_ai_gateway_startup(config: AiGatewayConfig | None = None) -> AiGatewayConfig:
+    resolved = config if config is not None else load_ai_gateway_config()
+    if not resolved.anthropic_enabled_valid:
+        raise AiGatewayConfigurationError(
+            "AI_ANTHROPIC_ENABLED must be a recognized boolean value."
+        )
+    if not resolved.anthropic_enabled:
+        return resolved
+
+    missing = []
+    if not resolved.anthropic_api_key:
+        missing.append("ANTHROPIC_API_KEY")
+    if not resolved.anthropic_model:
+        missing.append("AI_ANTHROPIC_MODEL")
+    if not resolved.anthropic_api_version:
+        missing.append("ANTHROPIC_API_VERSION")
+    if missing:
+        raise AiGatewayConfigurationError(
+            "Anthropic is enabled but required environment variables are missing: "
+            + ", ".join(missing)
+        )
+    if not resolved.anthropic_timeout_valid:
+        raise AiGatewayConfigurationError(
+            "AI_ANTHROPIC_TIMEOUT_SECONDS must be a positive number when Anthropic is enabled."
+        )
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", resolved.anthropic_api_version):
+        raise AiGatewayConfigurationError(
+            "ANTHROPIC_API_VERSION must use YYYY-MM-DD format when Anthropic is enabled."
+        )
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}", resolved.anthropic_model):
+        raise AiGatewayConfigurationError(
+            "AI_ANTHROPIC_MODEL must be a valid provider model identifier."
+        )
+    return resolved
 
 
 def _env_positive_int(name: str, default: int) -> int:
@@ -236,6 +330,14 @@ def load_ai_gateway_config() -> AiGatewayConfig:
         local_timeout_seconds=legacy_local_timeout,
     )
     fast_profile = profiles[AI_PROFILE_FAST_TRIAGE]
+    anthropic_timeout, anthropic_timeout_valid = _env_positive_float_with_validity(
+        "AI_ANTHROPIC_TIMEOUT_SECONDS",
+        DEFAULT_ANTHROPIC_TIMEOUT_SECONDS,
+    )
+    anthropic_enabled, anthropic_enabled_valid = _env_bool_with_validity(
+        "AI_ANTHROPIC_ENABLED",
+        False,
+    )
 
     return AiGatewayConfig(
         mode=mode,
@@ -252,6 +354,16 @@ def load_ai_gateway_config() -> AiGatewayConfig:
             DEFAULT_PAID_TIMEOUT_SECONDS,
         ),
         paid_fallback_enabled=_env_bool("AI_PAID_FALLBACK_ENABLED", False),
+        anthropic_enabled=anthropic_enabled,
+        anthropic_enabled_valid=anthropic_enabled_valid,
+        anthropic_api_key=_env_text("ANTHROPIC_API_KEY"),
+        anthropic_model=_env_text("AI_ANTHROPIC_MODEL"),
+        anthropic_timeout_seconds=anthropic_timeout,
+        anthropic_timeout_valid=anthropic_timeout_valid,
+        anthropic_api_version=_env_text(
+            "ANTHROPIC_API_VERSION",
+            DEFAULT_ANTHROPIC_API_VERSION,
+        ),
         max_prompt_chars=_env_positive_int("AI_MAX_PROMPT_CHARS", DEFAULT_MAX_PROMPT_CHARS),
         profiles=profiles,
     )

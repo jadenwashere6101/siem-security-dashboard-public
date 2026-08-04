@@ -2,6 +2,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 UNIT_PATH = REPO_ROOT / "deploy" / "systemd" / "siem-backend.service"
@@ -119,6 +121,79 @@ def test_runtime_validator_accepts_safe_production_environment(tmp_path):
     assert "present" not in result.stdout
     assert "secret-value" not in result.stdout
     assert "token=hidden" not in result.stdout
+    assert "anthropic=disabled" in result.stdout
+
+
+def test_runtime_validator_accepts_local_only_without_anthropic_key(tmp_path):
+    env = validator_env(tmp_path, AI_GATEWAY_MODE="local_only")
+    env.pop("ANTHROPIC_API_KEY", None)
+
+    result = run_validator(env)
+
+    assert result.returncode == 0
+    assert "anthropic=disabled" in result.stdout
+
+
+def test_runtime_validator_rejects_enabled_anthropic_without_credentials(tmp_path):
+    result = run_validator(
+        validator_env(
+            tmp_path,
+            AI_ANTHROPIC_ENABLED="true",
+            AI_ANTHROPIC_MODEL="claude-test-model",
+        )
+    )
+
+    assert result.returncode != 0
+    assert "ANTHROPIC_API_KEY is missing" in result.stderr
+
+
+def test_runtime_validator_accepts_enabled_unassigned_anthropic_without_leaking_key(tmp_path):
+    result = run_validator(
+        validator_env(
+            tmp_path,
+            AI_ANTHROPIC_ENABLED="true",
+            ANTHROPIC_API_KEY="test-key-must-not-appear",
+            AI_ANTHROPIC_MODEL="claude-test-model",
+            AI_ANTHROPIC_TIMEOUT_SECONDS="12.5",
+            ANTHROPIC_API_VERSION="2023-06-01",
+        )
+    )
+
+    assert result.returncode == 0
+    assert "anthropic=configured-unassigned" in result.stdout
+    assert "test-key-must-not-appear" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "expected"),
+    [
+        ("AI_ANTHROPIC_ENABLED", "sometimes", "recognized boolean"),
+        ("AI_ANTHROPIC_TIMEOUT_SECONDS", "0", "must be a positive number"),
+        ("AI_ANTHROPIC_TIMEOUT_SECONDS", "invalid", "must be a positive number"),
+        ("ANTHROPIC_API_VERSION", "latest", "must use YYYY-MM-DD"),
+        ("AI_ANTHROPIC_MODEL", "invalid model", "valid provider model identifier"),
+    ],
+)
+def test_runtime_validator_rejects_invalid_required_anthropic_values(
+    tmp_path,
+    name,
+    value,
+    expected,
+):
+    overrides = {
+        "AI_ANTHROPIC_ENABLED": "true",
+        "ANTHROPIC_API_KEY": "test-key-must-not-appear",
+        "AI_ANTHROPIC_MODEL": "claude-test-model",
+        name: value,
+    }
+    if name == "AI_ANTHROPIC_ENABLED":
+        overrides["AI_ANTHROPIC_ENABLED"] = value
+
+    result = run_validator(validator_env(tmp_path, **overrides))
+
+    assert result.returncode != 0
+    assert expected in result.stderr
+    assert "test-key-must-not-appear" not in result.stderr
 
 
 def test_runtime_validator_rejects_debug_true(tmp_path):

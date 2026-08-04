@@ -506,6 +506,8 @@ def test_ai_status_route_allows_super_admin_without_inference_or_paid_call(clien
     monkeypatch.setenv("AI_PAID_PROVIDER", "openai")
     monkeypatch.setenv("AI_PAID_MODEL", "gpt-test")
     monkeypatch.setenv("AI_PAID_FALLBACK_ENABLED", "true")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key-must-not-appear")
+    monkeypatch.setenv("AI_ANTHROPIC_MODEL", "claude-test-model")
     monkeypatch.setattr(
         "core.ai.providers.OllamaProvider.generate",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("inference attempted")),
@@ -521,3 +523,4 @@ def test_ai_status_route_allows_super_admin_without_inference_or_paid_call(clien
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["gateway"]["paid_fallback_enabled"] is True
+    assert "test-anthropic-key-must-not-appear" not in str(data)

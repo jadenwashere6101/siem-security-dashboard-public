@@ -3,6 +3,7 @@ from flask_cors import CORS
 from flask_login import LoginManager
 from dotenv import load_dotenv
 from core.auth import load_user
+from core.ai.config import validate_ai_gateway_startup
 from core.rate_limit_config import apply_rate_limit_config
 from werkzeug.middleware.proxy_fix import ProxyFix
 from limits.errors import StorageError
@@ -90,6 +91,7 @@ SIEM_DEBUG = env_first("SIEM_DEBUG", default="false").strip().lower() == "true"
 
 def create_app():
     load_dotenv()
+    validate_ai_gateway_startup()
 
     app = Flask(__name__, static_folder="frontend/build/static")
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)

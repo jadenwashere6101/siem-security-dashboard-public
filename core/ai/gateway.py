@@ -152,6 +152,20 @@ class AiGateway:
     ) -> AiGatewayResponse:
         prompt_tokens = estimate_tokens(request.prompt)
         profile = self.config.profile(request.profile)
+        if self.config.paid_provider == "anthropic" and not self.config.anthropic_routing_enabled:
+            return _failure_response(
+                mode=self.config.mode,
+                status=AI_STATUS_FALLBACK_BLOCKED,
+                provider="anthropic",
+                model=self.config.anthropic_model or self.config.paid_model or None,
+                error="Anthropic routing is not enabled in the provider-foundation phase.",
+                error_code="anthropic_routing_not_enabled",
+                prompt_tokens=prompt_tokens,
+                fallback_attempted=True,
+                fallback_reason=fallback_reason,
+                paid_request=False,
+                profile=profile,
+            )
         if not self.config.paid_fallback_enabled or not self.config.paid_configured:
             return _failure_response(
                 mode=self.config.mode,

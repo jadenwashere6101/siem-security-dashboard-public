@@ -36,6 +36,9 @@ def get_ai_gateway_status(
         )
     if paid_provider is not None:
         provider_rows.append(paid_provider.readiness(resolved_config).as_dict())
+    anthropic_provider = resolved_providers.get("anthropic")
+    if anthropic_provider is not None and anthropic_provider is not paid_provider:
+        provider_rows.append(anthropic_provider.readiness(resolved_config).as_dict())
 
     return {
         "gateway": resolved_config.sanitized(),

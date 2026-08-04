@@ -27,6 +27,17 @@ bool_false() {
   esac
 }
 
+bool_true() {
+  case "${1:-}" in
+    true|True|TRUE|1|yes|Yes|YES|on|On|ON)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 [[ -x "$GUNICORN_BIN" ]] || die "Missing executable Gunicorn at ${GUNICORN_BIN}."
 [[ -x "$PYTHON_BIN" ]] || die "Missing executable Python at ${PYTHON_BIN}."
 
@@ -63,6 +74,28 @@ for value_name in workers timeout graceful_timeout keepalive; do
   [[ "$value" =~ ^[0-9]+$ ]] || die "${value_name} must be numeric."
 done
 
+anthropic_status="disabled"
+case "${AI_ANTHROPIC_ENABLED:-false}" in
+  true|True|TRUE|1|yes|Yes|YES|on|On|ON|false|False|FALSE|0|no|No|NO|off|Off|OFF)
+    ;;
+  *)
+    die "AI_ANTHROPIC_ENABLED must be a recognized boolean value."
+    ;;
+esac
+if bool_true "${AI_ANTHROPIC_ENABLED:-false}"; then
+  present ANTHROPIC_API_KEY || die "Anthropic is enabled but ANTHROPIC_API_KEY is missing."
+  present AI_ANTHROPIC_MODEL || die "Anthropic is enabled but AI_ANTHROPIC_MODEL is missing."
+  [[ "${AI_ANTHROPIC_MODEL}" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$ ]] \
+    || die "AI_ANTHROPIC_MODEL must be a valid provider model identifier."
+  anthropic_timeout="${AI_ANTHROPIC_TIMEOUT_SECONDS:-20}"
+  [[ "$anthropic_timeout" =~ ^[0-9]+([.][0-9]+)?$ && ! "$anthropic_timeout" =~ ^0+([.]0+)?$ ]] \
+    || die "AI_ANTHROPIC_TIMEOUT_SECONDS must be a positive number when Anthropic is enabled."
+  anthropic_api_version="${ANTHROPIC_API_VERSION:-2023-06-01}"
+  [[ "$anthropic_api_version" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
+    || die "ANTHROPIC_API_VERSION must use YYYY-MM-DD format when Anthropic is enabled."
+  anthropic_status="configured-unassigned"
+fi
+
 rate_limit_storage_summary="$(
   "$PYTHON_BIN" - <<'PY'
 import os
@@ -80,5 +113,5 @@ print(config.sanitized_summary)
 PY
 )" || die "Rate-limit storage validation failed."
 
-printf 'SIEM backend runtime validation passed: debug=false bind=%s port=%s workers=%s timeout=%s graceful_timeout=%s keepalive=%s rate_limit_storage=\"%s\"\n' \
-  "$bind_host" "$port" "$workers" "$timeout" "$graceful_timeout" "$keepalive" "$rate_limit_storage_summary"
+printf 'SIEM backend runtime validation passed: debug=false bind=%s port=%s workers=%s timeout=%s graceful_timeout=%s keepalive=%s anthropic=%s rate_limit_storage=\"%s\"\n' \
+  "$bind_host" "$port" "$workers" "$timeout" "$graceful_timeout" "$keepalive" "$anthropic_status" "$rate_limit_storage_summary"
