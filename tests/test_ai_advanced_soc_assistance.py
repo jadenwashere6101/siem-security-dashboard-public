@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from werkzeug.security import generate_password_hash
 
-from core.ai.config import AI_MODE_DISABLED, AI_MODE_LOCAL_ONLY, AiGatewayConfig
+from core.ai.config import AI_MODE_DISABLED, AI_MODE_LOCAL_ONLY, AiGatewayConfig, default_ai_profiles
 from core.ai.context_builder import AiContextPayload, AiContextSource
 from core.ai.investigation_models import (
     MAX_TOOL_CALLS_PER_PASS,
@@ -24,7 +24,8 @@ from core.ai.investigation_planner import (
 )
 import core.ai.investigation_planner as investigation_planner_module
 import core.ai.investigation_service as investigation_service_module
-from core.ai.investigation_service import run_investigation
+from core.ai.investigation_service import _build_correlation_prompt_result, run_investigation
+from core.ai.profile_registry import AI_PROFILE_GUIDED_ANALYSIS
 from core.ai.models import AI_STATUS_FALLBACK_BLOCKED, AI_STATUS_SUCCESS, AiGatewayRequest, AiGatewayResponse, AiRequestMetadata
 from core.ai.soc_tools import (
     TOOL_STATUS_FORBIDDEN,
@@ -294,6 +295,103 @@ def test_investigation_service_orchestrates_read_only_partial_fallback_metadata(
     assert len(gateway.requests) == 1
     assert gateway.requests[0].metadata["read_only"] is True
     assert "sk-secret-value" not in gateway.requests[0].prompt
+
+
+def test_large_evidence_guided_analysis_prompt_fits_complete_profile_budget():
+    config = _config()
+    plan = build_investigation_plan(
+        context_type="alert",
+        context={"alert_id": 7},
+        question="Deeply investigate this alert.",
+    )
+    context = AiContextPayload(
+        context_type="alert",
+        data={
+            "alert": {"id": 7, "severity": "high", "source_ip": "198.51.100.10"},
+            "related_events": [
+                {"id": index, "message": f"event-{index}-" + ("e" * 900)}
+                for index in range(40)
+            ],
+        },
+        sources=[
+            AiContextSource("event", "/events/search", list(range(1, 80)), "2026-08-04T00:00:00+00:00")
+        ],
+        truncated=True,
+        omitted_count=60,
+    )
+    result = _build_correlation_prompt_result(
+        plan=plan,
+        question="Deeply investigate this alert.",
+        ai_context=context,
+        tools=SocToolExecutionSummary(
+            used=True,
+            calls=[
+                _tool_result(data={"id": index, "detail": "t" * 1600})
+                for index in range(12)
+            ],
+            sources=_tool_result().sources,
+            truncated=True,
+            omitted_count=20,
+        ),
+        routing=type("Routing", (), {"profile": "guided_analysis"})(),
+        config=config,
+        profile_max_prompt_chars=14000,
+        conversation_context={
+            "thread": {"thread_id": "ath_large"},
+            "compact_summary": "Prior investigation context. " + ("h" * 7000),
+            "bounds": {"truncated": True, "omitted": {"turns": 40}},
+        },
+    )
+
+    assert result.prompt is not None
+    assert len(result.prompt) <= 14000
+    assert result.measurements["original_candidate_chars"] > result.measurements["final_chars"]
+    assert result.measurements["compacted"] is True
+    assert "Deeply investigate this alert." in result.prompt
+    assert "Source provenance and truncation metadata" in result.prompt
+    assert "/events/search" in result.prompt
+    assert "Do not invent facts" in result.prompt
+
+
+def test_mandatory_guided_analysis_overflow_returns_grounded_partial_without_provider(monkeypatch):
+    gateway = RecordingGateway()
+    profiles = default_ai_profiles(local_model="qwen3:4b-instruct", local_timeout_seconds=10)
+    profiles[AI_PROFILE_GUIDED_ANALYSIS] = replace(
+        profiles[AI_PROFILE_GUIDED_ANALYSIS],
+        max_prompt_chars=500,
+    )
+    config = _config(profiles=profiles)
+    monkeypatch.setattr("core.ai.investigation_service.build_ai_context", lambda **_kwargs: _context_payload("alert"))
+    monkeypatch.setattr(
+        "core.ai.investigation_service.execute_tool_plan",
+        lambda *_args, **_kwargs: SocToolExecutionSummary(
+            used=True,
+            calls=[_tool_result("get_alert_detail")],
+            sources=_tool_result("get_alert_detail").sources,
+        ),
+    )
+
+    result = run_investigation(
+        {
+            "context_type": "alert",
+            "question": "Investigate alert",
+            "context": {"alert_id": 7},
+            "allow_automatic_draft": False,
+        },
+        gateway=gateway,
+        config=config,
+    )
+
+    investigation = result.payload["investigation"]
+    correlation = next(step for step in investigation["steps"] if step["step_type"] == "correlate_evidence")
+    assert result.status_code == 200
+    assert investigation["status"] == "partial"
+    assert "Partial grounded assessment" in investigation["summary"]
+    assert "/alerts/7" in investigation["summary"]
+    assert "did not persist, apply, or execute" in investigation["summary"]
+    assert correlation["metadata"]["provider_invoked"] is False
+    assert correlation["metadata"]["synthesis_prompt"]["fallback_required"] is True
+    assert gateway.requests == []
 
 
 def test_investigation_service_reports_request_cancellation_before_tool_execution(monkeypatch):

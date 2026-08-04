@@ -17,6 +17,7 @@ from core.ai.conversation_context import (
 )
 from core.ai.conversation_orchestration_service import (
     ConversationBoundaryError,
+    _bounded_artifact,
     _planner_tool_request,
     plan_conversational_submission,
     queue_conversational_request,
@@ -28,12 +29,14 @@ from core.ai.session_memory_service import ThreadTargetUnavailableError
 from core.ai.session_memory_store import (
     MAX_JSON_DEPTH,
     SessionMemoryError,
+    SessionMemoryValidationError,
     append_turn,
     create_evidence,
     create_thread,
     get_thread,
     list_turns,
     save_thread_state,
+    sanitize_structured_value,
     utc_now,
 )
 from core.ai.workflow_orchestrator import WorkflowResult, WorkflowValidationError, classify_workflow
@@ -827,6 +830,145 @@ def test_generate_artifact_records_preview_only_assistant_turn(postgres_db, monk
         "applied": False,
         "approval_required": True,
     }
+
+
+def test_generated_artifact_normalizes_only_excess_depth_at_persistence_boundary():
+    artifact = {
+        "draft_type": "investigation_checklist",
+        "title": "Review checklist",
+        "payload": {
+            "checks": [
+                {
+                    "title": "Review firewall evidence",
+                    "details": {
+                        "evidence": [
+                            {
+                                "source": {"path": "/alerts/7", "record_ids": [7], "api_key": "never-store"},
+                                "status": "observed",
+                            }
+                        ]
+                    },
+                }
+            ],
+            "source_references": ["/alerts/7"],
+        },
+        "validation": {"valid": True, "errors": []},
+        "labels": {"preview_only": True, "persisted": False, "applied": False},
+    }
+
+    normalized = _bounded_artifact(artifact)
+    stored = sanitize_structured_value(
+        {"provenance": {"type": "model_inference"}, "artifact": normalized},
+        field_name="assistant structured_payload",
+    )
+
+    assert _structured_depth(artifact) > _structured_depth(normalized)
+    assert normalized["payload"]["checks"][0]["title"] == "Review firewall evidence"
+    assert '"path":"/alerts/7"' in normalized["payload"]["checks"][0]["details"]
+    assert "never-store" not in json.dumps(stored)
+    assert "[REDACTED]" in normalized["payload"]["checks"][0]["details"]
+    assert "artifact.payload.checks[0].details" in normalized["storage_normalization"]["flattened_paths"]
+    assert normalized["storage_normalization"]["original_depth"] == _structured_depth(artifact)
+    assert normalized["storage_normalization"]["stored_depth"] == _structured_depth(normalized)
+    assert stored["artifact"]["labels"]["preview_only"] is True
+
+
+def test_arbitrary_nested_session_payload_still_fails_closed():
+    nested = {"level": {"level": {"level": {"level": {"level": {"level": {"level": "unsafe"}}}}}}}
+
+    with pytest.raises(SessionMemoryValidationError, match="nested too deeply"):
+        sanitize_structured_value(nested)
+
+
+def test_long_lived_thread_persists_nested_artifact_preview_without_apply(postgres_db, monkeypatch):
+    conn, _cur = postgres_db
+    thread, alert_id = _seed(conn)
+    for index in range(10):
+        _turn, thread, created = append_turn(
+            conn,
+            thread_id=thread["thread_id"],
+            owner_username="conversation_analyst",
+            expected_version=thread["version"],
+            client_request_id=f"long-lived-{index}",
+            role="user",
+            content=f"Prior analyst turn {index}.",
+            assertion_type="analyst_statement",
+            entity_snapshot={"entities": [{"type": "alert", "id": alert_id}]},
+        )
+        assert created is True
+    conn.commit()
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
+    )
+    payload = _payload(
+        thread,
+        alert_id,
+        request_id="long-lived-artifact",
+        prompt="Generate a review-only investigation checklist.",
+        workflow="generate_artifact",
+    )
+    payload["artifact"] = {"type": "investigation_checklist"}
+    queue_conversational_request(
+        payload,
+        classification=classify_workflow(payload),
+        actor_username="conversation_analyst",
+        actor_role="analyst",
+    )
+
+    deep_draft = {
+        "draft_type": "investigation_checklist",
+        "title": "Review checklist",
+        "payload": {
+            "checks": [
+                {
+                    "title": "Review firewall evidence",
+                    "details": {
+                        "evidence": [
+                            {"source": {"path": "/alerts/7", "record_ids": [alert_id]}, "status": "observed"}
+                        ]
+                    },
+                }
+            ],
+            "source_references": ["/alerts/7"],
+        },
+        "validation": {"valid": True, "errors": []},
+        "generated_at": "2026-08-04T00:00:00+00:00",
+        "labels": {"preview_only": True, "persisted": False, "applied": False, "requires_confirmation": True},
+    }
+    monkeypatch.setattr(
+        "core.ai.workflow_request_worker._run_with_user_context",
+        lambda _payload, workflow, **_kwargs: WorkflowResult(
+            {
+                "status": "success",
+                "workflow": "generate_artifact",
+                "result": {"status": "success", "draft": deep_draft},
+                "metadata": {"profile": "guided_analysis"},
+                "error": None,
+            }
+        ),
+    )
+
+    stats = run_anakin_workflow_worker(
+        config=AnakinWorkflowWorkerConfig(batch_size=1, max_runtime_seconds=30),
+        worker_id="long-lived-artifact-worker",
+        connect=lambda: NoCloseConnection(conn),
+    )
+
+    assert stats["success"] == 1
+    turns = list_turns(conn, thread_id=thread["thread_id"], owner_username="conversation_analyst")["turns"]
+    assistant = turns[-1]
+    artifact = assistant["structured_payload"]["artifact"]
+    assert len(turns) == 12
+    assert assistant["assertion_type"] == "artifact_preview"
+    assert assistant["artifact_safety"] == {
+        "preview_only": True,
+        "persisted": False,
+        "applied": False,
+        "approval_required": True,
+    }
+    assert artifact["payload"]["checks"][0]["title"] == "Review firewall evidence"
+    assert '"path":"/alerts/7"' in artifact["payload"]["checks"][0]["details"]
+    assert artifact["storage_normalization"]["original_depth"] > artifact["storage_normalization"]["stored_depth"]
 
 
 def test_generate_artifact_derives_checklist_type_before_async_drafting(postgres_db, monkeypatch):

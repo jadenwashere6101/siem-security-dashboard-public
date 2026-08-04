@@ -53,6 +53,7 @@ from core.ai.workflow_orchestrator import (
 )
 from core.ai.workflow_request_store import create_or_get_request, serialize_request
 from core.ai.profile_registry import profile_for_agentic_planning
+from core.ai.soc_tools import redact_sensitive_values
 from core.auth import User
 from core.db import get_db_connection
 
@@ -1114,10 +1115,80 @@ def _assistant_structured_payload(
 
 
 def _bounded_artifact(value: Any) -> Any:
-    rendered = json.dumps(value, default=str, sort_keys=True)
-    if len(rendered) <= 24000:
+    if not isinstance(value, dict):
+        raise SessionMemoryValidationError("generated artifact preview must be an object.")
+    safe_value = redact_sensitive_values(value)
+    original_depth = _structured_value_depth(safe_value)
+    flattened_paths: list[str] = []
+    normalized = _normalize_artifact_storage_value(
+        safe_value,
+        path="artifact",
+        depth=0,
+        flattened_paths=flattened_paths,
+    )
+    stored_depth = _structured_value_depth(normalized)
+    normalized["storage_normalization"] = {
+        "original_depth": original_depth,
+        "stored_depth": stored_depth,
+        "flattened_paths": flattened_paths[:50],
+        "flattened_path_count": len(flattened_paths),
+        "truncated": len(flattened_paths) > 50,
+    }
+    rendered = json.dumps(normalized, default=str, sort_keys=True, separators=(",", ":"))
+    if len(rendered) > 24000:
+        raise SessionMemoryValidationError("generated artifact preview is too large for structured storage.")
+    normalized["storage_normalization"]["stored_depth"] = _structured_value_depth(normalized)
+    return normalized
+
+
+def _normalize_artifact_storage_value(
+    value: Any,
+    *,
+    path: str,
+    depth: int,
+    flattened_paths: list[str],
+) -> Any:
+    if depth >= 4 and isinstance(value, (dict, list, tuple)):
+        flattened_paths.append(path)
+        rendered = json.dumps(value, default=str, sort_keys=True, separators=(",", ":"))
+        return rendered[:4000] + ("... [truncated]" if len(rendered) > 4000 else "")
+    if isinstance(value, dict):
+        if len(value) > 100:
+            raise SessionMemoryValidationError("generated artifact preview has too many fields.")
+        return {
+            str(key)[:128]: _normalize_artifact_storage_value(
+                child,
+                path=f"{path}.{str(key)[:128]}",
+                depth=depth + 1,
+                flattened_paths=flattened_paths,
+            )
+            for key, child in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        if len(value) > 100:
+            raise SessionMemoryValidationError("generated artifact preview has too many list entries.")
+        return [
+            _normalize_artifact_storage_value(
+                child,
+                path=f"{path}[{index}]",
+                depth=depth + 1,
+                flattened_paths=flattened_paths,
+            )
+            for index, child in enumerate(value)
+        ]
+    if isinstance(value, str):
+        return value[:4000]
+    if value is None or isinstance(value, (bool, int, float)):
         return value
-    return {"summary": "Artifact payload exceeded conversation structured-storage bounds.", "preview": rendered[:12000]}
+    return str(value)[:4000]
+
+
+def _structured_value_depth(value: Any) -> int:
+    if isinstance(value, dict):
+        return 1 + max((_structured_value_depth(child) for child in value.values()), default=0)
+    if isinstance(value, (list, tuple)):
+        return 1 + max((_structured_value_depth(child) for child in value), default=0)
+    return 0
 
 
 def _persist_result_evidence(
