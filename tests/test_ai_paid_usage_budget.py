@@ -306,6 +306,7 @@ def test_status_reports_estimated_budget_usage_without_billed_cost_or_secret():
         "token_usage_source": "estimated",
         "cost_source": "estimated",
         "status": "available",
+        "accounting_status": "available",
     }
     assert "actual_billed" not in str(status["budget"])
     assert config.anthropic_api_key not in str(status)
@@ -338,10 +339,13 @@ def test_status_marks_anthropic_budget_blocked_when_no_budget_remains():
         accounting_store=accounting,
     )
     anthropic = next(row for row in status["providers"] if row["provider"] == "anthropic")
+    planner = next(row for row in status["profiles"] if row["profile"] == AI_PROFILE_AGENTIC_PLANNING)
 
     assert status["budget"]["status"] == AI_STATUS_BUDGET_EXHAUSTED
-    assert anthropic["ready"] is False
-    assert anthropic["status"] == AI_STATUS_BUDGET_EXHAUSTED
+    assert anthropic["ready"] is True
+    assert anthropic["status"] == AI_STATUS_SUCCESS
+    assert planner["executable"] is False
+    assert planner["status"] == AI_STATUS_BUDGET_EXHAUSTED
 
 
 def _postgres_store_factory(postgres_db, *, utc_day):

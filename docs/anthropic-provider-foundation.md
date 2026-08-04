@@ -1,10 +1,10 @@
 # Anthropic Provider Foundation
 
-## Phase 3 state
+## Phase 5 state
 
 Anthropic is implemented behind the existing AI Gateway abstraction and is the backend-owned provider assignment for `agentic_planning`. `fast_triage`, `guided_analysis`, `deep_briefing` (including scheduled SOC Briefings), and `developer_assistant` remain explicitly assigned to Ollama.
 
-Phase 3 permits Anthropic paid execution only after validated environment configuration and transactional PostgreSQL budget authorization. `local_only` blocks the Anthropic planner profile without substituting Ollama, and every paid request attempt fails closed before provider contact when accounting or budget authorization is unavailable.
+Anthropic paid execution remains permitted only after validated environment configuration and transactional PostgreSQL budget authorization. `local_only` blocks the Anthropic planner profile without substituting Ollama, and every paid request attempt fails closed before provider contact when accounting or budget authorization is unavailable.
 
 ## Environment configuration
 
@@ -26,7 +26,7 @@ AI_ANTHROPIC_OUTPUT_COST_PER_MILLION_TOKENS=
 - `AI_ANTHROPIC_MODEL` has no source default; it is the backend-owned model for the Anthropic `agentic_planning` profile and must be an approved provider model identifier when enabled.
 - `AI_ANTHROPIC_TIMEOUT_SECONDS` is bounded to a positive value and defaults to 20 seconds.
 - `ANTHROPIC_API_VERSION` defaults to the non-secret version header shown above and must use `YYYY-MM-DD` format.
-- The daily cap and both per-million-token prices must be positive validated values before paid routing can be enabled. They are non-secret Phase 3 environment policy; Phase 4 will move non-secret runtime policy into PostgreSQL administration.
+- The daily cap and both per-million-token prices must be positive validated values before paid routing can be enabled. The model and daily cap may be overridden through validated Phase 4 PostgreSQL runtime policy; pricing and credentials remain environment-owned.
 
 Paid execution is enabled only when provider configuration, pricing, the daily cap, gateway mode, and transactional PostgreSQL authorization all succeed. No standalone routing environment switch can bypass accounting.
 
@@ -34,7 +34,7 @@ Paid execution is enabled only when provider configuration, pricing, the daily c
 
 The backend reads the single-row `ai_gateway_config` policy before each gateway request. With no override row, validated source configuration remains effective. A valid override can change gateway mode, preferred Anthropic model, daily paid budget, and whether Anthropic routing is requested without restarting web or worker services.
 
-This follows the existing detection and pfSense configuration lifecycle: an additive PostgreSQL table, whole-policy backend validation, direct request-time reads, `updated_by`, `updated_at`, super-admin-only `GET` and `PATCH` at `/admin/ai-gateway-config`, and existing-format audit events containing sanitized old/new non-secret values and request context. No frontend configuration UI is added in this phase.
+This follows the existing detection and pfSense configuration lifecycle: an additive PostgreSQL table, whole-policy backend validation, direct request-time reads, `updated_by`, `updated_at`, super-admin-only `GET` and `PATCH` at `/admin/ai-gateway-config`, and existing-format audit events containing sanitized old/new non-secret values and request context. The Super-admin **AI Gateway Policy** page is a view/edit surface over that backend policy and is not a routing authority.
 
 Invalid or unavailable runtime policy fails closed to effective `local_only` with Anthropic routing disabled. If validated local configuration is unavailable, effective mode becomes `disabled`. `/ai/status` reports requested and effective sanitized runtime policy so operators can distinguish an applied override from default, invalid, or unavailable configuration.
 
@@ -42,7 +42,13 @@ The runtime table and API never accept or return API keys, provider endpoints, p
 
 ## Readiness and safety
 
-`/ai/status` includes an Anthropic provider row even when no Anthropic configuration exists. Phase 1 readiness is configuration-only and performs no provider network request or generation. It reports provider/model, configuration state, missing environment-variable names, and credential presence as a boolean. It never returns the key, authorization headers, prompts, provider response bodies, or provider endpoints.
+`/ai/status` independently reports sanitized Ollama and Anthropic readiness and includes an Anthropic row even when no Anthropic configuration exists. Anthropic readiness remains configuration-only and performs no provider network request or generation. It reports provider/model, configuration state, missing environment-variable names, and credential presence as a boolean. It never returns the key, authorization headers, prompts, provider response bodies, or provider endpoints.
+
+The endpoint lists every backend-owned profile with its effective provider/model, provider readiness, execution status, and whether current mode, routing, configuration, and budget policy make it executable. `deep_briefing`, including scheduled SOC Briefings, is explicitly reported as local-only. Anthropic failure does not change the readiness of unrelated Ollama profiles.
+
+Paid observability is an aggregate, read-only view over the existing Phase 3 accounting store. It reports the current UTC accounting day, configured cap, pending reservations, settled usage, remaining budget, attempt status counts, and aggregate provider latency. Token totals are split into `provider_reported` and `estimated` groups. Reserved and calculated cost remain `estimated`; `actual_billed` output is omitted unless durable provider-derived billing data genuinely exists. Reading status does not perform lazy rollover, mutate accounting, or invoke a provider.
+
+Unavailable runtime policy or accounting produces an explicit sanitized degraded/fail-closed status with unknown values represented as unavailable rather than zero. Valid local profiles remain independently observable and executable when their local policy and provider readiness permit them.
 
 Local-only backend and worker startup remains valid without Anthropic credentials. If `AI_ANTHROPIC_ENABLED=true`, backend and worker startup fails closed when the key, model, timeout, API version, daily cap, or pricing is missing or invalid.
 

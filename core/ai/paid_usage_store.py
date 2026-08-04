@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_CEILING
 import re
@@ -89,9 +89,24 @@ class PaidUsageSummary:
     total_tokens: int
     attempt_count: int
     token_usage_source: str
+    provider_reported_input_tokens: int = 0
+    provider_reported_output_tokens: int = 0
+    provider_reported_total_tokens: int = 0
+    estimated_input_tokens: int = 0
+    estimated_output_tokens: int = 0
+    estimated_total_tokens: int = 0
+    cost_usage_source: str = "estimated"
+    estimated_cost_usd: Decimal = Decimal("0")
+    provider_reported_cost_usd: Decimal = Decimal("0")
+    actual_billed_cost_usd: Decimal | None = None
+    actual_billed_attempt_count: int = 0
+    provider_latency_sample_count: int = 0
+    average_provider_latency_ms: float | None = None
+    maximum_provider_latency_ms: int | None = None
+    attempt_status_counts: dict[str, int] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        result = {
             "usage_day": self.usage_day.isoformat(),
             "daily_cap_usd": float(self.daily_cap_usd),
             "reserved_usd": float(self.reserved_usd),
@@ -103,8 +118,53 @@ class PaidUsageSummary:
             "total_tokens": self.total_tokens,
             "attempt_count": self.attempt_count,
             "token_usage_source": self.token_usage_source,
-            "cost_source": "estimated",
+            "cost_source": self.cost_usage_source,
+            "reserved_usage": {
+                "amount_usd": float(self.reserved_usd),
+                "source": "estimated",
+            },
+            "settled_usage": {
+                "amount_usd": float(self.settled_usd),
+                "source": self.cost_usage_source,
+            },
+            "token_usage": {
+                "provider_reported": {
+                    "input_tokens": self.provider_reported_input_tokens,
+                    "output_tokens": self.provider_reported_output_tokens,
+                    "total_tokens": self.provider_reported_total_tokens,
+                    "source": "provider_reported",
+                },
+                "estimated": {
+                    "input_tokens": self.estimated_input_tokens,
+                    "output_tokens": self.estimated_output_tokens,
+                    "total_tokens": self.estimated_total_tokens,
+                    "source": "estimated",
+                },
+            },
+            "cost_usage": {
+                "provider_reported": {
+                    "amount_usd": float(self.provider_reported_cost_usd),
+                    "source": "provider_reported",
+                },
+                "estimated": {
+                    "amount_usd": float(self.estimated_cost_usd),
+                    "source": "estimated",
+                },
+            },
+            "provider_latency": {
+                "sample_count": self.provider_latency_sample_count,
+                "average_ms": self.average_provider_latency_ms,
+                "maximum_ms": self.maximum_provider_latency_ms,
+            },
+            "attempt_status_counts": dict(self.attempt_status_counts),
         }
+        if self.actual_billed_attempt_count > 0 and self.actual_billed_cost_usd is not None:
+            result["actual_billed_usage"] = {
+                "amount_usd": float(self.actual_billed_cost_usd),
+                "attempt_count": self.actual_billed_attempt_count,
+                "source": "actual_billed",
+            }
+        return result
 
 
 def pricing_from_config(config: AiGatewayConfig) -> PaidUsagePricing:
@@ -480,13 +540,76 @@ class PostgresPaidUsageStore:
                            COUNT(*) FILTER (
                                WHERE status <> 'budget_exhausted'
                                  AND token_usage_source = 'estimated'
-                           )
+                           ),
+                           COALESCE(SUM(input_tokens) FILTER (
+                               WHERE status <> 'budget_exhausted'
+                                 AND token_usage_source = 'provider_reported'
+                           ), 0),
+                           COALESCE(SUM(output_tokens) FILTER (
+                               WHERE status <> 'budget_exhausted'
+                                 AND token_usage_source = 'provider_reported'
+                           ), 0),
+                           COALESCE(SUM(total_tokens) FILTER (
+                               WHERE status <> 'budget_exhausted'
+                                 AND token_usage_source = 'provider_reported'
+                           ), 0),
+                           COALESCE(SUM(input_tokens) FILTER (
+                               WHERE status <> 'budget_exhausted'
+                                 AND token_usage_source = 'estimated'
+                           ), 0),
+                           COALESCE(SUM(output_tokens) FILTER (
+                               WHERE status <> 'budget_exhausted'
+                                 AND token_usage_source = 'estimated'
+                           ), 0),
+                           COALESCE(SUM(total_tokens) FILTER (
+                               WHERE status <> 'budget_exhausted'
+                                 AND token_usage_source = 'estimated'
+                           ), 0),
+                           COUNT(*) FILTER (
+                               WHERE status <> 'budget_exhausted'
+                                 AND token_usage_source = 'provider_reported'
+                           ),
+                           COUNT(*) FILTER (
+                               WHERE status <> 'budget_exhausted'
+                                 AND cost_source = 'estimated'
+                           ),
+                           COUNT(*) FILTER (
+                               WHERE status <> 'budget_exhausted'
+                                 AND cost_source = 'provider_reported'
+                           ),
+                           COALESCE(SUM(settled_cost_usd) FILTER (
+                               WHERE status <> 'budget_exhausted'
+                                 AND cost_source = 'estimated'
+                           ), 0),
+                           COALESCE(SUM(settled_cost_usd) FILTER (
+                               WHERE status <> 'budget_exhausted'
+                                 AND cost_source = 'provider_reported'
+                           ), 0),
+                           COALESCE(SUM(actual_billed_cost_usd), 0),
+                           COUNT(actual_billed_cost_usd),
+                           COUNT(provider_latency_ms),
+                           AVG(provider_latency_ms),
+                           MAX(provider_latency_ms)
                     FROM ai_paid_request_attempts
                     WHERE usage_day = %s
                     """,
                     (usage_day,),
                 )
-                totals = cur.fetchone() or (0, 0, 0, 0)
+                totals = cur.fetchone() or (0,) * 21
+                cur.execute(
+                    """
+                    SELECT status, COUNT(*)
+                    FROM ai_paid_request_attempts
+                    WHERE usage_day = %s
+                    GROUP BY status
+                    ORDER BY status
+                    """,
+                    (usage_day,),
+                )
+                status_counts = {
+                    str(status): int(count)
+                    for status, count in cur.fetchall()
+                }
             if day_row is None:
                 cap = pricing.daily_cap_usd
                 reserved = settled = Decimal("0")
@@ -503,11 +626,34 @@ class PostgresPaidUsageStore:
                 total_output_tokens=int(totals[1]),
                 total_tokens=int(totals[2]),
                 attempt_count=int(totals[3]),
-                token_usage_source=(
-                    "estimated"
-                    if int(totals[4]) > 0 or int(totals[3]) == 0
-                    else "provider_reported"
+                token_usage_source=_aggregate_source(
+                    estimated_count=int(totals[4]),
+                    reported_count=int(totals[11]),
                 ),
+                provider_reported_input_tokens=int(totals[5]),
+                provider_reported_output_tokens=int(totals[6]),
+                provider_reported_total_tokens=int(totals[7]),
+                estimated_input_tokens=int(totals[8]),
+                estimated_output_tokens=int(totals[9]),
+                estimated_total_tokens=int(totals[10]),
+                cost_usage_source=_aggregate_source(
+                    estimated_count=int(totals[12]),
+                    reported_count=int(totals[13]),
+                ),
+                estimated_cost_usd=Decimal(str(totals[14])),
+                provider_reported_cost_usd=Decimal(str(totals[15])),
+                actual_billed_cost_usd=(
+                    Decimal(str(totals[16])) if int(totals[17]) > 0 else None
+                ),
+                actual_billed_attempt_count=int(totals[17]),
+                provider_latency_sample_count=int(totals[18]),
+                average_provider_latency_ms=(
+                    float(totals[19]) if totals[19] is not None else None
+                ),
+                maximum_provider_latency_ms=(
+                    int(totals[20]) if totals[20] is not None else None
+                ),
+                attempt_status_counts=status_counts,
             )
         except Exception:
             raise PaidAccountingUnavailable("Paid AI accounting is unavailable.") from None
@@ -525,6 +671,14 @@ def _token_cost(input_tokens: int, output_tokens: int, pricing: PaidUsagePricing
         + Decimal(output_tokens) * pricing.output_cost_per_million_tokens
     ) / MILLION
     return raw.quantize(MONEY_QUANTUM, rounding=ROUND_CEILING)
+
+
+def _aggregate_source(*, estimated_count: int, reported_count: int) -> str:
+    if estimated_count and reported_count:
+        return "mixed"
+    if reported_count:
+        return "provider_reported"
+    return "estimated"
 
 
 def _correlation_id(request: AiGatewayRequest) -> str | None:

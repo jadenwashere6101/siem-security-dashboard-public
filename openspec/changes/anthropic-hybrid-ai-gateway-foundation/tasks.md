@@ -44,12 +44,12 @@
 
 ## 5. Phase 5 - Observability
 
-- [ ] 5.1 Extend `/ai/status` serialization with active mode, secret-free provider readiness, and active provider/model for every profile.
-- [ ] 5.2 Add current UTC budget period, cap, used, remaining, and token/cost usage without triggering reset or billable generation; label exact provider-returned values `provider_reported` and every calculated, reserved, or inferred value `estimated`, never actual billed usage.
-- [ ] 5.3 Normalize configuration, readiness, budget-blocked, timeout, incapable, and provider failure states across API responses, logs, accounting, and audit events.
-- [ ] 5.4 Add automated redaction tests using credential-bearing provider errors, headers, URLs, prompts, and completions and prove none reach status, logs, audit, or frontend state.
-- [ ] 5.5 Add status endpoint authentication/RBAC, degraded-state, accounting, and provider-readiness tests while preserving its read-only philosophy.
-- [ ] 5.6 Update operator documentation and environment templates with variable names and safe rollout guidance but no secret values.
+- [x] 5.1 Extend `/ai/status` serialization with active mode, secret-free provider readiness, and active provider/model for every profile.
+- [x] 5.2 Add current UTC budget period, cap, used, remaining, and token/cost usage without triggering reset or billable generation; label exact provider-returned values `provider_reported` and every calculated, reserved, or inferred value `estimated`, never actual billed usage.
+- [x] 5.3 Normalize configuration, readiness, budget-blocked, timeout, incapable, and provider failure states across API responses, logs, accounting, and audit events.
+- [x] 5.4 Add automated redaction tests using credential-bearing provider errors, headers, URLs, prompts, and completions and prove none reach status, logs, audit, or frontend state.
+- [x] 5.5 Add status endpoint authentication/RBAC, degraded-state, accounting, and provider-readiness tests while preserving its read-only philosophy.
+- [x] 5.6 Update operator documentation and environment templates with variable names and safe rollout guidance but no secret values.
 
 ## 6. Phase 6 - Acceptance and Completion Gates
 

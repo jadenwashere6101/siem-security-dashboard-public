@@ -22,7 +22,7 @@ from core.ai.drafting_service import (
     DraftValidationError,
     service_error_response as draft_service_error_response,
 )
-from core.ai.readiness import get_ai_gateway_status
+from core.ai.readiness import degraded_ai_gateway_status, get_ai_gateway_status
 from core.ai.repo_assistant_service import (
     RepoAssistantValidationError,
     answer_repo_question,
@@ -94,8 +94,11 @@ def ai_status_route():
     try:
         return jsonify(get_ai_gateway_status()), 200
     except Exception as error:
-        current_app.logger.error("Error in ai_status_route: %s", error)
-        return jsonify({"error": "Internal server error"}), 500
+        current_app.logger.error(
+            "AI status observability unavailable error_type=%s",
+            type(error).__name__,
+        )
+        return jsonify(degraded_ai_gateway_status()), 200
 
 
 @ai_bp.route("/ai/threads", methods=["POST"])
