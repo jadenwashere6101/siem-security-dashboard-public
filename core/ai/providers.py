@@ -378,7 +378,6 @@ class AnthropicProvider:
             "model": profile.model,
             "max_tokens": profile.max_output_tokens,
             "messages": [{"role": "user", "content": request.prompt}],
-            "temperature": profile.temperature,
         }
         headers = {
             "Accept": "application/json",

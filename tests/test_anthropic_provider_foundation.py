@@ -230,9 +230,14 @@ def test_mocked_anthropic_generation_normalizes_profile_and_reported_usage(monke
     assert response.metadata.estimated_cost_usd is None
     assert response.metadata.actual_billed_cost_usd is None
     assert response.metadata.cost_source is None
-    assert captured["payload"]["model"] == "claude-test-model"
-    assert captured["payload"]["max_tokens"] == 1024
-    assert captured["payload"]["temperature"] == 0.1
+    assert captured["payload"] == {
+        "model": "claude-test-model",
+        "max_tokens": 1024,
+        "messages": [
+            {"role": "user", "content": "Return a bounded read-only plan."}
+        ],
+    }
+    assert "temperature" not in captured["payload"]
     assert captured["timeout"] == 90.0
     assert captured["headers"]["x-api-key"] == FAKE_ANTHROPIC_KEY
     assert FAKE_ANTHROPIC_KEY not in str(response.as_dict())
