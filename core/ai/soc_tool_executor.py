@@ -282,7 +282,7 @@ def _execute_search_alerts(args: dict[str, Any], *, started: float) -> SocToolRe
         "search": args.get("search") or args.get("hostname") or args.get("username"),
         "exact_source_ip": args.get("source_ip"),
         "exact_target_ip": args.get("destination_ip"),
-        "alert_id": None,
+        "alert_id": args.get("alert_id"),
         "rule_id": args.get("alert_type"),
         "severity": args.get("severity"),
         "status": args.get("status"),

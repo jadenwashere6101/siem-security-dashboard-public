@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 from werkzeug.security import generate_password_hash
 
+from core.ai import soc_tool_executor
 from core.ai.config import AI_MODE_DISABLED, AI_MODE_LOCAL_ONLY, AiGatewayConfig
 from core.ai.context_builder import AiContextPayload, AiContextSource
 from core.ai.models import AI_STATUS_SUCCESS, AiGatewayRequest, AiGatewayResponse, AiRequestMetadata
@@ -144,6 +145,7 @@ def test_tool_validation_rejects_unsupported_mutation_and_bad_arguments():
     args = validate_tool_args(
         "search_alerts",
         {
+            "alert_id": "9663",
             "severity": "HIGH",
             "alert_type": "failed_login",
             "destination_ip": "10.0.0.8",
@@ -153,6 +155,7 @@ def test_tool_validation_rejects_unsupported_mutation_and_bad_arguments():
             "limit": 1,
         },
     )
+    assert args["alert_id"] == 9663
     assert args["severity"] == "high"
     assert args["alert_type"] == "failed_login"
     assert args["destination_ip"] == "10.0.0.8"
@@ -169,6 +172,42 @@ def test_tool_validation_rejects_unsupported_mutation_and_bad_arguments():
     ):
         with pytest.raises(SocToolValidationError):
             validate_tool_args("search_alerts", invalid)
+
+
+def test_search_alerts_executor_preserves_exact_alert_id_filter(monkeypatch):
+    captured = {}
+
+    class Cursor:
+        def close(self):
+            return None
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+        def close(self):
+            return None
+
+    def capture_filters(filters):
+        captured.update(filters)
+        return [], []
+
+    monkeypatch.setattr(soc_tool_executor, "get_db_connection", Connection)
+    monkeypatch.setattr(soc_tool_executor, "_build_alert_filter_sql", capture_filters)
+    monkeypatch.setattr(soc_tool_executor, "_fetch_alert_total", lambda *_args: 0)
+    monkeypatch.setattr(soc_tool_executor, "_fetch_alert_rows", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(soc_tool_executor, "_fetch_latest_resolved_audits", lambda *_args: {})
+    monkeypatch.setattr(soc_tool_executor, "_fetch_alert_intelligence", lambda *_args: {})
+
+    result = execute_tool(
+        {"tool_name": "search_alerts", "arguments": {"alert_id": 9663, "limit": 1}},
+        actor_role="analyst",
+        config=_config(),
+    )
+
+    assert result.status == TOOL_STATUS_SUCCESS
+    assert captured["alert_id"] == 9663
+    assert result.data["total"] == 0
 
 
 def test_executor_dispatches_supported_tools_and_enforces_rbac(monkeypatch):

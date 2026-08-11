@@ -224,6 +224,10 @@ def _plan(
         )
     if strategy == "artifact_draft" and artifact_type is None:
         artifact_type = "investigation_checklist"
+    if requirements is None and strategy == "quick_evidence_lookup":
+        requirements = {"severity": "high", "limit": 1}
+        if len(entities) == 1 and entities[0].get("type") in {"alert", "detection"}:
+            requirements["alert_id"] = int(entities[0]["id"])
     return {
         "current_turn_intent": intent,
         "relationship_to_prior_turn": relationship,
@@ -233,11 +237,7 @@ def _plan(
         "proposed_strategy": strategy,
         "proposed_capability": capability,
         "proposed_tool_categories": tools if tools is not None else (["alerts"] if strategy == "quick_evidence_lookup" else []),
-        "evidence_requirements": requirements if requirements is not None else (
-            {"severity": "high", "limit": 1}
-            if strategy == "quick_evidence_lookup"
-            else {}
-        ),
+        "evidence_requirements": requirements if requirements is not None else {},
         "clarification_question": clarification,
         "artifact_type": artifact_type,
         "referenced_turn_sequence": referenced_turn_sequence,
@@ -414,6 +414,80 @@ def test_open_lookup_with_zero_entities_is_valid():
     assert plan.evidence_requirements == {"severity": "high", "limit": 1}
 
 
+def test_specific_alert_evidence_plan_binds_alert_9663():
+    value = _plan(
+        intent="evidence_explanation",
+        entities=[{"type": "alert", "id": "9663"}],
+        requirements={"alert_id": "9663", "limit": 1},
+    )
+
+    plan, errors = parse_and_validate_plan(json.dumps(value), _packet("Explain the selected record.").payload)
+
+    assert errors == []
+    assert plan.resolved_entities == ({"type": "alert", "id": "9663"},)
+    assert plan.evidence_requirements == {"alert_id": 9663, "limit": 1}
+    assert planner_output_schema()["entity_binding_keys"]["alert"] == "alert_id"
+
+
+def test_resolved_alert_rejects_unfiltered_newest_lookup():
+    value = _plan(
+        intent="evidence_explanation",
+        entities=[{"type": "alert", "id": "9663"}],
+        requirements={"limit": 1, "sort": "newest"},
+    )
+
+    plan, errors = parse_and_validate_plan(json.dumps(value), _packet().payload)
+
+    assert plan is None
+    assert any("must bind resolved alert 9663 with alert_id=9663" in error for error in errors)
+
+
+def test_resolved_alert_rejects_wrong_alert_id_lookup():
+    value = _plan(
+        intent="evidence_explanation",
+        entities=[{"type": "alert", "id": "9663"}],
+        requirements={"alert_id": 9682, "limit": 1},
+    )
+
+    plan, errors = parse_and_validate_plan(json.dumps(value), _packet().payload)
+
+    assert plan is None
+    assert "evidence_requirements alert_id must equal resolved alert id 9663" in errors
+
+
+def test_entity_binding_validation_does_not_interpret_question_language():
+    value = _plan(
+        intent="evidence_explanation",
+        entities=[{"type": "alert", "id": "9663"}],
+        requirements={"limit": 1, "sort": "newest"},
+    )
+    error_sets = []
+    for question in ("explain alert ID 9663", "unseen wording with no identifier syntax"):
+        plan, errors = parse_and_validate_plan(json.dumps(value), _packet(question).payload)
+        assert plan is None
+        error_sets.append(errors)
+
+    assert error_sets[0] == error_sets[1]
+
+
+@pytest.mark.parametrize(
+    "category,entity,requirements",
+    [
+        ("incidents", {"type": "incident", "id": "41"}, {"incident_id": 41}),
+        ("source_ip_activity", {"type": "source_ip", "id": "203.0.113.81"}, {"source_ip": "203.0.113.81"}),
+        ("recon_activity", {"type": "recon_activity", "id": "17"}, {"activity_id": 17}),
+        ("response_registry", {"type": "response_registry", "id": "29"}, {"registry_id": 29}),
+    ],
+)
+def test_other_supported_entity_bindings_use_existing_identity_keys(category, entity, requirements):
+    value = _plan(entities=[entity], tools=[category], requirements=requirements)
+
+    plan, errors = parse_and_validate_plan(json.dumps(value), _packet().payload)
+
+    assert errors == []
+    assert plan.evidence_requirements == requirements
+
+
 @pytest.mark.parametrize(
     "intent,strategy,entities,expected",
     [
@@ -552,7 +626,13 @@ def test_every_canonical_action_strategy_pair_accepts_its_exact_tokens():
             sufficiency="ambiguous" if is_clarification else "insufficient" if is_lookup else "sufficient",
             entities=candidates[: contract.minimum_entities],
             tools=["alerts"] if is_lookup else [],
-            requirements={"severity": "high"} if is_lookup else {},
+            requirements=(
+                {"alert_id": 9078, "severity": "high"}
+                if is_lookup and contract.minimum_entities
+                else {"severity": "high"}
+                if is_lookup
+                else {}
+            ),
             clarification="Which record did you mean?" if is_clarification else None,
             referenced_turn_sequence=2 if intent == "analyst_correction" else None,
         )
@@ -836,6 +916,29 @@ def test_planner_repairs_one_cross_field_contradiction_without_server_rewriting(
     assert len(gateway.requests) == 2
 
 
+def test_planner_repairs_entity_lookup_binding_without_server_rewriting():
+    inconsistent = _plan(
+        intent="evidence_explanation",
+        entities=[{"type": "alert", "id": "9663"}],
+        requirements={"limit": 1, "sort": "newest"},
+    )
+    repaired = _plan(
+        intent="evidence_explanation",
+        entities=[{"type": "alert", "id": "9663"}],
+        requirements={"alert_id": 9663, "limit": 1},
+    )
+    gateway = SequenceGateway([json.dumps(inconsistent), json.dumps(repaired)])
+
+    outcome = plan_turn(_packet("Explain the selected alert."), gateway=gateway, config=_config())
+
+    assert outcome.status == "planned"
+    assert outcome.repaired is True
+    assert outcome.plan.resolved_entities == ({"type": "alert", "id": "9663"},)
+    assert outcome.plan.evidence_requirements == {"alert_id": 9663, "limit": 1}
+    assert "must bind resolved alert 9663" in gateway.requests[1].prompt
+    assert len(gateway.requests) == 2
+
+
 def test_real_planner_request_reaches_anthropic_generation_contract(monkeypatch):
     calls = []
 
@@ -1087,7 +1190,7 @@ def test_quick_evidence_lookup_requires_named_evidence():
 )
 def test_evidence_requirements_reject_unknown_or_unbounded_filters(requirements, expected):
     plan, errors = parse_and_validate_plan(
-        json.dumps(_plan(requirements=requirements)),
+        json.dumps(_plan(requirements=requirements, entities=[])),
         _packet().payload,
     )
 
@@ -1107,7 +1210,7 @@ def test_alert_evidence_requirements_are_normalized_without_query_generation():
     }
 
     plan, errors = parse_and_validate_plan(
-        json.dumps(_plan(requirements=requirements)),
+        json.dumps(_plan(requirements=requirements, entities=[])),
         _packet(
             "Show the newest HIGH failed_login alert from source 203.0.113.81 to destination 10.0.0.8 in the last hour."
         ).payload,
@@ -1128,7 +1231,7 @@ def test_alert_evidence_requirements_are_normalized_without_query_generation():
 )
 def test_duration_is_interpreted_by_planner_and_bounded_by_server(question, expected_minutes):
     plan, errors = parse_and_validate_plan(
-        json.dumps(_plan(requirements={"time_window_minutes": expected_minutes, "limit": 10})),
+        json.dumps(_plan(requirements={"time_window_minutes": expected_minutes, "limit": 10}, entities=[])),
         _packet(question).payload,
     )
 
@@ -1349,6 +1452,7 @@ def test_behavioral_paraphrases_validate_consistently(question, intent, strategy
         strategy=strategy,
         sufficiency=sufficiency,
         tools=tools,
+        entities=[] if strategy == "quick_evidence_lookup" else None,
         referenced_turn_sequence=2 if intent == "analyst_correction" else None,
         requirements=(
             {"severity": "high", "limit": 1}

@@ -103,6 +103,10 @@ STRATEGY_STOPPING_CONDITIONS = {
 }
 EVIDENCE_REQUIREMENT_KEYS = frozenset(
     {
+        "alert_id",
+        "incident_id",
+        "activity_id",
+        "registry_id",
         "severity",
         "alert_type",
         "source_ip",
@@ -115,14 +119,69 @@ EVIDENCE_REQUIREMENT_KEYS = frozenset(
     }
 )
 EVIDENCE_REQUIREMENT_KEYS_BY_CATEGORY = {
-    "alerts": EVIDENCE_REQUIREMENT_KEYS,
-    "incidents": frozenset({"severity", "limit"}),
+    "alerts": frozenset(
+        {
+            "alert_id",
+            "severity",
+            "alert_type",
+            "source_ip",
+            "destination_ip",
+            "hostname",
+            "username",
+            "time_window_minutes",
+            "sort",
+            "limit",
+        }
+    ),
+    "incidents": frozenset({"incident_id", "severity", "limit"}),
     "source_ip_activity": frozenset({"source_ip"}),
-    "events": frozenset({"source_ip", "alert_type", "limit"}),
-    "authentication_activity": frozenset({"source_ip", "alert_type", "limit"}),
-    "network_activity": frozenset({"source_ip", "alert_type", "limit"}),
-    "recon_activity": frozenset({"source_ip", "alert_type", "limit"}),
-    "response_registry": frozenset({"source_ip", "limit"}),
+    "events": frozenset({"alert_id", "activity_id", "source_ip", "alert_type", "limit"}),
+    "authentication_activity": frozenset({"alert_id", "activity_id", "source_ip", "alert_type", "limit"}),
+    "network_activity": frozenset({"alert_id", "activity_id", "source_ip", "alert_type", "limit"}),
+    "recon_activity": frozenset({"alert_id", "activity_id", "source_ip", "alert_type", "limit"}),
+    "response_registry": frozenset({"registry_id", "source_ip", "limit"}),
+}
+ENTITY_EVIDENCE_BINDING_KEYS = {
+    "alert": {
+        "alerts": "alert_id",
+        "events": "alert_id",
+        "authentication_activity": "alert_id",
+        "network_activity": "alert_id",
+        "recon_activity": "alert_id",
+    },
+    "detection": {"alerts": "alert_id"},
+    "incident": {"incidents": "incident_id"},
+    "source_ip": {
+        "alerts": "source_ip",
+        "source_ip_activity": "source_ip",
+        "events": "source_ip",
+        "authentication_activity": "source_ip",
+        "network_activity": "source_ip",
+        "recon_activity": "source_ip",
+        "response_registry": "source_ip",
+    },
+    "recon_activity": {
+        "events": "activity_id",
+        "authentication_activity": "activity_id",
+        "network_activity": "activity_id",
+        "recon_activity": "activity_id",
+    },
+    "response_registry": {"response_registry": "registry_id"},
+}
+ENTITY_BINDING_ALLOWED_REQUIREMENTS = {
+    ("incident", "incidents"): frozenset({"incident_id"}),
+    ("source_ip", "source_ip_activity"): frozenset({"source_ip"}),
+    ("source_ip", "response_registry"): frozenset({"source_ip", "limit"}),
+    ("response_registry", "response_registry"): frozenset({"registry_id", "limit"}),
+    **{
+        (entity_type, category): allowed
+        for entity_type, allowed in (
+            ("alert", frozenset({"alert_id", "limit"})),
+            ("source_ip", frozenset({"source_ip", "alert_type", "limit"})),
+            ("recon_activity", frozenset({"activity_id"})),
+        )
+        for category in ("events", "authentication_activity", "network_activity", "recon_activity")
+    },
 }
 EVIDENCE_SORT_OPTIONS = frozenset({"newest", "oldest", "severity"})
 EVIDENCE_SEVERITIES = frozenset({"low", "medium", "high", "critical"})
@@ -761,6 +820,14 @@ def parse_and_validate_plan(
         semantic_contract.minimum_entities <= len(resolved_entities) <= semantic_contract.maximum_entities
     ):
         errors.append(_entity_cardinality_error(action, strategy, semantic_contract))
+    if strategy == "quick_evidence_lookup" and len(resolved_entities) == 1 and len(tools) == 1:
+        errors.extend(
+            _entity_evidence_binding_errors(
+                resolved_entities[0],
+                tool_category=tools[0],
+                evidence_requirements=evidence_requirements,
+            )
+        )
 
     reasoning = _bounded_text(payload.get("reasoning_summary"), 500)
     if not reasoning:
@@ -872,9 +939,8 @@ def _planner_prompt(packet: dict[str, Any]) -> str:
         "Choose one ACTION_STRATEGY_CONTRACT pair and obey its cardinality, filter, clarification, tool, and capability values. "
         "quick_evidence_lookup requires insufficient evidence, one required_evidence string, one approved tool category, and non-empty evidence_requirements; "
         "other strategies use no planner tool and empty evidence_requirements. Filters are scalar semantics, never SQL or query syntax. "
-        "Alert filters: severity,alert_type,source_ip,destination_ip,hostname,username,time_window_minutes,sort,limit. "
-        "Incident filters: severity,limit. source_ip_activity: source_ip. response_registry: source_ip,limit. "
-        "Events/authentication_activity/network_activity/recon_activity: source_ip,alert_type,limit. "
+        "Entity evidence uses OUTPUT_SCHEMA.entity_binding_keys; entityless fresh lookup may be broad. "
+        "Use supported evidence keys only. "
         "sort MUST be exactly newest, oldest, or severity; never output timestamp, asc, or desc. Convert explicit durations to minutes. "
         "Do not invent filters. clarification_required uses ambiguous sufficiency, a concise question, and no tool. "
         "When recorded summaries, conclusions, or unresolved questions contain enough facts and the analyst asks to summarize them, "
@@ -941,6 +1007,10 @@ def planner_output_schema() -> dict[str, Any]:
             "proposed_tool_categories": "array[string]",
             "evidence_requirements": "object",
             "reasoning_summary": "nonempty_string",
+        },
+        "entity_binding_keys": {
+            entity_type: next(iter(set(bindings.values())))
+            for entity_type, bindings in sorted(ENTITY_EVIDENCE_BINDING_KEYS.items())
         },
     }
 
@@ -1048,6 +1118,22 @@ def _validated_evidence_requirements(
             normalized["username"] = username
     if hostname and username:
         errors.append("evidence_requirements cannot combine hostname and username in one bounded lookup")
+    for key in ("alert_id", "incident_id", "activity_id", "registry_id"):
+        raw = value.get(key)
+        if raw in (None, ""):
+            continue
+        if isinstance(raw, bool):
+            errors.append(f"evidence_requirements {key} is invalid")
+            continue
+        try:
+            parsed = int(raw)
+        except (TypeError, ValueError):
+            errors.append(f"evidence_requirements {key} is invalid")
+            continue
+        if parsed < 1:
+            errors.append(f"evidence_requirements {key} is invalid")
+        else:
+            normalized[key] = parsed
     for key, maximum in (
         ("time_window_minutes", MAX_PLANNER_TIME_WINDOW_MINUTES),
         ("limit", MAX_PLANNER_EVIDENCE_LIMIT),
@@ -1066,6 +1152,53 @@ def _validated_evidence_requirements(
         else:
             normalized["sort"] = sort
     return normalized, errors
+
+
+def _entity_evidence_binding_errors(
+    entity: dict[str, str],
+    *,
+    tool_category: str,
+    evidence_requirements: dict[str, Any],
+) -> list[str]:
+    entity_type = str(entity.get("type") or "")
+    entity_id = str(entity.get("id") or "")
+    binding_key = ENTITY_EVIDENCE_BINDING_KEYS.get(entity_type, {}).get(tool_category)
+    if not binding_key:
+        return [
+            f"evidence_requirements cannot bind resolved {entity_type} entity to {tool_category}"
+        ]
+    expected: Any = entity_id
+    if binding_key == "source_ip":
+        try:
+            expected = str(ipaddress.ip_address(entity_id))
+        except ValueError:
+            return [f"evidence_requirements cannot bind invalid resolved source_ip id {entity_id}"]
+    else:
+        try:
+            expected = int(entity_id)
+        except (TypeError, ValueError):
+            return [f"evidence_requirements cannot bind non-integer resolved {entity_type} id {entity_id}"]
+        if expected < 1:
+            return [f"evidence_requirements cannot bind non-positive resolved {entity_type} id {entity_id}"]
+    actual = evidence_requirements.get(binding_key)
+    if actual is None:
+        return [
+            f"evidence_requirements must bind resolved {entity_type} {entity_id} with "
+            f"{binding_key}={expected} for {tool_category}"
+        ]
+    if actual != expected:
+        return [
+            f"evidence_requirements {binding_key} must equal resolved {entity_type} id {entity_id}"
+        ]
+    allowed = ENTITY_BINDING_ALLOWED_REQUIREMENTS.get((entity_type, tool_category))
+    if allowed is not None:
+        unsupported = sorted(set(evidence_requirements) - allowed)
+        if unsupported:
+            return [
+                f"evidence_requirements for resolved {entity_type} {entity_id} cannot include: "
+                + ", ".join(unsupported)
+            ]
+    return []
 
 
 def _validated_planner_entities(value: Any) -> tuple[list[dict[str, str]], list[str]]:

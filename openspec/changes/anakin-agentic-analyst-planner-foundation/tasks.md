@@ -128,3 +128,11 @@
 - [x] 18.3 Align the canonical Mac/VM/Mini-PC source-of-truth policy with the planner model and deployment discipline.
 - [x] 18.4 Add focused profile/provider metadata and documentation-contract regressions.
 - [x] 18.5 Run compilation, profile/provider/planner/orchestration and PostgreSQL suites, acceptance harness, `git diff --check`, and strict OpenSpec validation.
+
+## 19. Entity-to-Tool Binding Correctness
+
+- [x] 19.1 Trace resolved entity facts through planner schema, cross-field validation, repair, evidence translation, read-tool validation, executor filtering, and synthesis; record the exact loss point and supported binding matrix.
+- [x] 19.2 Extend the bounded evidence/tool contracts with existing structured identity arguments and reject missing, mismatched, or unsupported entity/category bindings without parsing conversational language.
+- [x] 19.3 Preserve exact validated identities through planner repair and one bounded tool request while keeping genuinely entityless searches valid.
+- [x] 19.4 Add focused planner, repair, orchestration, read-tool, executor, and no-language-interpretation regressions for alert `9663`, wrong/unfiltered IDs, generic searches, and other established entity bindings.
+- [x] 19.5 Run focused and affected AI tests, the offline acceptance harness, Python compilation, `git diff --check`, and strict OpenSpec validation without real provider traffic.

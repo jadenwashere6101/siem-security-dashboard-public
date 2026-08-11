@@ -79,7 +79,7 @@ The system SHALL support direct answer, one quick evidence lookup, bounded inves
 - **THEN** the planner selects quick evidence lookup with exactly one relevant read-tool category, non-empty bounded evidence requirements, and a stopping condition
 
 ### Requirement: Evidence intent is preserved through tool execution
-The system SHALL accept only allowlisted scalar evidence requirements for severity, alert type, source IP, destination IP, hostname, username, time window, sort order, and bounded result limit. It SHALL validate category compatibility and values before deterministically translating requirements into an existing approved read-tool request. It MUST reject unknown, invalid, unrepresentable, mutation-capable, or query-language input and MUST NOT silently discard accepted requirements.
+The system SHALL accept only allowlisted scalar evidence requirements for structured entity identity, severity, alert type, source IP, destination IP, hostname, username, time window, sort order, and bounded result limit. It SHALL validate category compatibility and values before deterministically translating requirements into an existing approved read-tool request. It MUST reject unknown, invalid, unrepresentable, mutation-capable, or query-language input and MUST NOT silently discard accepted requirements.
 
 #### Scenario: Most recent HIGH alert
 - **WHEN** a validated alert lookup requests HIGH severity, newest order, and one result
@@ -92,6 +92,38 @@ The system SHALL accept only allowlisted scalar evidence requirements for severi
 #### Scenario: Unsupported filter cannot be represented
 - **WHEN** a plan supplies an unknown filter, invalid value, excessive bound, or a requirement unsupported by the selected tool category
 - **THEN** validation fails before tool execution and the system does not replace it with a generic unfiltered lookup
+
+### Requirement: Entity-bearing evidence plans bind tools to the resolved entity
+When a quick evidence plan contains one planner-resolved entity, the system MUST validate that the selected evidence category supports that entity type, that `evidence_requirements` contains the category's exact structured identity key, and that its normalized value equals the resolved entity ID. A missing or different identity MUST enter the existing one-attempt planner repair path and MUST NOT be silently inserted, substituted, or ignored by backend conversational logic. A valid entityless fresh lookup MAY remain a bounded broad search.
+
+#### Scenario: Specific alert evidence is exactly bound
+- **WHEN** the planner resolves alert `9663` and requests alert evidence
+- **THEN** the accepted evidence requirements contain `alert_id: 9663`
+- **AND** the executed approved read tool contains the same `alert_id` rather than an unfiltered newest-alert query
+
+#### Scenario: Resolved alert has an unfiltered lookup
+- **WHEN** a plan resolves alert `9663` but proposes only `limit: 1` and `sort: newest`
+- **THEN** deterministic cross-field validation rejects the plan before execution
+- **AND** the structural validation error is available to the single repair attempt
+
+#### Scenario: Resolved alert targets a different ID
+- **WHEN** a plan resolves alert `9663` but its evidence requirements target alert `9682`
+- **THEN** deterministic cross-field validation rejects the plan before execution
+- **AND** no backend component substitutes either alert
+
+#### Scenario: Repair restores exact binding
+- **WHEN** the initial entity-bearing plan omits or mismatches its structured identity requirement
+- **AND** the one repaired proposal preserves the resolved entity and supplies the matching identity
+- **THEN** the repaired plan may execute through the unchanged bounded read-only path
+
+#### Scenario: Generic newest-alert search remains valid
+- **WHEN** the planner selects an entityless `fresh_evidence_lookup` for the newest alerts with valid bounded filters
+- **THEN** validation accepts the broad lookup without manufacturing an active entity or exact identity filter
+
+#### Scenario: Other supported entities use established identity arguments
+- **WHEN** an entity-bearing lookup resolves an incident, source IP, recon activity, response-registry record, or other already-supported planner entity/category pair
+- **THEN** the same cross-field invariant uses that existing tool schema's exact identity argument
+- **AND** unsupported entity/category pairs fail closed rather than gaining a new interpretation rule
 
 #### Scenario: Artifact request
 - **WHEN** an analyst requests an artifact

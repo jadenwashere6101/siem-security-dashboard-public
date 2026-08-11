@@ -1712,6 +1712,7 @@ def _planner_tool_request(
             "limit": requirements.get("limit") or 10,
         }
         for key in (
+            "alert_id",
             "severity",
             "alert_type",
             "source_ip",
@@ -1724,8 +1725,8 @@ def _planner_tool_request(
                 arguments[key] = requirements[key]
         return {"tool_name": "search_alerts", "arguments": arguments}
     if category == "incidents":
-        incident_id = context.get("incident_id")
-        if incident_id and not requirements:
+        incident_id = requirements.get("incident_id") or context.get("incident_id")
+        if requirements.get("incident_id"):
             return {"tool_name": "get_incident_timeline", "arguments": {"incident_id": incident_id}}
         return {
             "tool_name": "search_incidents",
@@ -1738,7 +1739,9 @@ def _planner_tool_request(
         source_ip = requirements.get("source_ip") or context.get("source_ip")
         return {"tool_name": "get_source_ip_context", "arguments": {"source_ip": source_ip}} if source_ip else None
     if category == "response_registry":
-        if requirements.get("source_ip"):
+        if requirements.get("registry_id"):
+            arguments = {"registry_id": requirements["registry_id"]}
+        elif requirements.get("source_ip"):
             arguments = {"source_ip": requirements["source_ip"]}
         else:
             arguments = {
@@ -1750,23 +1753,22 @@ def _planner_tool_request(
             arguments["limit"] = requirements["limit"]
         return {"tool_name": "get_response_registry_context", "arguments": arguments} if arguments else None
     if category in {"events", "authentication_activity", "network_activity", "recon_activity"}:
-        source_ip = requirements.get("source_ip") or context.get("source_ip")
-        if requirements.get("alert_type") and not source_ip:
-            return None
-        if requirements and source_ip:
-            arguments = {"source_ip": source_ip}
-            if requirements.get("alert_type"):
-                arguments["event_type"] = requirements["alert_type"]
-            if requirements.get("limit"):
-                arguments["limit"] = requirements["limit"]
-        else:
-            arguments = {
-                key: context[key]
-                for key in ("alert_id", "source_ip", "activity_id")
-                if context.get(key) not in (None, "")
-            }
-            if requirements.get("limit"):
-                arguments["limit"] = requirements["limit"]
+        arguments = {}
+        for key in ("alert_id", "activity_id", "source_ip"):
+            if requirements.get(key) not in (None, ""):
+                arguments[key] = requirements[key]
+                break
+        if not arguments:
+            if requirements.get("alert_type") and context.get("source_ip") in (None, ""):
+                return None
+            for key in ("source_ip", "alert_id", "activity_id"):
+                if context.get(key) not in (None, ""):
+                    arguments[key] = context[key]
+                    break
+        if requirements.get("alert_type"):
+            arguments["event_type"] = requirements["alert_type"]
+        if requirements.get("limit"):
+            arguments["limit"] = requirements["limit"]
         return {"tool_name": "get_related_events", "arguments": arguments} if arguments else None
     return None
 

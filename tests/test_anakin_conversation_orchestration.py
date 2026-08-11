@@ -151,6 +151,10 @@ def _quick_result(answer="This alert shows repeated blocked scan attempts."):
             {"time_window_minutes": 60, "sort": "newest", "limit": 10},
             {"sort": "newest", "limit": 10, "time_window_minutes": 60},
         ),
+        (
+            {"alert_id": 9663, "limit": 1},
+            {"sort": "newest", "limit": 1, "alert_id": 9663},
+        ),
     ],
 )
 def test_planner_alert_requirements_translate_to_bounded_tool_arguments(requirements, expected):
@@ -536,7 +540,7 @@ def test_deleted_planner_selected_entity_rejects_after_planning_before_execution
             sufficiency="insufficient",
             entities=[{"type": "alert", "id": str(alert_id)}],
             tools=["alerts"],
-            requirements={"limit": 1},
+            requirements={"alert_id": alert_id, "limit": 1},
         ),
         "unused",
     )
@@ -2271,6 +2275,62 @@ def test_open_newest_high_lookup_executes_with_zero_selected_entities(postgres_d
     assert turns[0]["entity_snapshot"] == {"active_entity": None, "entities": []}
 
 
+def test_specific_alert_lookup_executes_only_the_resolved_alert(postgres_db, monkeypatch):
+    conn, cur = postgres_db
+    thread, alert_id = _seed(conn)
+    cur.execute(
+        """
+        INSERT INTO alerts (alert_type, severity, source_ip, source, message, status, created_at)
+        VALUES ('port_scan', 'high', '203.0.113.99'::inet, 'pfsense',
+                'newer unrelated alert', 'open', NOW() + INTERVAL '1 minute')
+        RETURNING id
+        """
+    )
+    unrelated_alert_id = cur.fetchone()[0]
+    conn.commit()
+    monkeypatch.setattr(
+        "core.ai.conversation_orchestration_service.get_db_connection", lambda: NoCloseConnection(conn)
+    )
+    monkeypatch.setattr("core.ai.context_builder.get_db_connection", lambda: NoCloseConnection(conn))
+    monkeypatch.setattr("core.ai.soc_tool_executor.get_db_connection", lambda: NoCloseConnection(conn))
+    monkeypatch.setattr("core.ai.explainer_service.current_user", SimpleNamespace(role="analyst"))
+    plan = _semantic_plan(
+        "evidence_explanation",
+        "quick_evidence_lookup",
+        sufficiency="insufficient",
+        relationship="continuation",
+        entities=[{"type": "alert", "id": str(alert_id)}],
+        tools=["alerts"],
+        requirements={"alert_id": alert_id, "limit": 1},
+    )
+    gateway = PlannerThenAnswerGateway(plan, f"Alert {alert_id} is the selected record.")
+
+    result = run_conversational_workflow(
+        _payload(
+            thread,
+            alert_id,
+            request_id="specific-alert-exact-binding",
+            prompt="Explain the selected alert.",
+            workflow="auto",
+        ),
+        owner_username="conversation_analyst",
+        actor_role="analyst",
+        gateway=gateway,
+        config=_controlled_planner_config(),
+    )
+
+    assert result.status_code == 200
+    envelope = result.payload["result"]["evidence_envelope"]
+    assert envelope["evidence_query_parameters"] == {
+        "alert_id": alert_id,
+        "limit": 1,
+        "sort": "newest",
+    }
+    assert [record["id"] for record in envelope["records"]] == [alert_id]
+    assert unrelated_alert_id not in {record["id"] for record in envelope["records"]}
+    assert result.payload["conversation"]["active_entity"] == {"type": "alert", "id": str(alert_id)}
+
+
 def test_production_shaped_auto_turn_plans_dispatches_and_persists(postgres_db, monkeypatch):
     conn, _cur = postgres_db
     thread, alert_id = _seed(conn)
@@ -2316,8 +2376,8 @@ def test_production_shaped_auto_turn_plans_dispatches_and_persists(postgres_db, 
         "fresh_evidence_lookup",
         "quick_evidence_lookup",
         sufficiency="insufficient",
-        relationship="entity_switch",
-        entities=[{"type": "alert", "id": str(alert_id)}],
+        relationship="new_question",
+        entities=[],
         tools=["alerts"],
         requirements={
             "severity": "high",
@@ -2382,7 +2442,7 @@ def test_production_shaped_auto_turn_plans_dispatches_and_persists(postgres_db, 
     stored_plan = turns[0]["structured_payload"]["agentic_plan"]
     assert stored_plan["strategy"] == "quick_evidence_lookup"
     assert stored_plan["capability"] == "quick_explain"
-    assert stored_plan["relationship"] == "entity_switch"
+    assert stored_plan["relationship"] == "new_question"
     assert stored_plan["read_only"] is True
     assert stored_plan["evidence_requirements"] == {
         "severity": "high",
@@ -2400,8 +2460,7 @@ def test_production_shaped_auto_turn_plans_dispatches_and_persists(postgres_db, 
         "sort": "planner_interpreted",
         "limit": "planner_interpreted",
     }
-    assert turns[0]["entity_snapshot"]["active_entity"]["type"] == "alert"
-    assert turns[0]["entity_snapshot"]["active_entity"]["id"] == str(alert_id)
+    assert turns[0]["entity_snapshot"] == {"active_entity": None, "entities": []}
     assert turns[-1]["role"] == "assistant"
     grounding = turns[-1]["structured_payload"]["evidence_grounding"]
     assert grounding["result_count"] == 3
@@ -2428,7 +2487,7 @@ def test_production_time_window_no_match_does_not_reuse_older_alert(postgres_db,
         "fresh_evidence_lookup",
         "quick_evidence_lookup",
         sufficiency="insufficient",
-        entities=[{"type": "alert", "id": str(alert_id)}],
+        entities=[],
         tools=["alerts"],
         requirements={"time_window_minutes": 60, "limit": 10},
     )

@@ -150,7 +150,7 @@ TOOL_DEFINITIONS: dict[str, SocToolDefinition] = {
         name="search_alerts",
         description="Search alert list using canonical alert filters.",
         optional_args=(
-            "search", "source_ip", "destination_ip", "severity", "alert_type", "hostname", "username",
+            "alert_id", "search", "source_ip", "destination_ip", "severity", "alert_type", "hostname", "username",
             "time_window_minutes", "status", "source", "limit", "offset", "sort",
         ),
         source_path="/alerts",
@@ -324,6 +324,7 @@ def validate_tool_args(tool_name: str, raw_args: Any) -> dict[str, Any]:
             if time_window_minutes > MAX_EVIDENCE_TIME_WINDOW_MINUTES:
                 raise SocToolValidationError("time_window_minutes exceeds the bounded maximum")
         return {
+            "alert_id": parse_positive_int(args.get("alert_id"), "alert_id") if args.get("alert_id") else None,
             "search": normalize_text(args.get("search"), field_name="search"),
             "source_ip": parse_source_ip(args.get("source_ip")) if args.get("source_ip") else None,
             "destination_ip": parse_source_ip(args.get("destination_ip")) if args.get("destination_ip") else None,
