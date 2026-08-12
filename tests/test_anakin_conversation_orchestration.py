@@ -60,6 +60,56 @@ from core.ai.soc_tools import SocToolExecutionSummary
 from core.ai.models import AI_STATUS_SUCCESS, AiGatewayResponse, AiRequestMetadata
 
 
+def test_session_memory_sanitizer_preserves_only_explicit_numeric_token_usage_counts():
+    sanitized = sanitize_structured_value(
+        {
+            "observability": {
+                "attempts": [
+                    {
+                        "prompt_tokens": 2617,
+                        "completion_tokens": 1084,
+                        "access_token": "access-secret",
+                        "refresh_token": "refresh-secret",
+                        "api_token": "api-secret",
+                        "bearer_token": "bearer-secret",
+                        "session_token": "session-secret",
+                        "authentication_token": "authentication-secret",
+                        "unclassified_token_metric": 99,
+                        "api_key": "key-secret",
+                        "secret": "plain-secret",
+                        "password": "password-secret",
+                    }
+                ]
+            },
+            "invalid_string": {"prompt_tokens": "not-a-count"},
+            "invalid_negative": {"completion_tokens": -1},
+            "invalid_boolean": {"prompt_tokens": True},
+        }
+    )
+
+    attempt = sanitized["observability"]["attempts"][0]
+    assert attempt["prompt_tokens"] == 2617
+    assert attempt["completion_tokens"] == 1084
+    assert isinstance(attempt["prompt_tokens"], int)
+    assert isinstance(attempt["completion_tokens"], int)
+    for field in (
+        "access_token",
+        "refresh_token",
+        "api_token",
+        "bearer_token",
+        "session_token",
+        "authentication_token",
+        "unclassified_token_metric",
+        "api_key",
+        "secret",
+        "password",
+    ):
+        assert attempt[field] == "[REDACTED]"
+    assert sanitized["invalid_string"]["prompt_tokens"] == "[REDACTED]"
+    assert sanitized["invalid_negative"]["completion_tokens"] == "[REDACTED]"
+    assert sanitized["invalid_boolean"]["prompt_tokens"] == "[REDACTED]"
+
+
 def test_compact_planner_reliability_metadata_is_sanitized_and_blocks_invalid_shortcut():
     packet = build_planner_packet(
         question="Explain the selected alert.",
@@ -91,6 +141,86 @@ def test_compact_planner_reliability_metadata_is_sanitized_and_blocks_invalid_sh
     ]
     assert "missing identity" not in json.dumps(compact)
     assert conversation_orchestration_service._planner_explicit_shortcut_allowed(outcome) is False
+
+
+def test_planner_observability_token_counts_persist_without_raw_diagnostics(postgres_db):
+    conn, _cur = postgres_db
+    thread, _alert_id = _seed(conn)
+    raw_provider_prompt = "RAW_PROVIDER_PROMPT_SHOULD_NOT_PERSIST"
+    raw_failed_plan = "RAW_FAILED_PLAN_SHOULD_NOT_PERSIST api_token=planner-secret"
+    packet = build_planner_packet(
+        question=raw_provider_prompt,
+        request_context={"context_type": "alert"},
+        conversation_packet={"entities": [{"type": "alert", "id": "9663"}]},
+        preferred_capability="quick_explain",
+        latency_class={"mode": "sync"},
+    )
+    issue = PlannerValidationIssue(
+        "entity_binding",
+        "missing_entity_identity",
+        "evidence_requirements.alert_id",
+        raw_failed_plan,
+    )
+    outcome = PlannerOutcome(
+        status="invalid",
+        plan=None,
+        packet=packet,
+        repaired=False,
+        provider_status="success",
+        error_code="invalid_agentic_plan",
+        attempts=(
+            PlannerAttempt(
+                "initial",
+                "success",
+                "complete",
+                "end_turn",
+                640,
+                2617,
+                1084,
+                "attempt-1",
+                (issue,),
+            ),
+        ),
+    )
+    compact = conversation_orchestration_service._compact_planner_turn(outcome)
+
+    append_turn(
+        conn,
+        thread_id=thread["thread_id"],
+        owner_username="conversation_analyst",
+        expected_version=thread["version"],
+        client_request_id="planner-observability-persistence",
+        role="user",
+        workflow="quick_explain",
+        content="Persist bounded planner reliability metadata.",
+        assertion_type="analyst_statement",
+        structured_payload={"agentic_plan": compact},
+    )
+    conn.commit()
+
+    stored_turn = list_turns(
+        conn,
+        thread_id=thread["thread_id"],
+        owner_username="conversation_analyst",
+    )["turns"][0]
+    stored_plan = stored_turn["structured_payload"]["agentic_plan"]
+    stored_attempt = stored_plan["attempts"][0]
+    assert stored_attempt["prompt_tokens"] == 2617
+    assert stored_attempt["completion_tokens"] == 1084
+    assert stored_attempt["completion_state"] == "complete"
+    assert stored_attempt["stop_reason"] == "end_turn"
+    assert stored_attempt["validation_errors"] == [
+        {
+            "stage": "entity_binding",
+            "code": "missing_entity_identity",
+            "path": "evidence_requirements.alert_id",
+        }
+    ]
+    rendered = json.dumps(stored_plan, sort_keys=True)
+    assert raw_provider_prompt not in rendered
+    assert raw_failed_plan not in rendered
+    assert "planner-secret" not in rendered
+    assert "reasoning_summary" not in rendered
 
 
 def test_only_unrepaired_provider_unavailability_allows_documented_explicit_shortcut():

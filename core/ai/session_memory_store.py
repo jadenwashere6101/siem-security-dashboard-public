@@ -42,6 +42,12 @@ _SENSITIVE_KEY_PARTS = (
     "private_key",
     "webhook",
 )
+_SAFE_TOKEN_USAGE_COUNT_KEYS = frozenset(
+    {
+        "prompt_tokens",
+        "completion_tokens",
+    }
+)
 _CONTROL_MARKERS = re.compile(
     r"(?i)(<\/?system>|<\/?assistant>|\[/?inst\]|<<\/?sys>>|begin\s+(?:system|developer)\s+(?:prompt|message))"
 )
@@ -1541,7 +1547,9 @@ def _sanitize_value(value: Any, *, depth: int) -> Any:
         for key, child in value.items():
             key_text = str(key)[:128]
             normalized = key_text.lower().replace("-", "_")
-            if any(part in normalized for part in _SENSITIVE_KEY_PARTS):
+            if _is_safe_token_usage_count(normalized, child):
+                result[key_text] = child
+            elif any(part in normalized for part in _SENSITIVE_KEY_PARTS):
                 result[key_text] = "[REDACTED]"
             else:
                 result[key_text] = _sanitize_value(child, depth=depth + 1)
@@ -1551,6 +1559,15 @@ def _sanitize_value(value: Any, *, depth: int) -> Any:
             raise SessionMemoryValidationError("structured list has too many items.")
         return [_sanitize_value(item, depth=depth + 1) for item in value]
     return _CONTROL_MARKERS.sub("[stored-untrusted-control-text]", str(value))[:4000]
+
+
+def _is_safe_token_usage_count(normalized_key: str, value: Any) -> bool:
+    return (
+        normalized_key in _SAFE_TOKEN_USAGE_COUNT_KEYS
+        and isinstance(value, int)
+        and not isinstance(value, bool)
+        and value >= 0
+    )
 
 
 def _required_text(value: Any, field_name: str, max_chars: int) -> str:

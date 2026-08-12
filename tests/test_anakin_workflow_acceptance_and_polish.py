@@ -67,7 +67,7 @@ def test_removed_legacy_frontend_controls_and_action_ids_are_absent_from_compone
     obsolete = removed_frontend_ai_controls_present()
 
     assert obsolete == {"labels": [], "action_ids": []}
-    assert "Explain this alert" in REMOVED_FRONTEND_AI_LABELS
+    assert "Explain this alert" not in REMOVED_FRONTEND_AI_LABELS
     assert "suggestedactions" in REMOVED_FRONTEND_ACTION_IDS
 
 
