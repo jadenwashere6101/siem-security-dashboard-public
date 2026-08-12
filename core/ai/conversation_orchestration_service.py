@@ -331,10 +331,7 @@ def plan_conversational_submission(
         outcome = planner_configuration_outcome(packet, packet_error)
     else:
         outcome = plan_turn(packet, gateway=gateway, config=resolved_config)
-        if outcome.plan is None and preferred and outcome.error_code not in {
-            PlannerConfigurationError.error_code,
-            "agentic_plan_repair_too_large",
-        }:
+        if outcome.plan is None and preferred and _planner_explicit_shortcut_allowed(outcome):
             outcome = deterministic_shortcut_plan(packet, preferred)
     workflow = outcome.workflow or WORKFLOW_QUICK_EXPLAIN
     if outcome.plan and outcome.plan.proposed_strategy == "artifact_draft":
@@ -1674,8 +1671,44 @@ def _compact_planner_turn(outcome: PlannerOutcome) -> dict[str, Any]:
         "repaired": outcome.repaired,
         "packet_chars": outcome.packet.serialized_chars,
         "prompt_chars": outcome.packet.prompt_chars,
+        "provider_status": outcome.provider_status,
         "error_code": outcome.error_code,
+        "attempts": [
+            {
+                "stage": attempt.stage,
+                "provider_status": attempt.provider_status,
+                "completion_state": attempt.completion_state,
+                "stop_reason": attempt.stop_reason,
+                "plan_chars": attempt.plan_chars,
+                "prompt_tokens": attempt.prompt_tokens,
+                "completion_tokens": attempt.completion_tokens,
+                "accounting_attempt_id": attempt.accounting_attempt_id,
+                "validation_errors": [
+                    {"stage": error.stage, "code": error.code, "path": error.path}
+                    for error in attempt.validation_errors[:12]
+                ],
+            }
+            for attempt in outcome.attempts[:2]
+        ],
     }
+
+
+def _planner_explicit_shortcut_allowed(outcome: PlannerOutcome) -> bool:
+    return bool(
+        outcome.status == "unavailable"
+        and not outcome.repaired
+        and outcome.provider_status
+        in {
+            "provider_timeout",
+            "provider_unavailable",
+            "disabled",
+            "fallback_blocked",
+            "fallback_requires_confirmation",
+            "budget_exhausted",
+            "accounting_unavailable",
+        }
+        and not any(attempt.completion_state == "output_exhausted" for attempt in outcome.attempts)
+    )
 
 
 def _apply_planner_execution_hints(payload: dict[str, Any], plan: AgenticAnalystPlan | None) -> None:

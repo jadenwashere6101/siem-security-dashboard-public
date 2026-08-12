@@ -13,6 +13,7 @@ from core.ai.agentic_analyst_planner import (
     PLANNER_PACKET_MAX_CHARS,
     build_planner_packet,
     parse_and_validate_plan,
+    planner_output_contract,
     planner_output_schema,
     planner_semantic_contract,
     plan_turn,
@@ -23,10 +24,13 @@ from core.ai.config import (
     AiGatewayConfig,
     default_ai_profiles,
 )
+from core.ai.acceptance_harness import build_planner_reliability_fixtures
 from core.ai.gateway import AiGateway
 from core.ai.models import (
     AI_STATUS_BUDGET_EXHAUSTED,
     AI_STATUS_SUCCESS,
+    PROVIDER_COMPLETION_COMPLETE,
+    PROVIDER_COMPLETION_OUTPUT_EXHAUSTED,
     AiGatewayResponse,
     AiRequestMetadata,
 )
@@ -81,6 +85,33 @@ class FailureGateway:
                 error_code=self.status,
                 local_request=True,
                 paid_request=False,
+            ),
+        )
+
+
+class CompletionGateway:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.requests = []
+
+    def generate(self, request):
+        self.requests.append(request)
+        value = self.responses.pop(0)
+        return AiGatewayResponse(
+            status=value.get("status", AI_STATUS_SUCCESS),
+            content=value.get("content"),
+            error=None,
+            metadata=AiRequestMetadata(
+                provider="anthropic",
+                model="planner-test",
+                mode=AI_MODE_LOCAL_ONLY,
+                status=value.get("status", AI_STATUS_SUCCESS),
+                provider_completion_state=value.get("completion_state"),
+                provider_stop_reason=value.get("stop_reason"),
+                provider_reported_prompt_tokens=value.get("input_tokens"),
+                provider_reported_completion_tokens=value.get("output_tokens"),
+                accounting_attempt_id=value.get("accounting_attempt_id"),
+                paid_request=True,
             ),
         )
 
@@ -244,6 +275,11 @@ def _plan(
         "reasoning_summary": "The current question changes task and requires current alert evidence.",
         "confidence": "high",
     }
+
+
+def _prompt_contract(prompt: str) -> dict:
+    rendered = prompt.split("PLANNER_CONTRACT=", 1)[1].splitlines()[0]
+    return json.loads(rendered)
 
 
 def test_packet_is_fit_by_construction_with_production_sized_state():
@@ -568,10 +604,10 @@ def test_prompt_and_repair_use_the_authoritative_semantic_contract():
 
     outcome = plan_turn(_packet(), gateway=gateway, config=_config())
 
-    serialized = json.dumps(planner_semantic_contract(), sort_keys=True, separators=(",", ":"))
     assert outcome.status == "planned"
-    assert serialized in gateway.requests[0].prompt
-    assert serialized in gateway.requests[1].prompt
+    for request in gateway.requests:
+        rows = _prompt_contract(request.prompt)["action_strategy"]["rows"]
+        assert {(row[0], row[1]) for row in rows} == set(PLAN_SEMANTIC_CONTRACTS)
     assert "fresh_evidence_lookup/quick_evidence_lookup requires between 0 and 1 resolved entities" in gateway.requests[1].prompt
 
 
@@ -596,6 +632,23 @@ def test_compact_semantic_contract_is_equivalent_to_validator_authority():
     assert "resolved_entities" in planner_output_schema()["required"]
 
 
+def test_authoritative_output_contract_covers_filters_bounds_bindings_and_conditions():
+    contract = planner_output_contract()
+    schema = contract["schema"]
+
+    assert schema["bounds"]["time_window_minutes"] == [1, 7 * 24 * 60]
+    assert schema["bounds"]["limit"] == [1, 10]
+    assert schema["bounds"]["resolved_entities"] == 2
+    assert schema["bounds"]["proposed_tool_categories"] == 1
+    assert schema["evidence_filters"]["mutual_exclusion"] == [["hostname", "username"]]
+    assert schema["evidence_filters"]["allowed_by_tool"]["alerts"] == sorted(
+        {"alert_id", "severity", "alert_type", "source_ip", "destination_ip", "hostname", "username", "time_window_minutes", "sort", "limit"}
+    )
+    assert schema["entity_bindings"]["alert"]["alerts"] == "alert_id"
+    assert schema["conditionals"]["artifact_draft"].startswith("artifact_type required")
+    assert contract["action_strategy"]["rows"]
+
+
 def test_planner_prompt_explicitly_serializes_all_validator_owned_enums():
     gateway = SequenceGateway([json.dumps(_plan())])
 
@@ -609,10 +662,21 @@ def test_planner_prompt_explicitly_serializes_all_validator_owned_enums():
     assert schema["enums"]["proposed_capability"] == [
         "decision_support", "deep_investigate", "generate_artifact", "quick_explain"
     ]
-    assert json.dumps(schema, sort_keys=True, separators=(",", ":")) in prompt
-    assert "Use only exact enum tokens from OUTPUT_SCHEMA" in prompt
-    assert "never invent synonyms" in prompt
-    assert "capability token in a strategy field" in prompt
+    prompt_contract = _prompt_contract(prompt)
+    prompt_rows = prompt_contract["action_strategy"]["rows"]
+    assert {row[0] for row in prompt_rows} == set(schema["enums"]["current_turn_intent"])
+    assert {row[1] for row in prompt_rows} == set(schema["enums"]["proposed_strategy"])
+    assert {row[7] for row in prompt_rows if row[7] is not None} == set(schema["enums"]["proposed_capability"])
+    assert prompt_contract["filter_formats"] == schema["evidence_filters"]["formats"]
+    alert_binding = next(
+        value
+        for key, value in prompt_contract["entity_binding(entity@tools)"].items()
+        if key.startswith("alert@") and "events" in key
+    )
+    assert alert_binding == ["alert_id", ["alert_id", "limit"]]
+    assert "Obey PLANNER_CONTRACT" in prompt
+    assert "never invent tokens" in prompt
+    assert all(row[1] in schema["enums"]["proposed_strategy"] for row in prompt_rows)
 
 
 def test_every_canonical_action_strategy_pair_accepts_its_exact_tokens():
@@ -682,6 +746,7 @@ def test_noncanonical_action_synonyms_fail_and_repair_receives_exact_enum_vocabu
         (lambda value: f"Here is the plan: {value}", False),
         (lambda value: f"{value}\nThis is the plan.", False),
         (lambda value: f"Explanation first.\n```json\n{value}\n```", False),
+        (lambda value: f"```json\n{value}\n```", False),
     ],
 )
 def test_initial_parser_accepts_only_one_json_object_without_surrounding_prose(rendered, accepted):
@@ -718,11 +783,11 @@ def test_repair_prompt_has_hard_output_boundaries_and_preserves_unreported_valid
     prompt = gateway.requests[1].prompt
     assert prompt.startswith("Return ONLY the repaired JSON object. Your entire response must begin with { and end with }.")
     assert prompt.endswith("Return ONLY one JSON object beginning with { and ending with }; no text before or after it.")
-    assert '"preserve_original_fields"' in prompt
+    assert '"preserved_fields"' in prompt
     assert '"resolved_entities"' in prompt
     assert '"evidence_requirements"' in prompt
     assert '"proposed_strategy"' in prompt
-    assert "Change only invalid fields" in prompt
+    assert "Change only invalid or dependent fields" in prompt
 
 
 @pytest.mark.parametrize(
@@ -1246,8 +1311,8 @@ def test_planner_prompt_defines_sort_semantics_without_accepting_aliases():
 
     assert outcome.status == "planned"
     prompt = gateway.requests[0].prompt
-    assert "sort MUST be exactly newest, oldest, or severity" in prompt
-    assert "never output timestamp, asc, or desc" in prompt
+    assert _prompt_contract(prompt)["filter_formats"]["sort"] == ["newest", "oldest", "severity"]
+    assert all(alias not in _prompt_contract(prompt)["filter_formats"]["sort"] for alias in ("timestamp", "asc", "desc"))
 
 
 def test_planner_repair_reports_required_evidence_type_contract_precisely():
@@ -1262,8 +1327,8 @@ def test_planner_repair_reports_required_evidence_type_contract_precisely():
     assert len(gateway.requests) == 2
     repair_prompt = gateway.requests[1].prompt
     assert "required_evidence must be a list" in repair_prompt
-    assert '"required_evidence":"array of strings"' in repair_prompt
-    assert "Correct every reported schema and cross-field violation" in repair_prompt
+    assert _prompt_contract(repair_prompt)["shape"]["required_evidence"] == "array<=6[nonempty_string]"
+    assert "Correct every typed violation" in repair_prompt
 
 
 def test_repair_cannot_change_the_initial_valid_action_classification():
@@ -1282,7 +1347,8 @@ def test_repair_cannot_change_the_initial_valid_action_classification():
 
     assert outcome.status == "invalid"
     assert outcome.plan is None
-    assert '"current_turn_intent":"must remain fresh_evidence_lookup"' in gateway.requests[1].prompt
+    assert '"current_turn_intent":"fresh_evidence_lookup"' in gateway.requests[1].prompt
+    assert '"preserved_fields"' in gateway.requests[1].prompt
 
 
 def test_contradictory_repaired_direct_answer_still_fails_closed():
@@ -1312,8 +1378,9 @@ def test_planner_prompt_describes_state_summary_contract_without_server_routing(
     outcome = plan_turn(packet, gateway=gateway, config=_config())
 
     assert outcome.status == "planned"
-    assert "asks to summarize them" in gateway.requests[0].prompt
-    assert "use direct_answer with sufficient evidence" in gateway.requests[0].prompt
+    rows = _prompt_contract(gateway.requests[0].prompt)["action_strategy"]["rows"]
+    state_summary = next(row for row in rows if row[:2] == ["state_summary", "direct_answer"])
+    assert state_summary[2:8] == [0, 1, False, False, False, "quick_explain"]
 
 
 def test_second_invalid_plan_does_not_fall_back_to_prior_workflow():
@@ -1323,6 +1390,106 @@ def test_second_invalid_plan_does_not_fall_back_to_prior_workflow():
     assert outcome.plan is None
     assert outcome.error_code == "invalid_agentic_plan"
     assert len(gateway.requests) == 2
+
+
+def test_validation_errors_are_typed_by_parse_schema_semantic_and_binding_stage():
+    parse_plan, parse_errors = parse_and_validate_plan('{"current_turn_intent":', _packet().payload)
+    schema_value = _plan()
+    schema_value.pop("required_evidence")
+    schema_plan, schema_errors = parse_and_validate_plan(json.dumps(schema_value), _packet().payload)
+    semantic_value = _plan()
+    semantic_value["proposed_capability"] = "deep_investigate"
+    semantic_plan, semantic_errors = parse_and_validate_plan(json.dumps(semantic_value), _packet().payload)
+    binding_value = _plan(entities=[{"type": "alert", "id": "9663"}], requirements={"alert_id": 9682})
+    binding_plan, binding_errors = parse_and_validate_plan(json.dumps(binding_value), _packet().payload)
+
+    assert parse_plan is schema_plan is semantic_plan is binding_plan is None
+    assert parse_errors[0].as_dict() == {
+        "stage": "parse",
+        "code": "invalid_json_object",
+        "path": "$",
+        "message": "response must be one JSON object",
+    }
+    assert any(error.stage == "schema" and error.code == "missing_required_fields" for error in schema_errors)
+    assert any(error.stage == "semantic" and error.path == "proposed_capability" for error in semantic_errors)
+    assert any(error.stage == "entity_binding" and error.code == "mismatched_entity_identity" for error in binding_errors)
+
+
+@pytest.mark.parametrize("content", ['{"current_turn_intent":', None])
+def test_initial_output_exhaustion_is_classified_before_validation_or_repair(content):
+    gateway = CompletionGateway(
+        [{
+            "content": content,
+            "completion_state": PROVIDER_COMPLETION_OUTPUT_EXHAUSTED,
+            "stop_reason": "max_tokens",
+            "input_tokens": 42,
+            "output_tokens": 4096,
+            "accounting_attempt_id": "attempt-initial",
+        }]
+    )
+
+    outcome = plan_turn(_packet(), gateway=gateway, config=_config())
+
+    assert outcome.status == "truncated"
+    assert outcome.error_code == "agentic_plan_output_exhausted"
+    assert outcome.repaired is False
+    assert len(gateway.requests) == 1
+    assert outcome.attempts[0].validation_errors[0].stage == "provider_completion"
+    assert outcome.attempts[0].validation_errors[0].code == "output_exhausted"
+    assert outcome.attempts[0].plan_chars == len(content or "")
+    assert outcome.attempts[0].accounting_attempt_id == "attempt-initial"
+
+
+def test_repair_output_exhaustion_retains_both_attempt_classifications():
+    malformed = _plan()
+    malformed["required_evidence"] = "current alerts"
+    gateway = CompletionGateway(
+        [
+            {"content": json.dumps(malformed), "completion_state": PROVIDER_COMPLETION_COMPLETE, "stop_reason": "end_turn"},
+            {"content": '{"current_turn_intent":', "completion_state": PROVIDER_COMPLETION_OUTPUT_EXHAUSTED, "stop_reason": "max_tokens"},
+        ]
+    )
+
+    outcome = plan_turn(_packet(), gateway=gateway, config=_config())
+
+    assert outcome.status == "truncated"
+    assert outcome.error_code == "agentic_plan_repair_output_exhausted"
+    assert outcome.repaired is True
+    assert len(gateway.requests) == 2
+    assert [attempt.stage for attempt in outcome.attempts] == ["initial", "repair"]
+    assert outcome.attempts[0].validation_errors[0].stage == "schema"
+    assert outcome.attempts[1].validation_errors[0].stage == "provider_completion"
+
+
+def test_failed_repair_metadata_retains_bounded_attempt_errors_without_raw_plans():
+    gateway = CompletionGateway(
+        [
+            {"content": "not-json", "completion_state": PROVIDER_COMPLETION_COMPLETE, "stop_reason": "end_turn"},
+            {"content": "still-not-json", "completion_state": PROVIDER_COMPLETION_COMPLETE, "stop_reason": "end_turn"},
+        ]
+    )
+
+    outcome = plan_turn(_packet(), gateway=gateway, config=_config())
+    metadata = outcome.metadata()
+
+    assert outcome.status == "invalid"
+    assert [attempt["validation_errors"][0]["stage"] for attempt in metadata["attempts"]] == ["parse", "parse"]
+    assert "not-json" not in json.dumps(metadata)
+    assert "still-not-json" not in json.dumps(metadata)
+
+
+@pytest.mark.parametrize("fixture", build_planner_reliability_fixtures(), ids=lambda fixture: fixture["name"])
+def test_offline_acceptance_planner_reliability_fixtures(fixture):
+    gateway = CompletionGateway(fixture["responses"])
+
+    outcome = plan_turn(_packet(), gateway=gateway, config=_config())
+
+    expected = fixture["expected"]
+    assert outcome.status == expected["status"]
+    assert outcome.repaired is expected["repaired"]
+    assert outcome.error_code == expected["error_code"]
+    assert len(gateway.requests) == expected["requests"]
+    assert all(request.capability == "agentic_analyst_planning" for request in gateway.requests)
 
 
 def test_provider_timeout_returns_unavailable_without_repair_or_sticky_plan():

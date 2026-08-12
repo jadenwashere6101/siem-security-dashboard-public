@@ -2855,6 +2855,52 @@ def _acceptance_config() -> AiGatewayConfig:
     )
 
 
+def build_planner_reliability_fixtures() -> tuple[dict[str, Any], ...]:
+    """Deterministic provider-free fixtures for the planner reliability boundary."""
+    valid = {
+        "current_turn_intent": "fresh_evidence_lookup",
+        "relationship_to_prior_turn": "new_question",
+        "resolved_entities": [{"type": "alert", "id": "9078"}],
+        "evidence_sufficiency": "insufficient",
+        "required_evidence": ["current high-severity alert evidence"],
+        "proposed_strategy": "quick_evidence_lookup",
+        "proposed_capability": "quick_explain",
+        "proposed_tool_categories": ["alerts"],
+        "evidence_requirements": {"alert_id": 9078, "severity": "high", "limit": 1},
+        "reasoning_summary": "The current question requires one bounded alert lookup.",
+        "confidence": "high",
+    }
+    invalid_shape = dict(valid, required_evidence="current high-severity alert evidence")
+    return (
+        {
+            "name": "initial_success",
+            "responses": [{"content": json.dumps(valid), "completion_state": "complete", "stop_reason": "end_turn"}],
+            "expected": {"status": "planned", "repaired": False, "requests": 1, "error_code": None},
+        },
+        {
+            "name": "repair_success",
+            "responses": [
+                {"content": json.dumps(invalid_shape), "completion_state": "complete", "stop_reason": "end_turn"},
+                {"content": json.dumps(valid), "completion_state": "complete", "stop_reason": "end_turn"},
+            ],
+            "expected": {"status": "planned", "repaired": True, "requests": 2, "error_code": None},
+        },
+        {
+            "name": "repair_failure",
+            "responses": [
+                {"content": "not-json", "completion_state": "complete", "stop_reason": "end_turn"},
+                {"content": "still-not-json", "completion_state": "complete", "stop_reason": "end_turn"},
+            ],
+            "expected": {"status": "invalid", "repaired": True, "requests": 2, "error_code": "invalid_agentic_plan"},
+        },
+        {
+            "name": "provider_truncation",
+            "responses": [{"content": '{"current_turn_intent":', "completion_state": "output_exhausted", "stop_reason": "max_tokens"}],
+            "expected": {"status": "truncated", "repaired": False, "requests": 1, "error_code": "agentic_plan_output_exhausted"},
+        },
+    )
+
+
 __all__ = [
     "AcceptanceReport",
     "AcceptanceResult",
@@ -2871,6 +2917,7 @@ __all__ = [
     "build_complete_ai_inventory",
     "build_golden_reasoning_cases",
     "build_production_like_alert_checklist_fixture",
+    "build_planner_reliability_fixtures",
     "build_production_safe_live_sweep_matrix",
     "build_workflow_acceptance_summary",
     "build_workflow_representative_fixtures",

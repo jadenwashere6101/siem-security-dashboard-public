@@ -18,6 +18,11 @@ AI_STATUS_BUDGET_EXHAUSTED = "budget_exhausted"
 AI_STATUS_ACCOUNTING_UNAVAILABLE = "accounting_unavailable"
 AI_STATUS_FAILED = "failed"
 
+PROVIDER_COMPLETION_COMPLETE = "complete"
+PROVIDER_COMPLETION_OUTPUT_EXHAUSTED = "output_exhausted"
+PROVIDER_COMPLETION_MALFORMED_NO_TEXT = "malformed_no_text"
+PROVIDER_COMPLETION_PROVIDER_ERROR = "provider_error"
+
 
 @dataclass(frozen=True)
 class AiGatewayRequest:
@@ -102,6 +107,8 @@ class AiRequestMetadata:
     budget_remaining_usd: float | None = None
     usage_cost_usd: float | None = None
     usage_cost_source: str | None = None
+    provider_completion_state: str | None = None
+    provider_stop_reason: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)

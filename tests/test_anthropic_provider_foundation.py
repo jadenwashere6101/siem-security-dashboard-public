@@ -25,6 +25,10 @@ from core.ai.models import (
     AI_STATUS_PROVIDER_UNAVAILABLE,
     AI_STATUS_SUCCESS,
     AiGatewayRequest,
+    PROVIDER_COMPLETION_COMPLETE,
+    PROVIDER_COMPLETION_MALFORMED_NO_TEXT,
+    PROVIDER_COMPLETION_OUTPUT_EXHAUSTED,
+    PROVIDER_COMPLETION_PROVIDER_ERROR,
 )
 from core.ai.profile_registry import AI_PROFILE_AGENTIC_PLANNING
 from core.ai.providers import (
@@ -233,6 +237,8 @@ def test_mocked_anthropic_generation_normalizes_profile_and_reported_usage(monke
     assert response.metadata.estimated_cost_usd is None
     assert response.metadata.actual_billed_cost_usd is None
     assert response.metadata.cost_source is None
+    assert response.metadata.provider_completion_state == PROVIDER_COMPLETION_COMPLETE
+    assert response.metadata.provider_stop_reason is None
     assert captured["payload"] == {
         "model": "claude-test-model",
         "max_tokens": 4096,
@@ -244,6 +250,49 @@ def test_mocked_anthropic_generation_normalizes_profile_and_reported_usage(monke
     assert captured["timeout"] == 90.0
     assert captured["headers"]["x-api-key"] == FAKE_ANTHROPIC_KEY
     assert FAKE_ANTHROPIC_KEY not in str(response.as_dict())
+
+
+def test_anthropic_multiple_text_blocks_are_joined_in_provider_order(monkeypatch):
+    monkeypatch.setattr(
+        "core.ai.providers._anthropic_http_json",
+        lambda **_kwargs: {
+            "content": [
+                {"type": "text", "text": '{"first":'},
+                {"type": "thinking", "thinking": "hidden chain of thought"},
+                {"type": "text", "text": "true}"},
+            ],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 4, "output_tokens": 5},
+        },
+    )
+
+    response = AnthropicProvider().generate(_planner_request(), _anthropic_config())
+
+    assert response.status == AI_STATUS_SUCCESS
+    assert response.content == '{"first":\ntrue}'
+    assert "hidden chain of thought" not in response.content
+    assert "hidden chain of thought" not in str(response.metadata.as_dict())
+    assert response.metadata.provider_completion_state == PROVIDER_COMPLETION_COMPLETE
+    assert response.metadata.provider_stop_reason == "end_turn"
+
+
+def test_anthropic_no_text_normal_completion_is_malformed_without_reasoning_exposure(monkeypatch):
+    monkeypatch.setattr(
+        "core.ai.providers._anthropic_http_json",
+        lambda **_kwargs: {
+            "content": [{"type": "thinking", "thinking": "hidden chain of thought"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 4, "output_tokens": 5},
+        },
+    )
+
+    response = AnthropicProvider().generate(_planner_request(), _anthropic_config())
+
+    assert response.status == AI_STATUS_PROVIDER_MALFORMED_RESPONSE
+    assert response.content is None
+    assert response.metadata.provider_completion_state == PROVIDER_COMPLETION_MALFORMED_NO_TEXT
+    assert response.metadata.provider_stop_reason == "end_turn"
+    assert "hidden chain of thought" not in str(response.as_dict())
 
 
 @pytest.mark.parametrize(
@@ -289,7 +338,7 @@ def test_unexpected_anthropic_error_logs_only_exception_type(monkeypatch, caplog
     assert FAKE_ANTHROPIC_KEY not in str(response.as_dict())
 
 
-def test_malformed_anthropic_response_is_normalized(monkeypatch):
+def test_thinking_only_max_tokens_response_is_normalized_as_output_exhaustion(monkeypatch):
     monkeypatch.setattr(
         "core.ai.providers._anthropic_http_json",
         lambda **_kwargs: {
@@ -301,9 +350,44 @@ def test_malformed_anthropic_response_is_normalized(monkeypatch):
 
     response = AnthropicProvider().generate(_planner_request(), _anthropic_config())
 
-    assert response.status == AI_STATUS_PROVIDER_MALFORMED_RESPONSE
-    assert response.metadata.error_code == AI_STATUS_PROVIDER_MALFORMED_RESPONSE
+    assert response.status == AI_STATUS_SUCCESS
+    assert response.metadata.error_code is None
     assert response.content is None
+    assert response.metadata.provider_completion_state == PROVIDER_COMPLETION_OUTPUT_EXHAUSTED
+    assert response.metadata.provider_stop_reason == "max_tokens"
+    assert response.metadata.provider_reported_completion_tokens == 4096
+    assert "truncated reasoning" not in str(response.as_dict())
+
+
+def test_anthropic_partial_text_max_tokens_preserves_text_but_marks_exhaustion(monkeypatch):
+    monkeypatch.setattr(
+        "core.ai.providers._anthropic_http_json",
+        lambda **_kwargs: {
+            "content": [{"type": "text", "text": '{"current_turn_intent":'}],
+            "stop_reason": "max_tokens",
+            "usage": {"input_tokens": 17, "output_tokens": 4096},
+        },
+    )
+
+    response = AnthropicProvider().generate(_planner_request(), _anthropic_config())
+
+    assert response.status == AI_STATUS_SUCCESS
+    assert response.content == '{"current_turn_intent":'
+    assert response.metadata.provider_completion_state == PROVIDER_COMPLETION_OUTPUT_EXHAUSTED
+    assert response.metadata.provider_stop_reason == "max_tokens"
+
+
+def test_anthropic_transport_error_marks_provider_completion_error(monkeypatch):
+    def fail_transport(**_kwargs):
+        raise TimeoutError()
+
+    monkeypatch.setattr("core.ai.providers._anthropic_http_json", fail_transport)
+
+    response = AnthropicProvider().generate(_planner_request(), _anthropic_config())
+
+    assert response.status == AI_STATUS_PROVIDER_TIMEOUT
+    assert response.metadata.provider_completion_state == PROVIDER_COMPLETION_PROVIDER_ERROR
+    assert response.metadata.provider_stop_reason is None
 
 
 def test_gateway_blocks_anthropic_routing_until_paid_accounting_exists(monkeypatch):

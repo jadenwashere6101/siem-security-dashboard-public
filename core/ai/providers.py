@@ -27,6 +27,10 @@ from core.ai.models import (
     AiGatewayResponse,
     AiProviderReadiness,
     AiRequestMetadata,
+    PROVIDER_COMPLETION_COMPLETE,
+    PROVIDER_COMPLETION_MALFORMED_NO_TEXT,
+    PROVIDER_COMPLETION_OUTPUT_EXHAUSTED,
+    PROVIDER_COMPLETION_PROVIDER_ERROR,
     estimate_tokens,
 )
 
@@ -379,6 +383,8 @@ class AnthropicProvider:
             "max_tokens": profile.max_output_tokens,
             "messages": [{"role": "user", "content": request.prompt}],
         }
+        # Temperature is intentionally omitted for Anthropic until the repository
+        # validates a provider/model contract that authorizes sending it.
         headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
@@ -392,7 +398,12 @@ class AnthropicProvider:
                 headers=headers,
                 timeout=profile.timeout_seconds,
             )
+            stop_reason = _anthropic_stop_reason(response)
             content = _anthropic_content(response)
+            completion_state = _anthropic_completion_state(
+                stop_reason=stop_reason,
+                has_text=bool(content),
+            )
             input_tokens, output_tokens = _anthropic_usage(response)
         except TimeoutError:
             return self._failure(
@@ -424,6 +435,7 @@ class AnthropicProvider:
                 status=AI_STATUS_PROVIDER_MALFORMED_RESPONSE,
                 error="Anthropic provider returned a malformed response.",
                 error_code=AI_STATUS_PROVIDER_MALFORMED_RESPONSE,
+                completion_state=PROVIDER_COMPLETION_MALFORMED_NO_TEXT,
             )
         except OSError:
             return self._failure(
@@ -450,6 +462,21 @@ class AnthropicProvider:
                 error_code=AI_STATUS_FAILED,
             )
 
+        if completion_state == PROVIDER_COMPLETION_MALFORMED_NO_TEXT:
+            return self._failure(
+                config=config,
+                profile=profile,
+                prompt_tokens=prompt_tokens,
+                started=started,
+                status=AI_STATUS_PROVIDER_MALFORMED_RESPONSE,
+                error="Anthropic provider returned no usable text content.",
+                error_code=AI_STATUS_PROVIDER_MALFORMED_RESPONSE,
+                completion_state=completion_state,
+                stop_reason=stop_reason,
+                provider_prompt_tokens=input_tokens,
+                provider_completion_tokens=output_tokens,
+            )
+
         return _provider_response(
             provider=self.provider_key,
             model=profile.model,
@@ -463,6 +490,8 @@ class AnthropicProvider:
             content=content,
             paid_request=True,
             profile=profile,
+            completion_state=completion_state,
+            stop_reason=stop_reason,
         )
 
     def _failure(
@@ -475,6 +504,10 @@ class AnthropicProvider:
         status: str,
         error: str,
         error_code: str,
+        completion_state: str = PROVIDER_COMPLETION_PROVIDER_ERROR,
+        stop_reason: str | None = None,
+        provider_prompt_tokens: int | None = None,
+        provider_completion_tokens: int | None = None,
     ) -> AiGatewayResponse:
         return _provider_response(
             provider=self.provider_key,
@@ -487,6 +520,10 @@ class AnthropicProvider:
             error_code=error_code,
             paid_request=True,
             profile=profile,
+            completion_state=completion_state,
+            stop_reason=stop_reason,
+            provider_prompt_tokens=provider_prompt_tokens,
+            provider_completion_tokens=provider_completion_tokens,
         )
 
 class PlaceholderPaidProvider:
@@ -609,7 +646,7 @@ def _anthropic_http_json(
     return decoded
 
 
-def _anthropic_content(response: dict[str, object]) -> str:
+def _anthropic_content(response: dict[str, object]) -> str | None:
     blocks = response.get("content")
     if not isinstance(blocks, list):
         raise _AnthropicMalformedResponse()
@@ -620,9 +657,27 @@ def _anthropic_content(response: dict[str, object]) -> str:
             if isinstance(text, str) and text.strip():
                 parts.append(text.strip())
     content = "\n".join(parts).strip()
-    if not content:
+    return content or None
+
+
+def _anthropic_stop_reason(response: dict[str, object]) -> str | None:
+    value = response.get("stop_reason")
+    if value is None:
+        return None
+    if not isinstance(value, str):
         raise _AnthropicMalformedResponse()
-    return content
+    normalized = value.strip()
+    if not normalized or len(normalized) > 80:
+        raise _AnthropicMalformedResponse()
+    return normalized
+
+
+def _anthropic_completion_state(*, stop_reason: str | None, has_text: bool) -> str:
+    if stop_reason == "max_tokens":
+        return PROVIDER_COMPLETION_OUTPUT_EXHAUSTED
+    if not has_text:
+        return PROVIDER_COMPLETION_MALFORMED_NO_TEXT
+    return PROVIDER_COMPLETION_COMPLETE
 
 
 def _anthropic_usage(response: dict[str, object]) -> tuple[int | None, int | None]:
@@ -722,6 +777,8 @@ def _provider_response(
     local_request: bool = False,
     paid_request: bool = False,
     profile=None,
+    completion_state: str | None = None,
+    stop_reason: str | None = None,
 ) -> AiGatewayResponse:
     metadata = AiRequestMetadata(
         provider=provider,
@@ -753,6 +810,8 @@ def _provider_response(
         task_category=profile.task_category if profile else None,
         timeout_seconds=profile.timeout_seconds if profile else None,
         max_output_tokens=profile.max_output_tokens if profile else None,
+        provider_completion_state=completion_state,
+        provider_stop_reason=stop_reason,
     )
     return AiGatewayResponse(status=status, content=content, error=error, metadata=metadata)
 

@@ -8,6 +8,12 @@ from types import SimpleNamespace
 import pytest
 
 import core.ai.conversation_orchestration_service as conversation_orchestration_service
+from core.ai.agentic_analyst_planner import (
+    PlannerAttempt,
+    PlannerOutcome,
+    PlannerValidationIssue,
+    build_planner_packet,
+)
 from core.ai.config import AI_MODE_LOCAL_ONLY, AiGatewayConfig, default_ai_profiles, load_ai_gateway_config
 from core.ai.conversation_context import (
     ConversationContextTooLargeError,
@@ -52,6 +58,67 @@ from core.ai.investigation_planner import InvestigationPlan
 from core.ai.investigation_service import _build_correlation_prompt
 from core.ai.soc_tools import SocToolExecutionSummary
 from core.ai.models import AI_STATUS_SUCCESS, AiGatewayResponse, AiRequestMetadata
+
+
+def test_compact_planner_reliability_metadata_is_sanitized_and_blocks_invalid_shortcut():
+    packet = build_planner_packet(
+        question="Explain the selected alert.",
+        request_context={"context_type": "alert"},
+        conversation_packet={"entities": [{"type": "alert", "id": "9663"}]},
+        preferred_capability="quick_explain",
+        latency_class={"mode": "sync"},
+    )
+    issue = PlannerValidationIssue("entity_binding", "missing_entity_identity", "evidence_requirements.alert_id", "missing identity")
+    outcome = PlannerOutcome(
+        status="invalid",
+        plan=None,
+        packet=packet,
+        repaired=True,
+        provider_status="success",
+        error_code="invalid_agentic_plan",
+        attempts=(
+            PlannerAttempt("initial", "success", "complete", "end_turn", 640, 100, 80, "attempt-1", (issue,)),
+            PlannerAttempt("repair", "success", "complete", "end_turn", 620, 90, 70, "attempt-2", (issue,)),
+        ),
+    )
+
+    compact = conversation_orchestration_service._compact_planner_turn(outcome)
+
+    assert compact["error_code"] == "invalid_agentic_plan"
+    assert [attempt["stage"] for attempt in compact["attempts"]] == ["initial", "repair"]
+    assert compact["attempts"][0]["validation_errors"] == [
+        {"stage": "entity_binding", "code": "missing_entity_identity", "path": "evidence_requirements.alert_id"}
+    ]
+    assert "missing identity" not in json.dumps(compact)
+    assert conversation_orchestration_service._planner_explicit_shortcut_allowed(outcome) is False
+
+
+def test_only_unrepaired_provider_unavailability_allows_documented_explicit_shortcut():
+    packet = build_planner_packet(
+        question="Explain the selected alert.",
+        request_context={"context_type": "alert"},
+        conversation_packet={"entities": [{"type": "alert", "id": "9663"}]},
+        preferred_capability="quick_explain",
+        latency_class={"mode": "sync"},
+    )
+    unavailable = PlannerOutcome(
+        status="unavailable",
+        plan=None,
+        packet=packet,
+        repaired=False,
+        provider_status="provider_timeout",
+        error_code="provider_timeout",
+    )
+    truncated = replace(
+        unavailable,
+        status="truncated",
+        provider_status="success",
+        error_code="agentic_plan_output_exhausted",
+        attempts=(PlannerAttempt("initial", "success", "output_exhausted", "max_tokens", 80),),
+    )
+
+    assert conversation_orchestration_service._planner_explicit_shortcut_allowed(unavailable) is True
+    assert conversation_orchestration_service._planner_explicit_shortcut_allowed(truncated) is False
 
 
 class NoCloseConnection:
