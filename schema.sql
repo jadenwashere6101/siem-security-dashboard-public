@@ -2129,7 +2129,7 @@ CREATE TABLE IF NOT EXISTS nist_evidence_references (
                 'failed'
             )
         ),
-    is_truncated BOOLEAN NOT NULL DEFAULT FALSE,
+    has_omitted_records BOOLEAN NOT NULL DEFAULT FALSE,
     omitted_count INTEGER NOT NULL DEFAULT 0 CHECK (omitted_count >= 0),
     catalog_version TEXT NOT NULL,
     mapping_version TEXT NOT NULL,

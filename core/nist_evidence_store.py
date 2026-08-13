@@ -259,7 +259,7 @@ def insert_evidence_reference(
                 evidence_type, canonical_source, source_type, source_health_state,
                 entity_type, entity_id, occurrence_timestamp, ingestion_timestamp,
                 collection_timestamp, query_window_start, query_window_end, query_hash,
-                operational_classification, is_truncated, omitted_count,
+                operational_classification, has_omitted_records, omitted_count,
                 catalog_version, mapping_version, collector_version, evidence_summary,
                 reference_metadata
             ) VALUES (
@@ -368,7 +368,7 @@ def list_evidence_references(
                    canonical_source, source_type, source_health_state, entity_type,
                    entity_id, occurrence_timestamp, ingestion_timestamp,
                    collection_timestamp, query_window_start, query_window_end,
-                   query_hash, operational_classification, is_truncated,
+                   query_hash, operational_classification, has_omitted_records,
                    omitted_count, catalog_version, mapping_version, collector_version,
                    evidence_summary, reference_metadata, COUNT(*) OVER()
             FROM nist_evidence_references
