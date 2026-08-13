@@ -34,6 +34,7 @@ from routes.source_health_routes import source_health_bp
 from routes.response_registry_routes import response_registry_bp
 from routes.detection_simulator_routes import detection_simulator_bp
 from routes.severity_response_matrix_routes import severity_response_matrix_bp
+from routes.nist_evidence_routes import nist_evidence_bp
 
 
 # ============================================================================
@@ -159,6 +160,7 @@ def create_app():
     app.register_blueprint(response_registry_bp)
     app.register_blueprint(detection_simulator_bp)
     app.register_blueprint(severity_response_matrix_bp)
+    app.register_blueprint(nist_evidence_bp)
 
     return app
 

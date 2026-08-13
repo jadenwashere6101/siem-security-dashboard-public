@@ -32,3 +32,23 @@ CANONICAL_SOURCES = (
 
 CANONICAL_SOURCE_IDS = frozenset(item.source for item in CANONICAL_SOURCES)
 
+# Inbound compatibility aliases only. Canonical IDs remain authoritative for
+# persistence, filtering, evidence provenance, and user-visible contracts.
+SOURCE_ID_ALIASES = {
+    "azure": "azure_insights",
+    "otlp": "opentelemetry",
+    "web_log": "nginx",
+}
+
+
+def normalize_source_id(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    normalized = SOURCE_ID_ALIASES.get(normalized, normalized)
+    if normalized not in CANONICAL_SOURCE_IDS:
+        raise ValueError(f"Unsupported source: {value}")
+    return normalized
+
+
+def source_definition(value: str) -> SourceDefinition:
+    normalized = normalize_source_id(value)
+    return next(item for item in CANONICAL_SOURCES if item.source == normalized)
