@@ -8,8 +8,10 @@ from unittest.mock import MagicMock, patch
 from werkzeug.security import generate_password_hash
 
 from core.source_health import (
+    PUSH_FRESHNESS_CANDIDATE_LIMIT,
     SOURCE_HEALTH_AGGREGATION_SQL,
     SOURCE_HEALTH_CHECKPOINT_SQL,
+    SOURCE_HEALTH_PUSH_FRESHNESS_SQL,
     aggregate_source_health,
 )
 from core.source_inventory import CANONICAL_SOURCE_IDS, CANONICAL_SOURCES
@@ -360,7 +362,7 @@ def test_unclassified_ingestion_mode_fails_closed():
         3600,
     )
     cursor = MagicMock()
-    cursor.fetchall.side_effect = [[], []]
+    cursor.fetchall.side_effect = [[], [], []]
     conn = MagicMock()
     conn.cursor.return_value = cursor
 
@@ -395,18 +397,53 @@ def test_explicit_synthetic_ingestion_cannot_make_push_source_healthy(postgres_d
     assert pfsense["health_status"] == "unknown"
 
 
-def test_aggregation_issues_exactly_one_grouped_query():
+def test_recent_synthetic_event_does_not_hide_bounded_stale_real_ingestion(postgres_db):
+    conn, cur = postgres_db
+    insert_event(
+        cur,
+        source="pfsense",
+        source_type="firewall",
+        source_ip="9.9.9.9",
+        created_at=GENERATED_AT - timedelta(hours=1),
+    )
+    insert_event(
+        cur,
+        source="pfsense",
+        source_type="firewall",
+        source_ip="9.9.9.9",
+        created_at=GENERATED_AT - timedelta(minutes=1),
+        raw_payload={"data_provenance": "synthetic"},
+    )
+    conn.commit()
+
+    pfsense = source_entry(
+        aggregate_source_health(conn, generated_at=GENERATED_AT), "pfsense"
+    )
+
+    assert pfsense["last_event_at"] == "2026-07-12T14:59:00+00:00"
+    assert pfsense["latest_ingestion_at"] == "2026-07-12T14:00:00+00:00"
+    assert pfsense["health_status"] == "degraded"
+
+
+def test_source_health_uses_separate_bounded_push_freshness_query():
     cursor = MagicMock()
-    cursor.fetchall.side_effect = [[], []]
+    cursor.fetchall.side_effect = [[], [], []]
     conn = MagicMock()
     conn.cursor.return_value = cursor
 
     aggregate_source_health(conn, generated_at=GENERATED_AT)
 
-    assert cursor.execute.call_count == 2
+    assert cursor.execute.call_count == 3
     assert cursor.execute.call_args_list[0].args[0] == SOURCE_HEALTH_AGGREGATION_SQL
     assert "GROUP BY source" in cursor.execute.call_args_list[0].args[0]
-    assert cursor.execute.call_args_list[1].args[0] == SOURCE_HEALTH_CHECKPOINT_SQL
+    assert "raw_payload" not in SOURCE_HEALTH_AGGREGATION_SQL
+    assert "latest_qualifying_ingestion_at" not in SOURCE_HEALTH_AGGREGATION_SQL
+    assert cursor.execute.call_args_list[1].args[0] == SOURCE_HEALTH_PUSH_FRESHNESS_SQL
+    assert "LEFT JOIN LATERAL" in SOURCE_HEALTH_PUSH_FRESHNESS_SQL
+    assert "ORDER BY created_at DESC, id DESC" in SOURCE_HEALTH_PUSH_FRESHNESS_SQL
+    assert "LIMIT %s" in SOURCE_HEALTH_PUSH_FRESHNESS_SQL
+    assert cursor.execute.call_args_list[1].args[1][-1] == PUSH_FRESHNESS_CANDIDATE_LIMIT
+    assert cursor.execute.call_args_list[2].args[0] == SOURCE_HEALTH_CHECKPOINT_SQL
 
 
 def test_source_health_includes_checkpoint_fields_for_azure_insights(postgres_db):
@@ -504,7 +541,6 @@ def test_representative_query_plan_scans_events_once_without_per_source_queries(
     cur.execute(
         "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + SOURCE_HEALTH_AGGREGATION_SQL,
         (
-            sorted(SYNTHETIC_PROVENANCE_VALUES),
             GENERATED_AT - timedelta(hours=1),
             GENERATED_AT.replace(hour=0),
             [item.source for item in CANONICAL_SOURCES],
@@ -524,6 +560,52 @@ def test_representative_query_plan_scans_events_once_without_per_source_queries(
     assert "Aggregate" in plan["Node Type"]
     assert len(event_scans) == 1
     assert plan["Actual Rows"] == 6
+
+
+def test_push_freshness_query_plan_bounds_provenance_candidates_and_uses_index(postgres_db):
+    conn, cur = postgres_db
+    cur.execute(
+        """
+        INSERT INTO events (
+            event_type, severity, source_ip, source, source_type,
+            message, app_name, environment, raw_payload, created_at
+        )
+        SELECT
+            'normal_activity', 'low', '9.9.9.9'::inet, 'pfsense', 'firewall',
+            'Push freshness plan test', 'source_health_test', 'prod', '{}'::jsonb,
+            %s - (series * INTERVAL '1 second')
+        FROM generate_series(1, 100000) AS series
+        """,
+        (GENERATED_AT,),
+    )
+    conn.commit()
+    cur.execute("ANALYZE events")
+    cur.execute("SET LOCAL enable_seqscan = off")
+    cur.execute(
+        "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + SOURCE_HEALTH_PUSH_FRESHNESS_SQL,
+        (
+            sorted(SYNTHETIC_PROVENANCE_VALUES),
+            ["pfsense"],
+            GENERATED_AT,
+            PUSH_FRESHNESS_CANDIDATE_LIMIT,
+        ),
+    )
+    plan = cur.fetchone()[0][0]["Plan"]
+
+    def walk(node):
+        yield node
+        for child in node.get("Plans", []):
+            yield from walk(child)
+
+    nodes = list(walk(plan))
+    event_scans = [node for node in nodes if node.get("Relation Name") == "events"]
+    limits = [node for node in nodes if node.get("Node Type") == "Limit"]
+
+    assert len(event_scans) == 1
+    assert event_scans[0]["Node Type"] in {"Index Scan", "Index Only Scan"}
+    assert event_scans[0].get("Index Name") == "idx_events_source_created_at_nist"
+    assert limits
+    assert max(node["Actual Rows"] for node in limits) <= PUSH_FRESHNESS_CANDIDATE_LIMIT
 
 
 def test_source_health_requires_authentication(client):

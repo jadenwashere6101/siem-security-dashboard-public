@@ -14,14 +14,12 @@ from core.synthetic_data_policy import (
 
 
 _EVENT_PROVENANCE_SQL = build_synthetic_json_value_sql("raw_payload")
+PUSH_FRESHNESS_CANDIDATE_LIMIT = 256
 
-SOURCE_HEALTH_AGGREGATION_SQL = f"""
+SOURCE_HEALTH_AGGREGATION_SQL = """
     SELECT
         source,
         MAX(created_at) AS last_event_at,
-        MAX(created_at) FILTER (
-            WHERE {_EVENT_PROVENANCE_SQL} <> ALL(%s)
-        ) AS latest_qualifying_ingestion_at,
         COUNT(*) FILTER (WHERE created_at >= %s) AS events_last_hour,
         COUNT(*) FILTER (WHERE created_at >= %s) AS events_today,
         COUNT(*) AS total_events
@@ -29,6 +27,24 @@ SOURCE_HEALTH_AGGREGATION_SQL = f"""
     WHERE source = ANY(%s)
       AND created_at <= %s
     GROUP BY source
+"""
+
+SOURCE_HEALTH_PUSH_FRESHNESS_SQL = f"""
+    SELECT
+        configured.source,
+        MAX(candidates.created_at) FILTER (
+            WHERE {_EVENT_PROVENANCE_SQL} <> ALL(%s)
+        ) AS latest_qualifying_ingestion_at
+    FROM UNNEST(%s::text[]) AS configured(source)
+    LEFT JOIN LATERAL (
+        SELECT created_at, raw_payload
+        FROM events
+        WHERE source = configured.source
+          AND created_at <= %s
+        ORDER BY created_at DESC, id DESC
+        LIMIT %s
+    ) AS candidates ON TRUE
+    GROUP BY configured.source
 """
 
 SOURCE_HEALTH_CHECKPOINT_SQL = """
@@ -121,7 +137,6 @@ def aggregate_source_health(conn, *, generated_at: datetime | None = None) -> di
         cur.execute(
             SOURCE_HEALTH_AGGREGATION_SQL,
             (
-                sorted(SYNTHETIC_PROVENANCE_VALUES),
                 last_hour_start,
                 today_start,
                 [item.source for item in CANONICAL_SOURCES],
@@ -131,11 +146,29 @@ def aggregate_source_health(conn, *, generated_at: datetime | None = None) -> di
         rows_by_source = {
             row[0]: {
                 "last_event_at": row[1],
-                "latest_qualifying_ingestion_at": row[2],
-                "events_last_hour": int(row[3]),
-                "events_today": int(row[4]),
-                "total_events": int(row[5]),
+                "events_last_hour": int(row[2]),
+                "events_today": int(row[3]),
+                "total_events": int(row[4]),
             }
+            for row in cur.fetchall()
+        }
+
+        push_sources = [
+            item.source
+            for item in CANONICAL_SOURCES
+            if item.ingestion_mode == INGESTION_MODE_PUSH
+        ]
+        cur.execute(
+            SOURCE_HEALTH_PUSH_FRESHNESS_SQL,
+            (
+                sorted(SYNTHETIC_PROVENANCE_VALUES),
+                push_sources,
+                observation_time,
+                PUSH_FRESHNESS_CANDIDATE_LIMIT,
+            ),
+        )
+        latest_qualifying_by_source = {
+            row[0]: row[1]
             for row in cur.fetchall()
         }
 
@@ -161,8 +194,12 @@ def aggregate_source_health(conn, *, generated_at: datetime | None = None) -> di
         checkpoint = checkpoints_by_source.get(definition.source)
         total_events = aggregate["total_events"] if aggregate else 0
         if definition.ingestion_mode == INGESTION_MODE_PUSH:
+            push_aggregate = dict(aggregate or {})
+            push_aggregate["latest_qualifying_ingestion_at"] = (
+                latest_qualifying_by_source.get(definition.source)
+            )
             health_status, health_reason, basis_age_seconds = _resolve_push_health(
-                aggregate,
+                push_aggregate,
                 observation_time=observation_time,
                 freshness_threshold_seconds=definition.freshness_threshold_seconds,
             )
@@ -193,7 +230,9 @@ def aggregate_source_health(conn, *, generated_at: datetime | None = None) -> di
                 aggregate["last_event_at"] if aggregate else None
             ),
             "latest_ingestion_at": _serialize_timestamp(
-                aggregate["latest_qualifying_ingestion_at"] if aggregate else None
+                latest_qualifying_by_source.get(definition.source)
+                if definition.ingestion_mode == INGESTION_MODE_PUSH
+                else None
             ),
             "events_last_hour": aggregate["events_last_hour"] if aggregate else 0,
             "events_today": aggregate["events_today"] if aggregate else 0,
