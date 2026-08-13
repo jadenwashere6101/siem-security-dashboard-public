@@ -25,6 +25,7 @@ from core.nist_evidence_engine import (
     collection_confidence_for_sources,
     evaluate_requirement,
 )
+from core.source_health import aggregate_source_health
 from core.source_inventory import normalize_source_id
 
 
@@ -37,10 +38,11 @@ def _mapping(requirement_id):
 
 
 def _health(status="healthy", *, updated_at=NOW):
-    connector = {"healthy": "healthy", "degraded": "failed", "unknown": None}[status]
-    entry = {"source": "bank_app"}
-    if connector:
-        entry.update({"connector_status": connector, "last_poll_at": updated_at.isoformat()})
+    entry = {
+        "source": "bank_app",
+        "health_status": status,
+        "latest_ingestion_at": updated_at.isoformat(),
+    }
     return {"generated_at": NOW.isoformat(), "sources": [entry]}
 
 
@@ -137,11 +139,117 @@ def test_status_engine_supports_explicit_non_siem_requirement():
         (_health("healthy"), CONFIDENCE_HEALTHY),
         (_health("degraded"), CONFIDENCE_DEGRADED),
         (_health("unknown"), CONFIDENCE_UNKNOWN),
-        (_health("healthy", updated_at=NOW - timedelta(hours=3)), CONFIDENCE_DEGRADED),
     ],
 )
-def test_collection_confidence_handles_healthy_degraded_unknown_and_stale(snapshot, expected):
+def test_collection_confidence_handles_canonical_health_states(snapshot, expected):
     assert collection_confidence_for_sources(snapshot, ("bank_app",), observed_at=NOW) == expected
+
+
+def test_collection_confidence_preserves_legacy_checkpoint_snapshot_compatibility():
+    snapshot = {
+        "sources": [{
+            "source": "azure_insights",
+            "connector_status": "healthy",
+            "last_poll_at": (NOW - timedelta(hours=3)).isoformat(),
+        }]
+    }
+    assert collection_confidence_for_sources(
+        snapshot, ("azure_insights",), observed_at=NOW
+    ) == CONFIDENCE_DEGRADED
+
+
+@pytest.mark.parametrize(
+    ("states", "expected"),
+    [
+        (("healthy", "healthy"), CONFIDENCE_HEALTHY),
+        (("healthy", "degraded"), CONFIDENCE_DEGRADED),
+        (("healthy", "unknown"), CONFIDENCE_UNKNOWN),
+    ],
+)
+def test_collection_confidence_mixed_boundary_precedence(states, expected):
+    snapshot = {
+        "sources": [
+            {"source": "pfsense", "health_status": states[0]},
+            {"source": "azure_insights", "health_status": states[1]},
+        ]
+    }
+    assert collection_confidence_for_sources(
+        snapshot, ("pfsense", "azure_insights"), observed_at=NOW
+    ) == expected
+
+
+def test_production_push_source_without_checkpoint_can_reach_evidence_available(postgres_db):
+    conn, cur = postgres_db
+    cur.execute(
+        """
+        INSERT INTO events (
+            event_type, severity, source_ip, source, source_type, event_timestamp,
+            message, app_name, environment, raw_payload, created_at
+        ) VALUES (
+            'firewall_deny', 'medium', '9.9.9.9', 'pfsense', 'firewall', %s,
+            'recent real firewall evidence', 'pfsense', 'prod', '{}'::jsonb, %s
+        )
+        """,
+        (NOW - timedelta(minutes=2), NOW - timedelta(minutes=1)),
+    )
+    conn.commit()
+
+    snapshot = aggregate_source_health(conn, generated_at=NOW)
+    confidence = collection_confidence_for_sources(
+        snapshot, ("pfsense",), observed_at=NOW
+    )
+    mapping = _mapping("03.13.01")
+    result = evaluate_requirement(
+        mapping,
+        [EvidenceBundle(category, 1) for category in mapping.evidence_categories],
+        collection_confidence=confidence,
+        window_start=START,
+        window_end=NOW,
+    )
+
+    assert confidence == CONFIDENCE_HEALTHY
+    assert result.evidence_status == EVIDENCE_AVAILABLE
+
+
+def test_stale_and_never_seen_push_health_propagate_to_nist_confidence(postgres_db):
+    conn, cur = postgres_db
+    cur.execute(
+        """
+        INSERT INTO events (
+            event_type, severity, source_ip, source, source_type,
+            message, app_name, environment, raw_payload, created_at
+        ) VALUES (
+            'firewall_deny', 'medium', '9.9.9.9', 'pfsense', 'firewall',
+            'stale real firewall evidence', 'pfsense', 'prod', '{}'::jsonb, %s
+        )
+        """,
+        (NOW - timedelta(hours=1),),
+    )
+    conn.commit()
+
+    snapshot = aggregate_source_health(conn, generated_at=NOW)
+
+    assert collection_confidence_for_sources(
+        snapshot, ("pfsense",), observed_at=NOW
+    ) == CONFIDENCE_DEGRADED
+    assert collection_confidence_for_sources(
+        snapshot, ("opentelemetry",), observed_at=NOW
+    ) == CONFIDENCE_UNKNOWN
+
+
+@pytest.mark.parametrize("health_status", (CONFIDENCE_DEGRADED, CONFIDENCE_UNKNOWN))
+def test_unhealthy_collection_cannot_produce_no_evidence_found(health_status):
+    mapping = _mapping("03.13.01")
+    result = evaluate_requirement(
+        mapping,
+        [EvidenceBundle(category, 0) for category in mapping.evidence_categories],
+        collection_confidence=health_status,
+        window_start=START,
+        window_end=NOW,
+    )
+
+    assert result.evidence_status == PARTIAL_EVIDENCE
+    assert result.evidence_status != NO_EVIDENCE_FOUND
 
 
 def test_soar_and_synthetic_classification_is_conservative():
@@ -264,7 +372,7 @@ def test_collectors_cover_every_v1_mapping_with_bounded_canonical_references(pos
     snapshot = {
         "generated_at": NOW.isoformat(),
         "sources": [
-            {"source": source, "connector_status": "healthy", "last_poll_at": NOW.isoformat()}
+            {"source": source, "health_status": "healthy"}
             for source in ("bank_app", "pfsense", "nginx", "azure_insights", "opentelemetry")
         ],
     }

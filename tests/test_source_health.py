@@ -13,6 +13,16 @@ from core.source_health import (
     aggregate_source_health,
 )
 from core.source_inventory import CANONICAL_SOURCE_IDS, CANONICAL_SOURCES
+from core.source_inventory import (
+    AZURE_CHECKPOINT_FRESHNESS_SECONDS,
+    INGESTION_MODE_CHECKPOINT,
+    INGESTION_MODE_PUSH,
+    PUSH_APPLICATION_FRESHNESS_SECONDS,
+    PUSH_CONTINUOUS_FRESHNESS_SECONDS,
+    PUSH_SPARSE_FRESHNESS_SECONDS,
+    SourceDefinition,
+)
+from core.synthetic_data_policy import SYNTHETIC_PROVENANCE_VALUES
 from routes.alerts_events_routes import VALID_EVENT_SOURCES
 
 
@@ -40,6 +50,7 @@ def insert_event(
     source_type,
     created_at,
     source_ip="198.51.100.10",
+    raw_payload=None,
 ):
     cur.execute(
         """
@@ -50,7 +61,7 @@ def insert_event(
         VALUES ('normal_activity', 'low', %s, %s, %s, 'Source health test',
                 'source_health_test', 'test', %s, %s)
         """,
-        (source_ip, source, source_type, json.dumps({}), created_at),
+        (source_ip, source, source_type, json.dumps(raw_payload or {}), created_at),
     )
 
 
@@ -152,6 +163,21 @@ def test_canonical_source_inventory_is_exact_and_reused_by_event_search():
         ),
     ]
     assert CANONICAL_SOURCE_IDS == VALID_EVENT_SOURCES
+    assert [
+        (item.source, item.ingestion_mode, item.freshness_threshold_seconds)
+        for item in CANONICAL_SOURCES
+    ] == [
+        ("honeypot", INGESTION_MODE_PUSH, PUSH_SPARSE_FRESHNESS_SECONDS),
+        ("bank_app", INGESTION_MODE_PUSH, PUSH_APPLICATION_FRESHNESS_SECONDS),
+        ("pfsense", INGESTION_MODE_PUSH, PUSH_CONTINUOUS_FRESHNESS_SECONDS),
+        ("nginx", INGESTION_MODE_PUSH, PUSH_APPLICATION_FRESHNESS_SECONDS),
+        (
+            "azure_insights",
+            INGESTION_MODE_CHECKPOINT,
+            AZURE_CHECKPOINT_FRESHNESS_SECONDS,
+        ),
+        ("opentelemetry", INGESTION_MODE_PUSH, PUSH_APPLICATION_FRESHNESS_SECONDS),
+    ]
 
 
 def test_empty_database_returns_all_six_never_seen_sources(postgres_db):
@@ -172,6 +198,8 @@ def test_empty_database_returns_all_six_never_seen_sources(postgres_db):
         assert item["events_today"] == 0
         assert item["total_events"] == 0
         assert item["ever_seen"] is False
+        assert item["health_status"] == "unknown"
+        assert item["latest_ingestion_at"] is None
 
 
 def test_aggregation_uses_inclusive_utc_boundaries_and_excludes_future_rows(postgres_db):
@@ -262,6 +290,111 @@ def test_last_event_at_is_independent_per_source(postgres_db):
     assert source_entry(response, "pfsense")["last_event_at"] == "2026-07-12T14:53:00+00:00"
 
 
+def test_recent_push_ingestion_without_checkpoint_is_healthy(postgres_db):
+    conn, cur = postgres_db
+    insert_event(
+        cur,
+        source="pfsense",
+        source_type="firewall",
+        source_ip="9.9.9.9",
+        created_at=GENERATED_AT - timedelta(minutes=2),
+    )
+    conn.commit()
+
+    pfsense = source_entry(
+        aggregate_source_health(conn, generated_at=GENERATED_AT), "pfsense"
+    )
+
+    assert pfsense["ingestion_mode"] == "push"
+    assert pfsense["health_basis"] == "event_ingestion_freshness"
+    assert pfsense["health_status"] == "healthy"
+    assert pfsense["health_reason"] == "recent_qualifying_ingestion"
+    assert pfsense["latest_ingestion_at"] == "2026-07-12T14:58:00+00:00"
+    assert pfsense["health_basis_age_seconds"] == 120
+    assert "connector_status" not in pfsense
+
+
+def test_push_ingestion_freshness_boundary_is_inclusive_then_degraded(postgres_db):
+    conn, cur = postgres_db
+    insert_event(
+        cur,
+        source="pfsense",
+        source_type="firewall",
+        source_ip="9.9.9.9",
+        created_at=GENERATED_AT - timedelta(seconds=PUSH_CONTINUOUS_FRESHNESS_SECONDS),
+    )
+    conn.commit()
+
+    at_boundary = source_entry(
+        aggregate_source_health(conn, generated_at=GENERATED_AT), "pfsense"
+    )
+    after_boundary = source_entry(
+        aggregate_source_health(conn, generated_at=GENERATED_AT + timedelta(seconds=1)),
+        "pfsense",
+    )
+
+    assert at_boundary["health_status"] == "healthy"
+    assert after_boundary["health_status"] == "degraded"
+    assert after_boundary["health_reason"] == "qualifying_ingestion_stale"
+
+
+def test_never_seen_push_source_is_unknown(postgres_db):
+    conn, _cur = postgres_db
+
+    pfsense = source_entry(
+        aggregate_source_health(conn, generated_at=GENERATED_AT), "pfsense"
+    )
+
+    assert pfsense["health_status"] == "unknown"
+    assert pfsense["health_reason"] == "no_qualifying_ingestion"
+    assert pfsense["health_basis_age_seconds"] is None
+
+
+def test_unclassified_ingestion_mode_fails_closed():
+    definition = SourceDefinition(
+        "ambiguous_source",
+        "custom",
+        "Ambiguous Source",
+        "live-logs-ambiguous",
+        "unknown",
+        3600,
+    )
+    cursor = MagicMock()
+    cursor.fetchall.side_effect = [[], []]
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+
+    with patch("core.source_health.CANONICAL_SOURCES", (definition,)):
+        response = aggregate_source_health(conn, generated_at=GENERATED_AT)
+
+    item = response["sources"][0]
+    assert item["health_status"] == "unknown"
+    assert item["health_basis"] == "unclassified"
+    assert item["health_reason"] == "ingestion_mode_unknown"
+
+
+def test_explicit_synthetic_ingestion_cannot_make_push_source_healthy(postgres_db):
+    conn, cur = postgres_db
+    insert_event(
+        cur,
+        source="pfsense",
+        source_type="firewall",
+        source_ip="9.9.9.9",
+        created_at=GENERATED_AT - timedelta(minutes=1),
+        raw_payload={"data_provenance": "synthetic"},
+    )
+    conn.commit()
+
+    pfsense = source_entry(
+        aggregate_source_health(conn, generated_at=GENERATED_AT), "pfsense"
+    )
+
+    assert pfsense["total_events"] == 1
+    assert pfsense["last_event_at"] == "2026-07-12T14:59:00+00:00"
+    assert pfsense["latest_ingestion_at"] is None
+    assert pfsense["health_status"] == "unknown"
+
+
 def test_aggregation_issues_exactly_one_grouped_query():
     cursor = MagicMock()
     cursor.fetchall.side_effect = [[], []]
@@ -294,6 +427,9 @@ def test_source_health_includes_checkpoint_fields_for_azure_insights(postgres_db
     assert azure["last_processed_at"] == "2026-07-12T14:55:00+00:00"
     assert azure["checkpoint_age_seconds"] == 300
     assert azure["connector_status"] == "failed"
+    assert azure["health_status"] == "degraded"
+    assert azure["health_basis"] == "poll_checkpoint"
+    assert azure["health_reason"] == "checkpoint_failure"
     assert azure["last_poll_counts"] == {"returned": 25, "forwarded": 24, "failures": 1}
 
 
@@ -308,6 +444,35 @@ def test_sources_without_checkpoint_row_remain_unaffected(postgres_db):
     assert "last_processed_at" not in nginx
     assert "checkpoint_age_seconds" not in nginx
     assert "connector_status" not in nginx
+    assert nginx["health_status"] == "unknown"
+
+
+def test_checkpoint_source_requires_fresh_successful_checkpoint(postgres_db):
+    conn, cur = postgres_db
+    insert_checkpoint(
+        cur,
+        last_processed_at=GENERATED_AT - timedelta(minutes=5),
+        updated_at=GENERATED_AT - timedelta(minutes=5),
+    )
+    conn.commit()
+
+    fresh = source_entry(
+        aggregate_source_health(conn, generated_at=GENERATED_AT), "azure_insights"
+    )
+    stale = source_entry(
+        aggregate_source_health(
+            conn,
+            generated_at=GENERATED_AT
+            + timedelta(seconds=AZURE_CHECKPOINT_FRESHNESS_SECONDS + 1),
+        ),
+        "azure_insights",
+    )
+
+    assert fresh["connector_status"] == "healthy"
+    assert fresh["health_status"] == "healthy"
+    assert fresh["health_reason"] == "checkpoint_success_fresh"
+    assert stale["health_status"] == "degraded"
+    assert stale["health_reason"] == "checkpoint_stale"
 
 
 def test_representative_query_plan_scans_events_once_without_per_source_queries(postgres_db):
@@ -339,6 +504,7 @@ def test_representative_query_plan_scans_events_once_without_per_source_queries(
     cur.execute(
         "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + SOURCE_HEALTH_AGGREGATION_SQL,
         (
+            sorted(SYNTHETIC_PROVENANCE_VALUES),
             GENERATED_AT - timedelta(hours=1),
             GENERATED_AT.replace(hour=0),
             [item.source for item in CANONICAL_SOURCES],
@@ -396,6 +562,13 @@ def test_source_health_allows_super_admin(client, postgres_db):
             "events_today",
             "total_events",
             "ever_seen",
+            "ingestion_mode",
+            "health_status",
+            "health_basis",
+            "health_reason",
+            "freshness_threshold_seconds",
+            "health_basis_age_seconds",
+            "latest_ingestion_at",
         }.issubset(set(item))
         assert item["last_event_at"] is None
         assert isinstance(item["events_last_hour"], int)

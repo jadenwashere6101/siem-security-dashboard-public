@@ -158,6 +158,12 @@ def collection_confidence_for_sources(
         if not entry:
             states.append(CONFIDENCE_UNKNOWN)
             continue
+        resolved_status = entry.get("health_status")
+        if resolved_status in COLLECTION_CONFIDENCES:
+            states.append(resolved_status)
+            continue
+        # Compatibility for persisted snapshots created before canonical source
+        # health exposed a resolved health_status field.
         connector_status = entry.get("connector_status")
         if connector_status in {"degraded", "failed"}:
             states.append(CONFIDENCE_DEGRADED)

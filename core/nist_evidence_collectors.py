@@ -50,7 +50,9 @@ def _source_health_map(snapshot: dict[str, Any]) -> dict[str, str]:
     for item in snapshot.get("sources", []):
         if not isinstance(item, dict) or not item.get("source"):
             continue
-        status = item.get("connector_status")
+        status = item.get("health_status")
+        if status not in {"healthy", "degraded", "unknown"}:
+            status = item.get("connector_status")
         result[item["source"]] = (
             "healthy" if status == "healthy"
             else "degraded" if status in {"degraded", "failed"}

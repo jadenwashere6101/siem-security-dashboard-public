@@ -3,30 +3,60 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+INGESTION_MODE_PUSH = "push"
+INGESTION_MODE_CHECKPOINT = "checkpoint"
+
+# These thresholds describe when the SIEM can still establish ingestion
+# freshness. They are intentionally centralized with the canonical source
+# definitions rather than inferred by individual consumers.
+PUSH_CONTINUOUS_FRESHNESS_SECONDS = 15 * 60
+PUSH_APPLICATION_FRESHNESS_SECONDS = 60 * 60
+PUSH_SPARSE_FRESHNESS_SECONDS = 24 * 60 * 60
+AZURE_CHECKPOINT_FRESHNESS_SECONDS = 30 * 60
+
+
 @dataclass(frozen=True)
 class SourceDefinition:
     source: str
     source_type: str
     display_label: str
     live_logs_destination: str
+    ingestion_mode: str
+    freshness_threshold_seconds: int
 
 
 CANONICAL_SOURCES = (
-    SourceDefinition("honeypot", "honeypot", "Honeypot", "live-logs-honeypot"),
-    SourceDefinition("bank_app", "custom", "Bank App", "live-logs-bank-app"),
-    SourceDefinition("pfsense", "firewall", "pfSense", "live-logs-pfsense"),
-    SourceDefinition("nginx", "web_log", "NGINX", "live-logs-nginx"),
+    SourceDefinition(
+        "honeypot", "honeypot", "Honeypot", "live-logs-honeypot",
+        INGESTION_MODE_PUSH, PUSH_SPARSE_FRESHNESS_SECONDS,
+    ),
+    SourceDefinition(
+        "bank_app", "custom", "Bank App", "live-logs-bank-app",
+        INGESTION_MODE_PUSH, PUSH_APPLICATION_FRESHNESS_SECONDS,
+    ),
+    SourceDefinition(
+        "pfsense", "firewall", "pfSense", "live-logs-pfsense",
+        INGESTION_MODE_PUSH, PUSH_CONTINUOUS_FRESHNESS_SECONDS,
+    ),
+    SourceDefinition(
+        "nginx", "web_log", "NGINX", "live-logs-nginx",
+        INGESTION_MODE_PUSH, PUSH_APPLICATION_FRESHNESS_SECONDS,
+    ),
     SourceDefinition(
         "azure_insights",
         "cloud_api",
         "Azure Application Insights",
         "live-logs-azure",
+        INGESTION_MODE_CHECKPOINT,
+        AZURE_CHECKPOINT_FRESHNESS_SECONDS,
     ),
     SourceDefinition(
         "opentelemetry",
         "telemetry",
         "OpenTelemetry",
         "live-logs-otel",
+        INGESTION_MODE_PUSH,
+        PUSH_APPLICATION_FRESHNESS_SECONDS,
     ),
 )
 
