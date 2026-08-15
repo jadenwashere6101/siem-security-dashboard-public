@@ -113,6 +113,68 @@ def test_ingest_normalized_event_inserts_event_without_detection(postgres_db):
         "United States",
     )
     assert count_rows(cur, "alerts") == 0
+    cur.execute(
+        """
+        SELECT latest_event_at, latest_qualifying_real_ingestion_at
+        FROM source_ingestion_health_state
+        WHERE source = 'bank_app'
+        """
+    )
+    latest_event_at, latest_real_at = cur.fetchone()
+    assert latest_event_at is not None
+    assert latest_real_at == latest_event_at
+
+
+@pytest.mark.parametrize(
+    ("source", "source_type", "state_expected"),
+    [
+        ("honeypot", "honeypot", True),
+        ("bank_app", "custom", True),
+        ("pfsense", "firewall", True),
+        ("nginx", "web_log", True),
+        ("azure_insights", "cloud_api", False),
+        ("opentelemetry", "telemetry", True),
+    ],
+)
+def test_shared_normalized_persistence_updates_every_canonical_push_source(
+    postgres_db, source, source_type, state_expected
+):
+    conn, cur = postgres_db
+    siem_backend.ingest_normalized_event(
+        make_event(source=source, source_type=source_type),
+        conn,
+        cur,
+    )
+
+    cur.execute(
+        "SELECT 1 FROM source_ingestion_health_state WHERE source = %s",
+        (source,),
+    )
+    assert (cur.fetchone() is not None) is state_expected
+
+
+def test_synthetic_normalized_event_does_not_advance_real_ingestion(postgres_db):
+    conn, cur = postgres_db
+    siem_backend.ingest_normalized_event(
+        make_event(
+            source="pfsense",
+            source_type="firewall",
+            raw_payload={"provenance": {"classification": "synthetic"}},
+        ),
+        conn,
+        cur,
+    )
+
+    cur.execute(
+        """
+        SELECT latest_event_at, latest_qualifying_real_ingestion_at
+        FROM source_ingestion_health_state
+        WHERE source = 'pfsense'
+        """
+    )
+    latest_event_at, latest_real_at = cur.fetchone()
+    assert latest_event_at is not None
+    assert latest_real_at is None
 
 
 def test_ingest_normalized_event_routes_supported_port_scan_into_detection_core(postgres_db):
@@ -264,6 +326,7 @@ def test_ingest_normalized_event_rolls_back_event_insert_on_downstream_failure(p
     assert count_rows(cur, "events") == 0
     assert count_rows(cur, "alerts") == 0
     assert count_rows(cur, "response_actions_log") == 0
+    assert count_rows(cur, "source_ingestion_health_state") == 0
 
 
 def test_ingest_normalized_event_orchestration_ordering_uses_detection_before_correlation(postgres_db):

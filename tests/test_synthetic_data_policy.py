@@ -3,6 +3,8 @@ from core.synthetic_data_policy import (
     CONFIRMED_LEGACY_SYNTHETIC_SOURCE_IPS,
     CONFIRMED_SYNTHETIC_CLEANUP_SOURCE_IPS,
     load_synthetic_source_ip_exclusions,
+    is_synthetic_json_payload,
+    synthetic_json_provenance_value,
 )
 
 
@@ -52,3 +54,25 @@ def test_operational_event_without_synthetic_markers_has_no_synthetic_context():
     )
 
     assert context is None
+
+
+def test_canonical_json_classifier_uses_ordered_supported_paths():
+    assert is_synthetic_json_payload({"data_provenance": "synthetic"}) is True
+    assert is_synthetic_json_payload(
+        {"provenance": {"classification": "demo"}}
+    ) is True
+    assert is_synthetic_json_payload(
+        {"metadata": {"provenance": "manual_test"}}
+    ) is True
+    assert synthetic_json_provenance_value(
+        {
+            "data_provenance": "operational",
+            "provenance": {"classification": "synthetic"},
+        }
+    ) == "operational"
+    assert is_synthetic_json_payload(
+        {
+            "data_provenance": "operational",
+            "provenance": {"classification": "synthetic"},
+        }
+    ) is False

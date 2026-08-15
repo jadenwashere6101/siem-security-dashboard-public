@@ -146,7 +146,14 @@ def build_synthetic_json_value_sql(json_column: str) -> str:
             COALESCE(
                 NULLIF({json_column}->>'data_provenance', ''),
                 NULLIF({json_column}->>'telemetry_provenance', ''),
-                NULLIF({json_column}->>'provenance', ''),
+                NULLIF(
+                    CASE
+                        WHEN jsonb_typeof({json_column}->'provenance') = 'string'
+                        THEN {json_column}->>'provenance'
+                        ELSE NULL
+                    END,
+                    ''
+                ),
                 NULLIF({json_column}#>>'{{provenance,classification}}', ''),
                 NULLIF({json_column}#>>'{{provenance,source}}', ''),
                 NULLIF({json_column}#>>'{{provenance,origin}}', ''),
@@ -156,6 +163,39 @@ def build_synthetic_json_value_sql(json_column: str) -> str:
             )
         )
     """
+
+
+def synthetic_json_provenance_values(payload: object) -> tuple[str, ...]:
+    """Return non-empty provenance values in the canonical SQL precedence order."""
+    if not isinstance(payload, dict):
+        return ()
+
+    provenance = payload.get("provenance")
+    metadata = payload.get("metadata")
+    candidates = (
+        payload.get("data_provenance"),
+        payload.get("telemetry_provenance"),
+        provenance if isinstance(provenance, str) else None,
+        provenance.get("classification") if isinstance(provenance, dict) else None,
+        provenance.get("source") if isinstance(provenance, dict) else None,
+        provenance.get("origin") if isinstance(provenance, dict) else None,
+        metadata.get("data_provenance") if isinstance(metadata, dict) else None,
+        metadata.get("provenance") if isinstance(metadata, dict) else None,
+    )
+    return tuple(
+        normalized
+        for value in candidates
+        if (normalized := str(value or "").strip().lower())
+    )
+
+
+def synthetic_json_provenance_value(payload: object) -> str:
+    values = synthetic_json_provenance_values(payload)
+    return values[0] if values else ""
+
+
+def is_synthetic_json_payload(payload: object) -> bool:
+    return synthetic_json_provenance_value(payload) in SYNTHETIC_PROVENANCE_VALUES
 
 
 def build_operational_source_ip_exclusion_sql(

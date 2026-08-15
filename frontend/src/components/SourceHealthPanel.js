@@ -46,7 +46,7 @@ function SourceHealthPanel({ pollIntervalMs = 0, displaySettings, onOpenLiveLogs
     };
   }, [pollIntervalMs, refresh]);
 
-  const allNeverSeen = useMemo(
+  const allNoActivity = useMemo(
     () => !!data?.sources?.length && data.sources.every((item) => !item.ever_seen),
     [data]
   );
@@ -57,7 +57,7 @@ function SourceHealthPanel({ pollIntervalMs = 0, displaySettings, onOpenLiveLogs
         <div>
           <p style={eyebrowStyle}>Overview</p>
           <h2 id="source-health-heading" data-workspace-heading style={headingStyle}>Source Health</h2>
-          <p style={subtitleStyle}>Authoritative stored-event activity. Hour and day windows use UTC.</p>
+          <p style={subtitleStyle}>Bounded ingestion health from durable push state and connector checkpoints.</p>
         </div>
         <button type="button" onClick={() => refresh()} disabled={loading || refreshing} style={refreshButtonStyle}>
           {refreshing ? "Refreshing…" : "Refresh"}
@@ -67,7 +67,7 @@ function SourceHealthPanel({ pollIntervalMs = 0, displaySettings, onOpenLiveLogs
       {loading && <p role="status" style={stateStyle}>Loading source activity…</p>}
       {!loading && error && !data && <div role="alert" style={errorStyle}>{error}</div>}
       {!loading && error && data && <div role="alert" style={warningStyle}>Refresh failed: {error}. Showing the last successful response.</div>}
-      {!loading && allNeverSeen && <p style={emptyStyle}>No recognized source has stored an event yet. All six sources remain visible below.</p>}
+      {!loading && allNoActivity && <p style={emptyStyle}>No durable source activity is available yet. All six sources remain visible below.</p>}
 
       {!loading && data && (
         <>
@@ -75,6 +75,10 @@ function SourceHealthPanel({ pollIntervalMs = 0, displaySettings, onOpenLiveLogs
             {data.sources.map((item) => {
               const metadata = SOURCE_METADATA_BY_ID[item.source];
               const badge = getSourceBadgeMeta(item.source, item.source_type);
+              const health = HEALTH_META[item.health_status] || HEALTH_META.unknown;
+              const latestBasisTimestamp = item.ingestion_mode === "checkpoint"
+                ? item.last_poll_at
+                : item.latest_ingestion_at;
               return (
                 <article key={item.source} data-source={item.source} style={cardStyle}>
                   <div style={cardTopStyle}>
@@ -82,15 +86,39 @@ function SourceHealthPanel({ pollIntervalMs = 0, displaySettings, onOpenLiveLogs
                       <h3 style={sourceHeadingStyle}>{item.display_label}</h3>
                       <code style={identityStyle}>{item.source} / {item.source_type}</code>
                     </div>
-                    <span style={{ ...badgeStyle, ...badge.style }}>{badge.label}</span>
+                    <div style={badgeStackStyle}>
+                      <span style={{ ...healthBadgeStyle, ...health.style }}>{health.label}</span>
+                      <span style={{ ...badgeStyle, ...badge.style }}>{badge.label}</span>
+                    </div>
                   </div>
                   <dl style={metricsStyle}>
-                    <Metric label="Last event" value={item.ever_seen ? formatTimestamp(item.last_event_at, displaySettings, "Unavailable") : "Never seen"} />
-                    <Metric label="Last hour" value={item.events_last_hour.toLocaleString()} />
-                    <Metric label="Today (UTC)" value={item.events_today.toLocaleString()} />
-                    <Metric label="Total events" value={item.total_events.toLocaleString()} />
+                    <Metric label="Health basis" value={humanizeReason(item.health_reason)} />
+                    <Metric
+                      label={item.ingestion_mode === "checkpoint" ? "Last checkpoint" : "Latest real ingest"}
+                      value={formatTimestamp(latestBasisTimestamp, displaySettings, "Unavailable")}
+                    />
+                    <Metric
+                      label={item.ingestion_mode === "checkpoint" ? "Last processed" : "Last event"}
+                      value={item.ingestion_mode === "checkpoint"
+                        ? formatTimestamp(item.last_processed_at, displaySettings, "Unavailable")
+                        : item.ever_seen ? formatTimestamp(item.last_event_at, displaySettings, "Unavailable") : "Never seen"}
+                    />
+                    <Metric
+                      label={item.ingestion_mode === "checkpoint" ? "Authority" : "Historical state"}
+                      value={item.ingestion_mode === "checkpoint"
+                        ? "Connector checkpoint"
+                        : item.historical_backfill_complete ? "Initialized" : "Initializing"}
+                    />
                   </dl>
-                  {!item.ever_seen && <p style={neverSeenStyle}>No stored events for this source.</p>}
+                  {!item.ever_seen && item.ingestion_mode === "push" && !item.historical_backfill_complete && (
+                    <p style={neverSeenStyle}>Historical initialization is incomplete; health fails closed.</p>
+                  )}
+                  {!item.ever_seen && item.ingestion_mode === "push" && item.historical_backfill_complete && (
+                    <p style={neverSeenStyle}>No qualifying stored event was established.</p>
+                  )}
+                  {!item.ever_seen && item.ingestion_mode === "checkpoint" && (
+                    <p style={neverSeenStyle}>No connector checkpoint is available.</p>
+                  )}
                   <button
                     type="button"
                     onClick={() => onOpenLiveLogs(metadata.liveLogsDestination)}
@@ -103,12 +131,22 @@ function SourceHealthPanel({ pollIntervalMs = 0, displaySettings, onOpenLiveLogs
               );
             })}
           </div>
-          <p style={observedStyle}>Observed {formatTimestamp(data.generated_at, { ...displaySettings, timezoneMode: "utc" }, data.generated_at)} · UTC boundaries supplied by the API</p>
+          <p style={observedStyle}>Observed {formatTimestamp(data.generated_at, { ...displaySettings, timezoneMode: "utc" }, data.generated_at)} · Health reads are bounded by canonical source count</p>
         </>
       )}
     </section>
   );
 }
+
+function humanizeReason(value) {
+  return String(value || "unknown").replaceAll("_", " ");
+}
+
+const HEALTH_META = {
+  healthy: { label: "Healthy", style: { color: "#7ee787", borderColor: "#238636", background: "rgba(35,134,54,.18)" } },
+  degraded: { label: "Degraded", style: { color: "#e3b341", borderColor: "#9e6a03", background: "rgba(158,106,3,.18)" } },
+  unknown: { label: "Unknown", style: { color: "#c9d1d9", borderColor: "#6e7681", background: "rgba(110,118,129,.16)" } },
+};
 
 function Metric({ label, value }) {
   return <div style={metricStyle}><dt style={metricLabelStyle}>{label}</dt><dd style={metricValueStyle}>{value}</dd></div>;
@@ -130,6 +168,8 @@ const cardTopStyle = { display: "flex", justifyContent: "space-between", gap: "1
 const sourceHeadingStyle = { margin: "0 0 5px", fontSize: "18px" };
 const identityStyle = { color: "#8c96a1", fontSize: "12px", overflowWrap: "anywhere" };
 const badgeStyle = { borderRadius: "999px", padding: "4px 8px", fontSize: "11px", whiteSpace: "nowrap" };
+const badgeStackStyle = { display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "6px" };
+const healthBadgeStyle = { ...badgeStyle, border: "1px solid" };
 const metricsStyle = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", margin: "18px 0" };
 const metricStyle = { minWidth: 0 };
 const metricLabelStyle = { color: "#8c96a1", fontSize: "11px", textTransform: "uppercase", letterSpacing: ".05em" };

@@ -15,11 +15,17 @@ const makePayload = ({ allNeverSeen = false } = {}) => ({
     source: item.source,
     source_type: item.sourceType,
     display_label: item.displayLabel,
+    ingestion_mode: item.source === "azure_insights" ? "checkpoint" : "push",
+    health_status: index === 0 ? "healthy" : index === 1 ? "degraded" : "unknown",
+    health_basis: item.source === "azure_insights" ? "poll_checkpoint" : "event_ingestion_freshness",
+    health_reason: index === 0 ? "recent_qualifying_ingestion" : index === 1 ? "qualifying_ingestion_stale" : "historical_backfill_incomplete",
+    freshness_threshold_seconds: 900,
+    health_basis_age_seconds: index < 2 ? index * 100 : null,
     last_event_at: allNeverSeen || index === 2 ? null : `2026-07-12T14:5${index}:00+00:00`,
-    events_last_hour: allNeverSeen ? 0 : index + 1,
-    events_today: allNeverSeen ? 0 : (index + 1) * 10,
-    total_events: allNeverSeen ? 0 : (index + 1) * 100,
+    latest_ingestion_at: allNeverSeen || index === 2 ? null : `2026-07-12T14:5${index}:00+00:00`,
     ever_seen: !allNeverSeen && index !== 2,
+    historical_backfill_complete: item.source === "azure_insights" ? null : index !== 2,
+    ...(item.source === "azure_insights" ? { last_poll_at: null } : {}),
   })),
 });
 
@@ -37,17 +43,18 @@ test("renders six sources in canonical order without client aggregation", async 
   expect(within(grid).getAllByRole("article").map((node) => node.dataset.source)).toEqual(
     SOURCE_METADATA.map((item) => item.source)
   );
-  expect(screen.getByText("600")).toBeInTheDocument();
   expect(screen.getByText("Never seen")).toBeInTheDocument();
   expect(screen.getByText("pfsense / firewall")).toBeInTheDocument();
+  expect(screen.getByText("Healthy")).toBeInTheDocument();
+  expect(screen.getByText("Degraded")).toBeInTheDocument();
 });
 
 test("shows all-never-seen state while keeping all entries", async () => {
   loadSourceHealth.mockResolvedValue(makePayload({ allNeverSeen: true }));
   render(<SourceHealthPanel onOpenLiveLogs={() => {}} />);
-  expect(await screen.findByText(/no recognized source has stored an event yet/i)).toBeInTheDocument();
-  expect(screen.getAllByText("Never seen")).toHaveLength(6);
-  expect(screen.getAllByText("0").length).toBeGreaterThanOrEqual(6);
+  expect(await screen.findByText(/no durable source activity is available yet/i)).toBeInTheDocument();
+  expect(screen.getAllByText("Never seen")).toHaveLength(5);
+  expect(screen.getByText("Last processed")).toBeInTheDocument();
 });
 
 test("supports initial error, manual refresh, and recovery", async () => {
@@ -94,9 +101,11 @@ test("routes every accessible Live Logs action to canonical destination", async 
   }
 });
 
-test("does not introduce inferred source-state wording", async () => {
+test("presents authoritative health state without historical counters", async () => {
   loadSourceHealth.mockResolvedValue(makePayload());
   const { container } = render(<SourceHealthPanel onOpenLiveLogs={() => {}} />);
   await screen.findByTestId("source-health-grid");
-  expect(container.textContent).not.toMatch(/\b(healthy|stale|offline|connected|degraded)\b/i);
+  expect(container).toHaveTextContent(/healthy/i);
+  expect(container).toHaveTextContent(/degraded/i);
+  expect(container.textContent).not.toMatch(/total events|last hour|today \(utc\)/i);
 });

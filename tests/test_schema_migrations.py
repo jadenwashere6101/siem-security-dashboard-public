@@ -155,7 +155,66 @@ def test_schema_snapshot_marker_matches_latest_migration():
         migrations_dir=repo_root / "migrations",
     )
 
-    assert version == 36
+    assert version == 37
+
+
+def test_source_ingestion_health_state_migration_is_additive_and_minimal():
+    repo_root = Path(__file__).resolve().parent.parent
+    migration_sql = (
+        repo_root / "migrations" / "0037_source_ingestion_health_state.sql"
+    ).read_text()
+    schema_sql = (repo_root / "schema.sql").read_text()
+
+    for sql in (migration_sql, schema_sql):
+        assert "CREATE TABLE IF NOT EXISTS source_ingestion_health_state" in sql
+        assert "source TEXT PRIMARY KEY" in sql
+        assert "latest_event_at TIMESTAMPTZ" in sql
+        assert "latest_qualifying_real_ingestion_at TIMESTAMPTZ" in sql
+        assert "historical_backfill_complete BOOLEAN NOT NULL DEFAULT FALSE" in sql
+        assert "backfill_high_water_event_id BIGINT" in sql
+        assert "backfill_last_processed_event_id BIGINT NOT NULL DEFAULT 0" in sql
+        assert "updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()" in sql
+
+    assert "CREATE INDEX" not in migration_sql.upper()
+    for destructive in ("DROP ", "TRUNCATE ", "DELETE FROM ", "ALTER TABLE ", "RENAME "):
+        assert destructive not in migration_sql.upper()
+
+
+def test_source_ingestion_health_state_migration_applies_forward(postgres_db):
+    repo_root = Path(__file__).resolve().parent.parent
+    migration_sql = (
+        repo_root / "migrations" / "0037_source_ingestion_health_state.sql"
+    ).read_text()
+    conn, cur = postgres_db
+
+    cur.execute("DROP TABLE source_ingestion_health_state")
+    cur.execute(migration_sql)
+    cur.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'source_ingestion_health_state'
+        ORDER BY ordinal_position
+        """
+    )
+    assert [row[0] for row in cur.fetchall()] == [
+        "source",
+        "latest_event_at",
+        "latest_qualifying_real_ingestion_at",
+        "historical_backfill_complete",
+        "backfill_high_water_event_id",
+        "backfill_last_processed_event_id",
+        "updated_at",
+    ]
+    cur.execute(
+        """
+        INSERT INTO source_ingestion_health_state (source)
+        VALUES ('pfsense')
+        RETURNING historical_backfill_complete, backfill_last_processed_event_id
+        """
+    )
+    assert cur.fetchone() == (False, 0)
 
 
 def test_nist_evidence_foundation_migration_is_additive_and_reference_only():

@@ -6,11 +6,16 @@ const REQUIRED_SOURCE_FIELDS = [
   "source",
   "source_type",
   "display_label",
+  "ingestion_mode",
+  "health_status",
+  "health_basis",
+  "health_reason",
+  "freshness_threshold_seconds",
+  "health_basis_age_seconds",
   "last_event_at",
-  "events_last_hour",
-  "events_today",
-  "total_events",
+  "latest_ingestion_at",
   "ever_seen",
+  "historical_backfill_complete",
 ];
 
 export const isValidSourceHealthResponse = (data) => {
@@ -30,11 +35,17 @@ export const isValidSourceHealthResponse = (data) => {
     return item.source === expected.source &&
       item.source_type === expected.sourceType &&
       item.display_label === expected.displayLabel &&
+      ["push", "checkpoint"].includes(item.ingestion_mode) &&
+      ["healthy", "degraded", "unknown"].includes(item.health_status) &&
+      typeof item.health_basis === "string" &&
+      typeof item.health_reason === "string" &&
+      Number.isInteger(item.freshness_threshold_seconds) &&
+      item.freshness_threshold_seconds > 0 &&
+      (item.health_basis_age_seconds === null || Number.isInteger(item.health_basis_age_seconds)) &&
       (item.last_event_at === null || typeof item.last_event_at === "string") &&
-      [item.events_last_hour, item.events_today, item.total_events].every(
-        (value) => Number.isInteger(value) && value >= 0
-      ) &&
-      typeof item.ever_seen === "boolean";
+      (item.latest_ingestion_at === null || typeof item.latest_ingestion_at === "string") &&
+      typeof item.ever_seen === "boolean" &&
+      (item.historical_backfill_complete === null || typeof item.historical_backfill_complete === "boolean");
   });
 };
 

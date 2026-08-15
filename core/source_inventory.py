@@ -61,6 +61,11 @@ CANONICAL_SOURCES = (
 )
 
 CANONICAL_SOURCE_IDS = frozenset(item.source for item in CANONICAL_SOURCES)
+CANONICAL_PUSH_SOURCE_IDS = frozenset(
+    item.source
+    for item in CANONICAL_SOURCES
+    if item.ingestion_mode == INGESTION_MODE_PUSH
+)
 
 # Inbound compatibility aliases only. Canonical IDs remain authoritative for
 # persistence, filtering, evidence provenance, and user-visible contracts.

@@ -23,7 +23,11 @@ from engines.detection_engine import (
     _generate_successful_login_after_spray_alerts_core,
 )
 from helpers.ingest_normalizers import reject_raw_password_fields
-from core.synthetic_data_policy import SYNTHETIC_PROVENANCE_VALUES
+from core.source_ingestion_health_state import record_persisted_push_event
+from core.synthetic_data_policy import (
+    SYNTHETIC_PROVENANCE_VALUES,
+    synthetic_json_provenance_values,
+)
 
 IMPLEMENTED_BASE_DETECTION_RULE_IDS = (
     "failed_login_threshold",
@@ -51,21 +55,7 @@ def _lower_text(value):
 
 
 def _raw_payload_provenance_values(raw_payload):
-    if not isinstance(raw_payload, dict):
-        return []
-    values = [
-        raw_payload.get("data_provenance"),
-        raw_payload.get("telemetry_provenance"),
-    ]
-    provenance = raw_payload.get("provenance")
-    if isinstance(provenance, dict):
-        values.extend([provenance.get("classification"), provenance.get("source")])
-    else:
-        values.append(provenance)
-    metadata = raw_payload.get("metadata")
-    if isinstance(metadata, dict):
-        values.append(metadata.get("data_provenance"))
-    return [_lower_text(value) for value in values if _lower_text(value)]
+    return list(synthetic_json_provenance_values(raw_payload))
 
 
 def _build_synthetic_provenance_context(event_dict):
@@ -162,6 +152,7 @@ def ingest_normalized_event(event_dict, conn, cur):
             raw_payload
         )
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING created_at
         """,
         (
             event_type,
@@ -175,6 +166,13 @@ def ingest_normalized_event(event_dict, conn, cur):
             environment,
             Json(raw_payload),
         ),
+    )
+    ingested_at = cur.fetchone()[0]
+    record_persisted_push_event(
+        cur,
+        source=source,
+        ingested_at=ingested_at,
+        raw_payload=raw_payload,
     )
 
     detector_candidates = {

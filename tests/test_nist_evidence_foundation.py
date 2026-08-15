@@ -192,6 +192,14 @@ def test_production_push_source_without_checkpoint_can_reach_evidence_available(
         """,
         (NOW - timedelta(minutes=2), NOW - timedelta(minutes=1)),
     )
+    cur.execute(
+        """
+        INSERT INTO source_ingestion_health_state (
+            source, latest_event_at, latest_qualifying_real_ingestion_at
+        ) VALUES ('pfsense', %s, %s)
+        """,
+        (NOW - timedelta(minutes=1), NOW - timedelta(minutes=1)),
+    )
     conn.commit()
 
     snapshot = aggregate_source_health(conn, generated_at=NOW)
@@ -224,6 +232,14 @@ def test_stale_and_never_seen_push_health_propagate_to_nist_confidence(postgres_
         )
         """,
         (NOW - timedelta(hours=1),),
+    )
+    cur.execute(
+        """
+        INSERT INTO source_ingestion_health_state (
+            source, latest_event_at, latest_qualifying_real_ingestion_at
+        ) VALUES ('pfsense', %s, %s)
+        """,
+        (NOW - timedelta(hours=1), NOW - timedelta(hours=1)),
     )
     conn.commit()
 
