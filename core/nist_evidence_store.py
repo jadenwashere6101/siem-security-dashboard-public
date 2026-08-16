@@ -328,6 +328,107 @@ def get_run(conn, run_id: int) -> dict[str, Any] | None:
         return _run_row(cur.fetchone())
 
 
+def list_boundary_runs(
+    conn,
+    boundary_id: int,
+    *,
+    limit: int = 25,
+    before_created_at: datetime | None = None,
+    before_id: int | None = None,
+) -> dict[str, Any]:
+    safe_limit = max(1, min(int(limit), 50))
+    if (before_created_at is None) != (before_id is None):
+        raise NistEvidenceValidationError(
+            "before_created_at and before_id must be provided together"
+        )
+    params: list[Any] = [boundary_id]
+    cursor_clause = ""
+    if before_created_at is not None and before_id is not None:
+        cursor_clause = "AND (r.created_at, r.id) < (%s, %s)"
+        params.extend([before_created_at, int(before_id)])
+    params.append(safe_limit + 1)
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT {_RUN_COLUMNS}
+            FROM nist_assessment_runs r
+            WHERE r.boundary_id = %s
+              {cursor_clause}
+            ORDER BY r.created_at DESC, r.id DESC
+            LIMIT %s
+            """,
+            tuple(params),
+        )
+        rows = cur.fetchall()
+    has_more = len(rows) > safe_limit
+    items = [_run_row(row) for row in rows[:safe_limit]]
+    last = items[-1] if has_more and items else None
+    return {
+        "items": items,
+        "limit": safe_limit,
+        "next_cursor": (
+            {"before_created_at": last["created_at"], "before_id": last["id"]}
+            if last else None
+        ),
+    }
+
+
+def get_requirement_result(
+    conn, run_id: int, requirement_id: str
+) -> dict[str, Any] | None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, run_id, requirement_id, requirement_name, mapping_strength,
+                   evidence_status, collection_confidence, reason_code, limitation,
+                   evidence_count, omitted_count, evaluated_at, catalog_version,
+                   catalog_hash, collector_version
+            FROM nist_requirement_results
+            WHERE run_id = %s AND requirement_id = %s
+            """,
+            (run_id, requirement_id),
+        )
+        row = cur.fetchone()
+    return _requirement_result_row(row)
+
+
+def get_bound_requirement_result(
+    conn,
+    *,
+    boundary_id: int,
+    run_id: int,
+    requirement_result_id: int,
+    requirement_id: str,
+) -> dict[str, Any] | None:
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT {_RUN_COLUMNS},
+                   rr.id, rr.run_id, rr.requirement_id, rr.requirement_name,
+                   rr.mapping_strength, rr.evidence_status,
+                   rr.collection_confidence, rr.reason_code, rr.limitation,
+                   rr.evidence_count, rr.omitted_count, rr.evaluated_at,
+                   rr.catalog_version, rr.catalog_hash, rr.collector_version
+            FROM nist_assessment_runs r
+            JOIN nist_assessment_boundaries b ON b.id = r.boundary_id
+            JOIN nist_requirement_results rr ON rr.run_id = r.id
+            WHERE b.id = %s
+              AND r.id = %s
+              AND rr.id = %s
+              AND rr.requirement_id = %s
+            """,
+            (boundary_id, run_id, requirement_result_id, requirement_id),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    return {
+        "boundary_id": boundary_id,
+        "run": _run_row(row[:16]),
+        "result": _requirement_result_row(row[16:]),
+    }
+
+
 def list_requirement_results(conn, run_id: int) -> list[dict[str, Any]]:
     with conn.cursor() as cur:
         cur.execute(
@@ -342,18 +443,21 @@ def list_requirement_results(conn, run_id: int) -> list[dict[str, Any]]:
             """,
             (run_id,),
         )
-        return [
-            {
-                "id": row[0], "run_id": row[1], "requirement_id": row[2],
-                "requirement_name": row[3], "mapping_strength": row[4],
-                "evidence_status": row[5], "collection_confidence": row[6],
-                "reason_code": row[7], "limitation": row[8],
-                "evidence_count": row[9], "omitted_count": row[10],
-                "evaluated_at": row[11].isoformat(), "catalog_version": row[12],
-                "catalog_hash": row[13].strip(), "collector_version": row[14],
-            }
-            for row in cur.fetchall()
-        ]
+        return [_requirement_result_row(row) for row in cur.fetchall()]
+
+
+def _requirement_result_row(row: tuple | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    return {
+        "id": row[0], "run_id": row[1], "requirement_id": row[2],
+        "requirement_name": row[3], "mapping_strength": row[4],
+        "evidence_status": row[5], "collection_confidence": row[6],
+        "reason_code": row[7], "limitation": row[8],
+        "evidence_count": row[9], "omitted_count": row[10],
+        "evaluated_at": row[11].isoformat(), "catalog_version": row[12],
+        "catalog_hash": row[13].strip(), "collector_version": row[14],
+    }
 
 
 def list_evidence_references(
@@ -380,22 +484,59 @@ def list_evidence_references(
             (run_id, requirement_id, safe_limit, safe_offset),
         )
         rows = cur.fetchall()
-    items = [
-        {
-            "id": row[0], "requirement_id": row[1], "evidence_category": row[2],
-            "evidence_type": row[3], "canonical_source": row[4],
-            "source_type": row[5], "source_health_state": row[6],
-            "entity_type": row[7], "entity_id": row[8],
-            "occurrence_timestamp": row[9].isoformat() if row[9] else None,
-            "ingestion_timestamp": row[10].isoformat() if row[10] else None,
-            "collection_timestamp": row[11].isoformat(),
-            "query_window_start": row[12].isoformat(),
-            "query_window_end": row[13].isoformat(), "query_hash": row[14].strip(),
-            "operational_classification": row[15], "is_truncated": row[16],
-            "omitted_count": row[17], "catalog_version": row[18],
-            "mapping_version": row[19], "collector_version": row[20],
-            "evidence_summary": row[21], "reference_metadata": row[22],
-        }
-        for row in rows
-    ]
+    items = [_evidence_reference_row(row) for row in rows]
     return {"items": items, "total": int(rows[0][23]) if rows else 0, "limit": safe_limit, "offset": safe_offset}
+
+
+def list_bound_evidence_references(
+    conn,
+    *,
+    run_id: int,
+    requirement_result_id: int,
+    requirement_id: str,
+    limit: int = 26,
+) -> dict[str, Any]:
+    safe_limit = max(1, min(int(limit), 26))
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, requirement_id, evidence_category, evidence_type,
+                   canonical_source, source_type, source_health_state, entity_type,
+                   entity_id, occurrence_timestamp, ingestion_timestamp,
+                   collection_timestamp, query_window_start, query_window_end,
+                   query_hash, operational_classification, has_omitted_records,
+                   omitted_count, catalog_version, mapping_version, collector_version,
+                   evidence_summary, reference_metadata, COUNT(*) OVER()
+            FROM nist_evidence_references
+            WHERE run_id = %s
+              AND requirement_result_id = %s
+              AND requirement_id = %s
+            ORDER BY evidence_category, occurrence_timestamp DESC NULLS LAST,
+                     ingestion_timestamp DESC NULLS LAST, id
+            LIMIT %s
+            """,
+            (run_id, requirement_result_id, requirement_id, safe_limit),
+        )
+        rows = cur.fetchall()
+    return {
+        "items": [_evidence_reference_row(row) for row in rows],
+        "total": int(rows[0][23]) if rows else 0,
+    }
+
+
+def _evidence_reference_row(row: tuple) -> dict[str, Any]:
+    return {
+        "id": row[0], "requirement_id": row[1], "evidence_category": row[2],
+        "evidence_type": row[3], "canonical_source": row[4],
+        "source_type": row[5], "source_health_state": row[6],
+        "entity_type": row[7], "entity_id": row[8],
+        "occurrence_timestamp": row[9].isoformat() if row[9] else None,
+        "ingestion_timestamp": row[10].isoformat() if row[10] else None,
+        "collection_timestamp": row[11].isoformat(),
+        "query_window_start": row[12].isoformat(),
+        "query_window_end": row[13].isoformat(), "query_hash": row[14].strip(),
+        "operational_classification": row[15], "is_truncated": row[16],
+        "omitted_count": row[17], "catalog_version": row[18],
+        "mapping_version": row[19], "collector_version": row[20],
+        "evidence_summary": row[21], "reference_metadata": row[22],
+    }

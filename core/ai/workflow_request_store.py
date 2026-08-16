@@ -15,11 +15,13 @@ ASYNC_WORKFLOW_DEEP_INVESTIGATE = "deep_investigate"
 ASYNC_WORKFLOW_DECISION_SUPPORT = "decision_support"
 ASYNC_WORKFLOW_GENERATE_ARTIFACT = "generate_artifact"
 ASYNC_WORKFLOW_REPO_ASSISTANT = "repo_assistant"
+ASYNC_WORKFLOW_NIST_EVIDENCE_EXPLANATION = "nist_evidence_explanation"
 ASYNC_WORKFLOWS = frozenset(
     {
         ASYNC_WORKFLOW_DEEP_INVESTIGATE,
         ASYNC_WORKFLOW_DECISION_SUPPORT,
         ASYNC_WORKFLOW_GENERATE_ARTIFACT,
+        ASYNC_WORKFLOW_NIST_EVIDENCE_EXPLANATION,
     }
 )
 
@@ -511,7 +513,18 @@ def _lifecycle(status: str, stage: str, *, workflow: str | None = None) -> dict[
         STAGE_VALIDATING_RESPONSE,
         STAGE_COMPLETE,
     ]
-    if workflow == ASYNC_WORKFLOW_REPO_ASSISTANT or stage in {
+    if workflow == ASYNC_WORKFLOW_NIST_EVIDENCE_EXPLANATION:
+        order = [
+            STAGE_QUEUED,
+            STAGE_RUNNING,
+            STAGE_GATHERING_CONTEXT,
+            STAGE_RETRIEVING_EVIDENCE,
+            STAGE_PREPARING_EVIDENCE,
+            STAGE_GENERATING_ANALYSIS,
+            STAGE_VALIDATING_RESPONSE,
+            STAGE_COMPLETE,
+        ]
+    elif workflow == ASYNC_WORKFLOW_REPO_ASSISTANT or stage in {
         STAGE_RETRIEVING_REPOSITORY_EVIDENCE,
         STAGE_PREPARING_REPOSITORY_CONTEXT,
         STAGE_GENERATING_ANSWER,

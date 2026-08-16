@@ -14,6 +14,7 @@ const SECTION_ICONS = {
   "response-registry": "◎",
   "threat-hunt": "⌖",
   "detection-simulator": "◇",
+  "nist-evidence": "N",
   "detection-rules": "≡",
   "pfsense-ingest-filters": "▥",
   "ai-gateway-config": "AI",

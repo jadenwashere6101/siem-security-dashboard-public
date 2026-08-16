@@ -120,6 +120,7 @@ def _result():
 def test_nist_routes_require_authentication(client):
     assert client.get("/nist/evidence/catalog").status_code == 401
     assert client.post("/nist/evidence/boundaries", json={}).status_code == 401
+    assert client.post("/nist/evidence/explanations", json={}).status_code == 401
 
 
 def test_analyst_can_read_catalog_but_cannot_mutate_boundary(client):
@@ -134,7 +135,116 @@ def test_analyst_can_read_catalog_but_cannot_mutate_boundary(client):
 def test_viewer_cannot_read_nist_evidence(client):
     with _logged_in_role(client, "viewer"):
         response = client.get("/nist/evidence/catalog")
+        explanation = client.post("/nist/evidence/explanations", json={})
     assert response.status_code == 403
+    assert explanation.status_code == 403
+
+
+def test_run_history_is_analyst_readable_bounded_and_keyset_paginated(client):
+    conn = RouteSafeConnection()
+    next_cursor = {"before_created_at": _run()["created_at"], "before_id": 11}
+    with _logged_in_role(client, "analyst"), patch(
+        "routes.nist_evidence_routes.get_db_connection", return_value=conn
+    ), patch("routes.nist_evidence_routes.get_boundary", return_value=_boundary()), patch(
+        "routes.nist_evidence_routes.list_boundary_runs",
+        return_value={"items": [_run()], "limit": 25, "next_cursor": next_cursor},
+    ) as list_mock:
+        response = client.get("/nist/evidence/boundaries/7/runs?limit=25")
+    assert response.status_code == 200
+    assert response.get_json()["next_cursor"] == next_cursor
+    list_mock.assert_called_once_with(
+        conn, 7, limit=25, before_created_at=None, before_id=None
+    )
+
+
+def test_run_history_rejects_partial_cursor_and_viewer(client):
+    conn = RouteSafeConnection()
+    with _logged_in_role(client, "analyst"), patch(
+        "routes.nist_evidence_routes.get_db_connection", return_value=conn
+    ), patch("routes.nist_evidence_routes.get_boundary", return_value=_boundary()):
+        malformed = client.get(
+            "/nist/evidence/boundaries/7/runs?before_id=11"
+        )
+        zero_limit = client.get("/nist/evidence/boundaries/7/runs?limit=0")
+    with _logged_in_role(client, "viewer"):
+        denied = client.get("/nist/evidence/boundaries/7/runs")
+    assert malformed.status_code == 400
+    assert zero_limit.status_code == 400
+    assert denied.status_code == 403
+
+
+def test_evidence_route_returns_404_when_requirement_result_does_not_belong_to_run(client):
+    conn = RouteSafeConnection()
+    with _logged_in_role(client, "analyst"), patch(
+        "routes.nist_evidence_routes.get_db_connection", return_value=conn
+    ), patch("routes.nist_evidence_routes.get_run", return_value=_run()), patch(
+        "routes.nist_evidence_routes.get_requirement_result", return_value=None
+    ), patch("routes.nist_evidence_routes.list_evidence_references") as list_mock:
+        response = client.get(
+            "/nist/evidence/runs/11/results/03.99.99/evidence"
+        )
+    assert response.status_code == 404
+    list_mock.assert_not_called()
+
+
+def test_explanation_submission_is_id_only_binding_checked_and_idempotent(client):
+    conn = RouteSafeConnection()
+    queued = {
+        "request_id": "aiwf_nist_test",
+        "status": "queued",
+        "workflow": "nist_evidence_explanation",
+        "binding": {
+            "boundary_id": 7,
+            "run_id": 11,
+            "requirement_result_id": 20,
+            "requirement_id": "03.03.01",
+        },
+        "created": False,
+    }
+    payload = {
+        "boundary_id": 7,
+        "run_id": 11,
+        "requirement_result_id": 20,
+        "requirement_id": "03.03.01",
+        "client_request_id": "55f5fa58-9dc3-4dda-b880-d950bcf56c62",
+    }
+    with _logged_in_role(client, "analyst"), patch(
+        "routes.nist_evidence_routes.get_db_connection", return_value=conn
+    ), patch(
+        "routes.nist_evidence_routes.enqueue_explanation", return_value=(queued, False)
+    ) as enqueue_mock, patch("routes.nist_evidence_routes.log_audit_event") as audit_mock:
+        response = client.post("/nist/evidence/explanations", json=payload)
+    assert response.status_code == 200
+    enqueue_mock.assert_called_once_with(
+        conn, payload, actor_username="nist_analyst", actor_role="analyst"
+    )
+    details = audit_mock.call_args.kwargs["details"]
+    assert audit_mock.call_args.args[0] == "NIST_EVIDENCE_EXPLANATION_DUPLICATE"
+    assert "prompt" not in json.dumps(details).lower()
+    assert "evidence" not in json.dumps(details).lower()
+
+
+def test_explanation_binding_rejection_is_404_audited_and_does_not_queue(client):
+    from core.nist_evidence_explanation import NistExplanationBindingError
+
+    conn = RouteSafeConnection()
+    payload = {
+        "boundary_id": 7,
+        "run_id": 99,
+        "requirement_result_id": 20,
+        "requirement_id": "03.03.01",
+        "client_request_id": "55f5fa58-9dc3-4dda-b880-d950bcf56c62",
+    }
+    with _logged_in_role(client, "analyst"), patch(
+        "routes.nist_evidence_routes.get_db_connection", return_value=conn
+    ), patch(
+        "routes.nist_evidence_routes.enqueue_explanation",
+        side_effect=NistExplanationBindingError("not found"),
+    ), patch("routes.nist_evidence_routes.log_audit_event") as audit_mock:
+        response = client.post("/nist/evidence/explanations", json=payload)
+    assert response.status_code == 404
+    assert response.get_json()["error_code"] == "binding_invalid"
+    assert audit_mock.call_args.args[0] == "NIST_EVIDENCE_EXPLANATION_BINDING_REJECTED"
 
 
 def test_super_admin_boundary_create_normalizes_and_audits(client):

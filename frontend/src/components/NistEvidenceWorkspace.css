@@ -1,0 +1,74 @@
+.nist-workspace {
+  display: grid;
+  gap: 16px;
+  color: #e6edf3;
+}
+
+.nist-disclaimer {
+  padding: 14px 18px;
+  color: #f5d487;
+  background: rgba(217, 164, 65, 0.1);
+}
+
+.nist-workspace__body { padding: 20px; }
+.nist-boundary-selector { max-width: 520px; margin-bottom: 14px; }
+.nist-boundary-card { margin-bottom: 18px; }
+.nist-boundary-card h3, .nist-run-content h3 { margin: 0; }
+.nist-run-layout { display: grid; grid-template-columns: minmax(190px, 250px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.nist-run-history { display: grid; gap: 8px; padding: 14px; border: 1px solid #30363d; border-radius: 10px; background: #0f1720; }
+.nist-run-history h3 { margin: 0 0 6px; }
+.nist-run-button { display: grid; gap: 4px; width: 100%; padding: 10px; border: 1px solid #30363d; border-radius: 8px; background: #161b22; color: #c9d1d9; text-align: left; cursor: pointer; }
+.nist-run-button span { font-size: 11px; color: #8b949e; }
+.nist-run-button.is-selected { border-color: rgba(125, 211, 252, 0.55); background: rgba(14, 165, 233, 0.12); }
+.nist-run-content { display: grid; gap: 16px; min-width: 0; }
+.nist-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.nist-row--spread { justify-content: space-between; }
+.nist-definition-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 18px; }
+.nist-definition-grid div, .nist-detail-list div { min-width: 0; }
+.nist-definition-grid dt, .nist-detail-list dt { color: #8b949e; font-size: 11px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.nist-definition-grid dd, .nist-detail-list dd { margin: 4px 0 0; overflow-wrap: anywhere; }
+.nist-muted { color: #8b949e; font-size: 12px; }
+.nist-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+.nist-link-button { display: inline-flex; padding: 8px 11px; border: 1px solid #30363d; border-radius: 8px; color: #c9d1d9; font-size: 12px; font-weight: 800; text-decoration: none; }
+.nist-table-scroll { overflow-x: auto; }
+.nist-results-table { width: 100%; min-width: 720px; border-collapse: collapse; background: #161b22; }
+.nist-results-table th { color: #8b949e; font-size: 11px; text-transform: uppercase; text-align: left; }
+.nist-results-table th, .nist-results-table td { padding: 10px; border-bottom: 1px solid #30363d; vertical-align: top; }
+.nist-results-table tr.is-selected { background: rgba(14, 165, 233, 0.1); }
+.nist-results-table td:first-child button { display: grid; gap: 3px; width: 100%; padding: 0; border: 0; background: transparent; color: #e6edf3; text-align: left; cursor: pointer; font-weight: 800; }
+.nist-results-table td:first-child button span { color: #8b949e; font-size: 12px; font-weight: 400; }
+.nist-detail { display: grid; gap: 14px; padding: 16px; }
+.nist-detail h2, .nist-detail h3, .nist-detail h4, .nist-detail p { margin: 0; }
+.nist-eyebrow { color: #93c5fd; font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.nist-status-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.nist-detail-list { display: grid; gap: 12px; margin: 0; }
+.nist-notice { padding: 10px 12px; border: 1px solid rgba(217, 164, 65, .36); border-radius: 8px; background: rgba(217, 164, 65, .12); color: #f5d487; }
+.nist-error { padding: 10px 12px; border: 1px solid rgba(248, 81, 73, .38); border-radius: 8px; background: rgba(248, 81, 73, .12); color: #fca5a5; }
+.nist-empty { padding: 28px 16px; border: 1px dashed #30363d; border-radius: 10px; color: #8b949e; text-align: center; }
+.nist-evidence-card { display: grid; gap: 10px; padding: 12px; border: 1px solid #30363d; border-radius: 10px; background: #0f1720; }
+.nist-evidence-card p { line-height: 1.5; }
+.nist-explanation { display: grid; gap: 8px; padding: 14px; border: 1px solid rgba(125, 211, 252, .4); border-radius: 10px; background: rgba(14, 165, 233, .1); }
+.nist-explanation--unavailable { border-color: #30363d; background: rgba(139, 148, 158, .08); }
+.nist-explanation ul { margin: 0; padding-left: 20px; }
+.nist-field { display: grid; gap: 6px; color: #c9d1d9; font-size: 12px; font-weight: 700; }
+.nist-field input, .nist-field textarea, .nist-field select, .nist-boundary-selector select { width: 100%; box-sizing: border-box; padding: 9px 10px; border: 1px solid #30363d; border-radius: 8px; background: #0d1117; color: #e6edf3; }
+.nist-fieldset { border: 1px solid #30363d; border-radius: 8px; color: #c9d1d9; }
+.nist-source-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.nist-checkbox { color: #c9d1d9; font-size: 13px; }
+.nist-modal-backdrop { position: fixed; inset: 0; z-index: 10020; display: grid; place-items: center; padding: 16px; background: rgba(0, 0, 0, .72); }
+.nist-modal { width: min(680px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; border: 1px solid #30363d; border-radius: 12px; background: #161b22; box-shadow: 0 18px 48px rgba(0, 0, 0, .45); }
+.nist-modal__body { display: grid; gap: 14px; padding: 20px; }
+.nist-modal__actions { display: flex; justify-content: flex-end; gap: 8px; padding: 16px 20px; border-top: 1px solid #30363d; }
+
+@media (max-width: 1023px) {
+  .nist-run-layout { grid-template-columns: 1fr; }
+  .nist-run-history { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .nist-run-history h3, .nist-run-history > p, .nist-run-history > button:last-child { grid-column: 1 / -1; }
+}
+
+@media (max-width: 639px) {
+  .nist-workspace__body { padding: 14px; }
+  .nist-run-history, .nist-definition-grid, .nist-source-grid { grid-template-columns: 1fr; }
+  .nist-results-table { min-width: 650px; }
+  .nist-modal-backdrop { padding: 8px; }
+}

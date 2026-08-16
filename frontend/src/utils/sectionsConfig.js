@@ -56,6 +56,12 @@ export const sectionsConfig = [
     visibleWhen: ({ canTakeAlertActions }) => canTakeAlertActions,
   },
   {
+    id: "nist-evidence",
+    label: "NIST Evidence",
+    group: "soc",
+    visibleWhen: ({ canTakeAlertActions }) => canTakeAlertActions,
+  },
+  {
     id: "detection-simulator",
     label: "Detection Simulator",
     group: "soc",

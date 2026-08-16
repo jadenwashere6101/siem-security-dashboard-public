@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+from datetime import datetime, timezone
 from io import StringIO
 import json
 
@@ -15,12 +16,19 @@ from core.auth import analyst_or_super_admin_required, super_admin_required
 from core.db import get_db_connection
 from core.nist_evidence_catalog import catalog_document
 from core.nist_evidence_service import execute_assessment_run
+from core.nist_evidence_explanation import (
+    NistExplanationBindingError,
+    NistExplanationValidationError,
+    enqueue_explanation,
+)
 from core.nist_evidence_store import (
     NistEvidenceValidationError,
     create_boundary,
     get_boundary,
+    get_requirement_result,
     get_run,
     list_boundaries,
+    list_boundary_runs,
     list_evidence_references,
     list_requirement_results,
     update_boundary,
@@ -50,6 +58,22 @@ def _audit(event_type: str, details: dict) -> None:
         source_ip=request.remote_addr,
         details=details,
     )
+
+
+def _cursor_datetime(value: str | None) -> datetime | None:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError as error:
+        raise NistEvidenceValidationError(
+            "before_created_at must be an ISO-8601 timestamp"
+        ) from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise NistEvidenceValidationError(
+            "before_created_at must include a timezone offset"
+        )
+    return parsed.astimezone(timezone.utc)
 
 
 @nist_evidence_bp.route("/nist/evidence/catalog", methods=["GET"])
@@ -192,6 +216,49 @@ def start_nist_assessment_run(boundary_id: int):
             conn.close()
 
 
+@nist_evidence_bp.route("/nist/evidence/boundaries/<int:boundary_id>/runs", methods=["GET"])
+@login_required
+@analyst_or_super_admin_required
+def get_nist_boundary_runs(boundary_id: int):
+    conn = None
+    try:
+        conn = get_db_connection()
+        if not get_boundary(conn, boundary_id):
+            return jsonify({"error": "Assessment boundary not found"}), 404
+        limit = _positive_int(request.args.get("limit"), 25, maximum=50)
+        if limit == 0:
+            raise NistEvidenceValidationError("limit must be a positive integer")
+        raw_before_id = request.args.get("before_id")
+        before_created_at = _cursor_datetime(request.args.get("before_created_at"))
+        before_id = (
+            _positive_int(raw_before_id, 0, maximum=2**63 - 1)
+            if raw_before_id not in (None, "") else None
+        )
+        if (before_created_at is None) != (before_id is None):
+            raise NistEvidenceValidationError(
+                "before_created_at and before_id must be provided together"
+            )
+        if before_id == 0:
+            raise NistEvidenceValidationError("before_id must be a positive integer")
+        return jsonify(
+            list_boundary_runs(
+                conn,
+                boundary_id,
+                limit=limit,
+                before_created_at=before_created_at,
+                before_id=before_id,
+            )
+        ), 200
+    except NistEvidenceValidationError as error:
+        return jsonify({"error": str(error)}), 400
+    except Exception as error:
+        current_app.logger.error("Error listing NIST assessment runs: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
 @nist_evidence_bp.route("/nist/evidence/runs/<int:run_id>", methods=["GET"])
 @login_required
 @analyst_or_super_admin_required
@@ -240,6 +307,8 @@ def get_nist_requirement_evidence(run_id: int, requirement_id: str):
         conn = get_db_connection()
         if not get_run(conn, run_id):
             return jsonify({"error": "Assessment run not found"}), 404
+        if not get_requirement_result(conn, run_id, requirement_id):
+            return jsonify({"error": "Requirement result not found"}), 404
         limit = _positive_int(request.args.get("limit"), 100, maximum=100)
         offset = _positive_int(request.args.get("offset"), 0, maximum=10000)
         return jsonify(
@@ -249,6 +318,63 @@ def get_nist_requirement_evidence(run_id: int, requirement_id: str):
         return jsonify({"error": str(error)}), 400
     except Exception as error:
         current_app.logger.error("Error reading NIST evidence references: %s", error)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@nist_evidence_bp.route("/nist/evidence/explanations", methods=["POST"])
+@login_required
+@analyst_or_super_admin_required
+def queue_nist_evidence_explanation():
+    conn = None
+    payload = request.get_json(silent=True)
+    try:
+        conn = get_db_connection()
+        result, created = enqueue_explanation(
+            conn,
+            payload,
+            actor_username=current_user.id,
+            actor_role=current_user.role,
+        )
+        conn.commit()
+        binding = result["binding"]
+        _audit(
+            "NIST_EVIDENCE_EXPLANATION_QUEUED"
+            if created else "NIST_EVIDENCE_EXPLANATION_DUPLICATE",
+            {
+                "workflow_request_id": result.get("request_id"),
+                **binding,
+                "created": created,
+            },
+        )
+        return jsonify(result), 202 if created else 200
+    except NistExplanationValidationError as error:
+        if conn:
+            conn.rollback()
+        return jsonify({"error": str(error), "error_code": "invalid_explanation_request"}), 400
+    except NistExplanationBindingError:
+        if conn:
+            conn.rollback()
+        safe = payload if isinstance(payload, dict) else {}
+        _audit(
+            "NIST_EVIDENCE_EXPLANATION_BINDING_REJECTED",
+            {
+                "workflow_request_id": None,
+                "boundary_id": safe.get("boundary_id"),
+                "run_id": safe.get("run_id"),
+                "requirement_result_id": safe.get("requirement_result_id"),
+                "requirement_id": safe.get("requirement_id"),
+                "outcome": "rejected",
+                "error_code": "binding_invalid",
+            },
+        )
+        return jsonify({"error": "NIST evidence result not found", "error_code": "binding_invalid"}), 404
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        current_app.logger.error("Error queueing NIST evidence explanation: %s", error)
         return jsonify({"error": "Internal server error"}), 500
     finally:
         if conn:

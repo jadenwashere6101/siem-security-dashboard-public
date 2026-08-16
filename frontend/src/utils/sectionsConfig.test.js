@@ -10,6 +10,7 @@ const EXPECTED_SECTION_IDS = [
   "response-registry",
   "threat-hunt",
   "analyst-workspace",
+  "nist-evidence",
   "detection-simulator",
   "soar-queue",
   "soar-incidents",
@@ -107,6 +108,12 @@ const expectedVisibility = {
     unauthenticated: false,
   },
   "analyst-workspace": {
+    super_admin: true,
+    analyst: true,
+    viewer: false,
+    unauthenticated: false,
+  },
+  "nist-evidence": {
     super_admin: true,
     analyst: true,
     viewer: false,
@@ -248,7 +255,7 @@ const expectedVisibility = {
 
 describe("sectionsConfig", () => {
   test("contains exactly the expected section ids", () => {
-    expect(sectionsConfig).toHaveLength(31);
+    expect(sectionsConfig).toHaveLength(32);
     expect(sectionsConfig.map((section) => section.id)).toEqual(EXPECTED_SECTION_IDS);
   });
 

@@ -32,6 +32,7 @@ import InvestigationDrawer from "./components/InvestigationDrawer";
 import ThreatBrief, { buildThreatBriefModel } from "./components/ThreatBrief";
 import AlertsToast from "./components/AlertsToast";
 import RepoArchitectureAssistantPanel from "./components/RepoArchitectureAssistantPanel";
+import NistEvidenceWorkspace from "./components/NistEvidenceWorkspace";
 import { theme } from "./theme";
 import { UiSettingsProvider, useUiSettings } from "./context/UiSettingsContext";
 import { ResponseSyncProvider } from "./context/ResponseSyncContext";
@@ -3003,6 +3004,16 @@ function AppInner() {
             aiEnabled={canTakeAlertActions}
             actionBusy={workspaceActionBusy}
             actionStatus={workspaceActionStatus}
+          />
+        )}
+
+        {activeSection === "nist-evidence" && isSectionVisible("nist-evidence", roleFlags) && (
+          <NistEvidenceWorkspace
+            userRole={userRole}
+            onOpenAlert={handleOpenAlert}
+            onOpenIncident={handleOpenIncident}
+            onOpenApproval={handleOpenApproval}
+            onOpenPlaybookExecution={handleOpenPlaybookExecution}
           />
         )}
 

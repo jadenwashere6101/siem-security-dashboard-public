@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 import logging
@@ -10,10 +11,15 @@ from typing import Callable
 from flask_login import login_user
 
 from core.ai.repo_assistant_service import answer_repo_question
+from core.nist_evidence_explanation import (
+    audit_explanation_worker_failure,
+    execute_explanation,
+)
 from core.auth import User
 from core.ai.workflow_orchestrator import run_workflow
 from core.ai.workflow_request_store import (
     ASYNC_WORKFLOW_REPO_ASSISTANT,
+    ASYNC_WORKFLOW_NIST_EVIDENCE_EXPLANATION,
     STATUS_COMPLETED,
     STATUS_DEGRADED,
     STATUS_FAILED,
@@ -24,6 +30,7 @@ from core.ai.workflow_request_store import (
     STAGE_GENERATING_ANSWER,
     STAGE_QUERYING_TOOLS,
     STAGE_PREPARING_REPOSITORY_CONTEXT,
+    STAGE_PREPARING_EVIDENCE,
     STAGE_RETRIEVING_REPOSITORY_EVIDENCE,
     STAGE_RETRIEVING_EVIDENCE,
     STAGE_VALIDATING_CITATIONS,
@@ -173,11 +180,14 @@ def _process_request(
 ) -> str:
     request_id = job["request_id"]
     payload = job.get("request_payload") if isinstance(job.get("request_payload"), dict) else {}
+    workflow = job.get("workflow")
     try:
-        payload, current_actor_role = prepare_worker_conversation(conn, job)
+        if workflow == ASYNC_WORKFLOW_NIST_EVIDENCE_EXPLANATION:
+            current_actor_role = str(job.get("actor_role") or "")
+        else:
+            payload, current_actor_role = prepare_worker_conversation(conn, job)
         update_request_stage(conn, request_id, lease_owner=lease_owner, stage=STAGE_GATHERING_CONTEXT, now=clock())
         conn.commit()
-        workflow = job.get("workflow")
         if workflow == ASYNC_WORKFLOW_REPO_ASSISTANT:
             update_request_stage(conn, request_id, lease_owner=lease_owner, stage=STAGE_RETRIEVING_REPOSITORY_EVIDENCE, now=clock())
             conn.commit()
@@ -189,6 +199,23 @@ def _process_request(
             update_request_stage(conn, request_id, lease_owner=lease_owner, stage=STAGE_RETRIEVING_EVIDENCE, now=clock())
             conn.commit()
             update_request_stage(conn, request_id, lease_owner=lease_owner, stage=STAGE_QUERYING_TOOLS, now=clock())
+            conn.commit()
+        elif workflow == ASYNC_WORKFLOW_NIST_EVIDENCE_EXPLANATION:
+            update_request_stage(
+                conn,
+                request_id,
+                lease_owner=lease_owner,
+                stage=STAGE_RETRIEVING_EVIDENCE,
+                now=clock(),
+            )
+            conn.commit()
+            update_request_stage(
+                conn,
+                request_id,
+                lease_owner=lease_owner,
+                stage=STAGE_PREPARING_EVIDENCE,
+                now=clock(),
+            )
             conn.commit()
         if workflow != ASYNC_WORKFLOW_REPO_ASSISTANT:
             update_request_stage(conn, request_id, lease_owner=lease_owner, stage=STAGE_GENERATING_ANALYSIS, now=clock())
@@ -202,6 +229,8 @@ def _process_request(
         conn.commit()
         result = _run_with_user_context(
             payload,
+            conn=conn,
+            request_id=request_id,
             workflow=workflow,
             actor_username=job["actor_username"],
             actor_role=current_actor_role,
@@ -214,7 +243,8 @@ def _process_request(
             stage=STAGE_VALIDATING_CITATIONS if workflow == ASYNC_WORKFLOW_REPO_ASSISTANT else STAGE_VALIDATING_RESPONSE,
             now=clock(),
         )
-        result = complete_worker_conversation(conn, {**job, "request_payload": payload}, result)
+        if workflow != ASYNC_WORKFLOW_NIST_EVIDENCE_EXPLANATION:
+            result = complete_worker_conversation(conn, {**job, "request_payload": payload}, result)
         status = _terminal_status_for_result(result.payload, result.status_code)
         error_code, error_message = _error_fields(result.payload)
         completed = complete_request(
@@ -234,7 +264,21 @@ def _process_request(
     except Exception as error:
         logger.exception("anakin_workflow_request_failed request_id=%s", request_id)
         conn.rollback()
-        fail_worker_conversation(conn, job)
+        if workflow == ASYNC_WORKFLOW_NIST_EVIDENCE_EXPLANATION:
+            with _worker_request_context(
+                actor_username=job["actor_username"],
+                actor_role=str(job.get("actor_role") or ""),
+                flask_app=flask_app,
+            ):
+                audit_explanation_worker_failure(
+                    payload,
+                    actor_username=job["actor_username"],
+                    actor_role=str(job.get("actor_role") or ""),
+                    request_id=request_id,
+                    error_code=type(error).__name__,
+                )
+        else:
+            fail_worker_conversation(conn, job)
         failed = fail_request(
             conn,
             request_id,
@@ -248,16 +292,42 @@ def _process_request(
         return "failed"
 
 
-def _run_with_user_context(payload: dict, *, workflow: str | None = None, actor_username: str, actor_role: str, flask_app=None):
-    app = flask_app
-    if app is None:
-        from siem_backend import app as app
-
-    with app.test_request_context("/ai/workflows/requests/worker", method="POST", json={}):
-        login_user(User(actor_username, role=actor_role))
+def _run_with_user_context(
+    payload: dict,
+    *,
+    conn=None,
+    request_id: str,
+    workflow: str | None = None,
+    actor_username: str,
+    actor_role: str,
+    flask_app=None,
+):
+    with _worker_request_context(
+        actor_username=actor_username,
+        actor_role=actor_role,
+        flask_app=flask_app,
+    ):
+        if workflow == ASYNC_WORKFLOW_NIST_EVIDENCE_EXPLANATION:
+            return execute_explanation(
+                conn,
+                payload,
+                actor_username=actor_username,
+                actor_role=actor_role,
+                request_id=request_id,
+            )
         if workflow == ASYNC_WORKFLOW_REPO_ASSISTANT:
             return answer_repo_question(payload)
         return run_workflow(payload)
+
+
+@contextmanager
+def _worker_request_context(*, actor_username: str, actor_role: str, flask_app=None):
+    app = flask_app
+    if app is None:
+        from siem_backend import app as app
+    with app.test_request_context("/ai/workflows/requests/worker", method="POST", json={}):
+        login_user(User(actor_username, role=actor_role))
+        yield
 
 
 def _terminal_status_for_result(payload: dict, status_code: int) -> str:
@@ -271,7 +341,7 @@ def _terminal_status_for_result(payload: dict, status_code: int) -> str:
         return STATUS_COMPLETED
     if status in {"partial"}:
         return STATUS_PARTIAL
-    if status in {"degraded", "insufficient_context"}:
+    if status in {"degraded", "insufficient_context", "explanation_unavailable"}:
         return STATUS_DEGRADED
     if "timeout" in status or status in {"timed_out", "provider_timeout"}:
         return STATUS_TIMED_OUT

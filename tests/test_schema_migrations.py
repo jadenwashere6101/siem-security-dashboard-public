@@ -155,7 +155,48 @@ def test_schema_snapshot_marker_matches_latest_migration():
         migrations_dir=repo_root / "migrations",
     )
 
-    assert version == 37
+    assert version == 38
+
+
+def test_nist_explanation_workflow_migration_only_extends_async_workflow_constraint():
+    repo_root = Path(__file__).resolve().parent.parent
+    migration_sql = (
+        repo_root / "migrations" / "0038_nist_analyst_workspace_grounded_explanation.sql"
+    ).read_text()
+    normalized = " ".join(migration_sql.split())
+
+    assert "ai_workflow_requests_workflow_check" in migration_sql
+    assert "nist_evidence_explanation" in migration_sql
+    assert "ALTER TABLE ai_workflow_requests" in migration_sql
+    assert "CREATE TABLE" not in migration_sql.upper()
+    assert "CREATE INDEX" not in migration_sql.upper()
+    assert "DELETE FROM" not in migration_sql.upper()
+    assert "DROP TABLE" not in migration_sql.upper()
+    assert normalized.count("ADD CONSTRAINT") == 1
+
+
+def test_nist_explanation_workflow_migration_applies_forward(postgres_db):
+    repo_root = Path(__file__).resolve().parent.parent
+    migration_sql = (
+        repo_root / "migrations" / "0038_nist_analyst_workspace_grounded_explanation.sql"
+    ).read_text()
+    _conn, cur = postgres_db
+
+    cur.execute(migration_sql)
+    cur.execute(
+        """
+        INSERT INTO ai_workflow_requests (
+            request_id, workflow, context_type, request_payload, classification,
+            actor_username, actor_role, idempotency_key
+        ) VALUES (
+            'aiwf_nist_migration_test', 'nist_evidence_explanation',
+            'nist_evidence_result', '{}'::jsonb, '{}'::jsonb,
+            'analyst', 'analyst', 'nist-migration-test'
+        )
+        RETURNING workflow
+        """
+    )
+    assert cur.fetchone()[0] == "nist_evidence_explanation"
 
 
 def test_source_ingestion_health_state_migration_is_additive_and_minimal():

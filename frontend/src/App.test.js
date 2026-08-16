@@ -84,6 +84,12 @@ jest.mock('./services/investigationWorkspaceService', () => ({
   updateWorkspaceTask: jest.fn(),
 }));
 
+jest.mock('./components/NistEvidenceWorkspace', () => (props) => (
+  <div data-testid="nist-evidence-workspace" data-role={props.userRole}>
+    NIST Evidence Workspace Mock
+  </div>
+));
+
 jest.mock('./components/DashboardSection', () => (props) => (
   <div data-testid="dashboard-section" data-anakin-open={props.anakinOpen ? 'true' : 'false'}>
     <h2>Dashboard workspace</h2>
@@ -521,6 +527,20 @@ test('renders Source Health beneath Dashboard and routes its Live Logs action', 
   expect(await screen.findByTestId('source-health-panel')).toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: /source health open pfsense logs/i }));
   expect(await screen.findByTestId('live-logs-panel')).toHaveTextContent('pfSense pfsense');
+});
+
+test('renders the NIST Evidence workspace for Analyst+ and hides it from viewers', async () => {
+  loadCurrentSession.mockResolvedValue({ authenticated: true, user: 'analyst1', role: 'analyst' });
+  const { unmount } = render(<App />);
+  const nist = await screen.findByRole('button', { name: /^nist evidence$/i });
+  await userEvent.click(nist);
+  expect(await screen.findByTestId('nist-evidence-workspace')).toHaveAttribute('data-role', 'analyst');
+  unmount();
+
+  loadCurrentSession.mockResolvedValue({ authenticated: true, user: 'viewer1', role: 'viewer' });
+  render(<App />);
+  await screen.findByRole('button', { name: /^dashboard$/i });
+  expect(screen.queryByRole('button', { name: /^nist evidence$/i })).not.toBeInTheDocument();
 });
 
 test('renders Detection Simulator for analyst and hides it from viewers', async () => {
