@@ -191,6 +191,9 @@ class OllamaProvider:
                 "temperature": profile.temperature,
             },
         }
+        response_format = request.metadata.get("response_format")
+        if response_format == "json" or isinstance(response_format, dict):
+            payload["format"] = response_format
         try:
             response = _http_json(
                 "POST",

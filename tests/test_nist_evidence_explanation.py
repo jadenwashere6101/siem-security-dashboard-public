@@ -420,6 +420,61 @@ def test_valid_grounded_output_preserves_bounded_citations():
     }
 
 
+@pytest.mark.parametrize(
+    ("content", "error_code"),
+    [
+        (f"Here is the JSON: {_model_output()}", "malformed_model_output"),
+        (f"{_model_output()}\n{_model_output()}", "malformed_model_output"),
+        (f"```json\n{_model_output()}\n```", "malformed_model_output"),
+        (
+            json.dumps(
+                {
+                    key: value
+                    for key, value in json.loads(_model_output()).items()
+                    if key != "limitations"
+                }
+            ),
+            "invalid_explanation_schema",
+        ),
+        (_model_output(citation_ids="31"), "invalid_explanation_schema"),
+        (_model_output(extra_field="not allowed"), "invalid_explanation_schema"),
+    ],
+)
+def test_realistic_small_model_format_variants_fail_closed(content, error_code):
+    explanation, actual_error = validate_explanation_output(content, _context())
+    assert explanation is None
+    assert actual_error == error_code
+
+
+@pytest.mark.parametrize("confidence", ["degraded", "unknown"])
+def test_valid_output_preserves_nonhealthy_collection_limit(confidence):
+    explanation, error = validate_explanation_output(
+        _model_output(
+            limitations=(
+                f"Only bounded persisted records are described; collection {confidence} "
+                "limits interpretation of missing evidence."
+            )
+        ),
+        _context(confidence=confidence),
+    )
+    assert error is None
+    assert confidence in explanation["limitations"]
+
+
+def test_valid_output_preserves_truncation_limit():
+    explanation, error = validate_explanation_output(
+        _model_output(
+            limitations=(
+                "Only bounded persisted records are described; additional records were "
+                "omitted from the truncated context."
+            )
+        ),
+        _context(truncated=True),
+    )
+    assert error is None
+    assert "truncated" in explanation["limitations"]
+
+
 def test_provider_unavailable_returns_only_server_owned_result_and_safe_metadata():
     gateway = SimpleNamespace(generate=MagicMock(return_value=AiGatewayResponse(
         status=AI_STATUS_PROVIDER_UNAVAILABLE,
@@ -442,6 +497,15 @@ def test_provider_unavailable_returns_only_server_owned_result_and_safe_metadata
     assert request.profile == "fast_triage"
     assert request.capability == "text_generation"
     assert request.metadata["read_only"] is True
+    response_schema = request.metadata["response_format"]
+    assert response_schema["type"] == "object"
+    assert response_schema["additionalProperties"] is False
+    assert set(response_schema["required"]) == {
+        "summary", "why_it_matters", "limitations",
+        "additional_evidence_needed", "citation_ids",
+    }
+    assert "CANONICAL EXAMPLE:" in request.prompt
+    assert "No markdown fences or prose outside JSON." in request.prompt
     logged_details = audit_mock.call_args.kwargs["details"]
     assert "prompt" not in logged_details
     assert "raw_model_prose" not in logged_details

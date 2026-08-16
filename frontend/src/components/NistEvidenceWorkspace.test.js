@@ -50,7 +50,12 @@ const run = {
   requested_window_start: "2026-08-12T09:00:00Z",
   requested_window_end: "2026-08-12T10:00:00Z",
   status: "completed_with_partial_evidence",
-  summary_counts: { requirement_count: 12 },
+  summary_counts: {
+    requirement_count: 12,
+    catalog_version: "v1",
+    by_collection_confidence: { healthy: 1, degraded: 11 },
+    by_evidence_status: { evidence_available: 1, partial_evidence: 11 },
+  },
   created_at: "2026-08-12T10:00:00Z",
 };
 
@@ -161,6 +166,10 @@ test("renders persisted workspace, exact three-dimensional statuses, provenance,
   expect(screen.getAllByText(NIST_STATUS_LABELS.mapping.strong_siem_evidence).length).toBeGreaterThan(0);
   expect(screen.getAllByText(NIST_STATUS_LABELS.evidence.evidence_available).length).toBeGreaterThan(0);
   expect(screen.getAllByText(NIST_STATUS_LABELS.confidence.healthy).length).toBeGreaterThan(0);
+  expect(screen.getByText("1 healthy · 11 degraded")).toBeInTheDocument();
+  expect(screen.getByText("1 available · 11 partial")).toBeInTheDocument();
+  expect(screen.queryByText(/\[object Object\]/)).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Explain this result" })).toBeInTheDocument();
   expect(await screen.findByText("A bounded persisted alert reference.")).toBeInTheDocument();
   await waitFor(() => expect(screen.queryByText("Loading persisted evidence…")).not.toBeInTheDocument());
   expect(screen.queryByText("raw_payload")).not.toBeInTheDocument();
@@ -219,7 +228,7 @@ test("explanation uses async lifecycle and renders only successful grounded pros
   await screen.findByText("A bounded persisted alert reference.");
   await waitFor(() => expect(screen.queryByText("Loading persisted evidence…")).not.toBeInTheDocument());
 
-  await userEvent.click(screen.getByRole("button", { name: "Explain this evidence" }));
+  await userEvent.click(screen.getByRole("button", { name: "Explain this result" }));
   expect(await screen.findByText("The persisted alert supports the deterministic evidence package.")).toBeInTheDocument();
   expect(queueNistExplanation).toHaveBeenCalledWith(expect.objectContaining({
     boundary_id: 7,
@@ -238,7 +247,7 @@ test("provider failure leaves deterministic detail visible and stale selection d
   await screen.findByText("A bounded persisted alert reference.");
   await waitFor(() => expect(screen.queryByText("Loading persisted evidence…")).not.toBeInTheDocument());
 
-  await userEvent.click(screen.getByRole("button", { name: "Explain this evidence" }));
+  await userEvent.click(screen.getByRole("button", { name: "Explain this result" }));
   expect(screen.getByText("Queued…")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: /03\.03\.02/i }));
   expect((await screen.findAllByText("Audit Record Content")).length).toBeGreaterThan(0);
@@ -257,7 +266,7 @@ test("provider failure leaves deterministic detail visible and stale selection d
     terminal: true,
     result: { explanation_status: "unavailable", explanation: null },
   });
-  await userEvent.click(screen.getByRole("button", { name: "Explain this evidence" }));
+  await userEvent.click(screen.getByRole("button", { name: "Explain this result" }));
   expect(await screen.findByText("Explanation unavailable")).toBeInTheDocument();
   expect(screen.getByText("Collection degradation limits absence interpretation.")).toBeInTheDocument();
 });
@@ -297,7 +306,7 @@ test("polling exposes running state before a grounded terminal response", async 
   await screen.findAllByText("Event Logging");
   await screen.findByText("A bounded persisted alert reference.");
   await waitFor(() => expect(screen.queryByText("Loading persisted evidence…")).not.toBeInTheDocument());
-  await userEvent.click(screen.getByRole("button", { name: "Explain this evidence" }));
+  await userEvent.click(screen.getByRole("button", { name: "Explain this result" }));
   expect(await screen.findByText("Running…")).toBeInTheDocument();
   expect(await screen.findByText("Bounded explanation complete.", {}, { timeout: 3000 })).toBeInTheDocument();
 });

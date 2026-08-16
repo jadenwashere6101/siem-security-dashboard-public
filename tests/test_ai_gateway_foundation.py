@@ -422,6 +422,38 @@ def test_ollama_provider_accepts_agentic_planner_and_rejects_unknown_capability(
     assert unknown.status == AI_STATUS_PROVIDER_INCAPABLE
 
 
+def test_ollama_provider_sends_structured_format_only_when_requested(monkeypatch):
+    calls = []
+
+    def fake_http(method, url, *, payload=None, timeout):
+        calls.append({"method": method, "url": url, "payload": payload, "timeout": timeout})
+        return {"response": '{"summary":"bounded"}'}
+
+    monkeypatch.setattr("core.ai.providers._http_json", fake_http)
+    provider = OllamaProvider()
+    config = _config()
+
+    schema = {
+        "type": "object",
+        "properties": {"summary": {"type": "string"}},
+        "required": ["summary"],
+        "additionalProperties": False,
+    }
+    structured = provider.generate(
+        AiGatewayRequest(
+            prompt="Return JSON.",
+            metadata={"response_format": schema},
+        ),
+        config,
+    )
+    ordinary = provider.generate(AiGatewayRequest(prompt="Return text."), config)
+
+    assert structured.status == AI_STATUS_SUCCESS
+    assert ordinary.status == AI_STATUS_SUCCESS
+    assert calls[0]["payload"]["format"] == schema
+    assert "format" not in calls[1]["payload"]
+
+
 def test_gateway_never_routes_agentic_planner_to_ollama(monkeypatch):
     calls = []
 

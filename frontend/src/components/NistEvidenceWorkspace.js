@@ -54,6 +54,34 @@ const STATUS_HELP = Object.freeze({
   confidence: "Whether collection health supports interpreting absence of evidence.",
 });
 
+const SUMMARY_LABELS = Object.freeze({
+  confidence: Object.freeze({
+    healthy: "healthy",
+    degraded: "degraded",
+    unknown: "unknown",
+  }),
+  evidence: Object.freeze({
+    evidence_available: "available",
+    partial_evidence: "partial",
+    no_evidence_found: "no evidence found",
+    not_assessable_by_siem: "outside SIEM visibility",
+  }),
+});
+
+function formatSummaryCounts(counts, labels) {
+  if (!counts || typeof counts !== "object" || Array.isArray(counts)) return "—";
+  const keys = [
+    ...Object.keys(labels).filter((key) => Object.prototype.hasOwnProperty.call(counts, key)),
+    ...Object.keys(counts).filter((key) => !Object.prototype.hasOwnProperty.call(labels, key)).sort(),
+  ];
+  const entries = keys.map((key) => [key, counts[key]])
+    .filter(([, count]) => Number.isFinite(Number(count)));
+  if (!entries.length) return "—";
+  return entries
+    .map(([key, count]) => `${Number(count)} ${labels[key] || key.replaceAll("_", " ")}`)
+    .join(" · ");
+}
+
 function formatDate(value) {
   if (!value) return "—";
   const parsed = new Date(value);
@@ -485,10 +513,11 @@ function NistEvidenceWorkspace({
                   <dl className="nist-definition-grid">
                     <div><dt>Window</dt><dd>{formatDate(selectedRun.requested_window_start)} – {formatDate(selectedRun.requested_window_end)}</dd></div>
                     <div><dt>Framework</dt><dd>{selectedRun.framework_id} · {selectedRun.framework_version}</dd></div>
-                    <div><dt>Catalog</dt><dd>{selectedRun.catalog_version} · <span className="nist-mono">{selectedRun.catalog_hash}</span></dd></div>
+                    <div><dt>Catalog</dt><dd>{runSummary.catalog_version || selectedRun.catalog_version} · <span className="nist-mono">{selectedRun.catalog_hash}</span></dd></div>
                     <div><dt>Collector</dt><dd>{selectedRun.collector_version}</dd></div>
-                    <div><dt>Persisted results</dt><dd>{results.length}</dd></div>
-                    <div><dt>Summary</dt><dd>{Object.entries(runSummary).map(([key, value]) => `${key}: ${value}`).join(" · ") || "—"}</dd></div>
+                    <div><dt>Requirements</dt><dd>{runSummary.requirement_count ?? results.length}</dd></div>
+                    <div><dt>Confidence</dt><dd>{formatSummaryCounts(runSummary.by_collection_confidence, SUMMARY_LABELS.confidence)}</dd></div>
+                    <div><dt>Evidence</dt><dd>{formatSummaryCounts(runSummary.by_evidence_status, SUMMARY_LABELS.evidence)}</dd></div>
                   </dl>
                   <div className="nist-row"><a className="nist-link-button" href={nistExportUrl(selectedRun.id, "json")}>Export JSON</a><a className="nist-link-button" href={nistExportUrl(selectedRun.id, "csv")}>Export CSV</a></div>
                 </Panel>
@@ -503,7 +532,7 @@ function NistEvidenceWorkspace({
                       <div className="nist-status-row"><StatusChip kind="mapping" value={selectedResult.mapping_strength} /><StatusChip kind="evidence" value={selectedResult.evidence_status} /><StatusChip kind="confidence" value={selectedResult.collection_confidence} /></div>
                       <p className="nist-notice"><strong>Assessment-support only.</strong> These statuses do not determine requirement satisfaction.</p>
                       <dl className="nist-detail-list"><div><dt>Deterministic reason</dt><dd>{selectedResult.reason_code}</dd></div><div><dt>Limitation</dt><dd>{selectedResult.limitation}</dd></div><div><dt>Evidence counts</dt><dd>{selectedResult.evidence_count} persisted; {selectedResult.omitted_count} omitted by collector</dd></div></dl>
-                      <Button variant="primary" onClick={handleExplain} disabled={["queued", "running"].includes(explanation.status)}>Explain this evidence</Button>
+                      <Button variant="primary" onClick={handleExplain} disabled={["queued", "running"].includes(explanation.status)}>Explain this result</Button>
                       <ExplanationPanel state={explanation} />
                       <h3>Persisted evidence references</h3>
                       {detailError ? <p role="alert" className="nist-error">{detailError}</p> : null}
