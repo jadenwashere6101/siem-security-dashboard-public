@@ -14,7 +14,7 @@ All supported production ingestion endpoints (`/ingest`, honeypot, web log, Azur
 - Maintain latest any-event and latest qualifying real-ingestion timestamps atomically with canonical event persistence.
 - Preserve push/checkpoint freshness thresholds, synthetic exclusion, fail-closed states, and NIST evidence/confidence behavior.
 - Initialize historical state with a bounded, resumable, idempotent, concurrency-safe backfill.
-- Replace expensive decorative counters with analyst-visible health and freshness information.
+- Preserve the analyst-visible lifetime event total without deriving it from event history during requests.
 
 **Non-Goals:**
 
@@ -24,11 +24,11 @@ All supported production ingestion endpoints (`/ingest`, honeypot, web log, Azur
 
 ## Decisions
 
-### One small row per canonical push source
+### One small row per canonical source
 
-Migration `0037` adds `source_ingestion_health_state`, keyed by canonical `source`, with `latest_event_at`, `latest_qualifying_real_ingestion_at`, `historical_backfill_complete`, `backfill_high_water_event_id`, `backfill_last_processed_event_id`, and `updated_at`. The two backfill cursor fields are the minimum additional metadata needed to make initialization resumable and auditable. No secondary index is needed because the table has only the handful of push sources and is read by primary key.
+Migration `0037` adds `source_ingestion_health_state`, keyed by canonical `source`, with push-health timestamps and historical-backfill state. Migration `0039` adds only `total_events` and `total_events_initialized`; no rolling buckets or secondary index are introduced. Checkpoint sources may have a row solely for the informational lifetime total, while their health authority remains the checkpoint table.
 
-Checkpoint sources remain authoritative in `ingestion_checkpoints`; `azure_insights` events do not establish checkpoint health.
+Checkpoint sources remain authoritative in `ingestion_checkpoints`; `azure_insights` events increment its informational total but do not establish checkpoint health.
 
 ### Transactional maintenance at the shared persistence layer
 
@@ -42,11 +42,13 @@ The explicit Mac-authored/VM-operated backfill captures `MAX(events.id)` once th
 
 Live rows above the captured high-water mark update state normally. Batch updates use `GREATEST`, so older historical rows cannot overwrite newer live timestamps. Completion is set only after the stored cursor reaches the captured high-water mark. Reruns resume from the committed cursor; completed runs are no-ops. A missing or incomplete state row never triggers a runtime fallback scan.
 
-### Health and dashboard statistics are separate concerns
+### Health and lifetime volume remain bounded durable state
 
 `aggregate_source_health` reads push rows from `source_ingestion_health_state` and checkpoint rows from `ingestion_checkpoints`; its SQL must not reference `events`. Known qualifying timestamps resolve normally even during backfill. When no qualifying timestamp exists and backfill is incomplete, health is Unknown with an explicit incomplete-history reason. Completed history with no qualifying timestamp remains Unknown/no qualifying ingestion.
 
-The synchronous API removes `events_last_hour`, `events_today`, and `total_events`. `last_event_at` and `ever_seen` come cheaply from durable state, while the frontend displays health, basis, latest qualifying ingestion, and backfill status. A future independently designed rollup may restore counters, but no event-history query is retained for compatibility.
+The synchronous API removes rolling `events_last_hour` and `events_today` calculations. A durable `total_events` value is maintained transactionally on the same small source-state row and initialized once outside request paths. `last_event_at`, `ever_seen`, and the lifetime total therefore come from bounded state, while no runtime health query references event history. The total is informational and does not participate in health decisions.
+
+The explicit total initializer performs the only lifetime history count. It records no result until the full count succeeds, briefly locks the six state rows, reconciles rows committed during the initial count, and then marks all totals initialized atomically. Ingestion increments totals only after initialization, so pre-initialization traffic is included by the initializer without double counting.
 
 ### Rejected alternatives
 
@@ -62,11 +64,11 @@ The synchronous API removes `events_last_hour`, `events_today`, and `total_event
 - [Unsupported direct database writers bypass state] → document direct writes as unsupported and verify all deployed adapters use the HTTP/shared-ingest path.
 - [Backfill is interrupted] → atomically persist each bounded batch and resume from stored cursor/high-water metadata.
 - [Incomplete history could be mistaken for never seen] → expose completion and use explicit fail-closed Unknown reasoning.
-- [API counter removal affects consumers] → update the only repository frontend service/panel and contract tests in the same change.
+- [Existing rows predate the durable total] → initialize totals once through an explicit command; return unavailable rather than a misleading zero until initialization completes.
 
 ## Migration Plan
 
-1. **Mac AI:** create migration `0037`, schema snapshot, shared classifier, transactional state maintenance, runtime reads, backfill command, frontend contract, and tests.
+1. **Mac AI:** create migration `0037`, the narrow total-counter extension in `0039`, schema snapshot, shared classifier, transactional state maintenance, runtime reads, explicit initialization commands, frontend contract, and tests.
 2. **Mac AI:** run focused and affected regression suites, frontend production build and visual review, schema validation, Python compilation, diff checks, and strict validation of both OpenSpecs.
 3. **VM AI after explicit authorization:** pass the clean-tree gate, sync the approved commit, run migration dry-run/apply through the documented deployment helper, and verify Gunicorn/systemd security gates.
 4. **VM AI after explicit authorization:** run the bounded backfill with a conservative batch size until all push rows report complete; record high-water marks, cursors, timestamps, batch counts, duration, and errors without exposing payloads.

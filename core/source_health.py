@@ -4,7 +4,6 @@ from datetime import datetime, timedelta, timezone
 
 from core.source_inventory import (
     CANONICAL_SOURCES,
-    CANONICAL_PUSH_SOURCE_IDS,
     INGESTION_MODE_CHECKPOINT,
     INGESTION_MODE_PUSH,
 )
@@ -18,6 +17,8 @@ SOURCE_HEALTH_STATE_SQL = """
         historical_backfill_complete,
         backfill_high_water_event_id,
         backfill_last_processed_event_id,
+        total_events,
+        total_events_initialized,
         updated_at
     FROM source_ingestion_health_state
     WHERE source = ANY(%s)
@@ -116,7 +117,7 @@ def aggregate_source_health(conn, *, generated_at: datetime | None = None) -> di
     try:
         cur.execute(
             SOURCE_HEALTH_STATE_SQL,
-            (sorted(CANONICAL_PUSH_SOURCE_IDS),),
+            ([item.source for item in CANONICAL_SOURCES],),
         )
         state_by_source = {
             row[0]: {
@@ -125,7 +126,9 @@ def aggregate_source_health(conn, *, generated_at: datetime | None = None) -> di
                 "historical_backfill_complete": bool(row[3]),
                 "backfill_high_water_event_id": row[4],
                 "backfill_last_processed_event_id": int(row[5]),
-                "updated_at": row[6],
+                "total_events": int(row[6]),
+                "total_events_initialized": bool(row[7]),
+                "updated_at": row[8],
             }
             for row in cur.fetchall()
         }
@@ -189,6 +192,11 @@ def aggregate_source_health(conn, *, generated_at: datetime | None = None) -> di
                 bool(state and state["last_event_at"] is not None)
                 if definition.ingestion_mode == INGESTION_MODE_PUSH
                 else checkpoint is not None
+            ),
+            "total_events": (
+                state["total_events"]
+                if state and state["total_events_initialized"]
+                else None
             ),
             "historical_backfill_complete": (
                 state["historical_backfill_complete"]

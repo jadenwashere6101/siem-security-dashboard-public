@@ -3,7 +3,6 @@ from flask_login import login_required
 
 from core.auth import analyst_or_super_admin_required
 from core.db import get_db_connection
-from core.source_event_metrics import aggregate_source_event_metrics
 from core.source_health import aggregate_source_health
 
 
@@ -21,22 +20,6 @@ def get_source_health():
     except Exception as error:
         current_app.logger.error("Error in get_source_health: %s", error)
         return jsonify({"error": "Internal server error"}), 500
-    finally:
-        if conn:
-            conn.close()
-
-
-@source_health_bp.route("/source-health/metrics", methods=["GET"])
-@login_required
-@analyst_or_super_admin_required
-def get_source_health_metrics():
-    conn = None
-    try:
-        conn = get_db_connection()
-        return jsonify(aggregate_source_event_metrics(conn)), 200
-    except Exception as error:
-        current_app.logger.error("Error in get_source_health_metrics: %s", error)
-        return jsonify({"error": "Historical event counts are temporarily unavailable"}), 503
     finally:
         if conn:
             conn.close()

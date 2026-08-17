@@ -9,7 +9,7 @@ The system SHALL persist one bounded health-state record per observed canonical 
 
 #### Scenario: Checkpoint event is persisted
 - **WHEN** a normalized event for a checkpoint-driven source is inserted
-- **THEN** that event SHALL NOT replace the checkpoint as the source's health authority
+- **THEN** that event SHALL increment its initialized informational total but SHALL NOT replace the checkpoint as the source's health authority
 
 #### Scenario: Unsupported direct writer
 - **WHEN** an external process bypasses the supported normalized application persistence path
@@ -104,15 +104,23 @@ The system SHALL preserve established freshness thresholds and health outcomes f
 - **THEN** checkpoint health SHALL be Unknown
 
 ### Requirement: Health-Focused API Contract
-The synchronous source-health API SHALL return canonical identity, health status and reason, freshness basis, bounded durable timestamps, and historical-completion state without calculating uncapped event-history statistics.
+The synchronous source-health API SHALL return canonical identity, health status and reason, freshness basis, bounded durable timestamps, historical-completion state, and an independently maintained lifetime event total without calculating event-history statistics during requests.
 
 #### Scenario: Analyst views source health
 - **WHEN** an authorized analyst opens the Source Health workspace
 - **THEN** the UI SHALL clearly present health and freshness using the bounded API response
 
 #### Scenario: Historical counters are unavailable cheaply
-- **WHEN** lifetime or rolling event counts would require runtime event-history work
-- **THEN** the health endpoint SHALL omit those counters rather than execute an expensive compatibility query
+- **WHEN** rolling event counts would require runtime event-history work
+- **THEN** the health endpoint SHALL omit those rolling counters rather than execute an expensive compatibility query
+
+#### Scenario: Lifetime event volume is displayed
+- **WHEN** the durable canonical-source total has been initialized
+- **THEN** the Source Health card SHALL display that total without using it to determine health
+
+#### Scenario: Lifetime total is not initialized
+- **WHEN** the durable total is unavailable or initialization is incomplete
+- **THEN** health SHALL still render and the total SHALL be presented as unavailable rather than zero
 
 ### Requirement: NIST Confidence Preservation
 NIST assessment runs SHALL consume the bounded canonical health snapshot while preserving evidence and confidence safeguards.

@@ -1,4 +1,4 @@
-import { loadSourceHealth, loadSourceHealthMetrics } from "./sourceHealthService";
+import { loadSourceHealth } from "./sourceHealthService";
 import { SOURCE_METADATA } from "../utils/sourceMetadata";
 
 const responsePayload = {
@@ -18,18 +18,7 @@ const responsePayload = {
     latest_ingestion_at: null,
     ever_seen: false,
     historical_backfill_complete: item.source === "azure_insights" ? null : false,
-  })),
-};
-
-const metricsPayload = {
-  generated_at: responsePayload.generated_at,
-  cache_ttl_seconds: 300,
-  windows: responsePayload.windows,
-  sources: SOURCE_METADATA.map((item) => ({
-    source: item.source,
-    events_last_hour: 12,
-    events_today: 345,
-    total_events: item.source === "pfsense" ? 5873421 : 678,
+    total_events: item.source === "pfsense" ? 5930682 : 0,
   })),
 };
 
@@ -58,19 +47,22 @@ test("uses existing API error conventions", async () => {
   await expect(loadSourceHealth()).rejects.toThrow("forbidden");
 });
 
-test("loads and validates independently cached source event metrics", async () => {
-  fetch.mockResolvedValue({ ok: true, json: async () => metricsPayload });
-  await expect(loadSourceHealthMetrics()).resolves.toEqual(metricsPayload);
-  expect(fetch).toHaveBeenCalledWith("/source-health/metrics", { credentials: "include" });
-});
+test("rejects an unsafe total event count without rejecting unavailable totals", async () => {
+  const unavailable = {
+    ...responsePayload,
+    sources: responsePayload.sources.map((item, index) => (
+      index === 0 ? { ...item, total_events: null } : item
+    )),
+  };
+  fetch.mockResolvedValueOnce({ ok: true, json: async () => unavailable });
+  await expect(loadSourceHealth()).resolves.toEqual(unavailable);
 
-test("rejects malformed, reordered, or unsafe source event counts", async () => {
-  const malformed = {
-    ...metricsPayload,
-    sources: metricsPayload.sources.map((item, index) => (
+  const unsafe = {
+    ...responsePayload,
+    sources: responsePayload.sources.map((item, index) => (
       index === 0 ? { ...item, total_events: Number.MAX_SAFE_INTEGER + 1 } : item
     )),
   };
-  fetch.mockResolvedValue({ ok: true, json: async () => malformed });
-  await expect(loadSourceHealthMetrics()).rejects.toThrow("Invalid source event metrics response");
+  fetch.mockResolvedValueOnce({ ok: true, json: async () => unsafe });
+  await expect(loadSourceHealth()).rejects.toThrow("Invalid source activity response");
 });

@@ -26,7 +26,7 @@
 
 ## 5. API and Frontend Contract
 
-- [x] 5.1 Remove uncapped historical counters from the synchronous source-health response and update backend route-contract tests.
+- [x] 5.1 Remove rolling historical counters from the synchronous source-health response, retain the bounded durable lifetime total, and update backend route-contract tests.
 - [x] 5.2 Update the frontend service validator and Source Health panel to present explicit health, freshness, durable timestamps, and backfill state.
 - [x] 5.3 Run focused frontend tests, production build, dark-theme/accessibility review, and practical visual verification.
 

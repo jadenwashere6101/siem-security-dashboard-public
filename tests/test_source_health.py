@@ -224,7 +224,7 @@ def test_empty_database_returns_all_six_fail_closed_sources(postgres_db):
         assert item["latest_ingestion_at"] is None
         assert "events_last_hour" not in item
         assert "events_today" not in item
-        assert "total_events" not in item
+        assert item["total_events"] is None
 
 
 def test_out_of_order_event_cannot_move_state_backward(postgres_db):
@@ -249,7 +249,7 @@ def test_out_of_order_event_cannot_move_state_backward(postgres_db):
     assert item["ever_seen"] is True
 
 
-def test_historical_counters_are_omitted_and_unknown_sources_cannot_expand_response(postgres_db):
+def test_only_durable_total_is_returned_and_unknown_sources_cannot_expand_response(postgres_db):
     conn, cur = postgres_db
     for offset in range(125):
         insert_event(
@@ -272,7 +272,7 @@ def test_historical_counters_are_omitted_and_unknown_sources_cannot_expand_respo
 
     assert "events_last_hour" not in bank_app
     assert "events_today" not in bank_app
-    assert "total_events" not in bank_app
+    assert bank_app["total_events"] is None
     assert len(response["sources"]) == 6
     assert {item["source"] for item in response["sources"]} == CANONICAL_SOURCE_IDS
     assert "unknown_source" not in {item["source"] for item in response["sources"]}
@@ -466,7 +466,7 @@ def test_aggregation_issues_only_bounded_state_and_checkpoint_queries():
 
     assert cursor.execute.call_count == 2
     assert cursor.execute.call_args_list[0].args[0] == SOURCE_HEALTH_STATE_SQL
-    assert "events" not in SOURCE_HEALTH_STATE_SQL.lower()
+    assert " from events" not in " ".join(SOURCE_HEALTH_STATE_SQL.lower().split())
     assert cursor.execute.call_args_list[1].args[0] == SOURCE_HEALTH_CHECKPOINT_SQL
 
 
@@ -567,7 +567,7 @@ def test_representative_query_plan_never_reads_events_and_is_source_bounded(post
     cur.execute("ANALYZE source_ingestion_health_state")
     cur.execute(
         "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + SOURCE_HEALTH_STATE_SQL,
-        (["honeypot", "bank_app", "pfsense", "nginx", "opentelemetry"],),
+        ([item.source for item in CANONICAL_SOURCES],),
     )
     plan = cur.fetchone()[0][0]["Plan"]
 
@@ -581,7 +581,7 @@ def test_representative_query_plan_never_reads_events_and_is_source_bounded(post
 
     assert "events" not in relation_names
     assert relation_names == {"source_ingestion_health_state"}
-    assert plan["Actual Rows"] <= 5
+    assert plan["Actual Rows"] <= 6
 
 
 def test_source_health_requires_authentication(client):
@@ -625,6 +625,7 @@ def test_source_health_allows_super_admin(client, postgres_db):
             "health_basis_age_seconds",
             "latest_ingestion_at",
             "historical_backfill_complete",
+            "total_events",
         }.issubset(set(item))
         assert item["last_event_at"] is None
         assert item["ever_seen"] is False

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { loadSourceHealth, loadSourceHealthMetrics } from "../services/sourceHealthService";
+import { loadSourceHealth } from "../services/sourceHealthService";
 import { formatTimestamp } from "../utils/displayFormatting";
 import { getSourceBadgeMeta } from "../utils/alertDisplay";
 import { SOURCE_METADATA_BY_ID } from "../utils/sourceMetadata";
@@ -10,9 +10,6 @@ function SourceHealthPanel({ pollIntervalMs = 0, displaySettings, onOpenLiveLogs
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
-  const [eventMetrics, setEventMetrics] = useState(null);
-  const [metricsLoading, setMetricsLoading] = useState(true);
-  const [metricsError, setMetricsError] = useState("");
   const mountedRef = useRef(false);
 
   const refresh = useCallback(async ({ initial = false } = {}) => {
@@ -33,40 +30,18 @@ function SourceHealthPanel({ pollIntervalMs = 0, displaySettings, onOpenLiveLogs
     }
   }, []);
 
-  const refreshMetrics = useCallback(async ({ initial = false } = {}) => {
-    if (initial) setMetricsLoading(true);
-    try {
-      const response = await loadSourceHealthMetrics();
-      if (!mountedRef.current) return;
-      setEventMetrics(response);
-      setMetricsError("");
-    } catch (err) {
-      if (!mountedRef.current) return;
-      setMetricsError(err.message || "Historical event counts are unavailable");
-    } finally {
-      if (mountedRef.current) setMetricsLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
     mountedRef.current = true;
     refresh({ initial: true });
-    refreshMetrics({ initial: true });
     if (pollIntervalMs <= 0) return () => { mountedRef.current = false; };
     const intervalId = window.setInterval(() => {
       refresh();
-      refreshMetrics();
     }, pollIntervalMs);
     return () => {
       mountedRef.current = false;
       window.clearInterval(intervalId);
     };
-  }, [pollIntervalMs, refresh, refreshMetrics]);
-
-  const metricsBySource = useMemo(
-    () => Object.fromEntries((eventMetrics?.sources || []).map((item) => [item.source, item])),
-    [eventMetrics]
-  );
+  }, [pollIntervalMs, refresh]);
 
   const allNoActivity = useMemo(
     () => !!data?.sources?.length && data.sources.every((item) => !item.ever_seen),
@@ -81,7 +56,7 @@ function SourceHealthPanel({ pollIntervalMs = 0, displaySettings, onOpenLiveLogs
           <h2 id="source-health-heading" data-workspace-heading style={headingStyle}>Source Health</h2>
           <p style={subtitleStyle}>Bounded ingestion health from durable push state and connector checkpoints.</p>
         </div>
-        <button type="button" onClick={() => { refresh(); refreshMetrics(); }} disabled={loading || refreshing} style={refreshButtonStyle}>
+        <button type="button" onClick={() => refresh()} disabled={loading || refreshing} style={refreshButtonStyle}>
           {refreshing ? "Refreshing…" : "Refresh"}
         </button>
       </header>
@@ -89,7 +64,6 @@ function SourceHealthPanel({ pollIntervalMs = 0, displaySettings, onOpenLiveLogs
       {loading && <p role="status" style={stateStyle}>Loading source activity…</p>}
       {!loading && error && !data && <div role="alert" style={errorStyle}>{error}</div>}
       {!loading && error && data && <div role="alert" style={warningStyle}>Refresh failed: {error}. Showing the last successful response.</div>}
-      {!loading && metricsError && <div role="status" style={metricsWarningStyle}>Historical event counts unavailable: {metricsError}. Health remains current.</div>}
       {!loading && allNoActivity && <p style={emptyStyle}>No durable source activity is available yet. All six sources remain visible below.</p>}
 
       {!loading && data && (
@@ -102,10 +76,6 @@ function SourceHealthPanel({ pollIntervalMs = 0, displaySettings, onOpenLiveLogs
               const latestBasisTimestamp = item.ingestion_mode === "checkpoint"
                 ? item.last_poll_at
                 : item.latest_ingestion_at;
-              const sourceMetrics = metricsBySource[item.source];
-              const metricValue = (field) => sourceMetrics
-                ? sourceMetrics[field].toLocaleString()
-                : metricsLoading ? "Loading…" : "Unavailable";
               return (
                 <article key={item.source} data-source={item.source} style={cardStyle}>
                   <div style={cardTopStyle}>
@@ -119,9 +89,7 @@ function SourceHealthPanel({ pollIntervalMs = 0, displaySettings, onOpenLiveLogs
                     </div>
                   </div>
                   <dl style={metricsStyle}>
-                    <Metric label="Total events" value={metricValue("total_events")} />
-                    <Metric label="Last hour" value={metricValue("events_last_hour")} />
-                    <Metric label="Today (UTC)" value={metricValue("events_today")} />
+                    <Metric label="Total events" value={item.total_events === null ? "Unavailable" : item.total_events.toLocaleString()} />
                     <Metric label="Health basis" value={humanizeReason(item.health_reason)} />
                     <Metric
                       label={item.ingestion_mode === "checkpoint" ? "Last checkpoint" : "Latest real ingest"}
@@ -191,7 +159,6 @@ const refreshButtonStyle = { border: "1px solid #388bfd", background: "#1f6feb",
 const stateStyle = { color: "#9da7b3", padding: "24px 0" };
 const errorStyle = { border: "1px solid #f85149", background: "rgba(248,81,73,.12)", color: "#ffa198", padding: "12px", borderRadius: "8px" };
 const warningStyle = { ...errorStyle, borderColor: "#d29922", background: "rgba(210,153,34,.12)", color: "#e3b341", marginBottom: "14px" };
-const metricsWarningStyle = { ...warningStyle, borderColor: "#388bfd", background: "rgba(56,139,253,.10)", color: "#a5d6ff" };
 const emptyStyle = { color: "#c9d1d9", background: "#161b22", border: "1px solid #30363d", padding: "12px", borderRadius: "8px" };
 const gridStyle = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "16px" };
 const cardStyle = { minWidth: 0, background: "#161b22", border: "1px solid #30363d", borderRadius: "12px", padding: "18px", boxShadow: "0 8px 22px rgba(0,0,0,.18)" };

@@ -1,4 +1,4 @@
--- Schema snapshot version: 0038
+-- Schema snapshot version: 0039
 
 CREATE TABLE IF NOT EXISTS events (
     id SERIAL PRIMARY KEY,
@@ -213,10 +213,16 @@ CREATE TABLE IF NOT EXISTS source_ingestion_health_state (
     historical_backfill_complete BOOLEAN NOT NULL DEFAULT FALSE,
     backfill_high_water_event_id BIGINT,
     backfill_last_processed_event_id BIGINT NOT NULL DEFAULT 0,
+    total_events BIGINT NOT NULL DEFAULT 0,
+    total_events_initialized BOOLEAN NOT NULL DEFAULT FALSE,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CHECK (
-        source IN ('honeypot', 'bank_app', 'pfsense', 'nginx', 'opentelemetry')
+        source IN (
+            'honeypot', 'bank_app', 'pfsense', 'nginx',
+            'azure_insights', 'opentelemetry'
+        )
     ),
+    CHECK (total_events >= 0),
     CHECK (backfill_high_water_event_id IS NULL OR backfill_high_water_event_id >= 0),
     CHECK (backfill_last_processed_event_id >= 0),
     CHECK (

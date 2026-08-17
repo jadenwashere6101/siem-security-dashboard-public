@@ -155,7 +155,42 @@ def test_schema_snapshot_marker_matches_latest_migration():
         migrations_dir=repo_root / "migrations",
     )
 
-    assert version == 38
+    assert version == 39
+
+
+def test_source_event_totals_migration_extends_existing_state_only():
+    repo_root = Path(__file__).resolve().parent.parent
+    migration_sql = (
+        repo_root / "migrations" / "0039_source_event_totals.sql"
+    ).read_text()
+    schema_sql = (repo_root / "schema.sql").read_text()
+
+    for sql in (migration_sql, schema_sql):
+        assert "total_events BIGINT NOT NULL DEFAULT 0" in sql
+        assert "total_events_initialized BOOLEAN NOT NULL DEFAULT FALSE" in sql
+        assert "azure_insights" in sql
+    assert "CREATE TABLE" not in migration_sql.upper()
+    assert "CREATE INDEX" not in migration_sql.upper()
+    assert "FROM events" not in migration_sql
+
+
+def test_source_event_totals_migration_applies_forward(postgres_db):
+    repo_root = Path(__file__).resolve().parent.parent
+    migration_sql = (
+        repo_root / "migrations" / "0039_source_event_totals.sql"
+    ).read_text()
+    conn, cur = postgres_db
+
+    cur.execute(migration_sql)
+    cur.execute(
+        """
+        INSERT INTO source_ingestion_health_state (source)
+        VALUES ('azure_insights')
+        RETURNING total_events, total_events_initialized
+        """
+    )
+    assert cur.fetchone() == (0, False)
+    conn.commit()
 
 
 def test_nist_explanation_workflow_migration_only_extends_async_workflow_constraint():

@@ -132,11 +132,11 @@ def test_ingest_normalized_event_inserts_event_without_detection(postgres_db):
         ("bank_app", "custom", True),
         ("pfsense", "firewall", True),
         ("nginx", "web_log", True),
-        ("azure_insights", "cloud_api", False),
+        ("azure_insights", "cloud_api", True),
         ("opentelemetry", "telemetry", True),
     ],
 )
-def test_shared_normalized_persistence_updates_every_canonical_push_source(
+def test_shared_normalized_persistence_updates_every_canonical_source(
     postgres_db, source, source_type, state_expected
 ):
     conn, cur = postgres_db
@@ -151,6 +151,32 @@ def test_shared_normalized_persistence_updates_every_canonical_push_source(
         (source,),
     )
     assert (cur.fetchone() is not None) is state_expected
+
+
+def test_initialized_total_increments_transactionally_for_canonical_ingestion(postgres_db):
+    conn, cur = postgres_db
+    cur.execute(
+        """
+        INSERT INTO source_ingestion_health_state (
+            source, total_events, total_events_initialized
+        )
+        VALUES ('pfsense', 5930682, TRUE)
+        """
+    )
+    siem_backend.ingest_normalized_event(
+        make_event(source="pfsense", source_type="firewall"),
+        conn,
+        cur,
+    )
+
+    cur.execute(
+        """
+        SELECT total_events, total_events_initialized
+        FROM source_ingestion_health_state
+        WHERE source = 'pfsense'
+        """
+    )
+    assert cur.fetchone() == (5930683, True)
 
 
 def test_synthetic_normalized_event_does_not_advance_real_ingestion(postgres_db):
