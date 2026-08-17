@@ -62,3 +62,42 @@ export const loadSourceHealth = async () => {
   }
   return data;
 };
+
+export const isValidSourceHealthMetricsResponse = (data) => {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+  if (
+    typeof data.generated_at !== "string" ||
+    !Number.isInteger(data.cache_ttl_seconds) ||
+    data.cache_ttl_seconds < 1 ||
+    !data.windows ||
+    !Array.isArray(data.sources)
+  ) return false;
+  if (
+    data.windows.timezone !== "UTC" ||
+    typeof data.windows.last_hour_start !== "string" ||
+    typeof data.windows.today_start !== "string" ||
+    data.sources.length !== SOURCE_METADATA.length
+  ) return false;
+
+  return data.sources.every((item, index) => {
+    if (!item || typeof item !== "object") return false;
+    return item.source === SOURCE_METADATA[index].source &&
+      [item.events_last_hour, item.events_today, item.total_events].every(
+        (value) => Number.isSafeInteger(value) && value >= 0
+      );
+  });
+};
+
+export const loadSourceHealthMetrics = async () => {
+  const response = await fetch(buildSiemPath("/source-health/metrics"), {
+    credentials: "include",
+  });
+  const data = await parseJsonResponse(response, {});
+  if (!response.ok) {
+    throw new Error(getApiErrorMessage(data, "Historical event counts are unavailable", ["error"]));
+  }
+  if (!isValidSourceHealthMetricsResponse(data)) {
+    throw new Error("Invalid source event metrics response");
+  }
+  return data;
+};
