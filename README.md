@@ -41,85 +41,39 @@ auditability.
 
 ### SOC Command Center
 
-![SOC Command Center overview](screenshots/soc-command-center-overview.png)
+![SOC Command Center with reconnaissance monitoring](screenshots/soc-command-center-reconnaissance-monitoring.jpeg)
 
-The Command Center gives an analyst multiple system details: incident pressure, 
-approval load, automation health, notification
-posture, and live recon triage all in one place.
+The SOC Command Center provides live visibility into reconnaissance activity, correlated threats, source health, and prioritized alerts requiring analyst attention.
 
-### Alert Investigation
+### Anakin AI-Powered SOC Briefings
 
-![Alert investigation with target context](screenshots/alert-investigation-target-context.png)
+![Anakin AI-powered SOC briefing](screenshots/anakin-ai-powered-soc-briefings.jpeg)
 
-This alert view shows that detections are written for analysts, not just engines:
-plain-English reasoning, target evidence, reputation context, and a concrete
-progression story are all visible without reading backend logic.
+Anakin produces locally generated SOC briefings that summarize prioritized threats, correlated evidence, investigation findings, and recommended analyst actions.
 
-### Distributed Internet Reconnaissance Activity
+### Detection Engineering Simulator
 
-![Distributed reconnaissance activity detail](screenshots/distributed-recon-activity-detail.png)
+![Detection engineering simulator](screenshots/detection-engineering-simulator.jpeg)
 
-This recon workspace shows the platform turning noisy internet scanning into a
-single investigation object, with compact triage on the left and a bounded
-evidence-based summary on the right.
+The Detection Simulator safely tests detection rules against simulated security events to validate alert logic, severity, MITRE ATT&CK mapping, and expected outcomes.
 
-### Incident Workspace
+### Analyst Investigation Workspace
 
-<table>
-  <tr>
-    <td width="50%">
-      <img src="screenshots/incident-workspace-response-context-incident.png" alt="Incident workspace detail" />
-    </td>
-    <td width="50%">
-      <img src="screenshots/incident-workspace-response-context-playbook.png" alt="Incident-linked playbook execution detail" />
-    </td>
-  </tr>
-</table>
+![Analyst investigation workspace](screenshots/analyst-investigation-workspace.jpeg)
 
-Together these panels show the handoff from detection to action: the incident
-explains why the case matters, and the paired response view shows the guarded
-playbook execution path behind that investigation.
+The Investigation Workspace centralizes alerts, evidence, hypotheses, tasks, analyst findings, and response activity in a complete case record.
 
-### Approval Workflow
+### SOAR Playbook Orchestration
 
-![Approval workflow detail](screenshots/approval-workflow-detail.png)
+![SOAR playbook orchestration](screenshots/soar-playbook-orchestration.jpeg)
 
-This approval detail makes the safety model obvious: disruptive actions stay
-human-gated, reviewers get the operational context they need, and every outcome is
-auditable.
+The Playbooks view presents configurable multi-step response workflows, their detection triggers and operational status, and the guarded actions available to analysts.
 
-### Playbook Execution Timeline
+### Analyst-Governed SOAR Approvals
 
-<table>
-  <tr>
-    <td width="50%">
-      <img src="screenshots/playbook-execution-timeline-detail.png" alt="Playbook execution outcome detail" />
-    </td>
-    <td width="50%">
-      <img src="screenshots/playbook-execution-timeline-steps.png" alt="Playbook execution step timeline" />
-    </td>
-  </tr>
-</table>
+![Analyst-governed SOAR approval requests](screenshots/analyst-governed-soar-approvals.jpeg)
 
-These execution views show that SOAR behavior is real and inspectable, with both a
-clear outcome summary and the step-by-step path the system followed to get there.
-
-### Detection Rules And Severity Philosophy
-
-<table>
-  <tr>
-    <td width="50%">
-      <img src="screenshots/detection-rules-and-severity-matrix.png" alt="Severity and response matrix" />
-    </td>
-    <td width="50%">
-      <img src="screenshots/detection-rules-runtime-table.png" alt="Runtime detection rules table" />
-    </td>
-  </tr>
-</table>
-
-These views make the detection philosophy visible in the product itself: severity
-means something operationally, incident behavior is documented, and rule metadata
-is available without digging through source code.
+The Approval Requests queue supports human review of high-risk response actions with recorded decisions and audit context before guarded execution.
 
 ## What It Does
 
