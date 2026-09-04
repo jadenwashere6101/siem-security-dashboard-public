@@ -41,37 +41,37 @@ auditability.
 
 ### SOC Command Center
 
-![SOC Command Center with reconnaissance monitoring](screenshots/soc-command-center-reconnaissance-monitoring.jpeg)
+<img src="screenshots/soc-command-center-reconnaissance-monitoring.jpeg" alt="SOC Command Center with reconnaissance monitoring" width="800" />
 
 The SOC Command Center provides live visibility into reconnaissance activity, correlated threats, source health, and prioritized alerts requiring analyst attention.
 
 ### Anakin AI-Powered SOC Briefings
 
-![Anakin AI-powered SOC briefing](screenshots/anakin-ai-powered-soc-briefings.jpeg)
+<img src="screenshots/anakin-ai-powered-soc-briefings.jpeg" alt="Anakin AI-powered SOC briefing" width="800" />
 
 Anakin produces locally generated SOC briefings that summarize prioritized threats, correlated evidence, investigation findings, and recommended analyst actions.
 
 ### Detection Engineering Simulator
 
-![Detection engineering simulator](screenshots/detection-engineering-simulator.jpeg)
+<img src="screenshots/detection-engineering-simulator.jpeg" alt="Detection engineering simulator" width="800" />
 
 The Detection Simulator safely tests detection rules against simulated security events to validate alert logic, severity, MITRE ATT&CK mapping, and expected outcomes.
 
 ### Analyst Investigation Workspace
 
-![Analyst investigation workspace](screenshots/analyst-investigation-workspace.jpeg)
+<img src="screenshots/analyst-investigation-workspace.jpeg" alt="Analyst investigation workspace" width="800" />
 
 The Investigation Workspace centralizes alerts, evidence, hypotheses, tasks, analyst findings, and response activity in a complete case record.
 
 ### SOAR Playbook Orchestration
 
-![SOAR playbook orchestration](screenshots/soar-playbook-orchestration.jpeg)
+<img src="screenshots/soar-playbook-orchestration.jpeg" alt="SOAR playbook orchestration" width="800" />
 
 The Playbooks view presents configurable multi-step response workflows, their detection triggers and operational status, and the guarded actions available to analysts.
 
 ### Analyst-Governed SOAR Approvals
 
-![Analyst-governed SOAR approval requests](screenshots/analyst-governed-soar-approvals.jpeg)
+<img src="screenshots/analyst-governed-soar-approvals.jpeg" alt="Analyst-governed SOAR approval requests" width="800" />
 
 The Approval Requests queue supports human review of high-risk response actions with recorded decisions and audit context before guarded execution.
 
